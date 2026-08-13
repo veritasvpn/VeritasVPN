@@ -624,6 +624,7 @@ function renderUser(user) {
     const button = e.target.closest('[data-resend-verification]');
     if (!button) return;
     button.disabled = true;
+    button.textContent = "Sending…";
     const email = emailInput?.value.trim() || '';
     try {
       await api('/api/v1/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email }) });
