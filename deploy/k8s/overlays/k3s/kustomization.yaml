@@ -8,8 +8,8 @@ resources:
 
 images:
   - name: localhost:31500/auth-svc
-    newName: 192.168.0.5:30500/auth-svc
-    newTag: latest
+    newName: localhost:31500/auth-svc
+    newTag: ratefix-20260813
   - name: localhost:31500/wg-manager
     newName: 192.168.0.5:30500/wg-manager
     newTag: latest

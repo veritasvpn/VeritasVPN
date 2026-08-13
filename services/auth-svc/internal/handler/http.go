@@ -343,7 +343,7 @@ func (h *HTTPHandler) handleCompleteReset(w http.ResponseWriter, r *http.Request
 }
 
 func (h *HTTPHandler) handleRegisterAnonymous(w http.ResponseWriter, r *http.Request) {
-	if h.service.RateLimited(r.Context(), "anonymous-register:"+clientIP(r), 5, time.Hour) {
+	if h.service.RateLimited(r.Context(), "anonymous-register:"+clientIP(r), 20, time.Hour) {
 		writeHTTPError(w, http.StatusTooManyRequests, "too many registration attempts; try again later")
 		return
 	}
