@@ -50,6 +50,8 @@ spec:
                 secretKeyRef:
                   name: veritas-secrets
                   key: DB_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           ports:
             - containerPort: 5432
           volumeMounts:

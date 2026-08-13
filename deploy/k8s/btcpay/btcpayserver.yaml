@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: btcpayserver
-          image: btcpayserver/btcpayserver:2.1.3
+          image: btcpayserver/btcpayserver:2.3.9
           env:
             - name: BTCPAY_NETWORK
               value: "testnet"

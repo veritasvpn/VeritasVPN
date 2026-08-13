@@ -32,3 +32,14 @@ spec:
                 name: nginx
                 port:
                   number: 8000
+    - host: api.veritasvpn.cloud
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nginx
+                port:
+                  number: 8000
+

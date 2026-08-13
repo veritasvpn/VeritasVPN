@@ -1,0 +1,13 @@
+# Cloudflare tunnel is configured with origin http://nginx:80 (compose-era DNS name).
+# cloudflared runs in ingress-nginx; alias "nginx" to the veritas nginx Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  namespace: ingress-nginx
+spec:
+  type: ExternalName
+  externalName: nginx.veritas.svc.cluster.local
+  ports:
+    - name: http
+      port: 80

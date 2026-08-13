@@ -45,7 +45,10 @@ spec:
             - name: DATABASE_URL
               value: "postgres://veritas:$(DB_PASSWORD)@postgres:5432/veritas?sslmode=disable"
             - name: REDIS_URL
-              value: "redis://redis:6379/0"
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: REDIS_URL
             - name: NATS_URL
               value: "nats://nats:4222"
             - name: JWT_SECRET

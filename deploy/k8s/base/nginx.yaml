@@ -1,112 +1,4 @@
 apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: nginx-config
-  namespace: veritas
-data:
-  default.conf: |
-    map $http_origin $cors_origin {
-        default "";
-        "https://veritasvpn.cloud"    "$http_origin";
-        "https://www.veritasvpn.cloud" "$http_origin";
-        "http://localhost:8000"        "$http_origin";
-        "http://127.0.0.1:8000"        "$http_origin";
-    }
-
-    server {
-        listen 8000;
-        server_name veritasvpn.cloud localhost;
-
-        root /usr/share/nginx/html;
-        index index.html;
-
-        # Cloudflare Tunnel terminates TLS at the edge and connects over HTTP
-        # without always setting X-Forwarded-Proto. Forcing an https:// redirect
-        # here (or via ingress ssl-redirect) causes a public redirect loop.
-
-        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Frame-Options "DENY" always;
-        add_header X-XSS-Protection "1; mode=block" always;
-        add_header Referrer-Policy "no-referrer" always;
-        add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
-
-        add_header Access-Control-Allow-Origin $cors_origin always;
-        add_header Access-Control-Allow-Methods "GET, POST, DELETE, OPTIONS" always;
-        add_header Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With" always;
-
-        location = /healthz {
-            access_log off;
-            return 200 "ok\n";
-            add_header Content-Type text/plain;
-        }
-
-        location ~* \.(css|js)$ {
-            expires 5m;
-            try_files $uri =404;
-        }
-
-        location ~* \.html$ {
-            expires -1;
-            try_files $uri =404;
-        }
-
-        location = / {
-            expires -1;
-            try_files /index.html =404;
-        }
-
-        location / {
-            try_files $uri $uri/ $uri.html =404;
-        }
-
-        location /api/v1/auth/ {
-            proxy_pass http://auth-svc:8080/api/v1/auth/;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto https;
-            proxy_read_timeout 60s;
-        }
-
-        location /api/v1/billing/ {
-            proxy_pass http://billing-svc:8080/api/v1/billing/;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto https;
-            proxy_read_timeout 60s;
-        }
-
-        location /api/v1/wg/ {
-            proxy_pass http://wg-manager:8080/api/v1/wg/;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto https;
-            proxy_read_timeout 60s;
-        }
-
-        location /api/v1/agents/ {
-            proxy_pass http://wg-manager:8080/api/v1/agents/;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto https;
-            proxy_buffering off;
-            proxy_read_timeout 3600s;
-        }
-
-        gzip on;
-        gzip_types text/css application/javascript application/json image/svg+xml;
-        gzip_min_length 256;
-    }
----
-apiVersion: v1
 kind: Service
 metadata:
   name: nginx
@@ -116,7 +8,11 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-    - port: 8000
+    - name: http-8000
+      port: 8000
+      targetPort: 8000
+    - name: http-80
+      port: 80
       targetPort: 8000
   selector:
     app: nginx
@@ -155,12 +51,18 @@ spec:
             httpGet:
               path: /healthz
               port: 8000
+              httpHeaders:
+                - name: Host
+                  value: localhost
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8000
+              httpHeaders:
+                - name: Host
+                  value: localhost
             initialDelaySeconds: 10
             periodSeconds: 10
           resources:

@@ -6,25 +6,27 @@ namespace: veritas
 resources:
   - ../../base
 
+# Local k3s registry (NodePort 31500). Images are built/imported by
+# deploy/k8s/scripts/import-images.sh during cutover.
 images:
   - name: localhost:31500/auth-svc
-    newName: ghcr.io/jpg19/veritasvpn/auth-svc
+    newName: localhost:31500/auth-svc
     newTag: latest
   - name: localhost:31500/wg-manager
-    newName: ghcr.io/jpg19/veritasvpn/wg-manager
+    newName: localhost:31500/wg-manager
     newTag: latest
   - name: localhost:31500/billing-svc
-    newName: ghcr.io/jpg19/veritasvpn/billing-svc
+    newName: localhost:31500/billing-svc
     newTag: latest
   - name: localhost:31500/veritas-agent
-    newName: ghcr.io/jpg19/veritasvpn/veritas-agent
+    newName: localhost:31500/veritas-agent
     newTag: latest
   - name: localhost:31500/veritas-proxy
-    newName: ghcr.io/jpg19/veritasvpn/veritas-proxy
+    newName: localhost:31500/veritas-proxy
     newTag: latest
 
 patches:
-  # -- ConfigMap: production defaults --
+  # -- ConfigMap: production defaults for this host --
   - target:
       kind: ConfigMap
       name: veritas-config
@@ -46,28 +48,40 @@ patches:
         value: "false"
       - op: replace
         path: /data/CHECKOUT_SUCCESS_URL
-        value: "https://veritasvpn.cloud/billing/success.html"
+        value: "https://veritasvpn.cloud/account/#/subscription"
       - op: replace
         path: /data/CHECKOUT_CANCEL_URL
-        value: "https://veritasvpn.cloud/billing/cancel.html"
+        value: "https://veritasvpn.cloud/account/#/subscription"
       - op: replace
         path: /data/SERVER_HOSTNAME
-        value: "veritas-node"
+        value: "delloptiplex-3060"
+      - op: replace
+        path: /data/SERVER_REGION
+        value: "sa"
       - op: replace
         path: /data/SERVER_COUNTRY
-        value: "PY"
+        value: "AR"
       - op: replace
         path: /data/SERVER_CITY
-        value: "asuncion"
+        value: "local"
+      - op: replace
+        path: /data/PUBLIC_IP
+        value: "186.122.244.166"
+      - op: replace
+        path: /data/BTCPAY_SERVER_URL
+        value: "http://btcpayserver.btcpay.svc.cluster.local:49392"
+      - op: replace
+        path: /data/BTCPAY_PUBLIC_URL
+        value: "https://btcpay.veritasvpn.cloud"
+      - op: replace
+        path: /data/MANAGER_ENDPOINT
+        value: "http://wg-manager.veritas.svc.cluster.local:8080"
 
-  # -- Redis: 2 replicas + requirepass + auth probes --
+  # -- Redis: requirepass + auth probes (single replica; clustered redis needs sentinel/cluster) --
   - target:
       kind: Deployment
       name: redis
     patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 2
       - op: add
         path: /spec/template/spec/containers/0/args/-
         value: "--requirepass"
@@ -84,10 +98,172 @@ patches:
                 key: REDIS_PASSWORD
       - op: replace
         path: /spec/template/spec/containers/0/readinessProbe/exec/command
-        value: ["redis-cli", "-a", "$(REDIS_PASSWORD)", "ping"]
+        value: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
       - op: replace
         path: /spec/template/spec/containers/0/livenessProbe/exec/command
-        value: ["redis-cli", "-a", "$(REDIS_PASSWORD)", "ping"]
+        value: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 999
+          capabilities:
+            drop: ["ALL"]
+
+  # -- Auth: Redis/NATS auth + securityContext --
+  - target:
+      kind: Deployment
+      name: auth-svc
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/3/value
+        value: "nats://nats:4222"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: REDIS_PASSWORD
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_USER
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_USER
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_PASSWORD
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: ["ALL"]
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+
+  # -- WG-Manager: Redis/NATS auth + securityContext --
+  - target:
+      kind: Deployment
+      name: wg-manager
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/3/value
+        value: "nats://nats:4222"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: REDIS_PASSWORD
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_USER
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_USER
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_PASSWORD
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: ["ALL"]
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+
+  # -- Billing: NATS auth + BTCPay secrets + securityContext --
+  - target:
+      kind: Deployment
+      name: billing-svc
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/2/value
+        value: "nats://nats:4222"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_USER
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_USER
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_PASSWORD
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: BTCPAY_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: BTCPAY_API_KEY
+              optional: true
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: BTCPAY_STORE_ID
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: BTCPAY_STORE_ID
+              optional: true
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: BTCPAY_WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: BTCPAY_WEBHOOK_SECRET
+              optional: true
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: ["ALL"]
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
 
   # -- securityContext: auth-svc --
   - target:
@@ -103,6 +279,9 @@ patches:
           runAsUser: 1000
           capabilities:
             drop: ["ALL"]
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
 
   # -- securityContext: wg-manager --
   - target:
@@ -118,6 +297,9 @@ patches:
           runAsUser: 1000
           capabilities:
             drop: ["ALL"]
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
 
   # -- securityContext: billing-svc --
   - target:
@@ -133,8 +315,11 @@ patches:
           runAsUser: 1000
           capabilities:
             drop: ["ALL"]
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
 
-  # -- securityContext: nginx (needs tmp for nginx pid) --
+  # -- nginx: securityContext + tmp volumes --
   - target:
       kind: Deployment
       name: nginx
@@ -159,6 +344,11 @@ patches:
           name: nginx-cache
           mountPath: /var/cache/nginx
       - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: nginx-run
+          mountPath: /var/run
+      - op: add
         path: /spec/template/spec/volumes/-
         value:
           name: nginx-tmp
@@ -168,8 +358,13 @@ patches:
         value:
           name: nginx-cache
           emptyDir: {}
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: nginx-run
+          emptyDir: {}
 
-  # -- securityContext: veritas-proxy --
+  # -- veritas-proxy: securityContext + host exposure --
   - target:
       kind: Deployment
       name: veritas-proxy
@@ -183,23 +378,32 @@ patches:
           runAsUser: 1000
           capabilities:
             drop: ["ALL"]
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
 
-  # -- securityContext: postgres --
   - target:
-      kind: StatefulSet
-      name: postgres
+      kind: Service
+      name: veritas-proxy
     patch: |-
+      - op: replace
+        path: /spec/type
+        value: NodePort
       - op: add
-        path: /spec/template/spec/containers/0/securityContext
-        value:
-          allowPrivilegeEscalation: false
-          runAsUser: 70
-          runAsGroup: 70
-          fsGroup: 70
-          capabilities:
-            drop: ["ALL"]
+        path: /spec/ports/0/nodePort
+        value: 30080
 
-  # -- securityContext: nats --
+  # -- veritas-agent: pull policy --
+  - target:
+      kind: DaemonSet
+      name: veritas-agent
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+
+
+  # -- nats securityContext --
   - target:
       kind: StatefulSet
       name: nats
@@ -210,19 +414,5 @@ patches:
           allowPrivilegeEscalation: false
           runAsNonRoot: true
           runAsUser: 1000
-          capabilities:
-            drop: ["ALL"]
-
-  # -- securityContext: redis --
-  - target:
-      kind: Deployment
-      name: redis
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/securityContext
-        value:
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 999
           capabilities:
             drop: ["ALL"]

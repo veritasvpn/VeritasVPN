@@ -83,19 +83,22 @@ spec:
                   key: BTCPAY_SERVER_URL
             - name: BTCPAY_API_KEY
               valueFrom:
-                configMapKeyRef:
-                  name: veritas-config
+                secretKeyRef:
+                  name: veritas-secrets
                   key: BTCPAY_API_KEY
+                  optional: true
             - name: BTCPAY_STORE_ID
               valueFrom:
-                configMapKeyRef:
-                  name: veritas-config
+                secretKeyRef:
+                  name: veritas-secrets
                   key: BTCPAY_STORE_ID
+                  optional: true
             - name: BTCPAY_WEBHOOK_SECRET
               valueFrom:
-                configMapKeyRef:
-                  name: veritas-config
+                secretKeyRef:
+                  name: veritas-secrets
                   key: BTCPAY_WEBHOOK_SECRET
+                  optional: true
             - name: BTCPAY_PUBLIC_URL
               valueFrom:
                 configMapKeyRef:

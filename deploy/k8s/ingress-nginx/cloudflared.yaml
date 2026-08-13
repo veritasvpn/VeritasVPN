@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: cloudflared
-          image: cloudflare/cloudflared:2025.6.1
+          image: cloudflare/cloudflared:2026.7.3
           args:
             - tunnel
             - --no-autoupdate
@@ -44,14 +44,3 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: cloudflared-token
-  namespace: ingress-nginx
-type: Opaque
-stringData:
-  token: ""
-# Real token must be supplied before deploying.
-# kubectl create secret generic cloudflared-token -n ingress-nginx --from-literal=token=...

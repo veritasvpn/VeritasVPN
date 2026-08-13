@@ -35,6 +35,12 @@ spec:
         - name: veritas-proxy
           image: localhost:31500/veritas-proxy:latest
           imagePullPolicy: Always
+          env:
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: JWT_SECRET
           ports:
             - name: socks5
               containerPort: 1080
