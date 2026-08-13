@@ -35,6 +35,21 @@ data:
     ALTER TABLE accounts ADD COLUMN IF NOT EXISTS reset_token_expiry TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS idx_accounts_email ON accounts(email);
 
+  003_auth_email_verification.sql: |
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verification_token_hash TEXT;
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verification_token_expiry TIMESTAMPTZ;
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verification_sent_at TIMESTAMPTZ;
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verification_attempts INTEGER NOT NULL DEFAULT 0;
+    UPDATE accounts SET email = LOWER(TRIM(email)), email_verified_at = created_at
+      WHERE email IS NOT NULL AND email_verified_at IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_email_normalized
+      ON accounts (LOWER(email)) WHERE email IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_verification_token
+      ON accounts (verification_token_hash) WHERE verification_token_hash IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_accounts_unverified_cleanup
+      ON accounts (created_at) WHERE email IS NOT NULL AND email_verified_at IS NULL;
+
   003_wg_initial.sql: |
     CREATE EXTENSION IF NOT EXISTS "pgcrypto";
     CREATE TABLE IF NOT EXISTS servers (

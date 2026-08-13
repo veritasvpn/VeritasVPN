@@ -537,13 +537,21 @@ function renderUser(user) {
         currentUser = user;
         updateNavbar(user);
 
-        const dl = document.createElement('a');
-        dl.href = `${AUTH_API}/api/v1/auth/download-account?token=${encodeURIComponent(data.access_token)}`;
-        dl.download = 'veritasvpn-account.txt';
-        dl.style.display = 'none';
+        const downloadResponse = await fetch(AUTH_API + "/api/v1/auth/download-account", {
+          headers: { Authorization: `Bearer ` },
+        });
+        if (!downloadResponse.ok) throw new Error("Account created, but the account file could not be downloaded.");
+        const downloadURL = URL.createObjectURL(await downloadResponse.blob());
+        const dl = document.createElement("a");
+        dl.href = downloadURL;
+        dl.download = "veritasvpn-account.txt";
+        dl.style.display = "none";
         document.body.appendChild(dl);
         dl.click();
-        setTimeout(() => { try { document.body.removeChild(dl); } catch(_){} }, 5000);
+        setTimeout(() => {
+          URL.revokeObjectURL(downloadURL);
+          try { document.body.removeChild(dl); } catch (_) {}
+        }, 5000);
 
         setError(`Account created. Account ID: <strong>${data.account_id}</strong> — check your downloads.`, { success: true });
         setTimeout(() => {

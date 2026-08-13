@@ -1,8 +1,8 @@
-ALTER TABLE accounts ADD COLUMN email_verified_at TIMESTAMPTZ;
-ALTER TABLE accounts ADD COLUMN verification_token_hash TEXT;
-ALTER TABLE accounts ADD COLUMN verification_token_expiry TIMESTAMPTZ;
-ALTER TABLE accounts ADD COLUMN verification_sent_at TIMESTAMPTZ;
-ALTER TABLE accounts ADD COLUMN verification_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verification_token_hash TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verification_token_expiry TIMESTAMPTZ;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verification_sent_at TIMESTAMPTZ;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS verification_attempts INTEGER NOT NULL DEFAULT 0;
 
 -- Existing accounts remain usable; verification is enforced for new registrations.
 UPDATE accounts SET email = LOWER(TRIM(email)), email_verified_at = created_at
