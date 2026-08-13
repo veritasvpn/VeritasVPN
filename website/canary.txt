@@ -4,7 +4,7 @@ VeritasVPN Warrant Canary
 Published: 2026-07-28
 Next expected update: on or before 2026-08-28
 Issuer: VeritasVPN (veritasvpn.cloud)
-Public repository: https://github.com/JPG19/VeritasVPN
+Public repository: https://github.com/veritasvpn/VeritasVPN
 
 This canary is a plain-text statement. Cryptographic signing of canary
 updates may be added later; until then, treat GitHub commit history and

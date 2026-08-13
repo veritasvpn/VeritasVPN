@@ -254,7 +254,7 @@ function renderSecurity() {
         </ul>
         <div class="account-actions">
           <a class="btn btn-outline" href="/#transparency">Transparency</a>
-          <a class="btn btn-outline" href="https://github.com/JPG19/VeritasVPN" target="_blank" rel="noopener">GitHub</a>
+          <a class="btn btn-outline" href="https://github.com/veritasvpn/VeritasVPN" target="_blank" rel="noopener">GitHub</a>
         </div>
       </div>
     </section>
