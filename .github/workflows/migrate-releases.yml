@@ -1,0 +1,36 @@
+name: Migrate Legacy Release
+
+on:
+  push:
+    tags:
+      - "v0.1.0"
+      - "v0.2.0"
+
+jobs:
+  migrate:
+    name: Copy release assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download legacy assets and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          mkdir -p artifacts
+          gh release download "$tag" \
+            --repo JPG19/VeritasVPN \
+            --dir artifacts
+
+          case "$tag" in
+            v0.2.0) description="Latest desktop builds" ;;
+            *) description="Legacy desktop builds" ;;
+          esac
+
+          gh release create "$tag" artifacts/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$tag" \
+            --notes "$description. Migrated from the previous repository into the clean-history VeritasVPN repository."

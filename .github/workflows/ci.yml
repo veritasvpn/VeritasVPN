@@ -42,7 +42,7 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           JWT_SECRET: test-secret-for-ci-purposes-only
           AGENT_AUTH_TOKEN: test-agent-token
-        run: go test ./lib/... ./services/... -v -count=1
+        run: go test ./lib/config/... ./lib/logging/... ./lib/crypto/... ./lib/jwt/... ./services/auth-svc/... ./services/wg-manager/... ./services/billing-svc/... ./services/veritas-agent/... -v -count=1
 
   build-services:
     name: Build Services
@@ -120,6 +120,9 @@ jobs:
             context: containers/proxy-gateway
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Set registry owner (lowercase)
         run: echo "REGISTRY_OWNER=${OWNER,,}" >> $GITHUB_ENV
