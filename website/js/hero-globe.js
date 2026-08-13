@@ -41,45 +41,38 @@ export function mountHeroGlobe(mount) {
             <path d="${WORLD_LAND_PATH}" transform="translate(-1000 0)"/>
             <path d="${WORLD_LAND_PATH}"/>
             <path d="${WORLD_LAND_PATH}" transform="translate(1000 0)"/>
-            <circle class="hero-globe-pin-pulse" cx="-661" cy="315" r="12"/><circle class="hero-globe-pin-core" cx="-661" cy="315" r="5"/>
-            <circle class="hero-globe-pin-pulse" cx="339" cy="315" r="12"/><circle class="hero-globe-pin-core" cx="339" cy="315" r="5"/>
-            <circle class="hero-globe-pin-pulse" cx="1339" cy="315" r="12"/><circle class="hero-globe-pin-core" cx="1339" cy="315" r="5"/>
           </g>
           <circle class="hero-globe-shade" cx="250" cy="250" r="218"/>
           <path class="hero-globe-glint" d="M108 170 C155 74 286 40 370 108"/>
         </g>
         <circle class="hero-globe-atmosphere" cx="250" cy="250" r="222"/>
       </svg>
+      <div class="hero-globe-marker" aria-hidden="true"><span></span></div>
       <p class="hero-globe-hint"><span aria-hidden="true">Drag</span> to explore</p>
     </div>`;
 
   const world = mount.querySelector('.hero-globe-world');
-  let longitude = 90;
-  let latitude = 0;
+  let longitude = -90;
   let dragging = false;
   let hovering = false;
   let pointerX = 0;
-  let pointerY = 0;
   let previousTime = 0;
 
   const render = () => {
     const wrapped = ((longitude % 1000) + 1000) % 1000;
-    world.setAttribute('transform', 'translate(' + (-wrapped) + ' ' + latitude + ')');
+    world.setAttribute('transform', `translate(${-wrapped} 0)`);
   };
 
   mount.addEventListener('pointerdown', (event) => {
     dragging = true;
     pointerX = event.clientX;
-    pointerY = event.clientY;
     mount.classList.add('is-dragging');
     mount.setPointerCapture(event.pointerId);
   });
   mount.addEventListener('pointermove', (event) => {
     if (!dragging) return;
     longitude -= (event.clientX - pointerX) * 1.45;
-    latitude = Math.max(-90, Math.min(90, latitude + (event.clientY - pointerY) * 0.7));
     pointerX = event.clientX;
-    pointerY = event.clientY;
     render();
   });
   const stopDragging = (event) => {
@@ -96,7 +89,10 @@ export function mountHeroGlobe(mount) {
     if (!previousTime) previousTime = time;
     const delta = Math.min(time - previousTime, 40);
     previousTime = time;
-    if (!reduceMotion && !dragging && !hovering) render();
+    if (!reduceMotion && !dragging && !hovering) {
+      longitude += delta * 0.006;
+      render();
+    }
     requestAnimationFrame(animate);
   };
 
