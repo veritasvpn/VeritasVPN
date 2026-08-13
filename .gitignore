@@ -1,0 +1,110 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Build output
+dist/
+build/
+target/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Secrets
+*.pem
+*.key
+*.crt
+credentials.json
+service-account.json
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+
+# Ansible
+*.retry
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+*.log
+logs/
+
+# Go
+*.test
+*.prof
+
+# Flutter
+.metadata
+.dart_tool/
+.flutter-plugins*
+.packages
+
+# Database
+*.db
+*.sqlite
+
+# WireGuard runtime
+/etc/wireguard/*.conf
+
+# Cloudflared
+cloudflared
+.cloudflared/
+dist-site/
+
+# Cloudflared credentials
+.cloudflared-credentials.json
+
+# Wrangler (Cloudflare Pages local state)
+.wrangler/
+
+# BTCPay secrets
+btcpay/.env
+containers/proxy-gateway/data/
+
+# Deployment backups and runtime data
+/backups/
+/deploy/backup/backups/
+
+# Production .env variants
+.env.prod
+deploy/security/.env.prod
+deploy/k8s/base/secrets.yaml
+deploy/k8s/btcpay/secrets.yaml
+
+# Downloaded binaries (local only)
+services/veritas-agent/agent
+
+services/wg-manager/server
+
+# Local/generated media tooling
+.video-tools/
+video/
+__pycache__/
+*.pyc
+
+# Keep only explicitly published macOS DMG builds in git.
+website/downloads/veritasvpn-macos-*.dmg
+
+# Website downloads generated outside the current release flow
+website/downloads/veritasvpn-linux.*

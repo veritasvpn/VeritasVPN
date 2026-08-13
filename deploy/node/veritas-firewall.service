@@ -1,0 +1,14 @@
+[Unit]
+Description=VeritasVPN host firewall
+Wants=network-online.target
+After=network-online.target docker.service tailscaled.service
+Before=veritas-vpn-health.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/veritas-firewall
+ExecReload=/usr/local/sbin/veritas-firewall
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

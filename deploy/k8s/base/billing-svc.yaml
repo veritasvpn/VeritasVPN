@@ -1,0 +1,152 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: billing-svc
+  namespace: veritas
+  labels:
+    app: billing-svc
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+  selector:
+    app: billing-svc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing-svc
+  namespace: veritas
+  labels:
+    app: billing-svc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: billing-svc
+  template:
+    metadata:
+      labels:
+        app: billing-svc
+    spec:
+      containers:
+        - name: billing-svc
+          image: localhost:31500/billing-svc:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: DB_PASSWORD
+            - name: DATABASE_URL
+              value: "postgres://veritas:$(DB_PASSWORD)@postgres:5432/veritas?sslmode=disable"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: JWT_SECRET
+            - name: AGENT_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: AGENT_AUTH_TOKEN
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: LOG_LEVEL
+            - name: LOG_FORMAT
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: LOG_FORMAT
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: ENVIRONMENT
+            - name: CORS_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: CORS_ORIGINS
+            - name: BTCPAY_SERVER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: BTCPAY_SERVER_URL
+            - name: BTCPAY_API_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: BTCPAY_API_KEY
+            - name: BTCPAY_STORE_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: BTCPAY_STORE_ID
+            - name: BTCPAY_WEBHOOK_SECRET
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: BTCPAY_WEBHOOK_SECRET
+            - name: BTCPAY_PUBLIC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: BTCPAY_PUBLIC_URL
+            - name: PREMIUM_PRICE_USD_CENTS
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: PREMIUM_PRICE_USD_CENTS
+            - name: PREMIUM_PERIOD_DAYS
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: PREMIUM_PERIOD_DAYS
+            - name: CHECKOUT_SUCCESS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: CHECKOUT_SUCCESS_URL
+            - name: CHECKOUT_CANCEL_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: CHECKOUT_CANCEL_URL
+            - name: BILLING_PUBLIC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: BILLING_PUBLIC_URL
+            - name: ALLOW_MOCK_BTCPAY
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: ALLOW_MOCK_BTCPAY
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi

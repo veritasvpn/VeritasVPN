@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the VeritasVPN health audit every five minutes
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=5m
+Persistent=true
+Unit=veritas-vpn-health.service
+
+[Install]
+WantedBy=timers.target
+

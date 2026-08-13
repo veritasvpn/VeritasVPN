@@ -1,0 +1,16 @@
+[Unit]
+Description=VeritasVPN Docker Compose stack
+Wants=network-online.target
+Requires=docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/jpg/VeritasVPN
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
+ExecReload=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
+RemainAfterExit=yes
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target

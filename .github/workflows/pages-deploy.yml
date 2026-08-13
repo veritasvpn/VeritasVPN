@@ -1,0 +1,36 @@
+name: Deploy Website
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "website/**"
+
+jobs:
+  deploy:
+    name: Deploy to Cloudflare Pages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare deploy directory
+        run: |
+          mkdir -p dist-site
+          rsync -a \
+            --exclude 'downloads/veritasvpn-linux.AppImage' \
+            --exclude 'downloads/veritasvpn-android.apk' \
+            --exclude 'downloads/veritasvpn-macos.dmg' \
+            --exclude 'README.md' \
+            --exclude '.gitignore' \
+            website/ dist-site/
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist-site/ --project-name=veritasvpn --branch=master

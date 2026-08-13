@@ -1,0 +1,173 @@
+# BTCPay Server — Bitcoin + Monero testnet deployment
+# Run: docker compose -f btcpay/docker-compose.yml up -d
+# Switch to mainnet: change NETWORK=mainnet, BTC_PORT=8332, BTC_P2P=8333, XMR stagenet→mainnet
+
+services:
+  postgres-btcpay:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: btcpay
+      POSTGRES_PASSWORD: ${BTCPAY_POSTGRES_PASSWORD:-change-me-set-in-btcpay-env}
+      POSTGRES_DB: btcpay
+    volumes:
+      - btcpay_pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "btcpay"]
+      interval: 5s
+      retries: 5
+    restart: unless-stopped
+
+  bitcoind:
+    image: btcpayserver/bitcoin:28.1
+    environment:
+      BITCOIN_NETWORK: ${BTC_NETWORK:-testnet}
+      BITCOIN_EXTRA_ARGS: |
+        prune=10000
+        rpcuser=btcpay_rpc
+        rpcpassword=${BTC_RPC_PASSWORD:-change-me-set-in-btcpay-env}
+        rpcallowip=172.16.0.0/12
+        rpcallowip=127.0.0.1
+        rpcbind=0.0.0.0
+        txindex=0
+        server=1
+    volumes:
+      - btcpay_bitcoind:/home/bitcoin/.bitcoin
+    expose:
+      - "${BTC_RPC_PORT:-18332}"
+      - "${BTC_P2P_PORT:-18333}"
+    ports:
+      - "${BTC_P2P_PORT:-18333}:${BTC_P2P_PORT:-18333}"
+    restart: unless-stopped
+
+  nbxplorer:
+    image: nicolasdorier/nbxplorer:2.6.9
+    environment:
+      NBXPLORER_NETWORK: ${BTC_NETWORK:-testnet}
+      NBXPLORER_BTCRPCURL: http://bitcoind:${BTC_RPC_PORT:-18332}/
+      NBXPLORER_BTCRPCUSER: btcpay_rpc
+      NBXPLORER_BTCRPCPASSWORD: ${BTC_RPC_PASSWORD:-change-me-set-in-btcpay-env}
+      NBXPLORER_BTCNODEENDPOINT: bitcoind:${BTC_P2P_PORT:-18333}
+      NBXPLORER_CHAINS: btc
+      NBXPLORER_BIND: 0.0.0.0:32838
+      NBXPLORER_NOAUTH: "true"
+      NBXPLORER_POSTGRES: User ID=btcpay;Password=${BTCPAY_POSTGRES_PASSWORD:-change-me-set-in-btcpay-env};Host=postgres-btcpay;Port=5432;Database=nbxplorer
+      NBXPLORER_AUTOMIGRATE: "true"
+    volumes:
+      - btcpay_nbxplorer:/home/nbxplorer/.nbxplorer
+    expose:
+      - "32838"
+    depends_on:
+      postgres-btcpay:
+        condition: service_healthy
+      bitcoind:
+        condition: service_started
+    restart: unless-stopped
+
+  monerod:
+    image: btcpayserver/monero:0.18.4.3
+    command:
+      - monerod
+      - --stagenet
+      - --non-interactive
+      - --prune-blockchain
+      - --add-priority-node=stagenet.xmr-tw.org:38080
+      - --rpc-bind-ip=0.0.0.0
+      - --rpc-bind-port=38081
+      - --confirm-external-bind
+      - --restricted-rpc
+      - --p2p-bind-ip=0.0.0.0
+      - --p2p-bind-port=38080
+      - --out-peers=16
+      - --in-peers=8
+      - --db-sync-mode=safe
+      - --block-notify=/bin/sh /scripts/notifier.sh -X GET http://btcpayserver:49392/monerolikedaemoncallback/block?cryptoCode=xmr&hash=%s
+    volumes:
+      - btcpay_monero:/home/monero/.bitmonero
+    expose:
+      - "38081"
+    ports:
+      - "38080:38080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":\"health\",\"method\":\"get_version\"}' http://127.0.0.1:38081/json_rpc | grep -q '\"version\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  monero-wallet-rpc:
+    image: btcpayserver/monero:0.18.4.3
+    command:
+      - monero-wallet-rpc
+      - --stagenet
+      - --non-interactive
+      - --daemon-address
+      - monerod:38081
+      - --wallet-dir
+      - /wallet
+      - --rpc-bind-port
+      - "38082"
+      - --rpc-bind-ip
+      - "0.0.0.0"
+      - --confirm-external-bind
+      - --disable-rpc-login
+      - --trusted-daemon
+      - --tx-notify=/bin/sh /scripts/notifier.sh -X GET http://btcpayserver:49392/monerolikedaemoncallback/tx?cryptoCode=xmr&hash=%s
+    volumes:
+      - btcpay_monero_wallet:/wallet
+    expose:
+      - "38082"
+    depends_on:
+      - monerod
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":\"health\",\"method\":\"get_version\"}' http://127.0.0.1:38082/json_rpc | grep -q '\"version\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  btcpayserver:
+    image: btcpayserver/btcpayserver:2.3.9
+    environment:
+      BTCPAY_NETWORK: ${BTC_NETWORK:-testnet}
+      BTCPAY_POSTGRES: User ID=btcpay;Password=${BTCPAY_POSTGRES_PASSWORD:-change-me-set-in-btcpay-env};Host=postgres-btcpay;Port=5432;Database=btcpay
+      BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838
+      BTCPAY_CHAINS: btc,xmr
+      BTCPAY_PLUGINDIR: /datadir/Plugins
+      BTCPAY_XMR_DAEMON_URI: http://monerod:38081
+      BTCPAY_XMR_WALLET_DAEMON_URI: http://monero-wallet-rpc:38082
+      BTCPAY_XMR_WALLET_DAEMON_WALLETDIR: /wallet
+      BTCPAY_BIND: 0.0.0.0:49392
+      BTCPAY_EXTERNALURL: ${BTCPAY_EXTERNAL_URL:-http://localhost:49392}
+      BTCPAY_CHECKREVOCATIONLIST: "false"
+    ports:
+      - "49392:49392"
+    networks:
+      default:
+      veritasvpn_default:
+        aliases:
+          - btcpayserver.btcpay.svc.cluster.local
+    depends_on:
+      postgres-btcpay:
+        condition: service_healthy
+      nbxplorer:
+        condition: service_started
+      monerod:
+        condition: service_healthy
+      monero-wallet-rpc:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  veritasvpn_default:
+    external: true
+
+volumes:
+  btcpay_pgdata:
+  btcpay_bitcoind:
+  btcpay_nbxplorer:
+  btcpay_monero:
+  btcpay_monero_wallet:

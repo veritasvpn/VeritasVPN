@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="VeritasVPN — The truth about online privacy. WireGuard VPN from Paraguay. Anonymous accounts. Bitcoin or Monero subscriptions. Source-available under BSL.">
+    <title>VeritasVPN — The truth about online privacy.</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css?v=faq2">
+    <link rel="icon" type="image/png" href="assets/favicon.png">
+</head>
+<body>
+    <nav class="navbar" id="navbar">
+        <div class="container">
+            <a href="/" class="logo">
+                <img src="assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+                <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="#network">Network</a></li>
+                <li><a href="#product">Product</a></li>
+                <li><a href="#pricing">Pricing</a></li>
+                <li><a href="downloads.html">Download</a></li>
+                <li><a href="#faq">FAQ</a></li>
+            </ul>
+            <div class="nav-auth">
+                <div id="navAuthLoggedOut" class="nav-auth-logged-out">
+                    <button type="button" class="btn btn-primary nav-login" data-auth-open="signin">Log in</button>
+                </div>
+                <div id="navAuthLoggedIn" class="nav-auth-logged-in is-hidden">
+                    <span id="navPlanBadge" class="nav-plan-badge" hidden>Inactive</span>
+                    <button type="button" class="nav-user-btn" id="navUserMenuBtn" aria-haspopup="true" aria-expanded="false">
+                        <span class="nav-user-avatar" aria-hidden="true"></span>
+                        <span id="navUserEmail" class="nav-user-email"></span>
+                    </button>
+                    <div class="nav-user-menu" id="navUserMenu" role="menu">
+                        <a href="/account/" class="nav-user-menu-item" role="menuitem">Open dashboard</a>
+                        <button type="button" class="nav-user-menu-item" id="authSignOut" role="menuitem">Sign out</button>
+                    </div>
+                </div>
+            </div>
+            <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">
+                <span></span><span></span><span></span>
+            </button>
+        </div>
+    </nav>
+
+    <section class="hero">
+        <div class="hero-map-plane" id="heroMap" aria-hidden="true">
+            <div class="hero-map-aura hero-map-aura-one"></div>
+            <div class="hero-map-aura hero-map-aura-two"></div>
+            <div class="hero-signal-particles">
+                <i></i><i></i><i></i><i></i><i></i><i></i>
+            </div>
+        </div>
+        <div class="hero-scrim" aria-hidden="true"></div>
+        <div class="container">
+            <p class="hero-brand-name">Veritas<span>VPN</span></p>
+            <h1 class="hero-title">The truth about online privacy</h1>
+            <p class="hero-subtitle">
+                WireGuard from Paraguay. Anonymous accounts. Bitcoin or Monero subscriptions.
+                One live node today — we only advertise what is running.
+            </p>
+            <div class="hero-actions">
+                <button type="button" class="btn btn-primary btn-lg" data-auth-gate="dashboard">
+                    Get VeritasVPN
+                    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M7 4l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <a href="#network" class="btn btn-outline btn-lg">See the network</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="network" id="network">
+        <div class="container">
+            <div class="network-panel reveal">
+                <div class="network-panel-head">
+                    <div>
+                        <span class="section-kicker">Network</span>
+                        <h2>Where traffic exits today</h2>
+                        <p>A single WireGuard egress in Paraguay. When we add regions, they appear here — not before.</p>
+                    </div>
+                    <div class="network-live"><span class="network-live-dot" aria-hidden="true"></span> 1 location live</div>
+                </div>
+                <div class="network-map-wrap" id="panelMap"></div>
+                <div class="network-legend">
+                    <div><span>Live</span> — Paraguay (Asunción metro)</div>
+                    <div><span>Protocol</span> — WireGuard UDP 51820</div>
+                    <div><span>Roadmap</span> — more regions when nodes ship</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section product-section" id="product">
+        <div class="container">
+            <div class="product-shell reveal">
+                <div class="section-header product-header">
+                    <div><span class="section-kicker">What you get</span><h2>Real protection.<br>Zero inflated claims.</h2></div>
+                    <p>One working Paraguay node, modern encryption, private payments, and source you can inspect. We show what exists today—not a fictional network map.</p>
+                </div>
+                <div class="reality-grid">
+                    <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3zM9 12l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="reality-label">Protocol</span><h3>WireGuard encryption</h3><p>Linux and Android establish real encrypted WireGuard tunnels. Chrome protects browser traffic through our authenticated proxy.</p></div></article>
+                    <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 13a4 4 0 100-8 4 4 0 000 8zM5 21a7 7 0 0114 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><span class="reality-label">Identity</span><h3>Anonymous by design</h3><p>Create an Account ID without an email, or choose verified email access. Your anonymous ID cannot be recovered if you lose it.</p></div></article>
+                    <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M8 7h8M6 12h12M9 17h6M12 3v18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><span class="reality-label">Plan</span><h3>One honest price</h3><p>$5 per month gives you the complete service on up to five devices. No feature maze and no artificially limited free tier.</p></div></article>
+                    <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 12s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5zM4 4l16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><span class="reality-label">Privacy</span><h3>No browsing history</h3><p>We do not retain destinations, DNS contents, or browsing activity. Operational account, billing, and peer metadata is documented in our <a href="privacy.html">Privacy Policy</a>.</p></div></article>
+                    <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M14 5l-4 14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="reality-label">Source</span><h3>Code you can inspect</h3><p>Clients, agent, and infrastructure are published under Business Source License 1.1. Read the implementation and follow every change.</p></div></article>
+                    <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M5 19L19 5M8 5h11v11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="reality-label">Roadmap</span><h3>Expanding transparently</h3><p>New locations and features appear only after they ship. Follow our <a href="/canary.txt">warrant canary</a> and public repository for current status.</p></div></article>
+                </div>
+                <div class="product-foot"><span><i></i> Live infrastructure</span><span>Paraguay egress</span><span>Up to 5 devices</span><span>Bitcoin or Monero</span></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section how-it-works" id="how-it-works">
+        <div class="container">
+            <div class="how-it-works-shell reveal">
+                <div class="section-header how-it-works-header">
+                    <div>
+                        <span class="section-kicker">How it works</span>
+                        <h2>Private in three simple steps</h2>
+                    </div>
+                    <p>From download to an encrypted Paraguay connection in minutes. No complicated network setup required.</p>
+                </div>
+                <div class="steps">
+                    <article class="step">
+                        <div class="step-topline"><span class="step-number">01</span><span class="step-status">Choose your app</span></div>
+                        <div class="step-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </div>
+                        <h3>Download VeritasVPN</h3>
+                        <p>Get the app for Android or Linux, or add the Chrome extension directly to your browser.</p>
+                        <a class="step-link" href="/downloads">Explore downloads <span aria-hidden="true">→</span></a>
+                    </article>
+                    <article class="step">
+                        <div class="step-topline"><span class="step-number">02</span><span class="step-status">Secure your access</span></div>
+                        <div class="step-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M12 13a4 4 0 100-8 4 4 0 000 8zM5 21a7 7 0 0114 0M18.5 8.5v5m-2.5-2.5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </div>
+                        <h3>Create your account</h3>
+                        <p>Use a verified email or create an anonymous Account ID. Anonymous credentials stay entirely in your hands.</p>
+                        <button type="button" class="step-link step-link-button" data-auth-open="signup">Create an account <span aria-hidden="true">→</span></button>
+                    </article>
+                    <article class="step">
+                        <div class="step-topline"><span class="step-number">03</span><span class="step-status">One tap to protect</span></div>
+                        <div class="step-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </div>
+                        <h3>Connect securely</h3>
+                        <p>Tap Connect to create an encrypted route to the live VeritasVPN server in Paraguay.</p>
+                        <span class="step-proof"><i aria-hidden="true"></i> WireGuard encrypted</span>
+                    </article>
+                </div>
+                <div class="how-it-works-foot">
+                    <span>Your device</span><i aria-hidden="true"></i><strong>Encrypted tunnel</strong><i aria-hidden="true"></i><span>Paraguay server</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section pricing" id="pricing">
+        <div class="container">
+            <div class="pricing-shell reveal">
+                <div class="pricing-intro">
+                    <span class="section-kicker">Simple pricing</span>
+                    <h2>Privacy without the pricing games.</h2>
+                    <p>One plan. Every available feature. Pay privately with cryptocurrency and protect up to five devices.</p>
+                    <div class="pricing-trust"><span><i></i>No free-tier tracking</span><span><i></i>No card required</span><span><i></i>Cancel anytime</span></div>
+                </div>
+                <div class="pricing-card pricing-card-featured">
+                    <div class="pricing-card-head"><div><span class="pricing-badge">Complete access</span><h3>VeritasVPN Premium</h3></div><span class="pricing-node"><i></i>Paraguay live</span></div>
+                    <div class="pricing-price"><span class="currency">$</span>5<span class="period">USD / month</span></div>
+                    <p class="pricing-description">Everything you need to route your connection privately.</p>
+                    <ul class="pricing-features">
+                        <li><span>✓</span>Encrypted Paraguay connection</li><li><span>✓</span>Up to five active devices</li><li><span>✓</span>Chrome, Android, and Linux access</li><li><span>✓</span>Anonymous Account ID option</li>
+                    </ul>
+                    <div class="pricing-payment-label">Choose a private payment method</div>
+                    <div class="pricing-payment-actions"><button type="button" class="btn btn-primary btn-block" data-billing-checkout data-payment-method="btcpay"><span class="crypto-mark">₿</span>Pay with Bitcoin</button><button type="button" class="btn btn-outline btn-block" data-billing-checkout data-payment-method="btcpay_xmr"><span class="crypto-mark">ɱ</span>Pay with Monero</button></div>
+                    <p class="pricing-fineprint">Subscription activates automatically after payment confirmation.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section transparency" id="transparency">
+        <div class="container">
+            <div class="transparency-shell reveal">
+                <div class="section-header transparency-header"><div><span class="section-kicker">Transparency</span><h2>Trust should be verifiable.</h2></div><p>We publish the evidence you can inspect today and state clearly what has not happened yet.</p></div>
+                <div class="transparency-list">
+                    <article class="transparency-row"><span class="transparency-index">01</span><span class="transparency-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3z" stroke="currentColor" stroke-width="1.8"/></svg></span><div><span class="transparency-status">Published</span><h3>Warrant canary</h3><p>A public statement for legal-request transparency. Read its current status directly—silence or unexplained changes should be treated seriously.</p></div><a href="/canary.txt">View canary <span>→</span></a></article>
+                    <article class="transparency-row"><span class="transparency-index">02</span><span class="transparency-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M14 5l-4 14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="transparency-status">Public repository</span><h3>Source under BSL 1.1</h3><p>Inspect the clients, server agent, and infrastructure. Commercial competing use is restricted until the license Change Date.</p></div><a href="https://github.com/JPG19/VeritasVPN" target="_blank" rel="noopener">Browse GitHub <span>→</span></a></article>
+                    <article class="transparency-row"><span class="transparency-index">03</span><span class="transparency-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M5 5h14v11H9l-4 4V5zM9 9h6M9 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="transparency-status is-pending">Audit pending</span><h3>Open issues and reviews</h3><p>No independent audit report is published yet. Review the code, report problems publicly, and track the work without marketing spin.</p></div><a href="https://github.com/JPG19/VeritasVPN/issues" target="_blank" rel="noopener">Open issues <span>→</span></a></article>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section downloads downloads-teaser" id="downloads">
+        <div class="container">
+            <div class="downloads-shell reveal">
+                <div class="section-header downloads-header"><div><span class="section-kicker">Available clients</span><h2>Protection wherever you connect.</h2></div><div><p>Choose the client that fits your device. Every available app connects to the same VeritasVPN service in Paraguay.</p><a href="downloads.html" class="text-link">Compare all clients →</a></div></div>
+                <div class="download-featured">
+                    <a class="download-featured-card" href="install/chrome.html"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-chrome-veritas.svg" alt=""></span><h3>Chrome</h3><p>Protect browser traffic with one-click authenticated proxy access.</p><span class="download-card-action">Get the extension <b>→</b></span></a>
+                    <a class="download-featured-card" href="install/android.html"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-android-veritas.svg" alt=""></span><h3>Android</h3><p>Secure your phone with a native full-device WireGuard tunnel.</p><span class="download-card-action">Get Android <b>→</b></span></a>
+                    <a class="download-featured-card" href="install/linux.html"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-linux-veritas.svg" alt=""></span><h3>Linux</h3><p>Connect your desktop through a native WireGuard-powered client.</p><span class="download-card-action">Get Linux <b>→</b></span></a>
+                </div>
+                <div class="downloads-platform-note"><span><i></i>3 clients available today</span><span>Windows and macOS are coming soon.</span></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section faq" id="faq">
+        <div class="container">
+            <div class="faq-shell reveal">
+                <aside class="faq-intro"><span class="section-kicker">FAQ</span><h2>Questions,<br>answered clearly.</h2><p>Everything important about our infrastructure, privacy claims, platforms, and roadmap—without fine-print evasions.</p><div class="faq-help"><span>Still have a question?</span><a href="https://github.com/JPG19/VeritasVPN/issues" target="_blank" rel="noopener">Ask it publicly →</a></div></aside>
+                <div class="faq-list">
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>01</b>Where are your servers?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>One live WireGuard egress in Paraguay today. We add locations to the network map only after they are online and tested.</p></div></div>
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>02</b>How is VeritasVPN different?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>WireGuard connections, anonymous Account IDs, Bitcoin or Monero payments, and public source under BSL 1.1. We do not advertise infrastructure or audits that do not exist.</p></div></div>
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>03</b>What does “no logs” mean?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>We do not store browsing history, DNS contents, or destination traffic. We retain the limited account, billing, and WireGuard peer metadata needed to operate the service. See the <a href="privacy.html">Privacy Policy</a>.</p></div></div>
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>04</b>Is VeritasVPN open source?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>The source is public under Business Source License 1.1. It is source-available rather than OSI open source, with competing commercial use restricted until the Change Date.</p></div></div>
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>05</b>Which platforms work today?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>Chrome, Android, and Linux are available now. Windows and macOS remain marked Coming soon until their production clients are ready.</p></div></div>
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>06</b>Do you have a kill switch?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>Not yet as a finished cross-platform feature. It remains on the roadmap, and we do not claim kill-switch protection until it ships and is verified.</p></div></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="cta-section">
+        <div class="container">
+            <h2 class="reveal">Ready when you are</h2>
+            <p class="reveal">Early-stage WireGuard VPN from Paraguay. Honest docs. Source on GitHub.</p>
+            <div class="cta-actions reveal">
+                <button type="button" class="btn btn-primary btn-lg" data-auth-gate="dashboard">Get started</button>
+                <a href="https://github.com/JPG19/VeritasVPN" class="btn btn-outline btn-lg" target="_blank" rel="noopener">View on GitHub</a>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div class="footer-brand">
+                    <a href="/" class="logo">
+                        <img src="assets/logo-mark.png" alt="" class="logo-mark" width="40" height="40">
+                        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+                    </a>
+                    <p>The truth about online privacy. WireGuard from Paraguay. Source-available under BSL.</p>
+                    <div class="footer-social">
+                        <a href="https://github.com/JPG19/VeritasVPN" target="_blank" rel="noopener" aria-label="GitHub">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                        </a>
+                    </div>
+                </div>
+                <div class="footer-links">
+                    <h4>Product</h4>
+                    <ul>
+                        <li><a href="#network">Network</a></li>
+                        <li><a href="#pricing">Pricing</a></li>
+                        <li><a href="downloads.html">Download</a></li>
+                        <li><a href="install/">Install guides</a></li>
+                    </ul>
+                </div>
+                <div class="footer-links">
+                    <h4>Trust</h4>
+                    <ul>
+                        <li><a href="#transparency">Transparency</a></li>
+                        <li><a href="/canary.txt">Warrant Canary</a></li>
+                        <li><a href="https://github.com/JPG19/VeritasVPN" target="_blank" rel="noopener">Source (BSL)</a></li>
+                        <li><a href="contact.html">Contact</a></li>
+                    </ul>
+                </div>
+                <div class="footer-links">
+                    <h4>Legal</h4>
+                    <ul>
+                        <li><a href="privacy.html">Privacy Policy</a></li>
+                        <li><a href="terms.html">Terms of Service</a></li>
+                        <li><a href="cookies.html">Cookie Policy</a></li>
+                        <li><a href="contact.html">Contact</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 VeritasVPN. All rights reserved.</p>
+                <p class="footer-tagline">Paraguay · WireGuard · BSL on GitHub</p>
+            </div>
+        </div>
+    </footer>
+
+    <div class="auth-modal" id="authModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+        <div class="auth-dialog">
+            <button type="button" class="auth-close" data-auth-close aria-label="Close">&times;</button>
+            <div class="auth-brand">
+                <img src="assets/logo-mark.png" alt="" width="48" height="48">
+                <p class="auth-brand-name">Veritas<span>VPN</span></p>
+            </div>
+            <div class="auth-tabs" role="tablist">
+                <button type="button" class="auth-tab is-active" data-auth-tab="signin" role="tab" aria-selected="true">Sign in</button>
+                <button type="button" class="auth-tab" data-auth-tab="signup" role="tab" aria-selected="false">Sign up</button>
+            </div>
+            <h2 id="authTitle" class="auth-title">Sign in</h2>
+            <p id="authError" class="auth-error" hidden></p>
+            <form id="authForm" class="auth-form" novalidate>
+                <div id="authFormFields">
+                <label class="auth-field">
+                    <span>Email</span>
+                    <input type="email" id="authEmail" name="email" autocomplete="email" required placeholder="you@example.com">
+                </label>
+                <label class="auth-field">
+                    <span>Password</span>
+                    <input type="password" id="authPassword" name="password" autocomplete="current-password" required placeholder="••••••••" minlength="10">
+                </label>
+                </div>
+                <button type="button" class="auth-reset" id="authReset">Forgot password?</button>
+                <button type="submit" class="btn btn-primary btn-block" id="authSubmit">Sign in</button>
+            </form>
+            <button type="button" class="auth-anon-link" id="authAnonSignup">Skip email — create anonymous account</button>
+            <button type="button" class="auth-anon-link" id="authAnonSignin" hidden>Sign in with Account ID instead</button>
+            <div class="auth-divider"><span>or</span></div>
+            <button type="button" class="auth-switch" id="authSwitchHint">Don't have an account? Sign up</button>
+        </div>
+    </div>
+
+    <script type="module" src="js/app-entry-12.js?v=hero5"></script>
+</body>
+</html>

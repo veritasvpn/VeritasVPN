@@ -1,0 +1,48 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicholas/tauri/refs/heads/v2/crates/tauri-config-schema/schema.json",
+  "productName": "VeritasVPN",
+  "version": "0.1.0",
+  "identifier": "cloud.veritasvpn.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "VeritasVPN",
+        "width": 1080,
+        "height": 720,
+        "minWidth": 820,
+        "minHeight": 620,
+        "resizable": true,
+        "maximizable": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/bin/**/*"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-"
+    },
+    "linux": {}
+  }
+}

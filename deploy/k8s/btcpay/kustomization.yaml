@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: btcpay
+
+resources:
+  - namespace.yaml
+  - secrets.yaml
+  - postgres-btcpay.yaml
+  - bitcoind.yaml
+  - nbxplorer.yaml
+  - btcpayserver.yaml
+  - monerod.yaml
+  - monero-wallet-rpc.yaml

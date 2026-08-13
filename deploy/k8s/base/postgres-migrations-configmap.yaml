@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-migrations
+  namespace: veritas
+data:
+  001_auth_initial.sql: |
+    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+    CREATE TABLE accounts (
+        id                 TEXT PRIMARY KEY,
+        hashed_device_id   TEXT NOT NULL UNIQUE,
+        hashed_public_key  TEXT NOT NULL,
+        created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        subscription_tier  TEXT NOT NULL DEFAULT 'free' CHECK (subscription_tier IN ('free', 'premium')),
+        subscription_expiry TIMESTAMPTZ,
+        account_status     TEXT NOT NULL DEFAULT 'active' CHECK (account_status IN ('active', 'suspended', 'deleted'))
+    );
+    CREATE INDEX idx_accounts_hashed_device ON accounts(hashed_device_id);
+    CREATE INDEX idx_accounts_status ON accounts(account_status);
+    CREATE TABLE refresh_tokens (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        token_hash  TEXT NOT NULL UNIQUE,
+        expires_at  TIMESTAMPTZ NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX idx_refresh_tokens_account ON refresh_tokens(account_id);
+    CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+    CREATE INDEX idx_refresh_tokens_expires ON refresh_tokens(expires_at);
+
+  002_auth_email.sql: |
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS email TEXT UNIQUE;
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS password_hash TEXT;
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS reset_token TEXT;
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS reset_token_expiry TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_accounts_email ON accounts(email);
+
+  003_wg_initial.sql: |
+    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+    CREATE TABLE IF NOT EXISTS servers (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        hostname    TEXT NOT NULL UNIQUE,
+        region      TEXT NOT NULL,
+        city        TEXT NOT NULL,
+        country     TEXT NOT NULL,
+        public_ip   TEXT NOT NULL,
+        wg_port     INTEGER NOT NULL DEFAULT 51820,
+        public_key  TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'offline' CHECK (status IN ('offline', 'online', 'maintenance', 'decommissioned')),
+        capacity    INTEGER NOT NULL DEFAULT 100,
+        load_factor REAL NOT NULL DEFAULT 0.0,
+        wg_subnet   TEXT NOT NULL,
+        dns_server  TEXT NOT NULL DEFAULT '1.1.1.1',
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_servers_region ON servers(region);
+    CREATE INDEX IF NOT EXISTS idx_servers_status ON servers(status);
+    CREATE TABLE IF NOT EXISTS peers (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        account_id    TEXT NOT NULL,
+        server_id     UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        pubkey        TEXT NOT NULL,
+        preshared_key TEXT,
+        allowed_ips   TEXT[] NOT NULL DEFAULT '{}',
+        assigned_ip   TEXT NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'failed', 'removed')),
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at    TIMESTAMPTZ,
+        UNIQUE(account_id, server_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_peers_account ON peers(account_id);
+    CREATE INDEX IF NOT EXISTS idx_peers_server ON peers(server_id);
+    CREATE INDEX IF NOT EXISTS idx_peers_pubkey ON peers(pubkey);
+    CREATE INDEX IF NOT EXISTS idx_peers_status ON peers(status);
+    CREATE TABLE IF NOT EXISTS server_metrics (
+        id         BIGSERIAL PRIMARY KEY,
+        server_id  UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+        timestamp  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        rx_bytes   BIGINT NOT NULL DEFAULT 0,
+        tx_bytes   BIGINT NOT NULL DEFAULT 0,
+        peer_count INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_server_metrics_server ON server_metrics(server_id, timestamp);
+
+  004_billing_initial.sql: |
+    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+    CREATE TABLE IF NOT EXISTS subscriptions (
+        id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        account_id            TEXT NOT NULL UNIQUE,
+        tier                  TEXT NOT NULL DEFAULT 'free' CHECK (tier IN ('free', 'premium')),
+        status                TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'canceled', 'past_due', 'pending')),
+        payment_method        TEXT NOT NULL DEFAULT 'none' CHECK (payment_method IN ('stripe', 'btcpay', 'none')),
+        current_period_start  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        current_period_end    TIMESTAMPTZ NOT NULL,
+        cancel_at_period_end  BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_account ON subscriptions(account_id);
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status);
+    CREATE TABLE IF NOT EXISTS payment_records (
+        id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        subscription_id        UUID NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
+        account_id             TEXT,
+        amount                 BIGINT NOT NULL,
+        currency               TEXT NOT NULL DEFAULT 'usd',
+        status                 TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'failed', 'refunded')),
+        provider_transaction_id TEXT NOT NULL,
+        created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_payment_records_subscription ON payment_records(subscription_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_records_provider_txn_unique ON payment_records(provider_transaction_id);
+
+  005_billing_bitcoin.sql: |
+    ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_status_check;
+    ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_status_check
+        CHECK (status IN ('active', 'canceled', 'past_due', 'pending'));
+    ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_payment_method_check;
+    ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_payment_method_check
+        CHECK (payment_method IN ('stripe', 'btcpay', 'none'));
+    ALTER TABLE payment_records
+        ADD COLUMN IF NOT EXISTS account_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_records_provider_txn_unique
+        ON payment_records(provider_transaction_id);
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_period_end
+        ON subscriptions(current_period_end)
+        WHERE tier = 'premium' AND status = 'active';
+
+  006_billing_monero.sql: |
+    ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_payment_method_check;
+    ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_payment_method_check
+        CHECK (payment_method IN ('stripe', 'btcpay', 'btcpay_xmr', 'none'));

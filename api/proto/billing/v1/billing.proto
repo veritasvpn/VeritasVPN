@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package billing.v1;
+
+option go_package = "github.com/veritasvpn/api/gen/billing/v1;billingv1";
+
+service BillingService {
+  rpc CreateSubscription(CreateSubscriptionRequest) returns (CreateSubscriptionResponse);
+  rpc CancelSubscription(CancelSubscriptionRequest) returns (CancelSubscriptionResponse);
+  rpc GetSubscription(GetSubscriptionRequest) returns (GetSubscriptionResponse);
+  rpc HandleStripeWebhook(StripeWebhookRequest) returns (StripeWebhookResponse);
+  rpc HandleBTCPayWebhook(BTCPayWebhookRequest) returns (BTCPayWebhookResponse);
+}
+
+message CreateSubscriptionRequest {
+  string account_id = 1;
+  string tier = 2;
+  string payment_method = 3;
+  string payment_token = 4;
+}
+
+message CreateSubscriptionResponse {
+  string subscription_id = 1;
+  string status = 2;
+  int64 current_period_end = 3;
+  string client_secret = 4;
+}
+
+message CancelSubscriptionRequest {
+  string account_id = 1;
+}
+
+message CancelSubscriptionResponse {
+  bool success = 1;
+}
+
+message GetSubscriptionRequest {
+  string account_id = 1;
+}
+
+message GetSubscriptionResponse {
+  string subscription_id = 1;
+  string tier = 2;
+  string status = 3;
+  int64 current_period_start = 4;
+  int64 current_period_end = 5;
+  bool cancel_at_period_end = 6;
+}
+
+message StripeWebhookRequest {
+  string payload = 1;
+  string signature = 2;
+}
+
+message StripeWebhookResponse {
+  bool success = 1;
+}
+
+message BTCPayWebhookRequest {
+  string payload = 1;
+  string signature = 2;
+}
+
+message BTCPayWebhookResponse {
+  bool success = 1;
+}

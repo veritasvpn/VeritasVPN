@@ -1,0 +1,169 @@
+x-logging: &production-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    restart: unless-stopped
+    ports: !reset []
+    logging: *production-logging
+    mem_limit: 768m
+    cpus: 1.5
+    healthcheck:
+      start_period: 30s
+
+  redis:
+    restart: unless-stopped
+    ports: !reset []
+    command:
+      - redis-server
+      - --appendonly
+      - "no"
+      - --maxmemory-policy
+      - allkeys-lru
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *production-logging
+    mem_limit: 256m
+    cpus: 0.5
+
+  nats:
+    restart: unless-stopped
+    ports: !reset []
+    command:
+      - -js
+      - -m
+      - "8222"
+      - -sd
+      - /data
+      - --user
+      - veritas
+      - --pass
+      - ${NATS_PASSWORD:?NATS_PASSWORD must be set in .env}
+    volumes:
+      - natsdata:/data
+    logging: *production-logging
+    mem_limit: 256m
+    cpus: 0.5
+
+  auth-svc:
+    restart: unless-stopped
+    ports: !reset []
+    environment:
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      ENVIRONMENT: production
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://veritasvpn.cloud,https://www.veritasvpn.cloud,https://api.veritasvpn.cloud}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}@redis:6379/0
+      NATS_URL: nats://veritas:${NATS_PASSWORD:?NATS_PASSWORD must be set in .env}@nats:4222
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *production-logging
+    mem_limit: 256m
+    cpus: 0.75
+
+  wg-manager:
+    restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:8082:8080"
+    environment:
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      ENVIRONMENT: production
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}@redis:6379/0
+      NATS_URL: nats://veritas:${NATS_PASSWORD:?NATS_PASSWORD must be set in .env}@nats:4222
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *production-logging
+    mem_limit: 256m
+    cpus: 0.75
+
+  veritas-agent:
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: info
+    logging: *production-logging
+    mem_limit: 256m
+    cpus: 0.75
+    depends_on:
+      wg-manager:
+        condition: service_healthy
+
+  billing-svc:
+    restart: unless-stopped
+    ports: !reset []
+    environment:
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      # Billing cannot use production mode until real BTCPay credentials exist.
+      # Mock billing remains explicitly disabled below.
+      ENVIRONMENT: ${BILLING_ENVIRONMENT:-development}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://veritasvpn.cloud,https://www.veritasvpn.cloud,https://api.veritasvpn.cloud}
+      ALLOW_MOCK_BTCPAY: "false"
+      NATS_URL: nats://veritas:${NATS_PASSWORD:?NATS_PASSWORD must be set in .env}@nats:4222
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *production-logging
+    mem_limit: 256m
+    cpus: 0.75
+
+  nginx:
+    restart: unless-stopped
+    # The remotely managed Cloudflare Tunnel currently targets the Pi origin
+    # on port 8000. The host firewall restricts this origin port.
+    ports: !override
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *production-logging
+    mem_limit: 128m
+    cpus: 0.5
+    depends_on:
+      auth-svc:
+        condition: service_healthy
+      billing-svc:
+        condition: service_healthy
+      wg-manager:
+        condition: service_healthy
+
+  cloudflared:
+    restart: unless-stopped
+    profiles: !reset []
+    image: cloudflare/cloudflared@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
+    logging: *production-logging
+    mem_limit: 128m
+    cpus: 0.5
+
+  # The legacy SOCKS proxy was used only by the retired Chrome extension.
+  # Keep it available for explicit recovery without starting it by default.
+  veritas-proxy:
+    profiles: ["legacy-browser-proxy"]
+
+volumes:
+  natsdata:

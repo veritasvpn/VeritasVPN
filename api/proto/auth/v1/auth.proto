@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package auth.v1;
+
+option go_package = "github.com/veritasvpn/api/gen/auth/v1;authv1";
+
+service AuthService {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc GetAccount(GetAccountRequest) returns (GetAccountResponse);
+  rpc DeleteAccount(DeleteAccountRequest) returns (DeleteAccountResponse);
+}
+
+message RegisterRequest {
+  string device_id = 1;
+  string public_key = 2;
+}
+
+message RegisterResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  string account_id = 3;
+  int64 expires_at = 4;
+}
+
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message RefreshTokenResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_at = 3;
+}
+
+message ValidateTokenRequest {
+  string access_token = 1;
+}
+
+message ValidateTokenResponse {
+  bool valid = 1;
+  string account_id = 2;
+  string tier = 3;
+}
+
+message GetAccountRequest {
+  string account_id = 1;
+}
+
+message GetAccountResponse {
+  string account_id = 1;
+  string tier = 2;
+  int64 subscription_expiry = 3;
+  string status = 4;
+  int64 created_at = 5;
+}
+
+message DeleteAccountRequest {
+  string account_id = 1;
+}
+
+message DeleteAccountResponse {
+  bool success = 1;
+}

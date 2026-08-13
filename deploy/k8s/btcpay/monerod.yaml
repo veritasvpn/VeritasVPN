@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: monerod
+  namespace: btcpay
+  labels:
+    app: monerod
+spec:
+  type: ClusterIP
+  ports:
+    - name: rpc
+      port: 18081
+      targetPort: 18081
+    - name: p2p
+      port: 18080
+      targetPort: 18080
+  selector:
+    app: monerod
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: monerod
+  namespace: btcpay
+  labels:
+    app: monerod
+spec:
+  serviceName: monerod
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monerod
+  template:
+    metadata:
+      labels:
+        app: monerod
+    spec:
+      containers:
+        - name: monerod
+          image: btcpayserver/monero:0.18.4.3
+          args:
+            - monerod
+            - --non-interactive
+            - --prune-blockchain
+            - --rpc-bind-ip=0.0.0.0
+            - --rpc-bind-port=18081
+            - --confirm-external-bind
+            - --restricted-rpc
+            - --p2p-bind-ip=0.0.0.0
+            - --p2p-bind-port=18080
+            - --out-peers=16
+            - --in-peers=8
+            - --db-sync-mode=safe
+          ports:
+            - containerPort: 18081
+              name: rpc
+            - containerPort: 18080
+              name: p2p
+          volumeMounts:
+            - name: monero-data
+              mountPath: /home/monero/.bitmonero
+          readinessProbe:
+            tcpSocket:
+              port: 18081
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          livenessProbe:
+            tcpSocket:
+              port: 18081
+            initialDelaySeconds: 120
+            periodSeconds: 60
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: monero-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 80Gi

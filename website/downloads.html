@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Download VeritasVPN for Chrome, Android, and Linux. Other platforms are coming soon.">
+    <title>Download VeritasVPN</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css?v=inter1">
+    <link rel="icon" type="image/png" href="assets/favicon.png">
+</head>
+<body>
+    <nav class="navbar" id="navbar">
+        <div class="container">
+            <a href="/" class="logo">
+                <img src="assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+                <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="/#features">Features</a></li>
+                <li><a href="/#pricing">Pricing</a></li>
+                <li><a href="/downloads.html" aria-current="page">Download</a></li>
+                <li><a href="/#faq">FAQ</a></li>
+            </ul>
+            <div class="nav-auth is-hidden" id="navAuthDownloads"></div>
+            <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">
+                <span></span><span></span><span></span>
+            </button>
+        </div>
+    </nav>
+
+    <main class="downloads-page">
+        <section class="downloads-hero">
+            <div class="container">
+                <span class="downloads-hero-emblem" aria-hidden="true"><img src="assets/logo-mark.png" alt=""></span>
+                <h1>Choose your VeritasVPN app</h1>
+                <p>One private account across Chrome, Android, and Linux. Every available app connects to the same secure VeritasVPN network in Paraguay.</p>
+            </div>
+        </section>
+
+        <section class="downloads platform-catalog" id="downloads">
+            <div class="container">
+                <div class="platform-grid" aria-label="VeritasVPN apps">
+                    <a class="platform-card is-available" href="/install/chrome.html">
+                        <span class="platform-badge">Available now</span>
+                        <span class="platform-icon platform-icon--chrome" aria-hidden="true"><img src="assets/icon-chrome-veritas.svg" alt=""></span>
+                        <div><h2>Chrome</h2><p>Private browsing through the authenticated Veritas gateway. Fast, focused protection for every Chrome tab.</p></div>
+                        <span class="platform-action">Get Chrome extension <b>→</b></span>
+                    </a>
+
+                    <a class="platform-card is-available" href="/install/android.html">
+                        <span class="platform-badge">Available now</span>
+                        <span class="platform-icon" aria-hidden="true"><img src="assets/icon-android-veritas.svg" alt=""></span>
+                        <div><h2>Android</h2><p>Full-device WireGuard protection with the live world map, connection status, and private account support.</p></div>
+                        <span class="platform-action">Download Android APK <b>→</b></span>
+                    </a>
+
+                    <a class="platform-card is-available" href="/install/linux.html">
+                        <span class="platform-badge">Available now</span>
+                        <span class="platform-icon platform-icon--linux" aria-hidden="true"><img src="assets/icon-linux-veritas.svg" alt=""></span>
+                        <div><h2>Linux</h2><p>Native WireGuard desktop protection for Debian, Ubuntu, and AppImage-compatible distributions.</p></div>
+                        <span class="platform-action">Download for Linux <b>→</b></span>
+                    </a>
+
+                    <article class="platform-card is-coming" aria-disabled="true"><span class="platform-badge">Coming soon…</span><span class="platform-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 12V6.5l8-1.1V12H3Zm9 0h9V4.2L12 2.9V12ZM3 13h8v6.6l-8-1.1V13Zm9 0h9v6.8l-9 1.3V13Z"/></svg></span><div><h2>Windows</h2><p>A polished native Windows experience is in development.</p></div><span class="platform-action">Coming soon…</span></article>
+                    <article class="platform-card is-coming" aria-disabled="true"><span class="platform-badge">Coming soon…</span><span class="platform-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 15 2.94 8.53 4.7 5.41c.87-1.56 2.43-2.55 4.12-2.58 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.88M13 3.5c.73-.83 1.22-1.98 1.08-3.13-1.05.04-2.31.7-3.06 1.58-.67.78-1.26 2.03-1.1 3.22 1.16.09 2.35-.59 3.08-1.67Z"/></svg></span><div><h2>macOS</h2><p>A signed and notarized Apple Silicon release is on the roadmap.</p></div><span class="platform-action">Coming soon…</span></article>
+                    <article class="platform-card is-coming" aria-disabled="true"><span class="platform-badge">Coming soon…</span><span class="platform-icon"><strong>iOS</strong></span><div><h2>iPhone &amp; iPad</h2><p>Private mobile protection designed for Apple devices.</p></div><span class="platform-action">Coming soon…</span></article>
+
+                </div>
+                <p class="platform-note"><span></span> Available apps are maintained for the current 64-bit platform versions.</p>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-bottom" style="border-top:none;padding-top:0;">
+                <p>&copy; 2025 VeritasVPN. All rights reserved.</p>
+                <p class="footer-tagline"><a href="/">Home</a> · <a href="/#pricing">Pricing</a></p>
+            </div>
+        </div>
+    </footer>
+
+    <div class="auth-modal is-hidden" id="authModal" aria-hidden="true"></div>
+
+    <script type="module">
+        import { isAlphaEnabled } from './js/config.js?v=alpha';
+        import { initAuthUI } from './js/auth.js';
+        if (isAlphaEnabled()) {
+            const nav = document.getElementById('navAuthDownloads');
+            nav.classList.remove('is-hidden');
+            nav.innerHTML = '<button type="button" class="btn btn-primary nav-login" data-auth-open="signin">Log in</button>';
+            initAuthUI();
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - secrets.yaml
+  - configmap.yaml
+  - nginx-configmap.yaml
+  - nats-configmap.yaml
+  - network-policy.yaml
+  - postgres-migrations-configmap.yaml
+  - postgres.yaml
+  - redis.yaml
+  - nats.yaml
+  - registry.yaml
+  - auth-svc.yaml
+  - wg-manager.yaml
+  - billing-svc.yaml
+  - nginx.yaml
+  - ingress.yaml
+  - veritas-agent.yaml
+  - veritas-proxy.yaml

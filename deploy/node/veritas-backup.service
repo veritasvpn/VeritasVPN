@@ -1,0 +1,12 @@
+[Unit]
+Description=VeritasVPN daily recovery snapshot
+Requires=docker.service
+After=docker.service veritasvpn-compose.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/veritas-backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+

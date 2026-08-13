@@ -1,0 +1,182 @@
+name: Build VeritasVPN Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Bundle WireGuard Go (macOS)
+        run: bash scripts/bundle-wg-macos.sh
+        working-directory: clients/desktop
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: clients/desktop
+
+      - name: Build .dmg
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: npx tauri build
+        working-directory: clients/desktop
+
+      - name: Upload .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: veritasvpn-macos
+          path: clients/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system deps
+        run: |
+          sudo apt update
+          sudo apt install -y libwebkit2gtk-4.1-dev libgtk-3-dev libglib2.0-dev librsvg2-dev patchelf
+
+      - name: Bundle WireGuard Go (Linux)
+        run: bash scripts/bundle-wg-linux.sh
+        working-directory: clients/desktop
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: clients/desktop
+
+      - name: Build .deb and .AppImage
+        run: npx tauri build
+        working-directory: clients/desktop
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: veritasvpn-linux-deb
+          path: clients/desktop/src-tauri/target/release/bundle/deb/*.deb
+
+      - name: Upload .AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: veritasvpn-linux-appimage
+          path: clients/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: clients/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: clients/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: clients/desktop
+
+      - name: Build .exe and .msi
+        run: npx tauri build
+        working-directory: clients/desktop
+
+      - name: Upload .exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: veritasvpn-windows-exe
+          path: clients/desktop/src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: Upload .msi
+        uses: actions/upload-artifact@v4
+        with:
+          name: veritasvpn-windows-msi
+          path: clients/desktop/src-tauri/target/release/bundle/msi/*.msi
+
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build WireGuard Go for Android
+        run: bash build-wg-android.sh
+        working-directory: android
+
+      - name: Assemble APK
+        run: ./gradlew assembleDebug
+        working-directory: android
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: veritasvpn-android
+          path: android/app/build/outputs/apk/debug/*.apk
+
+  release:
+    needs: [build-macos, build-linux, build-windows, build-android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Rename assets to fixed names
+        run: |
+          DMG=$(ls veritasvpn-macos/*.dmg | head -1)
+          cp "$DMG" VeritasVPN-macOS.dmg
+
+          DEB=$(ls veritasvpn-linux-deb/*.deb | head -1)
+          cp "$DEB" VeritasVPN-Linux.deb
+          AI=$(ls veritasvpn-linux-appimage/*.AppImage | head -1)
+          cp "$AI" VeritasVPN-Linux.AppImage
+
+          EXE=$(ls veritasvpn-windows-exe/*.exe | head -1)
+          cp "$EXE" VeritasVPN-Windows.exe
+          MSI=$(ls veritasvpn-windows-msi/*.msi | head -1)
+          cp "$MSI" VeritasVPN-Windows.msi
+
+          APK=$(ls veritasvpn-android/*.apk | head -1)
+          cp "$APK" VeritasVPN-Android.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            VeritasVPN-macOS.dmg
+            VeritasVPN-Linux.deb
+            VeritasVPN-Linux.AppImage
+            VeritasVPN-Windows.exe
+            VeritasVPN-Windows.msi
+            VeritasVPN-Android.apk

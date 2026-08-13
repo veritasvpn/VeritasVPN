@@ -1,0 +1,157 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: veritas
+
+resources:
+  - ../../base
+
+images:
+  - name: localhost:31500/auth-svc
+    newName: 192.168.0.5:30500/auth-svc
+    newTag: latest
+  - name: localhost:31500/wg-manager
+    newName: 192.168.0.5:30500/wg-manager
+    newTag: latest
+  - name: localhost:31500/billing-svc
+    newName: 192.168.0.5:30500/billing-svc
+    newTag: latest
+  - name: localhost:31500/veritas-agent
+    newName: 192.168.0.5:30500/veritas-agent
+    newTag: latest
+  - name: localhost:31500/veritas-proxy
+    newName: 192.168.0.5:30500/veritas-proxy
+    newTag: latest
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: veritas-config
+    patch: |-
+      - op: replace
+        path: /data/ENVIRONMENT
+        value: "production"
+      - op: replace
+        path: /data/LOG_LEVEL
+        value: "info"
+      - op: replace
+        path: /data/LOG_FORMAT
+        value: "json"
+      - op: replace
+        path: /data/CORS_ORIGINS
+        value: "https://veritasvpn.cloud,https://www.veritasvpn.cloud"
+      - op: replace
+        path: /data/ALLOW_MOCK_BTCPAY
+        value: "false"
+      - op: replace
+        path: /data/CHECKOUT_SUCCESS_URL
+        value: "https://veritasvpn.cloud/billing/success.html"
+      - op: replace
+        path: /data/CHECKOUT_CANCEL_URL
+        value: "https://veritasvpn.cloud/billing/cancel.html"
+      - op: replace
+        path: /data/SERVER_HOSTNAME
+        value: "veritas-node"
+      - op: replace
+        path: /data/SERVER_COUNTRY
+        value: "PY"
+      - op: replace
+        path: /data/SERVER_CITY
+        value: "asuncion"
+
+  # Auth env with Redis/NATS auth
+  - target:
+      kind: Deployment
+      name: auth-svc
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/2/value
+        value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
+      - op: replace
+        path: /spec/template/spec/containers/0/env/3/value
+        value: "nats://$(NATS_USER):$(NATS_PASSWORD)@nats:4222"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: REDIS_PASSWORD
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_USER
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_USER
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_PASSWORD
+
+  # WG-Manager env with Redis/NATS auth
+  - target:
+      kind: Deployment
+      name: wg-manager
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/2/value
+        value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
+      - op: replace
+        path: /spec/template/spec/containers/0/env/3/value
+        value: "nats://$(NATS_USER):$(NATS_PASSWORD)@nats:4222"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: REDIS_PASSWORD
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_USER
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_USER
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_PASSWORD
+
+  # Billing env with NATS auth
+  - target:
+      kind: Deployment
+      name: billing-svc
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/2/value
+        value: "nats://$(NATS_USER):$(NATS_PASSWORD)@nats:4222"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_USER
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_USER
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NATS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: veritas-secrets
+              key: NATS_PASSWORD

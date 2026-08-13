@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="VeritasVPN for macOS is planned but not currently offered for download.">
+    <title>VeritasVPN for macOS — Planned</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../css/style.css?v=inter1">
+    <link rel="icon" type="image/png" href="../assets/favicon.png">
+</head>
+<body>
+    <nav class="navbar" id="navbar">
+        <div class="container">
+            <a href="/" class="logo">
+                <img src="../assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+                <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="/downloads.html">Download</a></li>
+                <li><a href="/#pricing">Pricing</a></li>
+            </ul>
+            <div class="nav-auth">
+                <div id="navAuthLoggedOut" class="nav-auth-logged-out">
+                    <button type="button" class="btn btn-primary nav-login" data-auth-open="signin">Log in</button>
+                </div>
+                <div id="navAuthLoggedIn" class="nav-auth-logged-in is-hidden">
+                    <span id="navPlanBadge" class="nav-plan-badge" hidden>Inactive</span>
+                    <button type="button" class="nav-user-btn" id="navUserMenuBtn">
+                        <span class="nav-user-avatar" aria-hidden="true"></span>
+                        <span id="navUserEmail" class="nav-user-email"></span>
+                    </button>
+                    <div class="nav-user-menu" id="navUserMenu" role="menu">
+                        <button type="button" class="nav-user-menu-item" id="authSignOut" role="menuitem">Sign out</button>
+                    </div>
+                </div>
+            </div>
+            <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu"><span></span><span></span><span></span></button>
+        </div>
+    </nav>
+
+    <main class="downloads-page">
+        <section class="downloads-hero">
+            <div class="container">
+                <h1>macOS is not available yet</h1>
+                <p>We are waiting until the app can be distributed properly under Apple’s signing and notarization requirements.</p>
+                <div class="hero-actions" style="justify-content:center;margin-top:28px;">
+                    <a class="btn btn-primary btn-lg" href="/install/chrome.html">Use Chrome on macOS</a>
+                    <a class="btn btn-outline btn-lg" href="/downloads.html">View available platforms</a>
+                </div>
+            </div>
+        </section>
+
+        <section class="downloads">
+            <div class="container install-steps">
+                <h2>Why there is no download</h2>
+                <p class="downloads-note">VeritasVPN does not currently have the Apple distribution credentials needed to sign and notarize a public macOS build. We will not ask customers to bypass Gatekeeper or present an unsigned build as production-ready.</p>
+            </div>
+        </section>
+    </main>
+
+    <div class="auth-modal" id="authModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+        <div class="auth-dialog">
+            <button type="button" class="auth-close" data-auth-close aria-label="Close">&times;</button>
+            <div class="auth-brand">
+                <img src="../assets/logo-mark.png" alt="" width="48" height="48">
+                <p class="auth-brand-name">Veritas<span>VPN</span></p>
+            </div>
+            <div class="auth-tabs" role="tablist">
+                <button type="button" class="auth-tab is-active" data-auth-tab="signin" role="tab" aria-selected="true">Sign in</button>
+                <button type="button" class="auth-tab" data-auth-tab="signup" role="tab" aria-selected="false">Sign up</button>
+            </div>
+            <h2 id="authTitle" class="auth-title">Sign in</h2>
+            <p id="authError" class="auth-error" hidden></p>
+            <form id="authForm" class="auth-form" novalidate>
+                <div id="authFormFields">
+                <label class="auth-field"><span>Email</span><input type="email" id="authEmail" required></label>
+                <label class="auth-field"><span>Password</span><input type="password" id="authPassword" required minlength="6"></label>
+                </div>
+                <button type="button" class="auth-reset" id="authReset">Forgot password?</button>
+                <button type="submit" class="btn btn-primary btn-block" id="authSubmit">Sign in</button>
+            </form>
+            <div id="authForgot" class="auth-forgot" hidden>
+                <label class="auth-field"><span>Email</span><input type="email" id="authForgotEmail" required></label>
+                <button type="button" class="btn btn-primary btn-block" id="authForgotSubmit">Send reset link</button>
+                <button type="button" class="auth-forgot-back" id="authForgotBack">Back to sign in</button>
+            </div>
+            <button type="button" class="auth-anon-link" id="authAnonSignup">Skip email — create anonymous account</button>
+            <button type="button" class="auth-anon-link" id="authAnonSignin" hidden>Sign in with Account ID instead</button>
+            <div class="auth-divider"><span>or</span></div>
+            <button type="button" class="auth-switch" id="authSwitchHint">Don't have an account? Sign up</button>
+        </div>
+    </div>
+    <script type="module" src="../js/main.js"></script>
+</body>
+</html>

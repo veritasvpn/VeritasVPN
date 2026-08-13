@@ -1,0 +1,41 @@
+VeritasVPN Warrant Canary
+=========================
+
+Published: 2026-07-28
+Next expected update: on or before 2026-08-28
+Issuer: VeritasVPN (veritasvpn.cloud)
+Public repository: https://github.com/JPG19/VeritasVPN
+
+This canary is a plain-text statement. Cryptographic signing of canary
+updates may be added later; until then, treat GitHub commit history and
+this hosted file as the source of truth.
+
+As of the publication date above, VeritasVPN states that:
+
+1. We have not received a National Security Letter, FISA order, or any
+   comparable secret legal order requiring us to disclose user data or
+   modify VeritasVPN infrastructure in a way we cannot publicly describe.
+
+2. We have not been served with a gag order that would prevent us from
+   discussing a government demand for user data related to VeritasVPN.
+
+3. We have not been compelled to place backdoors, weaken cryptography, or
+   otherwise subvert the WireGuard or authentication systems we operate.
+
+4. We have not secretly handed over encryption keys, WireGuard private
+   keys, JWT signing secrets, or database dumps under sealed process that
+   we are forbidden from disclosing.
+
+If this file is not updated by the “Next expected update” date above, treat
+that silence as a potential warning and verify the repository / site for
+explanation.
+
+Honest scope note
+-----------------
+VeritasVPN is an early-stage service. Operational systems may store
+account identifiers, authentication tokens, billing records, and WireGuard
+peer metadata as described in our Privacy Policy. This canary is about
+secret legal compulsion — it is not a claim that we store zero operational
+data.
+
+Contact: contact@veritasvpn.cloud

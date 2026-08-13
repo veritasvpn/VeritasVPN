@@ -1,0 +1,228 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: veritas
+
+resources:
+  - ../../base
+
+images:
+  - name: localhost:31500/auth-svc
+    newName: ghcr.io/jpg19/veritasvpn/auth-svc
+    newTag: latest
+  - name: localhost:31500/wg-manager
+    newName: ghcr.io/jpg19/veritasvpn/wg-manager
+    newTag: latest
+  - name: localhost:31500/billing-svc
+    newName: ghcr.io/jpg19/veritasvpn/billing-svc
+    newTag: latest
+  - name: localhost:31500/veritas-agent
+    newName: ghcr.io/jpg19/veritasvpn/veritas-agent
+    newTag: latest
+  - name: localhost:31500/veritas-proxy
+    newName: ghcr.io/jpg19/veritasvpn/veritas-proxy
+    newTag: latest
+
+patches:
+  # -- ConfigMap: production defaults --
+  - target:
+      kind: ConfigMap
+      name: veritas-config
+    patch: |-
+      - op: replace
+        path: /data/ENVIRONMENT
+        value: "production"
+      - op: replace
+        path: /data/LOG_LEVEL
+        value: "info"
+      - op: replace
+        path: /data/LOG_FORMAT
+        value: "json"
+      - op: replace
+        path: /data/CORS_ORIGINS
+        value: "https://veritasvpn.cloud,https://www.veritasvpn.cloud"
+      - op: replace
+        path: /data/ALLOW_MOCK_BTCPAY
+        value: "false"
+      - op: replace
+        path: /data/CHECKOUT_SUCCESS_URL
+        value: "https://veritasvpn.cloud/billing/success.html"
+      - op: replace
+        path: /data/CHECKOUT_CANCEL_URL
+        value: "https://veritasvpn.cloud/billing/cancel.html"
+      - op: replace
+        path: /data/SERVER_HOSTNAME
+        value: "veritas-node"
+      - op: replace
+        path: /data/SERVER_COUNTRY
+        value: "PY"
+      - op: replace
+        path: /data/SERVER_CITY
+        value: "asuncion"
+
+  # -- Redis: 2 replicas + requirepass + auth probes --
+  - target:
+      kind: Deployment
+      name: redis
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: "--requirepass"
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: "$(REDIS_PASSWORD)"
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: veritas-secrets
+                key: REDIS_PASSWORD
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe/exec/command
+        value: ["redis-cli", "-a", "$(REDIS_PASSWORD)", "ping"]
+      - op: replace
+        path: /spec/template/spec/containers/0/livenessProbe/exec/command
+        value: ["redis-cli", "-a", "$(REDIS_PASSWORD)", "ping"]
+
+  # -- securityContext: auth-svc --
+  - target:
+      kind: Deployment
+      name: auth-svc
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: ["ALL"]
+
+  # -- securityContext: wg-manager --
+  - target:
+      kind: Deployment
+      name: wg-manager
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: ["ALL"]
+
+  # -- securityContext: billing-svc --
+  - target:
+      kind: Deployment
+      name: billing-svc
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: ["ALL"]
+
+  # -- securityContext: nginx (needs tmp for nginx pid) --
+  - target:
+      kind: Deployment
+      name: nginx
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 101
+          capabilities:
+            drop: ["ALL"]
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: nginx-tmp
+          mountPath: /tmp
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: nginx-cache
+          mountPath: /var/cache/nginx
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: nginx-tmp
+          emptyDir: {}
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: nginx-cache
+          emptyDir: {}
+
+  # -- securityContext: veritas-proxy --
+  - target:
+      kind: Deployment
+      name: veritas-proxy
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: ["ALL"]
+
+  # -- securityContext: postgres --
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          allowPrivilegeEscalation: false
+          runAsUser: 70
+          runAsGroup: 70
+          fsGroup: 70
+          capabilities:
+            drop: ["ALL"]
+
+  # -- securityContext: nats --
+  - target:
+      kind: StatefulSet
+      name: nats
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop: ["ALL"]
+
+  # -- securityContext: redis --
+  - target:
+      kind: Deployment
+      name: redis
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/securityContext
+        value:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 999
+          capabilities:
+            drop: ["ALL"]

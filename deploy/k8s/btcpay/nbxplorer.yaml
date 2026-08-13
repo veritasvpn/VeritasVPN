@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nbxplorer
+  namespace: btcpay
+  labels:
+    app: nbxplorer
+spec:
+  type: ClusterIP
+  ports:
+    - port: 32838
+      targetPort: 32838
+  selector:
+    app: nbxplorer
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nbxplorer
+  namespace: btcpay
+  labels:
+    app: nbxplorer
+spec:
+  serviceName: nbxplorer
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nbxplorer
+  template:
+    metadata:
+      labels:
+        app: nbxplorer
+    spec:
+      containers:
+        - name: nbxplorer
+          image: nicolasdorier/nbxplorer:2.6.9
+          env:
+            - name: NBXPLORER_NETWORK
+              value: "testnet"
+            - name: NBXPLORER_BTCRPCURL
+              value: "http://bitcoind:18332/"
+            - name: NBXPLORER_BTCRPCUSER
+              value: "btcpay_rpc"
+            - name: NBXPLORER_BTCRPCPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: btcpay-secrets
+                  key: BTC_RPC_PASSWORD
+            - name: NBXPLORER_BTCNODEENDPOINT
+              value: "bitcoind:18333"
+            - name: NBXPLORER_CHAINS
+              value: "btc"
+            - name: NBXPLORER_BIND
+              value: "0.0.0.0:32838"
+            - name: NBXPLORER_NOAUTH
+              value: "false"
+            - name: NBXPLORER_AUTOMIGRATE
+              value: "true"
+            - name: DOTNET_USE_POLLING_FILE_WATCHER
+              value: "true"
+            - name: NBXPLORER_DATADIR
+              value: "/data"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              eval "export NBXPLORER_POSTGRES=\"User ID=btcpay;Password=$BTCPAY_POSTGRES_PASSWORD;Host=postgres-btcpay;Port=5432;Database=nbxplorer\""
+              exec dotnet NBXplorer.dll
+          envFrom:
+            - secretRef:
+                name: btcpay-secrets
+          ports:
+            - containerPort: 32838
+          volumeMounts:
+            - name: nbxplorer-data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 32838
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 32838
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: nbxplorer-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

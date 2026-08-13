@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: monero-wallet-rpc
+  namespace: btcpay
+  labels:
+    app: monero-wallet-rpc
+spec:
+  type: ClusterIP
+  ports:
+    - port: 18082
+      targetPort: 18082
+  selector:
+    app: monero-wallet-rpc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: monero-wallet-pvc
+  namespace: btcpay
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: monero-wallet-rpc
+  namespace: btcpay
+  labels:
+    app: monero-wallet-rpc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monero-wallet-rpc
+  template:
+    metadata:
+      labels:
+        app: monero-wallet-rpc
+    spec:
+      containers:
+        - name: monero-wallet-rpc
+          image: btcpayserver/monero:0.18.4.3
+          args:
+            - monero-wallet-rpc
+            - --non-interactive
+            - --daemon-address
+            - monerod:18081
+            - --wallet-dir
+            - /wallet
+            - --rpc-bind-port
+            - "18082"
+            - --rpc-bind-ip
+            - "0.0.0.0"
+            - --confirm-external-bind
+            - --disable-rpc-login
+            - --trusted-daemon
+          ports:
+            - containerPort: 18082
+          volumeMounts:
+            - name: wallet-data
+              mountPath: /wallet
+          readinessProbe:
+            tcpSocket:
+              port: 18082
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 18082
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+      volumes:
+        - name: wallet-data
+          persistentVolumeClaim:
+            claimName: monero-wallet-pvc

@@ -1,0 +1,10 @@
+shell PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Daily PostgreSQL backup at 02:00
+0 2 * * * root /opt/veritasvpn/deploy/backup/backup-postgres.sh >> /var/log/veritas-backup.log 2>&1
+
+# Health check every 15 minutes
+*/15 * * * * root /opt/veritasvpn/deploy/monitoring/health-check.sh >> /var/log/veritas-health.log 2>&1
+
+# Weekly backup verification (Sunday at 03:00)
+0 3 * * 0 root /opt/veritasvpn/deploy/verify/boot-verify.sh >> /var/log/veritas-verify.log 2>&1

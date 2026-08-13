@@ -1,0 +1,9 @@
+[Unit]
+Description=VeritasVPN health audit
+Requires=docker.service
+After=network-online.target docker.service veritasvpn-compose.service veritas-firewall.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/veritas-vpn-health
+

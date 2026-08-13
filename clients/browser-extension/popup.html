@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VeritasVPN</title><link rel="stylesheet" href="css/popup.css"></head>
+<body><div class="shell">
+<header class="header"><img src="icons/veritas-mark.png" alt="VeritasVPN"><div class="brand-copy"><strong>VeritasVPN</strong><span>The truth about online privacy</span></div><button id="settingsButton" class="settings-button" type="button" aria-label="Open account settings" aria-expanded="false" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 8.94 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.57 15 1.7 1.7 0 0 0 3 14H3v-4h.08A1.7 1.7 0 0 0 4.6 8.94a1.7 1.7 0 0 0-.34-1.88L4.2 7l2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.57 1.7 1.7 0 0 0 10 3V3h4v.08A1.7 1.7 0 0 0 15.06 4.6a1.7 1.7 0 0 0 1.88-.34L17 4.2 19.83 7l-.06.06a1.7 1.7 0 0 0-.34 1.88A1.7 1.7 0 0 0 21 10h.08v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg></button></header>
+<p id="statusBanner" class="banner" hidden></p>
+<section id="authView" class="view auth-view">
+  <div class="tabs"><button class="tab is-active" data-mode="signin">Sign in</button><button class="tab" data-mode="signup">Sign up</button></div>
+  <form id="authForm"><div id="emailFields"><label>Email<input type="email" id="email" autocomplete="username" placeholder="you@example.com"></label><label>Password<input type="password" id="password" autocomplete="current-password" minlength="6" placeholder="••••••••"></label></div><div id="accountIdFields" hidden><label>Account ID<input type="text" id="accountId" autocomplete="off" spellcheck="false" placeholder="Your private Account ID"></label></div><p id="anonHint" class="hint" hidden>Create a private account with no email. Save the Account ID—it cannot be recovered.</p><button type="submit" class="btn primary" id="authSubmit">Sign in</button></form>
+  <button class="linkish auth-alt" id="authMethodToggle">Sign in with Account ID instead</button>
+</section>
+<section id="mainView" class="view" hidden>
+  <aside id="settingsPanel" class="settings-panel" aria-label="Account settings" hidden>
+    <button id="plansMenuBtn" class="settings-option" type="button">Plans</button>
+    <button id="networkMapBtn" class="settings-option" type="button">Network map</button>
+    <hr><button id="signOutBtn" class="settings-option danger" type="button">Sign out</button>
+  </aside>
+  <div id="dashboardView">
+    <section id="scene" class="privacy-exposure">
+      <div class="exposure-topline"><strong id="trafficLabel">UNENCRYPTED TRAFFIC</strong><b id="ipLabel">IP VISIBLE</b></div>
+      <svg class="exposure-routes" viewBox="0 0 340 300" aria-hidden="true"><g class="exposure-lines"><path d="M170 260L170 58"/><path d="M170 260L55 150"/><path d="M170 260L285 150"/></g><circle class="data-particle" r="4"><animateMotion dur="2.2s" repeatCount="indefinite" path="M170 260L170 58"/></circle><circle class="data-particle" r="4"><animateMotion dur="2.45s" repeatCount="indefinite" path="M170 260L55 150"/></circle><circle class="data-particle" r="4"><animateMotion dur="2.7s" repeatCount="indefinite" path="M170 260L285 150"/></circle></svg>
+      <div class="observer observer-isp"><i>ISP</i><strong>YOUR ISP</strong><span id="ispDetail">Can observe traffic</span></div>
+      <div class="observer observer-site"><i>WEB</i><strong>WEBSITE</strong><span id="siteDetail">Sees your IP</span></div>
+      <div class="observer observer-trackers"><i>WEB</i><strong>TRACKERS</strong><span id="trackerDetail">Build a profile</span></div>
+      <div id="activityCarousel" class="activity-carousel"><span>Sites you visit</span><span>Searches and activity</span><span>Your IP address</span></div>
+      <div class="device-node"><span class="mini-lock"></span><strong>YOU</strong></div><span class="scene-scan"></span>
+    </section>
+    <section class="blueprint-status"><div id="connectionBadge" class="blueprint-badge"><i></i><span>VPN DISCONNECTED</span></div><h1 id="connectionTitle">Your online activity is visible</h1><p id="connectionState">Hide your IP address and encrypt your connection.</p>
+      <button class="btn primary connect-btn blueprint-primary" id="toggleBtn" hidden><span id="toggleLabel">Connect now</span><i>→</i></button>
+      <button class="btn primary upgrade-btn blueprint-primary" id="upgradeBtn" type="button" hidden><span>Get Premium</span><i>→</i></button>
+      <div id="protectedMeta" class="protected-meta" hidden><i></i>Protected · Chrome proxy active</div>
+    </section>
+  </div>
+  <section id="networkMapView" class="network-map-view" hidden><div class="map-view-head"><div><span>NETWORK MAP</span><h2>Your secure route</h2></div><button id="networkMapBack" type="button">Back</button></div><div class="map-wrap"><img src="icons/world-map.svg" alt="World map"><svg class="route" viewBox="0 0 340 170" role="img" aria-label="Route from your location to the Paraguay VPN server"><path id="routePath"/><circle id="deviceDot" class="device" r="4"/><circle id="serverDot" class="server" r="5"/></svg></div><div class="map-summary"><div><span>CONNECTION</span><strong id="mapConnectionText">No secure route</strong></div><b id="mapConnectionBadge">OFFLINE</b></div></section>
+</section>
+</div><script type="module" src="js/popup.js"></script></body></html>

@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: veritas-config
+  namespace: veritas
+data:
+  ENVIRONMENT: "development"
+  LOG_LEVEL: "debug"
+  LOG_FORMAT: "console"
+  CORS_ORIGINS: "http://localhost:8000,http://127.0.0.1:8000"
+  PUBLIC_BASE_URL: "https://veritasvpn.cloud"
+
+  POSTGRES_DB: "veritas"
+  POSTGRES_USER: "veritas"
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+
+  NATS_HOST: "nats"
+  NATS_PORT: "4222"
+
+  PUBLIC_IP: "change-me-or-set-to-your-vps-ip"
+  SERVER_HOSTNAME: "linuxdesktop"
+  SERVER_REGION: "sa"
+  SERVER_CITY: "local"
+  SERVER_COUNTRY: "AR"
+  MANAGER_ENDPOINT: "http://wg-manager:8080"
+
+  WG_INTERFACE: "wg0"
+  WG_PORT: "51820"
+  WG_PRIVATE_KEY_FILE: "/etc/wireguard/private.key"
+
+  ALLOW_MOCK_BTCPAY: "true"
+  BTCPAY_SERVER_URL: "http://btcpayserver.btcpay.svc.cluster.local:49392"
+  BTCPAY_API_KEY: ""
+  BTCPAY_STORE_ID: ""
+  BTCPAY_WEBHOOK_SECRET: ""
+  BTCPAY_PUBLIC_URL: "https://btcpay.veritasvpn.cloud"
+
+  FREE_ALLOWED_REGIONS: ""
+  PREMIUM_PRICE_USD_CENTS: "500"
+  PREMIUM_PERIOD_DAYS: "30"
+  CHECKOUT_SUCCESS_URL: "http://localhost:8000/billing/success.html"
+  CHECKOUT_CANCEL_URL: "http://localhost:8000/billing/cancel.html"
+  BILLING_PUBLIC_URL: "http://billing-svc:8080"

@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: veritas-agent
+  namespace: veritas
+  labels:
+    app: veritas-agent
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+  selector:
+    app: veritas-agent
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: veritas-agent
+  namespace: veritas
+  labels:
+    app: veritas-agent
+spec:
+  selector:
+    matchLabels:
+      app: veritas-agent
+  template:
+    metadata:
+      labels:
+        app: veritas-agent
+    spec:
+      hostNetwork: true
+      hostPID: false
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        veritas-vpn-node: "true"
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: veritas-agent
+          image: localhost:31500/veritas-agent:latest
+          imagePullPolicy: Always
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+                - SYS_MODULE
+          env:
+            - name: AGENT_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: AGENT_AUTH_TOKEN
+            - name: MANAGER_ENDPOINT
+              value: "http://wg-manager.veritas.svc.cluster.local:8080"
+            - name: SERVER_HOSTNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: SERVER_HOSTNAME
+            - name: SERVER_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: SERVER_REGION
+            - name: SERVER_CITY
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: SERVER_CITY
+            - name: SERVER_COUNTRY
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: SERVER_COUNTRY
+            - name: PUBLIC_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: PUBLIC_IP
+            - name: WG_INTERFACE
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: WG_INTERFACE
+            - name: WG_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: WG_PORT
+            - name: WG_PRIVATE_KEY_FILE
+              value: "/etc/wireguard/private.key"
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: LOG_LEVEL
+          ports:
+            - containerPort: 9090
+              name: metrics
+              hostPort: 9090
+          volumeMounts:
+            - name: wireguard
+              mountPath: /etc/wireguard
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: wireguard
+          hostPath:
+            path: /home/jpg/VeritasVPN/data/wireguard
+            type: Directory

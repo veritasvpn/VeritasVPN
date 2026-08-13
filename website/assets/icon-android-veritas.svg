@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Android">
+  <defs><linearGradient id="a" x1="10" y1="8" x2="39" y2="42" gradientUnits="userSpaceOnUse"><stop stop-color="#00d2ff"/><stop offset="1" stop-color="#0047ff"/></linearGradient></defs>
+  <path fill="url(#a)" d="m35.2 19 4-7a1.25 1.25 0 0 0-2.16-1.25l-4.08 7.06a23 23 0 0 0-17.92 0l-4.08-7.06A1.25 1.25 0 0 0 8.8 12l4 7A19.4 19.4 0 0 0 5 34.5h38A19.4 19.4 0 0 0 35.2 19ZM15 28a2.25 2.25 0 1 1 0-4.5A2.25 2.25 0 0 1 15 28Zm18 0a2.25 2.25 0 1 1 0-4.5A2.25 2.25 0 0 1 33 28Z"/>
+</svg>

@@ -1,0 +1,14 @@
+go 1.22
+
+use (
+	./api
+	./lib/config
+	./lib/logging
+	./lib/crypto
+	./lib/jwt
+	./services/auth-svc
+	./services/wg-manager
+	./services/billing-svc
+	./services/veritas-agent
+	./clients/cli
+)

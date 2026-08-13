@@ -1,0 +1,199 @@
+package cloud.veritasvpn.vpn
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import com.wireguard.android.backend.BackendException
+import com.wireguard.android.backend.GoBackend
+import com.wireguard.android.backend.Tunnel
+import com.wireguard.config.Config
+import cloud.veritasvpn.MainActivity
+import cloud.veritasvpn.R
+import cloud.veritasvpn.api.ApiClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import java.io.ByteArrayInputStream
+
+class VeritasVpnService : GoBackend.VpnService(), Tunnel {
+
+    private val backend by lazy { GoBackend(applicationContext) }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Completes the shared VpnService future used by GoBackend so the backend
+        // reuses THIS instance instead of starting the library's base service.
+        super.onStartCommand(intent, flags, startId)
+
+        when (intent?.action) {
+            ACTION_CONNECT -> {
+                val config = intent.getStringExtra(EXTRA_CONFIG) ?: return START_STICKY
+                startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
+                scope.launch {
+                    try {
+                        val parsed = Config.parse(ByteArrayInputStream(config.toByteArray(Charsets.UTF_8)))
+                        val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
+                        if (state != Tunnel.State.UP) {
+                            throw IllegalStateException("WireGuard backend did not enter the UP state")
+                        }
+                        val egressIp = verifyTunnelEgress()
+                        broadcastState(true, null, egressIp)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Connect failed", e)
+                        try {
+                            backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
+                        } catch (_: Exception) {
+                        }
+                        broadcastState(false, friendlyError(e))
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
+                }
+            }
+            ACTION_DISCONNECT -> {
+                scope.launch {
+                    try {
+                        backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
+                    } catch (_: Exception) {
+                    }
+                    broadcastState(false, null)
+                }
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+            else -> {
+                // Re-started by the system (always-on VPN) without an action.
+            }
+        }
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    override fun getName(): String = TUNNEL_NAME
+
+    override fun onStateChange(newState: Tunnel.State) {
+        when (newState) {
+            Tunnel.State.UP -> {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    buildNotification("Verifying encrypted tunnel…"),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            }
+            else -> {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                broadcastState(false, null)
+            }
+        }
+    }
+
+    private fun friendlyError(e: Exception): String {
+        if (e is BackendException) {
+            return when (e.reason) {
+                BackendException.Reason.VPN_NOT_AUTHORIZED ->
+                    "VPN permission not granted. Grant VPN access and try again."
+                BackendException.Reason.TUN_CREATION_ERROR ->
+                    "Could not create the VPN tunnel."
+                BackendException.Reason.DNS_RESOLUTION_FAILURE ->
+                    "Could not resolve the server address."
+                BackendException.Reason.UNABLE_TO_START_VPN ->
+                    "Could not start the VPN service."
+                BackendException.Reason.GO_ACTIVATION_ERROR_CODE ->
+                    "The WireGuard backend failed to start (${e.format.joinToString()})."
+                else -> e.message ?: "Connection failed."
+            }
+        }
+        return e.message?.takeIf { it.isNotBlank() } ?: "Connection failed. Check your network and try again."
+    }
+
+    private suspend fun verifyTunnelEgress(): String {
+        var lastError: Throwable? = null
+        repeat(20) {
+            try {
+                val stats = backend.getStatistics(this@VeritasVpnService)
+                if (stats.totalTx() > 0 && stats.totalRx() > 0) {
+                    val egressIp = ApiClient.getText("https://api.ipify.org")
+                    ServiceCompat.startForeground(
+                        this,
+                        NOTIFICATION_ID,
+                        buildNotification("Connected · $egressIp"),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                    )
+                    return egressIp
+                }
+            } catch (error: Throwable) {
+                lastError = error
+            }
+            delay(500)
+        }
+        throw IllegalStateException(
+            lastError?.message ?: "WireGuard handshake timed out; no encrypted traffic was received"
+        )
+    }
+
+    private fun broadcastState(connected: Boolean, error: String?, egressIp: String? = null) {
+        val intent = Intent(ACTION_STATE).setPackage(packageName)
+            .putExtra(EXTRA_CONNECTED, connected)
+        if (error != null) intent.putExtra(EXTRA_ERROR, error)
+        if (egressIp != null) intent.putExtra(EXTRA_EGRESS_IP, egressIp)
+        sendBroadcast(intent)
+    }
+
+    private fun buildNotification(text: String): Notification {
+        val openIntent = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("VeritasVPN")
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_stat_veritas)
+            .setContentIntent(openIntent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .build()
+    }
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(
+            CHANNEL_ID, "VeritasVPN", NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "VPN connection status"
+        }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    companion object {
+        const val TUNNEL_NAME = "veritas"
+        const val CHANNEL_ID = "veritas_vpn"
+        const val NOTIFICATION_ID = 1
+        const val ACTION_CONNECT = "cloud.veritasvpn.CONNECT"
+        const val ACTION_DISCONNECT = "cloud.veritasvpn.DISCONNECT"
+        const val ACTION_STATE = "cloud.veritasvpn.STATE"
+        const val EXTRA_CONFIG = "config"
+        const val EXTRA_CONNECTED = "connected"
+        const val EXTRA_ERROR = "error"
+        const val EXTRA_EGRESS_IP = "egress_ip"
+        private const val TAG = "VeritasVpnService"
+    }
+}

@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: veritas-proxy
+  namespace: veritas
+  labels:
+    app: veritas-proxy
+spec:
+  type: ClusterIP
+  ports:
+    - name: socks5
+      port: 1080
+      targetPort: 1080
+  selector:
+    app: veritas-proxy
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: veritas-proxy
+  namespace: veritas
+  labels:
+    app: veritas-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: veritas-proxy
+  template:
+    metadata:
+      labels:
+        app: veritas-proxy
+    spec:
+      containers:
+        - name: veritas-proxy
+          image: localhost:31500/veritas-proxy:latest
+          imagePullPolicy: Always
+          ports:
+            - name: socks5
+              containerPort: 1080
+          readinessProbe:
+            tcpSocket:
+              port: 1080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 1080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

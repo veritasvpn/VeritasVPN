@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package wg.v1;
+
+option go_package = "github.com/veritasvpn/api/gen/wg/v1;wgv1";
+
+service WireGuardService {
+  rpc CreatePeer(CreatePeerRequest) returns (CreatePeerResponse);
+  rpc DeletePeer(DeletePeerRequest) returns (DeletePeerResponse);
+  rpc GetPeer(GetPeerRequest) returns (GetPeerResponse);
+  rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
+  rpc ListServers(ListServersRequest) returns (ListServersResponse);
+  rpc GetServerConfig(GetServerConfigRequest) returns (GetServerConfigResponse);
+}
+
+message CreatePeerRequest {
+  string account_id = 1;
+  string public_key = 2;
+  string preferred_region = 3;
+}
+
+message CreatePeerResponse {
+  string peer_id = 1;
+  string server_id = 2;
+  string server_hostname = 3;
+  string server_public_key = 4;
+  string server_endpoint = 5;
+  string assigned_ip = 6;
+  string dns_server = 7;
+  repeated string allowed_ips = 8;
+}
+
+message DeletePeerRequest {
+  string peer_id = 1;
+  string account_id = 2;
+}
+
+message DeletePeerResponse {
+  bool success = 1;
+}
+
+message GetPeerRequest {
+  string peer_id = 1;
+  string account_id = 2;
+}
+
+message GetPeerResponse {
+  string peer_id = 1;
+  string server_hostname = 2;
+  string server_endpoint = 3;
+  string server_public_key = 4;
+  string assigned_ip = 5;
+  string status = 6;
+  int64 created_at = 7;
+}
+
+message ListPeersRequest {
+  string account_id = 1;
+}
+
+message ListPeersResponse {
+  repeated PeerInfo peers = 1;
+}
+
+message PeerInfo {
+  string peer_id = 1;
+  string server_hostname = 2;
+  string server_endpoint = 3;
+  string assigned_ip = 4;
+  string status = 5;
+  int64 created_at = 6;
+}
+
+message ListServersRequest {
+  optional string region = 1;
+}
+
+message ListServersResponse {
+  repeated Server servers = 1;
+}
+
+message Server {
+  string id = 1;
+  string hostname = 2;
+  string region = 3;
+  string city = 4;
+  string country = 5;
+  double load_factor = 6;
+  string status = 7;
+}
+
+message GetServerConfigRequest {
+  string server_id = 1;
+}
+
+message GetServerConfigResponse {
+  string server_id = 1;
+  string hostname = 2;
+  string public_key = 3;
+  string endpoint = 4;
+  int32 wg_port = 5;
+  string dns_server = 6;
+}
