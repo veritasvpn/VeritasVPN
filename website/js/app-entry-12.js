@@ -1,6 +1,7 @@
 import { initAuthUI } from './auth-release-12.js';
 import { initBillingUI } from './billing.js?v=4';
 import { mountNetworkMap } from './network-map.js?v=hero5';
+import { mountHeroGlobe } from './hero-globe.js?v=1';
 
 document.addEventListener('DOMContentLoaded', () => {
     const navbar = document.getElementById('navbar');
@@ -12,7 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const heroMap = document.getElementById('heroMap');
     const panelMap = document.getElementById('panelMap');
-    if (heroMap) mountNetworkMap(heroMap, { variant: 'hero' });
+    if (heroMap) mountHeroGlobe(heroMap);
     if (panelMap) mountNetworkMap(panelMap, { variant: 'panel' });
 
     window.addEventListener('scroll', () => {
