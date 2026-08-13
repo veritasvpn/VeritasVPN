@@ -538,7 +538,7 @@ function renderUser(user) {
         updateNavbar(user);
 
         const downloadResponse = await fetch(AUTH_API + "/api/v1/auth/download-account", {
-          headers: { Authorization: `Bearer ` },
+          headers: { Authorization: "Bearer " + data.access_token },
         });
         if (!downloadResponse.ok) throw new Error("Account created, but the account file could not be downloaded.");
         const downloadURL = URL.createObjectURL(await downloadResponse.blob());
