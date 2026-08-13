@@ -1648,7 +1648,7 @@ body.auth-modal-open { overflow: hidden; }
 }
 .auth-inline-action::before {
   content: "✉";
-  font-size: 16px;
+  font-size: 22px;
   line-height: 1;
   color: #56e7ff;
 }
