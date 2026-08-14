@@ -62,6 +62,7 @@ spec:
                 -rpcallowip=0.0.0.0/0 \
                 -rpcbind=0.0.0.0 \
                 -rpcport=8332 \
+                -whitelist=10.42.0.0/16 \
                 -port=8333 \
                 -txindex=0 \
                 -server=1
