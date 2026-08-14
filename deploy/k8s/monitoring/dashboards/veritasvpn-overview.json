@@ -17,7 +17,7 @@
       "gridPos": {"h": 5, "w": 4, "x": 0, "y": 3},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "veritas_agent_active_peer_count", "refId": "A"}],
-      "fieldConfig": {"defaults": {"color": {"mode": "fixedColor", "fixedColor": "green"}, "unit": "short"}, "overrides": []},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "green"}, "unit": "short"}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
     },
     {
@@ -39,7 +39,7 @@
       "gridPos": {"h": 5, "w": 4, "x": 12, "y": 3},
       "datasource": {"type": "postgres", "uid": "postgres"},
       "targets": [{"format": "table", "rawQuery": true, "rawSql": "SELECT count(*)::double precision AS value FROM subscriptions WHERE tier='premium' AND status='active' AND current_period_end > NOW()", "refId": "A"}],
-      "fieldConfig": {"defaults": {"color": {"mode": "fixedColor", "fixedColor": "blue"}}, "overrides": []},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "/^value$/", "values": false}}
     },
     {
