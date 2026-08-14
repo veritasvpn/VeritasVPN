@@ -1,0 +1,39 @@
+groups:
+  - name: veritasvpn
+    rules:
+      - alert: VPNMetricsUnavailable
+        expr: up{job="veritas-agent"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "VeritasVPN agent metrics are unavailable"
+      - alert: PublicWebsiteUnavailable
+        expr: probe_success{instance="https://veritasvpn.cloud/"} == 0
+        for: 3m
+        labels: { severity: critical }
+        annotations:
+          summary: "veritasvpn.cloud is unavailable"
+      - alert: PublicAPIUnavailable
+        expr: probe_success{instance="https://api.veritasvpn.cloud/healthz"} == 0
+        for: 3m
+        labels: { severity: critical }
+        annotations:
+          summary: "VeritasVPN API is unavailable"
+      - alert: DellDiskFilling
+        expr: 100 * (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) > 85
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Dell root disk usage exceeds 85%"
+      - alert: DellMemoryPressure
+        expr: 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 90
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Dell memory usage exceeds 90%"
+      - alert: KubernetesContainerRestarting
+        expr: increase(kube_pod_container_status_restarts_total{namespace="veritas"}[15m]) > 2
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "A VeritasVPN container is repeatedly restarting"

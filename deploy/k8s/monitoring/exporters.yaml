@@ -1,0 +1,227 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels: { app: node-exporter }
+  template:
+    metadata:
+      labels: { app: node-exporter }
+    spec:
+      hostNetwork: true
+      hostPID: true
+      containers:
+        - name: node-exporter
+          image: quay.io/prometheus/node-exporter:v1.9.1
+          args:
+            - --path.rootfs=/host
+            - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
+          ports:
+            - { name: metrics, containerPort: 9100, hostPort: 9100 }
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 150m, memory: 128Mi }
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - { name: root, mountPath: /host, readOnly: true, mountPropagation: HostToContainer }
+      volumes:
+        - name: root
+          hostPath: { path: / }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-exporter
+  namespace: monitoring
+spec:
+  clusterIP: None
+  selector: { app: node-exporter }
+  ports:
+    - { name: metrics, port: 9100, targetPort: metrics }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: veritas-kube-state-metrics
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "nodes", "pods", "services", "resourcequotas", "replicationcontrollers", "limitranges", "persistentvolumeclaims", "persistentvolumes", "namespaces", "endpoints"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets", "daemonsets", "deployments", "replicasets"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "volumeattachments"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: veritas-kube-state-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: veritas-kube-state-metrics
+subjects:
+  - kind: ServiceAccount
+    name: kube-state-metrics
+    namespace: monitoring
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels: { app: kube-state-metrics }
+  template:
+    metadata:
+      labels: { app: kube-state-metrics }
+    spec:
+      serviceAccountName: kube-state-metrics
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.16.0
+          ports:
+            - { name: metrics, containerPort: 8080 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+spec:
+  selector: { app: kube-state-metrics }
+  ports:
+    - { name: metrics, port: 8080, targetPort: metrics }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels: { app: blackbox-exporter }
+  template:
+    metadata:
+      labels: { app: blackbox-exporter }
+    spec:
+      containers:
+        - name: blackbox-exporter
+          image: quay.io/prometheus/blackbox-exporter:v0.27.0
+          args: ["--config.file=/etc/blackbox/blackbox.yml"]
+          ports:
+            - { name: metrics, containerPort: 9115 }
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 150m, memory: 128Mi }
+          volumeMounts:
+            - { name: config, mountPath: /etc/blackbox/blackbox.yml, subPath: blackbox.yml }
+      volumes:
+        - name: config
+          configMap: { name: blackbox-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+spec:
+  selector: { app: blackbox-exporter }
+  ports:
+    - { name: metrics, port: 9115, targetPort: metrics }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-exporter
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels: { app: postgres-exporter }
+  template:
+    metadata:
+      labels: { app: postgres-exporter }
+    spec:
+      containers:
+        - name: postgres-exporter
+          image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+          env:
+            - name: DATA_SOURCE_NAME
+              valueFrom:
+                secretKeyRef: { name: analytics-database, key: uri }
+          ports:
+            - { name: metrics, containerPort: 9187 }
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 150m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-exporter
+  namespace: monitoring
+spec:
+  selector: { app: postgres-exporter }
+  ports:
+    - { name: metrics, port: 9187, targetPort: metrics }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-exporter
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels: { app: redis-exporter }
+  template:
+    metadata:
+      labels: { app: redis-exporter }
+    spec:
+      containers:
+        - name: redis-exporter
+          image: oliver006/redis_exporter:v1.67.0
+          env:
+            - { name: REDIS_ADDR, value: "redis://redis.veritas.svc.cluster.local:6379" }
+          ports:
+            - { name: metrics, containerPort: 9121 }
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 150m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-exporter
+  namespace: monitoring
+spec:
+  selector: { app: redis-exporter }
+  ports:
+    - { name: metrics, port: 9121, targetPort: metrics }

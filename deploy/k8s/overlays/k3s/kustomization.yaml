@@ -17,8 +17,8 @@ images:
     newName: 192.168.0.5:30500/billing-svc
     newTag: latest
   - name: localhost:31500/veritas-agent
-    newName: 192.168.0.5:30500/veritas-agent
-    newTag: latest
+    newName: localhost:31500/veritas-agent
+    newTag: analytics-20260814
   - name: localhost:31500/veritas-proxy
     newName: 192.168.0.5:30500/veritas-proxy
     newTag: latest

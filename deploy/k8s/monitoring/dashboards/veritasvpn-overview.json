@@ -1,0 +1,214 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "type": "text", "title": "Privacy boundary", "id": 1,
+      "gridPos": {"h": 3, "w": 24, "x": 0, "y": 0},
+      "options": {"mode": "markdown", "content": "### VeritasVPN private operational analytics\nAggregate infrastructure, VPN capacity, account, and payment measurements only. **No browsing history, DNS requests, destination domains, client IP addresses, account IDs, email addresses, or WireGuard public keys are collected here.**"}
+    },
+    {
+      "type": "stat", "title": "Connected now", "id": 2,
+      "gridPos": {"h": 5, "w": 4, "x": 0, "y": 3},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "veritas_agent_active_peer_count", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "fixedColor", "fixedColor": "green"}, "unit": "short"}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+    },
+    {
+      "type": "stat", "title": "Configured peers", "id": 3,
+      "gridPos": {"h": 5, "w": 4, "x": 4, "y": 3},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "veritas_agent_peer_count", "refId": "A"}],
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+    },
+    {
+      "type": "stat", "title": "Total accounts", "id": 4,
+      "gridPos": {"h": 5, "w": 4, "x": 8, "y": 3},
+      "datasource": {"type": "postgres", "uid": "postgres"},
+      "targets": [{"format": "table", "rawQuery": true, "rawSql": "SELECT count(*)::double precision AS value FROM accounts", "refId": "A"}],
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "/^value$/", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Premium active", "id": 5,
+      "gridPos": {"h": 5, "w": 4, "x": 12, "y": 3},
+      "datasource": {"type": "postgres", "uid": "postgres"},
+      "targets": [{"format": "table", "rawQuery": true, "rawSql": "SELECT count(*)::double precision AS value FROM subscriptions WHERE tier='premium' AND status='active' AND current_period_end > NOW()", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "fixedColor", "fixedColor": "blue"}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "/^value$/", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Website uptime", "id": 6,
+      "gridPos": {"h": 5, "w": 4, "x": 16, "y": 3},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "avg_over_time(probe_success{instance=\"https://veritasvpn.cloud/\"}[$__range]) * 100", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 99}, {"color": "green", "value": 99.9}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+    },
+    {
+      "type": "stat", "title": "API uptime", "id": 7,
+      "gridPos": {"h": 5, "w": 4, "x": 20, "y": 3},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "avg_over_time(probe_success{instance=\"https://api.veritasvpn.cloud/healthz\"}[$__range]) * 100", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 99}, {"color": "green", "value": 99.9}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+    },
+    {
+      "type": "timeseries", "title": "VPN throughput", "id": 8,
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(veritas_agent_rx_bytes_total[5m]) * 8", "legendFormat": "Received", "refId": "A"},
+        {"expr": "rate(veritas_agent_tx_bytes_total[5m]) * 8", "legendFormat": "Transmitted", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "bps", "color": {"mode": "palette-classic"}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max", "mean"]}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "timeseries", "title": "Connected and configured peers", "id": 9,
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "veritas_agent_active_peer_count", "legendFormat": "Connected", "refId": "A"},
+        {"expr": "veritas_agent_peer_count", "legendFormat": "Configured", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "color": {"mode": "palette-classic"}}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "stat", "title": "Downloaded in range", "id": 10,
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 17},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "increase(veritas_agent_rx_bytes_total[$__range])", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+    },
+    {
+      "type": "stat", "title": "Uploaded in range", "id": 11,
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 17},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "increase(veritas_agent_tx_bytes_total[$__range])", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+    },
+    {
+      "type": "stat", "title": "Anonymous accounts", "id": 12,
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 17},
+      "datasource": {"type": "postgres", "uid": "postgres"},
+      "targets": [{"format": "table", "rawQuery": true, "rawSql": "SELECT count(*)::double precision AS value FROM accounts WHERE email IS NULL", "refId": "A"}],
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "/^value$/", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Verified email accounts", "id": 13,
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 17},
+      "datasource": {"type": "postgres", "uid": "postgres"},
+      "targets": [{"format": "table", "rawQuery": true, "rawSql": "SELECT count(*)::double precision AS value FROM accounts WHERE email IS NOT NULL AND email_verified_at IS NOT NULL", "refId": "A"}],
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "/^value$/", "values": false}}
+    },
+    {
+      "type": "timeseries", "title": "Account registrations", "id": 14,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 22},
+      "datasource": {"type": "postgres", "uid": "postgres"},
+      "targets": [{"format": "time_series", "rawQuery": true, "rawSql": "SELECT $__timeGroupAlias(created_at,'1h'), count(*)::double precision AS value FROM accounts WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["sum", "max"]}, "tooltip": {"mode": "single"}}
+    },
+    {
+      "type": "piechart", "title": "Payment methods", "id": 15,
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 22},
+      "datasource": {"type": "postgres", "uid": "postgres"},
+      "targets": [{"format": "table", "rawQuery": true, "rawSql": "SELECT payment_method AS metric, count(*)::double precision AS value FROM subscriptions WHERE payment_method <> 'none' GROUP BY payment_method ORDER BY value DESC", "refId": "A"}],
+      "options": {"displayLabels": ["name", "percent"], "legend": {"displayMode": "table", "placement": "right", "values": ["value"]}, "pieType": "donut", "reduceOptions": {"calcs": ["lastNotNull"], "values": true}}
+    },
+    {
+      "type": "stat", "title": "Completed payments", "id": 16,
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 22},
+      "datasource": {"type": "postgres", "uid": "postgres"},
+      "targets": [{"format": "table", "rawQuery": true, "rawSql": "SELECT count(*)::double precision AS value FROM payment_records WHERE status='completed'", "refId": "A"}],
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "/^value$/", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Pending payments", "id": 17,
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 26},
+      "datasource": {"type": "postgres", "uid": "postgres"},
+      "targets": [{"format": "table", "rawQuery": true, "rawSql": "SELECT count(*)::double precision AS value FROM payment_records WHERE status='pending'", "refId": "A"}],
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "/^value$/", "values": false}}
+    },
+    {
+      "type": "timeseries", "title": "Dell CPU and memory", "id": 18,
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 30},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "100 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100", "legendFormat": "CPU", "refId": "A"},
+        {"expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "Memory", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "timeseries", "title": "Dell network I/O", "id": 19,
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 30},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum(rate(node_network_receive_bytes_total{device!~\"lo|veth.*|cni.*|flannel.*\"}[5m])) * 8", "legendFormat": "Received", "refId": "A"},
+        {"expr": "sum(rate(node_network_transmit_bytes_total{device!~\"lo|veth.*|cni.*|flannel.*\"}[5m])) * 8", "legendFormat": "Sent", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "bps"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "gauge", "title": "Root disk used", "id": 20,
+      "gridPos": {"h": 8, "w": 4, "x": 16, "y": 30},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "100 * (1 - node_filesystem_avail_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype!~\"tmpfs|overlay\"})", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 75}, {"color": "red", "value": 90}]}}, "overrides": []}
+    },
+    {
+      "type": "stat", "title": "Dell temperature", "id": 21,
+      "gridPos": {"h": 8, "w": 4, "x": 20, "y": 30},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(node_hwmon_temp_celsius)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "celsius", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 85}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+    },
+    {
+      "type": "timeseries", "title": "Kubernetes pod restarts", "id": 22,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 38},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=\"veritas\"}[1h]))", "legendFormat": "{{pod}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "right", "calcs": ["sum"]}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "timeseries", "title": "PostgreSQL and Redis", "id": 23,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 38},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "pg_stat_database_numbackends{datname=\"veritas\"}", "legendFormat": "Postgres connections", "refId": "A"},
+        {"expr": "redis_connected_clients", "legendFormat": "Redis clients", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "alertlist", "title": "Active operational alerts", "id": 24,
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 46},
+      "options": {"alertInstanceLabelFilter": "", "alertName": "", "dashboardAlerts": false, "groupBy": ["alertname"], "groupMode": "default", "maxItems": 20, "sortOrder": 1, "stateFilter": {"alerting": true, "error": true, "firing": true, "noData": true, "normal": false, "pending": true}}
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 41,
+  "tags": ["veritasvpn", "privacy-safe", "operations"],
+  "templating": {"list": []},
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "VeritasVPN Operations",
+  "uid": "veritasvpn-operations",
+  "version": 1
+}

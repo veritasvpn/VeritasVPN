@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/veritasvpn/services/veritas-agent/internal/wireguard"
 )
@@ -119,21 +120,25 @@ func (m *Manager) SyncPeers(desired []PeerConfig) error {
 	return nil
 }
 
-func (m *Manager) GetStats() (rxBytes, txBytes int64, peerCount int32) {
+func (m *Manager) GetStats() (rxBytes, txBytes int64, peerCount, activePeerCount int32) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	wgPeers, err := m.wg.ListPeers()
 	if err != nil {
-		return 0, 0, int32(len(m.peers))
+		return 0, 0, int32(len(m.peers)), 0
 	}
 
+	activeCutoff := time.Now().Add(-3 * time.Minute)
 	for _, p := range wgPeers {
 		rxBytes += p.RXBytes
 		txBytes += p.TXBytes
+		if !p.LastHandshakeAt.IsZero() && p.LastHandshakeAt.After(activeCutoff) {
+			activePeerCount++
+		}
 	}
 
-	return rxBytes, txBytes, int32(len(m.peers))
+	return rxBytes, txBytes, int32(len(m.peers)), activePeerCount
 }
 
 func cidrsToIPNets(cidrs []string) []net.IPNet {

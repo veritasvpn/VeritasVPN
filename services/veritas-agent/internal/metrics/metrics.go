@@ -9,12 +9,13 @@ import (
 )
 
 type Metrics struct {
-	PeerCount     prometheus.Gauge
-	RXBytesTotal  prometheus.Counter
-	TXBytesTotal  prometheus.Counter
-	UptimeSeconds prometheus.Counter
-	CPUUsage      prometheus.Gauge
-	MemoryUsage   prometheus.Gauge
+	PeerCount       prometheus.Gauge
+	ActivePeerCount prometheus.Gauge
+	RXBytesTotal    prometheus.Counter
+	TXBytesTotal    prometheus.Counter
+	UptimeSeconds   prometheus.Counter
+	CPUUsage        prometheus.Gauge
+	MemoryUsage     prometheus.Gauge
 
 	registry *prometheus.Registry
 	port     string
@@ -27,6 +28,10 @@ func New(port string) *Metrics {
 		PeerCount: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "veritas_agent_peer_count",
 			Help: "Current number of WireGuard peers.",
+		}),
+		ActivePeerCount: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "veritas_agent_active_peer_count",
+			Help: "WireGuard peers with a handshake in the last three minutes.",
 		}),
 		RXBytesTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "veritas_agent_rx_bytes_total",
@@ -53,6 +58,7 @@ func New(port string) *Metrics {
 	}
 
 	reg.MustRegister(m.PeerCount)
+	reg.MustRegister(m.ActivePeerCount)
 	reg.MustRegister(m.RXBytesTotal)
 	reg.MustRegister(m.TXBytesTotal)
 	reg.MustRegister(m.UptimeSeconds)

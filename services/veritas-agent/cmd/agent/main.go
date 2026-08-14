@@ -524,7 +524,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			return
 		}
 
-		rx, tx, count := a.peerManager.GetStats()
+		rx, tx, count, activeCount := a.peerManager.GetStats()
 		loadFactor := getLoadFactor()
 
 		req := &HeartbeatRequest{
@@ -551,6 +551,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		a.prevTXBytes = tx
 
 		a.metrics.PeerCount.Set(float64(count))
+		a.metrics.ActivePeerCount.Set(float64(activeCount))
 		a.metrics.UptimeSeconds.Add(30)
 		a.metrics.CPUUsage.Set(loadFactor * 100)
 		a.metrics.MemoryUsage.Set(float64(getMemoryUsage()))

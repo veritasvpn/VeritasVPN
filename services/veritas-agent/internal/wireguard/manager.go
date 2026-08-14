@@ -14,10 +14,11 @@ import (
 const netlinkTimeout = 30 * time.Second
 
 type PeerInfo struct {
-	PublicKey  string
-	AllowedIPs []net.IPNet
-	RXBytes    int64
-	TXBytes    int64
+	PublicKey       string
+	AllowedIPs      []net.IPNet
+	RXBytes         int64
+	TXBytes         int64
+	LastHandshakeAt time.Time
 }
 
 type Manager struct {
@@ -168,10 +169,11 @@ func (m *Manager) ListPeers() ([]PeerInfo, error) {
 	peers := make([]PeerInfo, 0, len(dev.Peers))
 	for _, p := range dev.Peers {
 		peers = append(peers, PeerInfo{
-			PublicKey:  p.PublicKey.String(),
-			AllowedIPs: p.AllowedIPs,
-			RXBytes:    p.ReceiveBytes,
-			TXBytes:    p.TransmitBytes,
+			PublicKey:       p.PublicKey.String(),
+			AllowedIPs:      p.AllowedIPs,
+			RXBytes:         p.ReceiveBytes,
+			TXBytes:         p.TransmitBytes,
+			LastHandshakeAt: p.LastHandshakeTime,
 		})
 	}
 	return peers, nil
