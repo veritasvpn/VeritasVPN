@@ -40,8 +40,8 @@ postgres (STS)                          postgres-btcpay (STS)
 redis (Deploy, x2 in prod)              bitcoind (STS)
 nats (STS)                              nbxplorer (STS)
 auth-svc (Deploy)                       btcpayserver (Deploy)
-wg-manager (Deploy)                     monerod (STS)
-billing-svc (Deploy)                    monero-wallet-rpc (Deploy)
+wg-manager (Deploy)                     Bitcoin-only checkout
+billing-svc (Deploy)                    archived wallet PVC (offline)
 veritas-agent (DaemonSet, hostNetwork)
 veritas-proxy (Deploy)                  Namespace: ingress-nginx
 nginx (Deploy)                          ─────────────────────

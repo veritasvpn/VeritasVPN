@@ -61,7 +61,6 @@ PUBLIC_IMAGES=(
   registry:2
   btcpayserver/bitcoin:28.1
   btcpayserver/btcpayserver:2.3.9
-  btcpayserver/monero:0.18.4.3
   nicolasdorier/nbxplorer:2.6.9
   cloudflare/cloudflared:2026.7.3
 )
@@ -78,5 +77,5 @@ done
 
 echo ""
 echo "k3s images (filtered):"
-k3s ctr images ls | awk 'NR==1 || /localhost:31500|nginx|postgres|redis|nats|btcpay|nbxplorer|monero|cloudflared|registry/' | head -40
+k3s ctr images ls | awk 'NR==1 || /localhost:31500|nginx|postgres|redis|nats|btcpay|nbxplorer|cloudflared|registry/' | head -40
 echo "Done."

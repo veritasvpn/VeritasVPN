@@ -1,0 +1,15 @@
+# Recovery-only archive. No workload mounts this volume.
+# Keep until the operator has independently backed up and intentionally destroyed
+# the former Monero wallet material.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: monero-wallet-pvc
+  namespace: btcpay
+  annotations:
+    veritasvpn.cloud/purpose: offline-recovery-only
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi

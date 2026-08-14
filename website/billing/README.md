@@ -2,7 +2,7 @@
 
 ## Useful information (humans)
 
-Static return pages after Bitcoin or Monero checkout:
+Static return pages after Bitcoin checkout:
 
 - `success.html` — payment confirmed / mock settle redirect target
 - `cancel.html` — user abandoned checkout

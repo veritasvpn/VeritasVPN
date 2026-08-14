@@ -37,7 +37,7 @@ spec:
             - name: BTCPAY_NETWORK
               value: "testnet"
             - name: BTCPAY_CHAINS
-              value: "btc,xmr"
+              value: "btc"
             - name: BTCPAY_BIND
               value: "0.0.0.0:49392"
             - name: BTCPAY_EXTERNALURL

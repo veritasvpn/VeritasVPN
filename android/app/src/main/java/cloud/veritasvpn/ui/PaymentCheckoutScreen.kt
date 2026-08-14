@@ -47,7 +47,7 @@ fun PaymentCheckoutScreen(checkoutUrl: String, onClose: () -> Unit, onRefreshPla
                             val uri = request.url
                             if (uri.host == "veritasvpn.cloud") { onRefreshPlan(); onClose(); return true }
                             if (uri.scheme == "https" && uri.host == "btcpay.veritasvpn.cloud") return false
-                            if (uri.scheme in setOf("bitcoin", "monero")) {
+                            if (uri.scheme == "bitcoin") {
                                 runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
                                 return true
                             }

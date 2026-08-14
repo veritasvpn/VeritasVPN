@@ -105,7 +105,7 @@ function renderHome() {
                 ? `Active until ${end || '—'}${
                     billingStatus?.cancel_at_period_end ? ' · Cancels at period end' : ''
                   }`
-                : 'Subscription required · Pay with Bitcoin or Monero'
+                : 'Subscription required · Pay with Bitcoin'
             }
           </div>
         </div>
@@ -115,7 +115,7 @@ function renderHome() {
               ? `
             <div class="plan-limit">Current network</div>
             <div class="plan-limit">Up to 5 devices</div>
-            <div class="plan-limit">Bitcoin or Monero billing</div>`
+            <div class="plan-limit">Private Bitcoin billing</div>`
               : `
             <div class="plan-limit">Current network</div>
             <div class="plan-limit">Payment required</div>`
@@ -131,7 +131,7 @@ function renderHome() {
           <p>${
             premium
               ? 'You are on Premium. Renew before expiry to stay protected.'
-              : 'One plan. Pay with Bitcoin or Monero.'
+              : 'One plan. Pay with Bitcoin.'
           }</p>
         </div>
         <a href="#/subscription">Manage subscription →</a>
@@ -139,16 +139,16 @@ function renderHome() {
       <div class="account-card upgrade-card">
         <div>
           <div class="upgrade-price">$5 <span>/ month</span></div>
-          <p class="plan-card-meta" style="margin-top:8px;">Bitcoin or Monero · 30-day period</p>
+          <p class="plan-card-meta" style="margin-top:8px;">Bitcoin · 30-day period</p>
         </div>
         <ul class="upgrade-features">
           <li>Access to the current network</li>
           <li>Up to 5 WireGuard devices</li>
-          <li>Pay with Bitcoin or Monero (no card)</li>
+          <li>Pay with Bitcoin (no card)</li>
           <li>Priority support while we expand</li>
         </ul>
         <div class="account-actions">
-          ${showCheckout ? `<button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay">Pay with Bitcoin</button><button type="button" class="btn btn-outline" data-action="checkout" data-payment-method="btcpay_xmr">Pay with Monero</button>` : ""}
+          ${showCheckout ? `<button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay">Pay with Bitcoin</button>` : ""}
         </div>
       </div>
     </section>
@@ -177,7 +177,7 @@ function renderSubscription() {
           ${cancelAtEnd ? ' · Will cancel at period end' : ''}
         </p>
         <div class="account-actions">
-          ${showCheckout ? `<button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay">Pay with Bitcoin</button><button type="button" class="btn btn-outline" data-action="checkout" data-payment-method="btcpay_xmr">Pay with Monero</button>` : ""}
+          ${showCheckout ? `<button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay">Pay with Bitcoin</button>` : ""}
           ${
             premium && !cancelAtEnd
               ? `<button type="button" class="btn btn-outline" data-action="cancel">Cancel at period end</button>`
@@ -280,7 +280,7 @@ function renderSecurity() {
         <ul class="upgrade-features">
           <li>WireGuard-only protocol</li>
           <li>No traffic logs — see Privacy Policy for operational data</li>
-          <li>Paid with Bitcoin or Monero (no card required)</li>
+          <li>Paid with Bitcoin (no card required)</li>
           <li>Diskless / RAM-oriented servers (roadmap)</li>
           <li><a href="/canary.txt">Warrant canary</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></li>
         </ul>

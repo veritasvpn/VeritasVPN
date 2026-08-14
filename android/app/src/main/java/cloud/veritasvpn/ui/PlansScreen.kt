@@ -113,7 +113,7 @@ fun PlansScreen(
 
         PlanCard(
             name = "Premium", price = "$5", suffix = "/30 days", current = premium,
-            features = listOf("Paraguay WireGuard egress", "Up to 5 VPN devices", "Bitcoin or Monero checkout", "Chrome, Android, and Linux access"),
+            features = listOf("Paraguay WireGuard egress", "Up to 5 VPN devices", "Private Bitcoin checkout", "Chrome, Android, and Linux access"),
             emphasized = true
         )
 
@@ -129,14 +129,6 @@ fun PlansScreen(
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Royal)
             ) { Text(if (checkoutMethod == "btcpay") "Opening Bitcoin checkout…" else "Pay with Bitcoin", color = Color.White, fontWeight = FontWeight.Bold) }
-            Spacer(Modifier.height(10.dp))
-            OutlinedButton(
-                onClick = { onCheckout("btcpay_xmr") },
-                enabled = checkoutMethod == null,
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                shape = RoundedCornerShape(14.dp),
-                border = BorderStroke(1.dp, LineStrong)
-            ) { Text(if (checkoutMethod == "btcpay_xmr") "Opening Monero checkout…" else "Pay with Monero", color = CyanHover, fontWeight = FontWeight.Bold) }
         } else {
             Spacer(Modifier.height(18.dp))
             Text("Premium is active", color = SuccessGreen, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)

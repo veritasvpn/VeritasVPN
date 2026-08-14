@@ -114,8 +114,8 @@ func (h *BillingHandler) handleSubscribe(w http.ResponseWriter, r *http.Request)
 	if req.PaymentMethod == "" {
 		req.PaymentMethod = "btcpay"
 	}
-	if req.PaymentMethod != "btcpay" && req.PaymentMethod != "btcpay_xmr" {
-		writeError(w, http.StatusBadRequest, "only bitcoin (btcpay) and monero (btcpay_xmr) payments are supported")
+	if req.PaymentMethod != "btcpay" {
+		writeError(w, http.StatusBadRequest, "only bitcoin (btcpay) payments are supported")
 		return
 	}
 

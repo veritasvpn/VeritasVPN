@@ -227,7 +227,7 @@ function App() {
     return status;
   }, []);
 
-  const startCheckout = useCallback(async (paymentMethod: "btcpay" | "btcpay_xmr") => {
+  const startCheckout = useCallback(async (paymentMethod: "btcpay") => {
     if (billingBusy || checkoutActive) return;
     setBillingBusy(true); setBillingError("");
     try {
@@ -583,10 +583,10 @@ function App() {
             <div className="billing-plan-card">
               <div className="billing-price"><span>$</span>5<small>/30 days</small></div>
               <p>Complete VeritasVPN access on up to five devices.</p>
-              <ul><li>✓ Paraguay WireGuard connection</li><li>✓ Chrome, Android, and Linux</li><li>✓ Anonymous account support</li><li>✓ Bitcoin or Monero payment</li></ul>
+              <ul><li>✓ Paraguay WireGuard connection</li><li>✓ Chrome, Android, and Linux</li><li>✓ Anonymous account support</li><li>✓ Private Bitcoin payment</li></ul>
               {!billingStatus?.is_premium ? <>
                 <p className="billing-choice">Choose a payment method</p>
-                <div className="billing-actions"><button disabled={billingBusy || checkoutActive} onClick={() => startCheckout("btcpay")}>₿ Pay with Bitcoin</button><button disabled={billingBusy || checkoutActive} onClick={() => startCheckout("btcpay_xmr")}>ɱ Pay with Monero</button></div>
+                <div className="billing-actions"><button disabled={billingBusy || checkoutActive} onClick={() => startCheckout("btcpay")}>₿ Pay with Bitcoin</button></div>
                 <p className="billing-note">Checkout opens in a secure VeritasVPN payment window. Premium activates automatically after confirmation.</p>
               </> : <>
                 <div className="billing-active">● Premium access is active</div>

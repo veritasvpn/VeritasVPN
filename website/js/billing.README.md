@@ -2,7 +2,7 @@
 
 ## Useful information (humans)
 
-Talks to `billing-svc` for subscription status and Bitcoin or Monero (BTCPay / mock) Premium checkout. Uses the Firebase ID token from `auth.js` as `Authorization: Bearer …`.
+Talks to `billing-svc` for subscription status and Bitcoin (BTCPay / mock) Premium checkout. Uses the Firebase ID token from `auth.js` as `Authorization: Bearer …`.
 
 Default API base: `http://localhost:8083`. Override with `window.VERITAS_BILLING_API`.
 

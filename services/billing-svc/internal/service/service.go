@@ -127,7 +127,7 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 	}, nil
 }
 
-// CreatePremiumCheckout starts a crypto (Bitcoin or Monero) checkout for premium. Does NOT activate until paid.
+// CreatePremiumCheckout starts a Bitcoin checkout for premium. Does NOT activate until paid.
 func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, paymentMethod string) (checkoutURL string, err error) {
 	if accountID == "" {
 		return "", fmt.Errorf("account_id is required")
@@ -276,10 +276,7 @@ func (s *BillingService) SettleInvoice(ctx context.Context, invoiceID, accountID
 	}
 	periodEnd := periodStart.Add(s.periodDuration())
 
-	paymentMethod := sub.PaymentMethod
-	if paymentMethod != model.PaymentBTCPayMonero {
-		paymentMethod = model.PaymentBTCPay
-	}
+	paymentMethod := model.PaymentBTCPay
 	sub.Tier = model.TierPremium
 	sub.Status = model.StatusActive
 	sub.PaymentMethod = paymentMethod

@@ -75,13 +75,8 @@ func (b *BTCPayProvider) CreateInvoice(accountID, tier, paymentMethod string, am
 	invReq.Metadata.AccountID = accountID
 	invReq.Metadata.Tier = tier
 	invReq.Checkout.RedirectURL = b.redirectURL
-	if paymentMethod == "btcpay_xmr" {
-		invReq.Checkout.PaymentMethods = []string{"XMR-CHAIN"}
-		invReq.Checkout.DefaultPaymentMethod = "XMR-CHAIN"
-	} else {
-		invReq.Checkout.PaymentMethods = []string{"BTC-CHAIN"}
-		invReq.Checkout.DefaultPaymentMethod = "BTC-CHAIN"
-	}
+	invReq.Checkout.PaymentMethods = []string{"BTC-CHAIN"}
+	invReq.Checkout.DefaultPaymentMethod = "BTC-CHAIN"
 
 	body, err := json.Marshal(invReq)
 	if err != nil {
