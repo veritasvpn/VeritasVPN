@@ -54,6 +54,7 @@ spec:
             - |
               exec bitcoind \
                 -datadir=/home/bitcoin/.bitcoin \
+                -testnet=0 \
                 -prune=10000 \
                 -dbcache=1024 \
                 -rpcuser="${BTC_RPC_USER}" \
