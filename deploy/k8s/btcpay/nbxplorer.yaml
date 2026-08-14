@@ -36,9 +36,9 @@ spec:
           image: nicolasdorier/nbxplorer:2.6.9
           env:
             - name: NBXPLORER_NETWORK
-              value: "testnet"
+              value: "mainnet"
             - name: NBXPLORER_BTCRPCURL
-              value: "http://bitcoind:18332/"
+              value: "http://bitcoind:8332/"
             - name: NBXPLORER_BTCRPCUSER
               value: "btcpay_rpc"
             - name: NBXPLORER_BTCRPCPASSWORD
@@ -47,13 +47,13 @@ spec:
                   name: btcpay-secrets
                   key: BTC_RPC_PASSWORD
             - name: NBXPLORER_BTCNODEENDPOINT
-              value: "bitcoind:18333"
+              value: "bitcoind:8333"
             - name: NBXPLORER_CHAINS
               value: "btc"
             - name: NBXPLORER_BIND
               value: "0.0.0.0:32838"
             - name: NBXPLORER_NOAUTH
-              value: "false"
+              value: "true"
             - name: NBXPLORER_AUTOMIGRATE
               value: "true"
             - name: DOTNET_USE_POLLING_FILE_WATCHER

@@ -1,6 +1,6 @@
-# BTCPay Server — Bitcoin testnet deployment
+# BTCPay Server — Bitcoin mainnet deployment
 # Run: docker compose -f btcpay/docker-compose.yml up -d
-# Switch to mainnet: change NETWORK=mainnet, BTC_PORT=8332, BTC_P2P=8333
+# Production defaults are mainnet with a pruned Bitcoin Core node.
 
 services:
   postgres-btcpay:
@@ -22,7 +22,7 @@ services:
   bitcoind:
     image: btcpayserver/bitcoin:28.1
     environment:
-      BITCOIN_NETWORK: ${BTC_NETWORK:-testnet}
+      BITCOIN_NETWORK: ${BTC_NETWORK:-mainnet}
       BITCOIN_EXTRA_ARGS: |
         prune=10000
         rpcuser=btcpay_rpc
@@ -35,20 +35,20 @@ services:
     volumes:
       - btcpay_bitcoind:/home/bitcoin/.bitcoin
     expose:
-      - "${BTC_RPC_PORT:-18332}"
-      - "${BTC_P2P_PORT:-18333}"
+      - "${BTC_RPC_PORT:-8332}"
+      - "${BTC_P2P_PORT:-8333}"
     ports:
-      - "${BTC_P2P_PORT:-18333}:${BTC_P2P_PORT:-18333}"
+      - "${BTC_P2P_PORT:-8333}:${BTC_P2P_PORT:-8333}"
     restart: unless-stopped
 
   nbxplorer:
     image: nicolasdorier/nbxplorer:2.6.9
     environment:
-      NBXPLORER_NETWORK: ${BTC_NETWORK:-testnet}
-      NBXPLORER_BTCRPCURL: http://bitcoind:${BTC_RPC_PORT:-18332}/
+      NBXPLORER_NETWORK: ${BTC_NETWORK:-mainnet}
+      NBXPLORER_BTCRPCURL: http://bitcoind:${BTC_RPC_PORT:-8332}/
       NBXPLORER_BTCRPCUSER: btcpay_rpc
       NBXPLORER_BTCRPCPASSWORD: ${BTC_RPC_PASSWORD:-change-me-set-in-btcpay-env}
-      NBXPLORER_BTCNODEENDPOINT: bitcoind:${BTC_P2P_PORT:-18333}
+      NBXPLORER_BTCNODEENDPOINT: bitcoind:${BTC_P2P_PORT:-8333}
       NBXPLORER_CHAINS: btc
       NBXPLORER_BIND: 0.0.0.0:32838
       NBXPLORER_NOAUTH: "true"
@@ -68,13 +68,13 @@ services:
   btcpayserver:
     image: btcpayserver/btcpayserver:2.3.9
     environment:
-      BTCPAY_NETWORK: ${BTC_NETWORK:-testnet}
+      BTCPAY_NETWORK: ${BTC_NETWORK:-mainnet}
       BTCPAY_POSTGRES: User ID=btcpay;Password=${BTCPAY_POSTGRES_PASSWORD:-change-me-set-in-btcpay-env};Host=postgres-btcpay;Port=5432;Database=btcpay
       BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838
       BTCPAY_CHAINS: btc
       BTCPAY_PLUGINDIR: /datadir/Plugins
       BTCPAY_BIND: 0.0.0.0:49392
-      BTCPAY_EXTERNALURL: ${BTCPAY_EXTERNAL_URL:-http://localhost:49392}
+      BTCPAY_EXTERNALURL: ${BTCPAY_EXTERNAL_URL:-https://btcpay.veritasvpn.cloud}
       BTCPAY_CHECKREVOCATIONLIST: "false"
     ports:
       - "49392:49392"

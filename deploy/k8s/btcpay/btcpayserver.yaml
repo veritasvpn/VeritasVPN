@@ -35,13 +35,13 @@ spec:
           image: btcpayserver/btcpayserver:2.3.9
           env:
             - name: BTCPAY_NETWORK
-              value: "testnet"
+              value: "mainnet"
             - name: BTCPAY_CHAINS
               value: "btc"
             - name: BTCPAY_BIND
               value: "0.0.0.0:49392"
             - name: BTCPAY_EXTERNALURL
-              value: "http://localhost:49392"
+              value: "https://btcpay.veritasvpn.cloud"
             - name: BTCPAY_BTCEXPLORERURL
               value: "http://nbxplorer:32838"
             - name: BTCPAY_CHECKREVOCATIONLIST

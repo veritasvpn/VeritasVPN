@@ -102,7 +102,7 @@ All ingress denied by default in `veritas` namespace. Specific allow rules:
 kubectl apply -k deploy/k8s/btcpay/
 ```
 
-BTCPay runs in its own namespace with testnet bitcoin by default.
+BTCPay runs in its own namespace with a pruned Bitcoin mainnet node.
 
 ## veritas-agent DaemonSet
 

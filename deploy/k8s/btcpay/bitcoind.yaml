@@ -9,11 +9,11 @@ spec:
   type: ClusterIP
   ports:
     - name: rpc
-      port: 18332
-      targetPort: 18332
+      port: 8332
+      targetPort: 8332
     - name: p2p
-      port: 18333
-      targetPort: 18333
+      port: 8333
+      targetPort: 8333
   selector:
     app: bitcoind
 ---
@@ -40,7 +40,7 @@ spec:
           image: btcpayserver/bitcoin:28.1
           env:
             - name: BITCOIN_NETWORK
-              value: "testnet"
+              value: "mainnet"
             - name: BTC_RPC_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -52,18 +52,22 @@ spec:
             - /bin/sh
             - -c
             - |
-              export BITCOIN_EXTRA_ARGS="prune=10000
-              rpcuser=${BTC_RPC_USER}
-              rpcpassword=${BTC_RPC_PASSWORD}
-              rpcallowip=0.0.0.0/0
-              rpcbind=0.0.0.0
-              txindex=0
-              server=1"
-              exec /entrypoint.sh bitcoind
+              exec bitcoind \
+                -datadir=/home/bitcoin/.bitcoin \
+                -prune=10000 \
+                -dbcache=1024 \
+                -rpcuser="${BTC_RPC_USER}" \
+                -rpcpassword="${BTC_RPC_PASSWORD}" \
+                -rpcallowip=0.0.0.0/0 \
+                -rpcbind=0.0.0.0 \
+                -rpcport=8332 \
+                -port=8333 \
+                -txindex=0 \
+                -server=1
           ports:
-            - containerPort: 18332
+            - containerPort: 8332
               name: rpc
-            - containerPort: 18333
+            - containerPort: 8333
               name: p2p
           volumeMounts:
             - name: bitcoind-data
@@ -73,7 +77,7 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - bitcoin-cli -testnet -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockchaininfo 2>/dev/null || exit 1
+                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockchaininfo 2>/dev/null || exit 1
             initialDelaySeconds: 30
             periodSeconds: 30
           livenessProbe:
@@ -81,7 +85,7 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - bitcoin-cli -testnet -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockchaininfo 2>/dev/null || exit 1
+                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockchaininfo 2>/dev/null || exit 1
             initialDelaySeconds: 120
             periodSeconds: 60
           resources:
