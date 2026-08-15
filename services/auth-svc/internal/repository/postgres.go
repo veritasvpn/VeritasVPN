@@ -153,7 +153,13 @@ func (p *Postgres) GetAccountByEmail(ctx context.Context, email string) (*model.
 }
 
 func (p *Postgres) UpdateAccountPassword(ctx context.Context, accountID, passwordHash string) error {
-	query := `UPDATE accounts SET password_hash = $2, reset_token = NULL, reset_token_expiry = NULL WHERE id = $1`
+	// Completing a reset proves access to the mailbox that received the one-time token.
+	// Treat that account as verified and clear any outstanding verification token.
+	query := `UPDATE accounts SET password_hash = $2,
+		email_verified_at = COALESCE(email_verified_at, NOW()),
+		verification_token_hash = NULL, verification_token_expiry = NULL,
+		reset_token = NULL, reset_token_expiry = NULL
+		WHERE id = $1`
 	_, err := p.pool.Exec(ctx, query, accountID, passwordHash)
 	return err
 }
