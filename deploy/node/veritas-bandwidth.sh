@@ -55,11 +55,8 @@ fi
 
 priority=10
 for peer in "${peers[@]}"; do
-  address="${peer%/32}"
-  IFS=. read -r octet1 octet2 octet3 octet4 <<< "$address"
-  # Stable, non-reserved class IDs for the 10.x.y.z address space.
-  minor="$(( ((octet1 * 256 + octet2) * 256 + octet3) * 256 + octet4 ))"
-  minor="$(( (minor % 7000) + 1000 ))"
+  # Peers are sorted above; sequential IDs avoid collisions across subnets.
+  minor="$((priority + 1000))"
 
   "$TC" class replace dev "$WG_IFACE" parent 1: classid "1:${minor}" htb rate "$DEVICE_RATE" ceil "$DEVICE_RATE"
   "$TC" qdisc replace dev "$WG_IFACE" parent "1:${minor}" handle "${minor}:" fq_codel
