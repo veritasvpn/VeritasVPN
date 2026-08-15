@@ -21,7 +21,7 @@ jobs:
       - name: Prepare deploy directory
         run: |
           mkdir -p dist-site
-          # Pages has a 25 MiB per-file limit; the APK is served by the redirect in website/_redirects.
+          # Pages has a 25 MiB per-file limit; the APK is streamed by a Pages Function.
           rsync -a \
             --exclude 'downloads/veritasvpn-linux.AppImage' \
             --exclude 'downloads/veritasvpn-android.apk' \
