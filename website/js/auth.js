@@ -265,10 +265,12 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
         resetCooldownTimer = null;
       }
       forgotSubmit.disabled = Boolean(busy);
+      forgotSubmit.classList.remove('is-disabled');
       forgotSubmit.textContent = 'Send reset link';
       return;
     }
     forgotSubmit.disabled = true;
+    forgotSubmit.classList.add('is-disabled');
     forgotSubmit.textContent = 'Try again in ' + Math.ceil(remaining / 1000) + 's';
     if (!resetCooldownTimer) {
       resetCooldownTimer = setInterval(syncResetCooldown, 250);

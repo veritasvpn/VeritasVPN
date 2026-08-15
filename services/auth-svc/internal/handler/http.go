@@ -47,6 +47,7 @@ func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/auth/me", h.withCORS(h.handleMe))
 	mux.HandleFunc("/api/v1/auth/account", h.withCORS(h.handleDeleteAccount))
 	mux.HandleFunc("/api/v1/auth/reset-password", h.withCORS(h.handleResetPassword))
+	mux.HandleFunc("/api/v1/auth/complete-reset", h.withCORS(h.handleCompleteReset))
 	mux.HandleFunc("/api/v1/auth/register-anonymous", h.withCORS(h.handleRegisterAnonymous))
 	mux.HandleFunc("/api/v1/auth/signin-account", h.withCORS(h.handleSignInAccount))
 	mux.HandleFunc("/api/v1/auth/download-account", h.withCORS(h.handleDownloadAccount))

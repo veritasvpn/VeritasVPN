@@ -9,7 +9,7 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    newTag: reset-cooldown-20260815
+    newTag: reset-complete-20260815
   - name: localhost:31500/wg-manager
     newName: 192.168.0.5:30500/wg-manager
     newTag: latest
