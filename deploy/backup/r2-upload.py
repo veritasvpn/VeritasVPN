@@ -7,15 +7,16 @@ import hmac
 import os
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
+from xml.etree import ElementTree
 
 
 def _hmac(key: bytes, value: str) -> bytes:
     return hmac.new(key, value.encode(), hashlib.sha256).digest()
 
 
-def _request(method: str, url: str, access_key: str, secret_key: str, payload: bytes | None = None) -> None:
+def _request(method: str, url: str, access_key: str, secret_key: str, payload: bytes | None = None) -> bytes:
     parsed = urlsplit(url)
     host = parsed.netloc
     path = parsed.path or "/"
@@ -48,10 +49,38 @@ def _request(method: str, url: str, access_key: str, secret_key: str, payload: b
         with urlopen(request, timeout=60) as response:
             if response.status not in (200, 201, 204):
                 raise RuntimeError(f"R2 {method} returned HTTP {response.status}")
+            return response.read()
     except (HTTPError, URLError) as exc:
         detail = exc.read().decode(errors="replace") if isinstance(exc, HTTPError) else str(exc)
         raise RuntimeError(f"R2 {method} failed: {detail}") from exc
 
+
+
+def _cleanup_old(endpoint: str, bucket: str, access_key: str, secret_key: str, prefix: str, retention_days: int) -> None:
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=retention_days)
+    continuation = None
+    while True:
+        params = [("list-type", "2"), ("prefix", prefix.rstrip("/") + "/")]
+        if continuation:
+            params.append(("continuation-token", continuation))
+        params.sort()
+        query = urlencode(params, quote_via=quote)
+        list_url = f"{endpoint}/{quote(bucket, safe='')}?{query}"
+        root = ElementTree.fromstring(_request("GET", list_url, access_key, secret_key))
+        for item in root.findall("{*}Contents"):
+            key = item.findtext("{*}Key")
+            modified_text = item.findtext("{*}LastModified")
+            if not key or not modified_text:
+                continue
+            modified = dt.datetime.fromisoformat(modified_text.replace("Z", "+00:00"))
+            if modified < cutoff:
+                object_url = f"{endpoint}/{quote(bucket, safe='')}/{quote(key, safe='/~-_.')}"
+                _request("DELETE", object_url, access_key, secret_key)
+                print(f"[r2] expired {key}")
+        continuation_node = root.find("{*}NextContinuationToken")
+        continuation = continuation_node.text if continuation_node is not None else None
+        if not continuation:
+            break
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -62,6 +91,7 @@ def main() -> int:
     bucket = os.environ["R2_BUCKET"]
     access_key = os.environ["R2_ACCESS_KEY_ID"]
     secret_key = os.environ["R2_SECRET_ACCESS_KEY"]
+    base_prefix = os.environ.get("R2_PREFIX", "veritasvpn/backups").strip("/")
     for file_name in args.file:
         path = Path(file_name)
         object_key = f"{args.prefix.strip('/')}/{path.name}"
@@ -70,6 +100,9 @@ def main() -> int:
         _request("PUT", url, access_key, secret_key, payload)
         _request("HEAD", url, access_key, secret_key)
         print(f"[r2] uploaded and verified {object_key} ({len(payload)} bytes)")
+    retention_days = int(os.environ.get("R2_RETENTION_DAYS", "60"))
+    if retention_days > 0:
+        _cleanup_old(endpoint, bucket, access_key, secret_key, base_prefix, retention_days)
     return 0
 
 
