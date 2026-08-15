@@ -1,0 +1,8 @@
+[Unit]
+Description=VeritasVPN Kubernetes health audit
+After=k3s.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/veritas-k8s-health
