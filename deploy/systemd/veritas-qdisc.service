@@ -1,0 +1,12 @@
+[Unit]
+Description=VeritasVPN low-latency queue discipline
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/tc qdisc replace dev enp1s0 root fq_codel
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
