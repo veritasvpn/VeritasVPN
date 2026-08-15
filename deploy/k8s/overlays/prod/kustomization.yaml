@@ -17,7 +17,7 @@ images:
     digest: sha256:772b42488ba6625f7b39dec0994b29efd40e181caba9e5a7adeccff0a5cc75f7
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    digest: sha256:2085015c333e7621193d037cc0588d8c7a89f7305f7b403c81bc6f6a39ec09d4
+    digest: sha256:e0ddde7768ec97a9f3d9e62117c28c87453f21dfd7abfa443a2e07a3929c8e35
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     digest: sha256:62e6794c1aee9f401a549cda2a9201d2eecb6cba98cd0e5302d9949fb1334915
@@ -46,6 +46,9 @@ patches:
       - op: replace
         path: /data/ALLOW_MOCK_BTCPAY
         value: "false"
+      - op: replace
+        path: /data/PREMIUM_PRICE_USD_CENTS
+        value: "300"
       - op: replace
         path: /data/CHECKOUT_SUCCESS_URL
         value: "https://veritasvpn.cloud/account/#/subscription"

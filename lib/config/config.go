@@ -60,7 +60,7 @@ func Load() *Config {
 		BTCPayWebhookSecret: os.Getenv("BTCPAY_WEBHOOK_SECRET"),
 		BTCPayPublicURL:     os.Getenv("BTCPAY_PUBLIC_URL"),
 
-		PremiumPriceUSDCents: int64EnvOrDefault("PREMIUM_PRICE_USD_CENTS", 500),
+		PremiumPriceUSDCents: int64EnvOrDefault("PREMIUM_PRICE_USD_CENTS", 300),
 		PremiumPeriodDays:    intEnvOrDefault("PREMIUM_PERIOD_DAYS", 30),
 		FirebaseProjectID:    envOrDefault("FIREBASE_PROJECT_ID", "veritasvpn-37cf6"),
 		CheckoutSuccessURL:   envOrDefault("CHECKOUT_SUCCESS_URL", "http://localhost:8000/billing/success.html"),

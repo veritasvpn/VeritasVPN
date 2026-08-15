@@ -112,7 +112,7 @@ fun PlansScreen(
         Spacer(Modifier.height(18.dp))
 
         PlanCard(
-            name = "Premium", price = "$5", suffix = "/30 days", current = premium,
+            name = "Premium", price = "$3", suffix = "/30 days", current = premium,
             features = listOf("Paraguay WireGuard egress", "Up to 5 VPN devices", "Private Bitcoin checkout", "Chrome, Android, and Linux access"),
             emphasized = true
         )

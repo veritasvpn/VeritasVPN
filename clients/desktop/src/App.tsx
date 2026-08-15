@@ -581,7 +581,7 @@ function App() {
             <div className="billing-panel-head"><div><span>SUBSCRIPTION</span><h2>Plans & billing</h2></div><button onClick={() => { setShowCancelConfirmation(false); setShowBilling(false); }} aria-label="Close billing">×</button></div>
             <div className="billing-current"><div><span>CURRENT PLAN</span><strong>{billingStatus?.is_premium ? "Premium" : "No active subscription"}</strong></div><button onClick={() => refreshBillingStatus().catch((err) => setBillingError(err.message))}>Refresh</button></div>
             <div className="billing-plan-card">
-              <div className="billing-price"><span>$</span>5<small>/30 days</small></div>
+              <div className="billing-price"><span>$</span>3<small>/30 days</small></div>
               <p>Complete VeritasVPN access on up to five devices.</p>
               <ul><li>✓ Paraguay WireGuard connection</li><li>✓ Chrome, Android, and Linux</li><li>✓ Anonymous account support</li><li>✓ Private Bitcoin payment</li></ul>
               {!billingStatus?.is_premium ? <>

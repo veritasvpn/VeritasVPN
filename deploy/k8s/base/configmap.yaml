@@ -40,7 +40,7 @@ data:
   BTCPAY_PUBLIC_URL: "https://btcpay.veritasvpn.cloud"
 
   FREE_ALLOWED_REGIONS: ""
-  PREMIUM_PRICE_USD_CENTS: "500"
+  PREMIUM_PRICE_USD_CENTS: "300"
   PREMIUM_PERIOD_DAYS: "30"
   CHECKOUT_SUCCESS_URL: "http://localhost:8000/billing/success.html"
   CHECKOUT_CANCEL_URL: "http://localhost:8000/billing/cancel.html"

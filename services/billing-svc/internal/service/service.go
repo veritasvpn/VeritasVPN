@@ -57,7 +57,7 @@ func (s *BillingService) Ready(ctx context.Context) error {
 
 func (s *BillingService) PremiumAmountCents() int64 {
 	if s.cfg.PremiumPriceUSDCents <= 0 {
-		return 500
+		return 300
 	}
 	return s.cfg.PremiumPriceUSDCents
 }

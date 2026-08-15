@@ -5,7 +5,7 @@
 HTTP billing service for VeritasVPN.
 
 - **Free** plan on Firebase sign-in (ensured via `/status`)
-- **Premium** ($5 / 30 days) paid with **Bitcoin** via BTCPay Server
+- **Premium** ($3 / 30 days) paid with **Bitcoin** via BTCPay Server
 - Local **mock checkout** when `BTCPAY_API_KEY` is unset (no real BTC required)
 
 Auth: Firebase ID token (`Authorization: Bearer <idToken>`). Account ID = Firebase UID.

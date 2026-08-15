@@ -138,7 +138,7 @@ function renderHome() {
       </div>
       <div class="account-card upgrade-card">
         <div>
-          <div class="upgrade-price">$5 <span>/ month</span></div>
+          <div class="upgrade-price">$3 <span>/ month</span></div>
           <p class="plan-card-meta" style="margin-top:8px;">Bitcoin · 30-day period</p>
         </div>
         <ul class="upgrade-features">
