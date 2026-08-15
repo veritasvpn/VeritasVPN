@@ -104,6 +104,18 @@ func (m *Manager) SetupMSSClamp(wgIface string) error {
 	return m.run("add", "rule", "inet", m.tableName, "forward", "oifname", wgIface, "tcp", "flags", "syn", "tcp", "option", "maxseg", "size", "set", "1380")
 }
 
+func (m *Manager) SetupBandwidth(wgIface string, mbps int) error {
+	if mbps <= 0 {
+		mbps = 50
+	}
+	bytesRate := fmt.Sprintf("%d kbytes/second", mbps*125)
+	m.ensureTable()
+	m.ensureChain("forward", "{ type filter hook forward priority filter; policy accept; }")
+	if err := m.run("insert", "rule", "inet", m.tableName, "forward", "iifname", wgIface, "meter", "vpn_upload", "{", "ip", "saddr", "limit", "rate", "over", bytesRate, "burst", "1", "mbytes", "}", "counter", "drop"); err != nil {
+		return err
+	}
+	return m.run("insert", "rule", "inet", m.tableName, "forward", "oifname", wgIface, "meter", "vpn_download", "{", "ip", "daddr", "limit", "rate", "over", bytesRate, "burst", "1", "mbytes", "}", "counter", "drop")
+}
 func (m *Manager) Cleanup() error {
 	return m.run("delete", "table", "inet", m.tableName)
 }

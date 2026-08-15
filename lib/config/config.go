@@ -24,6 +24,7 @@ type Config struct {
 	BTCPayStoreID       string
 	BTCPayWebhookSecret string
 	BTCPayPublicURL     string
+	BitcoinReadinessURL string
 
 	PremiumPriceUSDCents int64
 	PremiumPeriodDays    int
@@ -35,7 +36,7 @@ type Config struct {
 
 	AgentAuthToken string
 
-	ResendAPIKey string
+	ResendAPIKey  string
 	PublicBaseURL string
 
 	AccessTokenTTL  time.Duration
@@ -59,6 +60,7 @@ func Load() *Config {
 		BTCPayStoreID:       envOrDefault("BTCPAY_STORE_ID", "default"),
 		BTCPayWebhookSecret: os.Getenv("BTCPAY_WEBHOOK_SECRET"),
 		BTCPayPublicURL:     os.Getenv("BTCPAY_PUBLIC_URL"),
+		BitcoinReadinessURL: os.Getenv("BITCOIN_READINESS_URL"),
 
 		PremiumPriceUSDCents: int64EnvOrDefault("PREMIUM_PRICE_USD_CENTS", 300),
 		PremiumPeriodDays:    intEnvOrDefault("PREMIUM_PERIOD_DAYS", 30),
@@ -70,7 +72,7 @@ func Load() *Config {
 
 		AgentAuthToken: envRequired("AGENT_AUTH_TOKEN"),
 
-		ResendAPIKey: os.Getenv("RESEND_API_KEY"),
+		ResendAPIKey:  os.Getenv("RESEND_API_KEY"),
 		PublicBaseURL: envOrDefault("PUBLIC_BASE_URL", "https://veritasvpn.cloud"),
 
 		AccessTokenTTL:  durationEnvOrDefault("ACCESS_TOKEN_TTL", 1*time.Hour),

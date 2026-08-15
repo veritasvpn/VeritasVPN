@@ -28,7 +28,7 @@ spec:
         fsGroup: 472
       containers:
         - name: grafana
-          image: grafana/grafana:12.1.0
+          image: grafana/grafana@sha256:6ac590e7cabc2fbe8d7b8fc1ce9c9f0582177b334e0df9c927ebd9670469440f
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

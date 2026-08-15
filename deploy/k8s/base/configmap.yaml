@@ -33,6 +33,7 @@ data:
   WG_PRIVATE_KEY_FILE: "/etc/wireguard/private.key"
 
   ALLOW_MOCK_BTCPAY: "true"
+  BITCOIN_READINESS_URL: ""
   BTCPAY_SERVER_URL: "http://btcpayserver.btcpay.svc.cluster.local:49392"
   BTCPAY_API_KEY: ""
   BTCPAY_STORE_ID: ""

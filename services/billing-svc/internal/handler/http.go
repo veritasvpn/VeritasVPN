@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -62,7 +63,10 @@ func (h *BillingHandler) handleReady(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	if err := h.service.Ready(ctx); err != nil {
-		writeError(w, http.StatusServiceUnavailable, "billing dependencies unavailable")
+		if errors.Is(err, service.ErrBitcoinNotReady) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
@@ -140,6 +144,10 @@ func (h *BillingHandler) handleSubscribe(w http.ResponseWriter, r *http.Request)
 	checkoutURL, err := h.service.CreatePremiumCheckout(r.Context(), uid, req.PaymentMethod)
 	if err != nil {
 		h.log.Error("failed to create checkout", zap.Error(err))
+		if errors.Is(err, service.ErrBitcoinNotReady) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

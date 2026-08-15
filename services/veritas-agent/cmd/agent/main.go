@@ -245,37 +245,40 @@ func urlQueryEscape(s string) string {
 }
 
 type AgentConfig struct {
-	AuthToken       string
-	WGInterface     string
-	WGPort          int
-	WGSubnet        string
-	ManagerEndpoint string
-	MetricsPort     string
-	ServerHostname  string
-	ServerRegion    string
-	ServerCity      string
-	ServerCountry   string
-	DNSListen       string
-	DNSUpstream     string
+	AuthToken          string
+	WGInterface        string
+	WGPort             int
+	WGSubnet           string
+	ManagerEndpoint    string
+	MetricsPort        string
+	ServerHostname     string
+	ServerRegion       string
+	ServerCity         string
+	ServerCountry      string
+	DNSListen          string
+	DNSUpstream        string
+	BandwidthLimitMbps int
 }
 
 func LoadAgentConfig() *AgentConfig {
 	hostname, _ := os.Hostname()
 	port, _ := strconv.Atoi(envOrDefault("WG_PORT", "51820"))
+	bandwidth, _ := strconv.Atoi(envOrDefault("PEER_BANDWIDTH_LIMIT_MBPS", "50"))
 
 	return &AgentConfig{
-		AuthToken:       os.Getenv("AGENT_AUTH_TOKEN"),
-		WGInterface:     envOrDefault("WG_INTERFACE", "wg0"),
-		WGPort:          port,
-		WGSubnet:        os.Getenv("WG_SUBNET"),
-		ManagerEndpoint: envOrDefault("MANAGER_ENDPOINT", "http://wg-manager:8080"),
-		MetricsPort:     envOrDefault("METRICS_PORT", "9090"),
-		ServerHostname:  envOrDefault("SERVER_HOSTNAME", hostname),
-		ServerRegion:    os.Getenv("SERVER_REGION"),
-		ServerCity:      os.Getenv("SERVER_CITY"),
-		ServerCountry:   os.Getenv("SERVER_COUNTRY"),
-		DNSListen:       envOrDefault("DNS_LISTEN", "10.0.0.1:53"),
-		DNSUpstream:     envOrDefault("DNS_UPSTREAM", "https://cloudflare-dns.com/dns-query"),
+		AuthToken:          os.Getenv("AGENT_AUTH_TOKEN"),
+		WGInterface:        envOrDefault("WG_INTERFACE", "wg0"),
+		WGPort:             port,
+		WGSubnet:           os.Getenv("WG_SUBNET"),
+		ManagerEndpoint:    envOrDefault("MANAGER_ENDPOINT", "http://wg-manager:8080"),
+		MetricsPort:        envOrDefault("METRICS_PORT", "9090"),
+		ServerHostname:     envOrDefault("SERVER_HOSTNAME", hostname),
+		ServerRegion:       os.Getenv("SERVER_REGION"),
+		ServerCity:         os.Getenv("SERVER_CITY"),
+		ServerCountry:      os.Getenv("SERVER_COUNTRY"),
+		DNSListen:          envOrDefault("DNS_LISTEN", "10.0.0.1:53"),
+		DNSUpstream:        envOrDefault("DNS_UPSTREAM", "https://cloudflare-dns.com/dns-query"),
+		BandwidthLimitMbps: bandwidth,
 	}
 }
 
@@ -456,6 +459,9 @@ func (a *Agent) setupFirewall() error {
 	if err := a.fwManager.SetupKillSwitch(a.cfg.WGInterface, a.cfg.WGPort); err != nil {
 		a.logger.Warn("Kill switch setup failed (non-fatal)", zap.Error(err))
 	}
+	if err := a.fwManager.SetupBandwidth(a.cfg.WGInterface, a.cfg.BandwidthLimitMbps); err != nil {
+		a.logger.Warn("per-peer nftables bandwidth shaping unavailable", zap.Error(err))
+	}
 
 	a.logger.Info("Firewall rules configured",
 		zap.String("interface", a.cfg.WGInterface),
@@ -619,7 +625,7 @@ func (a *Agent) streamLoop(ctx context.Context) {
 func (a *Agent) handlePeerUpdate(update *PeerUpdate) {
 	switch update.Action {
 	case "ADD":
-		if err := a.peerManager.AddPeer(update.PeerID, update.PublicKey, update.PresharedKey, []string{"0.0.0.0/0"}); err != nil {
+		if err := a.peerManager.AddPeer(update.PeerID, update.PublicKey, update.PresharedKey, update.AllowedIPs); err != nil {
 			a.logger.Error("Failed to add peer",
 				zap.String("peer_id", update.PeerID), zap.Error(err))
 			return

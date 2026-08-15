@@ -23,6 +23,4 @@ ufw allow from 192.168.0.0/24 to any port 6443 proto tcp comment 'LAN Kubernetes
 ufw allow in on tailscale0 to any port 6443 proto tcp comment 'Tailscale Kubernetes API'
 ufw allow from 192.168.0.0/24 to any port 31500 proto tcp comment 'LAN image registry'
 ufw allow in on tailscale0 to any port 31500 proto tcp comment 'Tailscale image registry'
-ufw allow from 192.168.0.0/24 to any port 30982 proto tcp comment 'LAN ingress HTTP'
-ufw allow from 192.168.0.0/24 to any port 30369 proto tcp comment 'LAN ingress HTTPS'
 ufw --force enable

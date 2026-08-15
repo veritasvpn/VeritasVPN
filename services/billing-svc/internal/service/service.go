@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,6 +20,7 @@ import (
 type BillingConfig struct {
 	PremiumPriceUSDCents int64
 	PremiumPeriodDays    int
+	BitcoinReadinessURL  string
 }
 
 type BillingService struct {
@@ -29,6 +31,7 @@ type BillingService struct {
 	btcpay   *provider.BTCPayProvider // nil when mock-only
 	mock     *provider.MockBTCPayProvider
 	cfg      BillingConfig
+	http     *http.Client
 }
 
 func New(
@@ -48,11 +51,36 @@ func New(
 		btcpay:   btcpay,
 		mock:     mock,
 		cfg:      cfg,
+		http:     &http.Client{Timeout: 3 * time.Second},
 	}
 }
 
+var ErrBitcoinNotReady = errors.New("Bitcoin payments are temporarily unavailable while the node synchronizes")
+
+func (s *BillingService) bitcoinReady(ctx context.Context) error {
+	if s.cfg.BitcoinReadinessURL == "" {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.BitcoinReadinessURL, nil)
+	if err != nil {
+		return ErrBitcoinNotReady
+	}
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return ErrBitcoinNotReady
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ErrBitcoinNotReady
+	}
+	return nil
+}
+
 func (s *BillingService) Ready(ctx context.Context) error {
-	return s.db.Ping(ctx)
+	if err := s.db.Ping(ctx); err != nil {
+		return err
+	}
+	return s.bitcoinReady(ctx)
 }
 
 func (s *BillingService) PremiumAmountCents() int64 {
@@ -133,6 +161,9 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 
 // CreatePremiumCheckout starts a Bitcoin checkout for premium. Does NOT activate until paid.
 func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, paymentMethod string) (checkoutURL string, err error) {
+	if err := s.bitcoinReady(ctx); err != nil {
+		return "", err
+	}
 	if accountID == "" {
 		return "", fmt.Errorf("account_id is required")
 	}

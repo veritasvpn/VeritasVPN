@@ -7,6 +7,7 @@ KEY_FILE="${KEY_FILE:-/root/.config/veritasvpn/backup.key}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 WORK="$(mktemp -d)"
+TEXTFILE_DIR="${TEXTFILE_DIR:-/var/lib/node_exporter/textfile_collector}"
 trap 'rm -rf "$WORK"' EXIT
 
 install -d -m 700 "$BACKUP_ROOT" "$(dirname "$KEY_FILE")"
@@ -31,3 +32,24 @@ openssl dgst -sha256 -hmac "$hmac_key" -binary "$archive" | od -An -tx1 -v | tr 
 find "$BACKUP_ROOT" -maxdepth 1 -type f -name 'veritasvpn-*.tar.gz.enc*' -mtime "+$RETENTION_DAYS" -delete
 test -s "$archive" && test -s "$archive.hmac"
 sha256sum "$archive" > "$archive.sha256"
+
+# Verify the authenticated archive before reporting success. This is a
+# restore rehearsal: it decrypts and enumerates the tar stream without
+# touching Kubernetes or overwriting live data.
+expected_hmac="$(cat "$archive.hmac")"
+actual_hmac="$(openssl dgst -sha256 -hmac "$hmac_key" -binary "$archive" | od -An -tx1 -v | tr -d ' \n')"
+test "$expected_hmac" = "$actual_hmac"
+openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$KEY_FILE" -in "$archive" | tar -tzf - >/dev/null
+
+install -d -m 755 "$TEXTFILE_DIR"
+tmp_metrics="$(mktemp "$TEXTFILE_DIR/veritas_backup.prom.XXXXXX")"
+cat > "$tmp_metrics" <<EOF
+# HELP veritas_backup_last_success_timestamp Unix timestamp of the last encrypted backup that passed restore validation.
+# TYPE veritas_backup_last_success_timestamp gauge
+veritas_backup_last_success_timestamp $(date +%s)
+# HELP veritas_backup_archive_bytes Size of the last validated encrypted backup in bytes.
+# TYPE veritas_backup_archive_bytes gauge
+veritas_backup_archive_bytes $(stat -c %s "$archive")
+EOF
+chown --reference="$TEXTFILE_DIR" "$tmp_metrics" 2>/dev/null || true
+mv "$tmp_metrics" "$TEXTFILE_DIR/veritas_backup.prom"

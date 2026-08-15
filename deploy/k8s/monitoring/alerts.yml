@@ -56,12 +56,6 @@ groups:
         annotations:
           summary: "A required VeritasVPN monitoring scrape is missing"
 
-      - alert: BillingReadinessUnavailable
-        expr: probe_success{instance="https://api.veritasvpn.cloud/api/v1/billing/readyz"} == 0
-        for: 3m
-        labels: { severity: critical }
-        annotations:
-          summary: "Billing database readiness is unavailable"
       - alert: BitcoinNodeNotReady
         expr: kube_statefulset_status_replicas_ready{namespace="btcpay",statefulset="bitcoind"} < 1
         for: 10m
@@ -74,9 +68,26 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "Cloudflare Tunnel connector is not ready"
-      - alert: SingleReplicaCriticalService
-        expr: kube_deployment_spec_replicas{namespace=~"veritas|btcpay|monitoring",deployment=~"auth-svc|wg-manager|billing-svc|nginx|btcpayserver|grafana|prometheus|cloudflared"} == 1
-        for: 30m
-        labels: { severity: info }
+
+      - alert: BitcoinNodeSynchronizing
+        expr: bitcoin_readiness == 0 or bitcoin_initial_block_download == 1
+        for: 10m
+        labels: { severity: critical }
         annotations:
-          summary: "Critical service is running as a single replica"
+          summary: "Bitcoin node is not ready for payments"
+          description: "Bitcoin is synchronizing or has fallen behind; new Bitcoin checkouts are gated."
+      - alert: BitcoinHeaderLag
+        expr: (bitcoin_headers - bitcoin_blocks) > 6
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Bitcoin node is behind its advertised chain tip"
+          description: "Bitcoin block validation is more than six headers behind."
+
+      - alert: VeritasBackupStale
+        expr: time() - veritas_backup_last_success_timestamp > 172800
+        for: 30m
+        labels: { severity: critical }
+        annotations:
+          summary: "Encrypted VeritasVPN backup is stale"
+          description: "No backup has passed restore validation in the last 48 hours."

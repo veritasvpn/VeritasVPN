@@ -62,7 +62,7 @@ func main() {
 	}
 	log.Info("connected to redis")
 
-	nc, err := nats.Connect(cfg.NatsURL)
+	nc, err := connectNATS(ctx, cfg.NatsURL, log)
 	if err != nil {
 		log.Fatal("failed to connect to nats", "error", err)
 	}
@@ -87,7 +87,7 @@ func main() {
 	httpAddr := cfg.HTTPServerAddr()
 	httpSrv := &http.Server{
 		Addr:              httpAddr,
-		Handler:           httpHandler.Routes(),
+		Handler:           securityHeaders(httpHandler.Routes()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -114,4 +114,36 @@ func main() {
 	defer shutdownCancel()
 	_ = httpSrv.Shutdown(shutdownCtx)
 	log.Info("server stopped")
+}
+
+func connectNATS(ctx context.Context, url string, log *logging.Logger) (*nats.Conn, error) {
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		nc, err := nats.Connect(url, nats.MaxReconnects(-1), nats.ReconnectWait(time.Second))
+		if err == nil {
+			return nc, nil
+		}
+		lastErr = err
+		if attempt == 1 || attempt%10 == 0 {
+			log.Warn("NATS unavailable; retrying", "attempt", attempt, "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("nats connection canceled: %w", lastErr)
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
 }

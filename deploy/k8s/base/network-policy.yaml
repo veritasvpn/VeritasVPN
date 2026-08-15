@@ -148,8 +148,9 @@ spec:
         - podSelector:
             matchLabels:
               app: nginx
-        - ipBlock:
-            cidr: 0.0.0.0/0
+        - podSelector:
+            matchLabels:
+              app: veritas-agent
       ports:
         - port: 8080
 ---

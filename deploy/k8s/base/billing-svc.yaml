@@ -77,6 +77,11 @@ spec:
                 configMapKeyRef:
                   name: veritas-config
                   key: CORS_ORIGINS
+            - name: BITCOIN_READINESS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: BITCOIN_READINESS_URL
             - name: BTCPAY_SERVER_URL
               valueFrom:
                 configMapKeyRef:

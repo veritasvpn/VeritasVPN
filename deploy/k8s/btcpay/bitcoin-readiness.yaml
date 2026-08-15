@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bitcoin-readiness
+  namespace: btcpay
+  labels: {app: bitcoin-readiness}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector: {matchLabels: {app: bitcoin-readiness}}
+  template:
+    metadata: {labels: {app: bitcoin-readiness}}
+    spec:
+      containers:
+        - name: bitcoin-readiness
+          image: localhost:31500/bitcoin-readiness@sha256:9a3d1965eec510856ab9a4e2e88b491a279192f207c40e5b6ee0abd27521e99e
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8080}]
+          env:
+            - name: BTC_RPC_USER
+              valueFrom: {secretKeyRef: {name: btcpay-secrets, key: BTC_RPC_USER}}
+            - name: BTC_RPC_PASSWORD
+              valueFrom: {secretKeyRef: {name: btcpay-secrets, key: BTC_RPC_PASSWORD}}
+          readinessProbe: {httpGet: {path: /readyz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 15}
+          livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 20}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bitcoin-readiness
+  namespace: btcpay
+  labels: {app: bitcoin-readiness}
+spec:
+  type: ClusterIP
+  selector: {app: bitcoin-readiness}
+  ports: [{name: http, port: 8080, targetPort: 8080}]

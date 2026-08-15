@@ -99,6 +99,8 @@ spec:
                 configMapKeyRef:
                   name: veritas-config
                   key: LOG_LEVEL
+            - name: PEER_BANDWIDTH_LIMIT_MBPS
+              value: "50"
             - name: DNS_LISTEN
               value: "10.0.0.1:53"
             - name: DNS_UPSTREAM

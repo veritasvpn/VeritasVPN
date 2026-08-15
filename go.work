@@ -8,6 +8,7 @@ use (
 	./lib/jwt
 	./lib/logging
 	./services/auth-svc
+	./services/bitcoin-readiness
 	./services/billing-svc
 	./services/browser-proxy
 	./services/veritas-agent
