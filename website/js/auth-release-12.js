@@ -247,6 +247,40 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   let busy = false;
   let pendingDashboardRedirect = false;
 
+  const RESET_COOLDOWN_KEY = 'veritas_password_reset_cooldown_until';
+  const RESET_COOLDOWN_MS = 30 * 1000;
+  let resetCooldownTimer = null;
+
+  function resetCooldownRemaining() {
+    const until = Number(localStorage.getItem(RESET_COOLDOWN_KEY) || 0);
+    return Math.max(0, until - Date.now());
+  }
+
+  function syncResetCooldown() {
+    if (!forgotSubmit) return;
+    const remaining = resetCooldownRemaining();
+    if (remaining <= 0) {
+      if (resetCooldownTimer) {
+        clearInterval(resetCooldownTimer);
+        resetCooldownTimer = null;
+      }
+      forgotSubmit.disabled = Boolean(busy);
+      forgotSubmit.textContent = 'Send reset link';
+      return;
+    }
+    forgotSubmit.disabled = true;
+    forgotSubmit.textContent = 'Try again in ' + Math.ceil(remaining / 1000) + 's';
+    if (!resetCooldownTimer) {
+      resetCooldownTimer = setInterval(syncResetCooldown, 250);
+    }
+  }
+
+  function startResetCooldown() {
+    localStorage.setItem(RESET_COOLDOWN_KEY, String(Date.now() + RESET_COOLDOWN_MS));
+    syncResetCooldown();
+  }
+
+
   if (googleBtn) googleBtn.remove();
 
   function setError(message, { success = false } = {}) {
@@ -388,6 +422,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
     busy = next;
     if (submitBtn) submitBtn.disabled = busy;
     if (resetBtn) resetBtn.disabled = busy;
+    syncResetCooldown();
   }
 
   function enterDashboard(hash = requestedDashboardRoute) {
@@ -632,9 +667,14 @@ function renderUser(user) {
     } catch { setError('Could not resend the email. Please try again shortly.'); }
   });
 
+  syncResetCooldown();
+
   forgotSubmit?.addEventListener('click', async (e) => {
     e.preventDefault();
-    if (busy) return;
+    if (busy || resetCooldownRemaining() > 0) {
+      syncResetCooldown();
+      return;
+    }
     const email = forgotEmail?.value.trim() || '';
     if (!email) {
       setError('Enter your email to receive a reset link.');
@@ -648,6 +688,7 @@ function renderUser(user) {
         body: JSON.stringify({ email }),
       });
       setError('If this email is registered, a password reset link has been sent.', { success: true });
+      startResetCooldown();
     } catch (err) {
       setError(mapAuthError(err.message));
     } finally {

@@ -308,6 +308,13 @@ func (h *HTTPHandler) handleResetPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	if h.service.RateLimited(r.Context(), "password-reset-ip:"+clientIP(r), 1, 30*time.Second) ||
+		h.service.RateLimited(r.Context(), "password-reset-email:"+req.Email, 1, 30*time.Second) {
+		writeHTTPError(w, http.StatusTooManyRequests, "please wait 30 seconds before requesting another reset email")
+		return
+	}
+
 	if err := h.service.RequestPasswordReset(r.Context(), req.Email); err != nil {
 		h.log.Warn("password reset request failed", zap.Error(err))
 		writeHTTPError(w, http.StatusNotFound, err.Error())

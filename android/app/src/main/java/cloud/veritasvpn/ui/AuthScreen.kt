@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.ui.theme.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -64,8 +65,17 @@ fun AuthScreen(
     var loading by remember { mutableStateOf(false) }
     var forgotPassword by remember { mutableStateOf(false) }
     var resetSent by remember { mutableStateOf(false) }
+    var resetCooldown by remember { mutableIntStateOf(0) }
     var accountIdCopied by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(resetCooldown) {
+        if (resetCooldown > 0) {
+            delay(1000)
+            resetCooldown -= 1
+        }
+    }
+
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val authRepo = remember(context) { cloud.veritasvpn.auth.AuthRepository(context) }
@@ -104,7 +114,8 @@ fun AuthScreen(
             Text("Reset your password", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(
-                if (resetSent) "Check your inbox for a secure reset link."
+                if (resetCooldown > 0) "Check your inbox for a secure reset link. You can request another in $resetCooldown seconds."
+                else if (resetSent) "Check your inbox for a secure reset link."
                 else "Enter your email and we'll send you a secure reset link.",
                 color = PaperMuted,
                 fontSize = 14.sp,
@@ -136,6 +147,7 @@ fun AuthScreen(
                             try {
                                 withContext(Dispatchers.IO) { authRepo.resetPassword(email) }
                                 resetSent = true
+                                resetCooldown = 30
                             } catch (e: Exception) {
                                 error = e.message ?: "Could not send the reset link. Try again."
                             } finally {
@@ -144,12 +156,12 @@ fun AuthScreen(
                         }
                     }
                 },
-                enabled = !loading,
+                enabled = !loading && resetCooldown == 0,
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Royal)
             ) {
-                Text(if (loading) "Sending…" else if (resetSent) "Send again" else "Send reset link", color = Color.White)
+                Text(if (loading) "Sending…" else if (resetCooldown > 0) "Try again in $resetCooldown s" else "Send reset link", color = Color.White)
             }
             TextButton(onClick = { forgotPassword = false; error = null; resetSent = false }) {
                 Text("Back to sign in", color = CyanHover, fontWeight = FontWeight.Medium)
