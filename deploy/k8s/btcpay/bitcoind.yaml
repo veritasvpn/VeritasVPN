@@ -59,7 +59,7 @@ spec:
                 -dbcache=1024 \
                 -rpcuser="${BTC_RPC_USER}" \
                 -rpcpassword="${BTC_RPC_PASSWORD}" \
-                -rpcallowip=0.0.0.0/0 \
+                -rpcallowip=10.42.0.0/16 \
                 -rpcbind=0.0.0.0 \
                 -rpcport=8332 \
                 -whitelist=10.42.0.0/16 \
@@ -79,30 +79,30 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockchaininfo 2>/dev/null || exit 1
+                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockcount 2>/dev/null | grep -Eq "^[0-9]+$"
             initialDelaySeconds: 30
             periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 6
+            timeoutSeconds: 30
+            failureThreshold: 10
           livenessProbe:
             exec:
               command:
                 - /bin/sh
                 - -c
-                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockchaininfo 2>/dev/null || exit 1
+                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockcount 2>/dev/null | grep -Eq "^[0-9]+$"
             initialDelaySeconds: 120
             periodSeconds: 60
-            timeoutSeconds: 10
-            failureThreshold: 6
+            timeoutSeconds: 30
+            failureThreshold: 10
           startupProbe:
             exec:
               command:
                 - /bin/sh
                 - -c
-                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockchaininfo >/dev/null 2>&1
+                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockcount >/dev/null 2>&1
             periodSeconds: 20
-            timeoutSeconds: 10
-            failureThreshold: 90
+            timeoutSeconds: 30
+            failureThreshold: 180
           resources:
             requests:
               cpu: 250m

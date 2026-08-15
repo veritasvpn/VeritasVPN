@@ -7,6 +7,15 @@ latest="$(find "$BACKUP_ROOT" -maxdepth 1 -type f -name 'veritasvpn-*.tar.gz.enc
 [[ -n "$latest" && -s "$latest" ]] || { echo 'no encrypted backup found' >&2; exit 1; }
 [[ -s "$KEY_FILE" ]] || { echo 'backup key missing' >&2; exit 1; }
 
+# New backups include an HMAC sidecar. Verify it before attempting decryption.
+if [[ -s "$latest.hmac" ]]; then
+  expected="$(cat "$latest.hmac")"
+  actual="$(openssl dgst -sha256 -hmac "$(cat "$KEY_FILE")" -binary "$latest" | od -An -tx1 -v | tr -d ' \n')"
+  [[ "$expected" == "$actual" ]] || { echo 'backup authentication failed' >&2; exit 1; }
+else
+  echo 'warning: legacy backup has no authentication sidecar' >&2
+fi
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$KEY_FILE" -in "$latest" -out "$work/archive.tar.gz"

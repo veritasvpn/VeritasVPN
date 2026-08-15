@@ -136,6 +136,12 @@ spec:
       containers:
         - name: blackbox-exporter
           image: quay.io/prometheus/blackbox-exporter:v0.27.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           args: ["--config.file=/etc/blackbox/blackbox.yml"]
           ports:
             - { name: metrics, containerPort: 9115 }
@@ -173,6 +179,12 @@ spec:
       containers:
         - name: postgres-exporter
           image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           env:
             - name: DATA_SOURCE_NAME
               valueFrom:
@@ -208,6 +220,12 @@ spec:
       containers:
         - name: redis-exporter
           image: oliver006/redis_exporter:v1.67.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           env:
             - { name: REDIS_ADDR, value: "redis://redis.veritas.svc.cluster.local:6379" }
           ports:

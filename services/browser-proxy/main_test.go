@@ -12,7 +12,7 @@ import (
 func token(t *testing.T, secret []byte, exp int64, sub, tier string) string {
 	t.Helper()
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payloadBytes, _ := json.Marshal(claims{Exp: exp, Sub: sub, Tier: tier})
+	payloadBytes, _ := json.Marshal(claims{Exp: exp, Sub: sub, Tier: tier, Iss: "veritasvpn"})
 	payload := base64.RawURLEncoding.EncodeToString(payloadBytes)
 	input := header + "." + payload
 	mac := hmac.New(sha256.New, secret)

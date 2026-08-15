@@ -63,7 +63,21 @@ func main() {
 
 	var natsConn *nats.Conn
 	if cfg.NatsURL != "" {
-		nc, err := nats.Connect(cfg.NatsURL)
+		nc, err := nats.Connect(cfg.NatsURL,
+			nats.RetryOnFailedConnect(true),
+			nats.MaxReconnects(-1),
+			nats.ReconnectWait(2*time.Second),
+			nats.Timeout(5*time.Second),
+			nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+				log.Warn("NATS connection interrupted; reconnecting", zap.Error(err))
+			}),
+			nats.ReconnectHandler(func(nc *nats.Conn) {
+				log.Info("NATS connection restored", zap.String("url", nc.ConnectedUrl()))
+			}),
+			nats.ClosedHandler(func(_ *nats.Conn) {
+				log.Warn("NATS connection closed")
+			}),
+		)
 		if err != nil {
 			log.Warn("failed to connect to NATS, continuing without events", zap.Error(err))
 		} else {

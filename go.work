@@ -2,13 +2,14 @@ go 1.22
 
 use (
 	./api
+	./clients/cli
 	./lib/config
-	./lib/logging
 	./lib/crypto
 	./lib/jwt
+	./lib/logging
 	./services/auth-svc
-	./services/wg-manager
 	./services/billing-svc
+	./services/browser-proxy
 	./services/veritas-agent
-	./clients/cli
+	./services/wg-manager
 )

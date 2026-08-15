@@ -22,8 +22,8 @@ type claims struct {
 	Exp  int64  `json:"exp"`
 	Sub  string `json:"sub"`
 	Tier string `json:"tier"`
+	Iss  string `json:"iss"`
 }
-
 type proxy struct {
 	secret    []byte
 	transport *http.Transport
@@ -36,7 +36,7 @@ func main() {
 	}
 	p := &proxy{secret: []byte(secret), transport: &http.Transport{
 		Proxy:               nil,
-		DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:         dialPublic,
 		ForceAttemptHTTP2:   false,
 		IdleConnTimeout:     60 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
@@ -91,10 +91,29 @@ func validateJWT(token string, secret []byte) bool {
 		return false
 	}
 	var c claims
-	if json.Unmarshal(body, &c) != nil || c.Exp <= time.Now().Unix() || c.Sub == "" || c.Tier != "premium" {
+	if json.Unmarshal(body, &c) != nil || c.Exp <= time.Now().Unix() || c.Sub == "" || c.Tier != "premium" || c.Iss != "veritasvpn" {
 		return false
 	}
 	return true
+}
+
+func publicAddresses(ctx context.Context, host string) ([]net.IP, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
+			return nil, errors.New("private target is not allowed")
+		}
+		return []net.IP{ip}, nil
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil || len(ips) == 0 {
+		return nil, errors.New("target resolution failed")
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
+			return nil, errors.New("private target is not allowed")
+		}
+	}
+	return ips, nil
 }
 
 func allowedTarget(authority string) (string, error) {
@@ -105,25 +124,41 @@ func allowedTarget(authority string) (string, error) {
 	if port != "80" && port != "443" {
 		return "", errors.New("target port is not allowed")
 	}
-	ips, err := net.DefaultResolver.LookupIP(context.Background(), "ip", host)
-	if err != nil || len(ips) == 0 {
-		return "", errors.New("target resolution failed")
-	}
-	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
-			return "", errors.New("private target is not allowed")
-		}
+	if _, err := publicAddresses(context.Background(), host); err != nil {
+		return "", err
 	}
 	return net.JoinHostPort(host, port), nil
 }
 
+// dialPublic resolves and validates the destination immediately before every
+// connection. This prevents DNS rebinding between validation and dialing.
+func dialPublic(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || (port != "80" && port != "443") {
+		return nil, errors.New("target port is not allowed")
+	}
+	ips, err := publicAddresses(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	var lastErr error
+	for _, ip := range ips {
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
 func (p *proxy) connect(w http.ResponseWriter, r *http.Request) {
 	target, err := allowedTarget(r.Host)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	upstream, err := net.DialTimeout("tcp", target, 10*time.Second)
+	upstream, err := dialPublic(r.Context(), "tcp", target)
 	if err != nil {
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return

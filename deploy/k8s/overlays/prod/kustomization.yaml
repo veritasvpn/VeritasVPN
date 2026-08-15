@@ -11,19 +11,19 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:7be85196a22c5ec2a19ff1b820ab83b46e91c5cde1b54a3dc78ebc4912392c51
+    digest: sha256:9f0c31a1438d6664e1abcc066597035ab327f2b84cda1bdb1feee420a455a169
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
     digest: sha256:772b42488ba6625f7b39dec0994b29efd40e181caba9e5a7adeccff0a5cc75f7
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    digest: sha256:d641f19471b0a50a961b9f84bd981a289851e12022401fc2b14a7ce3b769d070
+    digest: sha256:2085015c333e7621193d037cc0588d8c7a89f7305f7b403c81bc6f6a39ec09d4
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     digest: sha256:62e6794c1aee9f401a549cda2a9201d2eecb6cba98cd0e5302d9949fb1334915
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
-    digest: sha256:a7478f7a67e70dcb40193c7be32db92da2554ef5af5444d0c48502c2e7bd7ef5
+    digest: sha256:735d0c4463bf3f0e87133f5e62e17749bb47efe7d83d9daac9c7e9c8c9ce7579
 
 patches:
   # -- ConfigMap: production defaults for this host --
