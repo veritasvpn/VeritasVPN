@@ -33,7 +33,7 @@ spec:
     spec:
       containers:
         - name: auth-svc
-          image: localhost:31500/auth-svc:latest
+          image: localhost:31500/auth-svc@sha256:606fd788562949b75c5e11135c77a3445c281d45003e9d781780e61ab88e0f77
           imagePullPolicy: Always
           ports:
             - containerPort: 8080

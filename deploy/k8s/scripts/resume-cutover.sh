@@ -51,6 +51,7 @@ if [ -z "$TOKEN" ]; then
   TOKEN=$(docker inspect veritasvpn-cloudflared-1 --format '{{json .Args}}' | python3 -c 'import json,sys; a=json.load(sys.stdin); print(a[a.index("--token")+1])')
 fi
 kubectl apply -f "$REPO_ROOT/deploy/k8s/ingress-nginx/cloudflared.yaml"
+kubectl apply -f "$REPO_ROOT/deploy/k8s/ingress-nginx/network-policies.yaml"
 kubectl -n ingress-nginx delete secret cloudflared-token --ignore-not-found
 kubectl -n ingress-nginx create secret generic cloudflared-token --from-literal=token="$TOKEN"
 kubectl -n ingress-nginx rollout restart deploy/cloudflared 2>/dev/null || true

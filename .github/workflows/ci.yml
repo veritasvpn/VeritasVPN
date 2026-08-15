@@ -43,8 +43,8 @@ jobs:
           JWT_SECRET: test-secret-for-ci-purposes-only
           AGENT_AUTH_TOKEN: test-agent-token
         run: |
-          go test ./api/... ./lib/config/... ./lib/logging/... ./lib/crypto/... ./lib/jwt/... ./services/auth-svc/... ./services/wg-manager/... ./services/billing-svc/... ./services/veritas-agent/... ./services/browser-proxy/... ./clients/cli/... -v -count=1 && go test ./services/telegram-notifier/... -v -count=1
-          go vet ./api/... ./lib/config/... ./lib/logging/... ./lib/crypto/... ./lib/jwt/... ./services/auth-svc/... ./services/wg-manager/... ./services/billing-svc/... ./services/veritas-agent/... ./services/browser-proxy/... ./clients/cli/...
+          go test ./api/... ./lib/config/... ./lib/logging/... ./lib/crypto/... ./lib/jwt/... ./services/auth-svc/... ./services/wg-manager/... ./services/billing-svc/... ./services/veritas-agent/... ./services/browser-proxy/... ./services/bitcoin-readiness/... ./clients/cli/... -v -count=1 && go test ./services/telegram-notifier/... -v -count=1
+          go vet ./api/... ./lib/config/... ./lib/logging/... ./lib/crypto/... ./lib/jwt/... ./services/auth-svc/... ./services/wg-manager/... ./services/billing-svc/... ./services/veritas-agent/... ./services/browser-proxy/... ./services/bitcoin-readiness/... ./clients/cli/...
 
   dependency-scan:
     name: Dependency vulnerability scan
@@ -161,9 +161,12 @@ jobs:
           test -f website/index.html
           test -f website/privacy.html
           grep -q 'Content-Security-Policy' website/_headers
+      - name: Validate shell scripts
+        run: |
+          find deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
       - name: Reject mutable production image tags
         run: |
-          ! grep -nE 'newTag: latest|image: .*:latest' deploy/k8s/overlays/prod/kustomization.yaml
+          ! grep -RInE 'newTag: latest|image: .*:latest' deploy/k8s/base deploy/k8s/overlays/prod
 
   build-images:
     name: Build & Push Images

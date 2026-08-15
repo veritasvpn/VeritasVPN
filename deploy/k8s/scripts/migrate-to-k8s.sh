@@ -198,6 +198,7 @@ sed -i 's|cloudflare/cloudflared:2025.6.1|cloudflare/cloudflared:2026.7.3|' \
   "$REPO_ROOT/deploy/k8s/ingress-nginx/cloudflared.yaml" || true
 # Ensure secret is used (strip empty inline token secret from manifest if present by applying deploy only)
 kubectl apply -f "$REPO_ROOT/deploy/k8s/ingress-nginx/cloudflared.yaml" || true
+kubectl apply -f "$REPO_ROOT/deploy/k8s/ingress-nginx/network-policies.yaml" || true
 # Re-assert secret after apply (manifest may contain empty secret)
 kubectl -n ingress-nginx delete secret cloudflared-token --ignore-not-found
 kubectl -n ingress-nginx create secret generic cloudflared-token --from-literal=token="$TOKEN"

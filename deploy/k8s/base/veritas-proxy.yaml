@@ -34,7 +34,7 @@ spec:
     spec:
       containers:
         - name: veritas-proxy
-          image: localhost:31500/veritas-proxy:latest
+          image: localhost:31500/veritas-proxy@sha256:735d0c4463bf3f0e87133f5e62e17749bb47efe7d83d9daac9c7e9c8c9ce7579
           imagePullPolicy: IfNotPresent
           env:
             - name: JWT_SECRET

@@ -20,4 +20,6 @@ openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$KEY_FILE" -in "$latest" | tar -
 for required in veritas.sql.gz btcpay.sql.gz veritas-k8s.yaml btcpay-k8s.yaml wireguard-private.key wireguard-state.txt; do
   test -s "$tmp/$required"
 done
+gzip -t "$tmp/veritas.sql.gz"
+gzip -t "$tmp/btcpay.sql.gz"
 printf 'restore rehearsal passed: %s\n' "$latest"

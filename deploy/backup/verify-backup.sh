@@ -25,4 +25,5 @@ for required in ./veritas.sql.gz ./btcpay.sql.gz ./veritas-k8s.yaml ./btcpay-k8s
 done
 gzip -t <(tar -xOf "$work/archive.tar.gz" ./veritas.sql.gz)
 gzip -t <(tar -xOf "$work/archive.tar.gz" ./btcpay.sql.gz)
+grep -Fxq './wireguard-state.txt' "$work/contents"
 echo "backup verified: $latest"

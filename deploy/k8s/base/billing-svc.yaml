@@ -33,7 +33,7 @@ spec:
     spec:
       containers:
         - name: billing-svc
-          image: localhost:31500/billing-svc:latest
+          image: localhost:31500/billing-svc@sha256:267b947ce72f0b944fbe2f010b7335fbf4ae3b6c7533843655f2bfc520257
           imagePullPolicy: Always
           ports:
             - containerPort: 8080

@@ -85,15 +85,17 @@ spec:
             timeoutSeconds: 30
             failureThreshold: 10
           livenessProbe:
+            # Do not restart Bitcoin Core merely because RPC is slow during sync.
+            # A crashed process exits and is still detected by this probe.
             exec:
               command:
                 - /bin/sh
                 - -c
-                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockcount 2>/dev/null | grep -Eq "^[0-9]+$"
-            initialDelaySeconds: 120
-            periodSeconds: 60
-            timeoutSeconds: 30
-            failureThreshold: 10
+                - kill -0 1
+            initialDelaySeconds: 180
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
           startupProbe:
             exec:
               command:

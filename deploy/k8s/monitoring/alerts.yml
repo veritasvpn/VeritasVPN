@@ -70,12 +70,33 @@ groups:
           summary: "Cloudflare Tunnel connector is not ready"
 
       - alert: BitcoinNodeSynchronizing
-        expr: bitcoin_readiness == 0 or bitcoin_initial_block_download == 1
-        for: 10m
+        expr: bitcoin_initial_block_download{job="bitcoin-readiness"} == 1
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Bitcoin node is still synchronizing"
+          description: "Bitcoin is in initial block download; Bitcoin checkouts remain gated until readiness is verified."
+      - alert: BitcoinRPCUnavailable
+        expr: bitcoin_rpc_up{job="bitcoin-readiness"} == 0
+        for: 5m
         labels: { severity: critical }
         annotations:
-          summary: "Bitcoin node is not ready for payments"
-          description: "Bitcoin is synchronizing or has fallen behind; new Bitcoin checkouts are gated."
+          summary: "Bitcoin RPC is unavailable"
+          description: "The readiness service cannot reach Bitcoin Core. Payment readiness cannot be evaluated."
+      - alert: BitcoinSyncStalled
+        expr: bitcoin_initial_block_download{job="bitcoin-readiness"} == 1 and changes(bitcoin_blocks{job="bitcoin-readiness"}[30m]) == 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Bitcoin synchronization appears stalled"
+          description: "Bitcoin block height has not advanced for 30 minutes while initial synchronization is active."
+      - alert: BillingReadinessUnavailable
+        expr: probe_success{instance="https://api.veritasvpn.cloud/api/v1/billing/readyz"} == 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Bitcoin billing readiness is unavailable"
+          description: "The billing readiness endpoint is unavailable; checkout is intentionally gated until Bitcoin is healthy."
       - alert: BitcoinHeaderLag
         expr: (bitcoin_headers - bitcoin_blocks) > 6
         for: 10m
