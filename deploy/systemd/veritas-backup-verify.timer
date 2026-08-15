@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly encrypted backup verification
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

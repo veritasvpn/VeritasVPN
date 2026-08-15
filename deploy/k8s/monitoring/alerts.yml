@@ -19,6 +19,12 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "VeritasVPN API is unavailable"
+      - alert: BTCPayUnavailable
+        expr: probe_success{instance="https://btcpay.veritasvpn.cloud/"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "BTCPay payment page is unavailable"
       - alert: DellDiskFilling
         expr: 100 * (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) > 85
         for: 10m
@@ -37,3 +43,15 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "A VeritasVPN container is repeatedly restarting"
+      - alert: WireGuardPeersNotHandshaking
+        expr: veritas_agent_peer_count > 0 and veritas_agent_active_peer_count == 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Configured WireGuard peers have no recent handshakes"
+      - alert: PrometheusScrapeMissing
+        expr: absent(up{job="veritas-agent"}) or absent(up{job="blackbox"})
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "A required VeritasVPN monitoring scrape is missing"

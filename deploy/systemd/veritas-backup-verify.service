@@ -1,0 +1,7 @@
+[Unit]
+Description=Verify the latest encrypted VeritasVPN backup
+After=veritas-backup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/veritas-backup-verify

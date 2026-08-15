@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/veritasvpn}"
+KEY_FILE="${KEY_FILE:-/root/.config/veritasvpn/backup.key}"
+latest="$(find "$BACKUP_ROOT" -maxdepth 1 -type f -name 'veritasvpn-*.tar.gz.enc' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)"
+[[ -n "$latest" && -s "$latest" ]] || { echo 'no encrypted backup found' >&2; exit 1; }
+[[ -s "$KEY_FILE" ]] || { echo 'backup key missing' >&2; exit 1; }
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$KEY_FILE" -in "$latest" -out "$work/archive.tar.gz"
+tar -tzf "$work/archive.tar.gz" > "$work/contents"
+for required in ./veritas.sql.gz ./btcpay.sql.gz ./veritas-k8s.yaml ./btcpay-k8s.yaml ./wireguard-private.key; do
+  grep -Fxq "$required" "$work/contents" || { echo "backup missing $required" >&2; exit 1; }
+done
+gzip -t <(tar -xOf "$work/archive.tar.gz" ./veritas.sql.gz)
+gzip -t <(tar -xOf "$work/archive.tar.gz" ./btcpay.sql.gz)
+echo "backup verified: $latest"
