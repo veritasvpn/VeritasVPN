@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telegram-notifier
+  namespace: veritas
+  labels: {app: telegram-notifier}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector: {matchLabels: {app: telegram-notifier}}
+  template:
+    metadata: {labels: {app: telegram-notifier}}
+    spec:
+      containers:
+        - name: telegram-notifier
+          image: localhost:31500/telegram-notifier@sha256:df9540aaa1f516075c360efb19b0a1c12ba20b370fc10da765b5a534dbca8698
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8080}]
+          env:
+            - name: NATS_URL
+              value: "nats://nats.veritas.svc.cluster.local:4222"
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom: {secretKeyRef: {name: telegram-notifier-secrets, key: BOT_TOKEN}}
+            - name: TELEGRAM_ACTIVITY_CHAT_ID
+              valueFrom: {secretKeyRef: {name: telegram-notifier-secrets, key: ACTIVITY_CHAT_ID}}
+          readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 5, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 15, periodSeconds: 20}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 128Mi}

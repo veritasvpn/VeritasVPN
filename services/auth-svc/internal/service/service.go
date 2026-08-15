@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/veritasvpn/lib/config"
 	libcrypto "github.com/veritasvpn/lib/crypto"
 	jwtlib "github.com/veritasvpn/lib/jwt"
@@ -24,10 +26,27 @@ type AuthService struct {
 	jwt   *jwtlib.Manager
 	email *email.Client
 	cfg   *config.Config
+	nats  *nats.Conn
 }
 
 func New(log *logging.Logger, db *repository.Postgres, redis *repository.Redis, jwt *jwtlib.Manager, emailClient *email.Client, cfg *config.Config) *AuthService {
 	return &AuthService{log: log, db: db, redis: redis, jwt: jwt, email: emailClient, cfg: cfg}
+}
+
+func (s *AuthService) SetNATS(nc *nats.Conn) { s.nats = nc }
+
+func (s *AuthService) publishEvent(subject string, payload map[string]interface{}) {
+	if s.nats == nil {
+		return
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		s.log.Warn("failed to marshal activity event", zap.Error(err))
+		return
+	}
+	if err := s.nats.Publish(subject, data); err != nil {
+		s.log.Warn("failed to publish activity event", zap.String("subject", subject), zap.Error(err))
+	}
 }
 
 func (s *AuthService) RateLimited(ctx context.Context, key string, limit int, window time.Duration) bool {
@@ -94,6 +113,8 @@ func (s *AuthService) Register(ctx context.Context, deviceID, publicKey string) 
 		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
 		zap.String("tier", acc.SubscriptionTier),
 	)
+
+	s.publishEvent("account.registered", map[string]interface{}{"account_type": "device"})
 
 	return accessToken, refreshToken, acc.ID, expiresAt, nil
 }
@@ -240,6 +261,8 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email, password str
 		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
 		zap.String("email", email),
 	)
+
+	s.publishEvent("account.registered", map[string]interface{}{"account_type": "email"})
 
 	return accessToken, refreshToken, acc.ID, expiresAt, nil
 }
@@ -418,6 +441,8 @@ func (s *AuthService) RegisterAnonymous(ctx context.Context) (string, string, st
 	s.log.Info("anonymous account created",
 		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
 	)
+
+	s.publishEvent("account.registered", map[string]interface{}{"account_type": "anonymous"})
 
 	return accessToken, refreshToken, acc.ID, expiresAt, nil
 }

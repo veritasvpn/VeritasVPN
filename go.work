@@ -11,5 +11,6 @@ use (
 	./services/billing-svc
 	./services/browser-proxy
 	./services/veritas-agent
+	./services/telegram-notifier
 	./services/wg-manager
 )

@@ -11,19 +11,22 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:9f0c31a1438d6664e1abcc066597035ab327f2b84cda1bdb1feee420a455a169
+    digest: sha256:e5e8361994def90d418f829e4586802ce4a4cd18a008b8296228c05669704af3
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
     digest: sha256:772b42488ba6625f7b39dec0994b29efd40e181caba9e5a7adeccff0a5cc75f7
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    digest: sha256:e0ddde7768ec97a9f3d9e62117c28c87453f21dfd7abfa443a2e07a3929c8e35
+    digest: sha256:3d792487fe717cac46b52ecea377be7845701bba02453b241261afccbae271b2
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     digest: sha256:62e6794c1aee9f401a549cda2a9201d2eecb6cba98cd0e5302d9949fb1334915
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
     digest: sha256:735d0c4463bf3f0e87133f5e62e17749bb47efe7d83d9daac9c7e9c8c9ce7579
+  - name: localhost:31500/telegram-notifier
+    newName: localhost:31500/telegram-notifier
+    digest: sha256:df9540aaa1f516075c360efb19b0a1c12ba20b370fc10da765b5a534dbca8698
 
 patches:
   # -- ConfigMap: production defaults for this host --

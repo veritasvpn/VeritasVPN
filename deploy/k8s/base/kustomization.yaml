@@ -16,6 +16,7 @@ resources:
   - auth-svc.yaml
   - wg-manager.yaml
   - billing-svc.yaml
+  - telegram-notifier.yaml
   - nginx.yaml
   - ingress.yaml
   - veritas-agent.yaml

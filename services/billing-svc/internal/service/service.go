@@ -296,9 +296,8 @@ func (s *BillingService) SettleInvoice(ctx context.Context, invoiceID, accountID
 	}
 
 	s.publishEvent("subscription.renewed", map[string]interface{}{
-		"account_id": accountID,
-		"tier":       model.TierPremium,
-		"period_end": periodEnd,
+		"tier":           model.TierPremium,
+		"payment_method": paymentMethod,
 	})
 
 	s.log.Info("premium activated",

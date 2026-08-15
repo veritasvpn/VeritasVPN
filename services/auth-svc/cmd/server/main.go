@@ -99,6 +99,7 @@ func main() {
 		} else {
 			natsConn = nc
 			defer natsConn.Close()
+			svc.SetNATS(natsConn)
 			if err := svc.StartSubscriptionSync(natsConn, log); err != nil {
 				log.Warn("subscription sync subscribe failed", zap.Error(err))
 			} else {

@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels: {app: alertmanager}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector: {matchLabels: {app: alertmanager}}
+  template:
+    metadata: {labels: {app: alertmanager}}
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.28.1
+          args: [--config.file=/etc/alertmanager/alertmanager.yml, --storage.path=/alertmanager]
+          env:
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom: {secretKeyRef: {name: alertmanager-telegram, key: BOT_TOKEN}}
+          ports: [{containerPort: 9093}]
+          volumeMounts:
+            - {name: config, mountPath: /etc/alertmanager, readOnly: true}
+            - {name: data, mountPath: /alertmanager}
+          readinessProbe: {httpGet: {path: /-/ready, port: 9093}, initialDelaySeconds: 10, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /-/healthy, port: 9093}, initialDelaySeconds: 20, periodSeconds: 20}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 200m, memory: 256Mi}
+      volumes:
+        - {name: config, secret: {secretName: alertmanager-config-secret}}
+        - {name: data, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels: {app: alertmanager}
+spec:
+  type: ClusterIP
+  selector: {app: alertmanager}
+  ports:
+    - {name: http, port: 9093, targetPort: 9093}
