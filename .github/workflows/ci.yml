@@ -93,6 +93,55 @@ jobs:
           name: veritas-${{ matrix.os }}-${{ matrix.arch }}
           path: build/veritas-${{ matrix.os }}-${{ matrix.arch }}
 
+  build-desktop:
+    name: Build desktop web bundle
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: clients/desktop/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  build-android:
+    name: Build Android debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Assemble and test Android app
+        working-directory: android
+        run: ./gradlew test assembleDebug --no-daemon
+
+  validate-website-extension:
+    name: Validate website and Chrome extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate extension manifest and bundle
+        run: |
+          node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('clients/browser-extension/manifest.json')); if(m.manifest_version!==3) throw new Error('Manifest V3 required'); if(m.host_permissions.includes('<all_urls>')) throw new Error('Broad <all_urls> permission is not allowed');"
+          test -f clients/browser-extension/popup.html
+          test -f clients/browser-extension/js/background.js
+      - name: Validate website entry points
+        run: |
+          test -f website/index.html
+          test -f website/privacy.html
+          grep -q 'Content-Security-Policy' website/_headers
+
   build-images:
     name: Build & Push Images
     runs-on: ubuntu-latest
