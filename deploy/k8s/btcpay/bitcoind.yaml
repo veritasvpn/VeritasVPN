@@ -82,6 +82,8 @@ spec:
                 - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockchaininfo 2>/dev/null || exit 1
             initialDelaySeconds: 30
             periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
           livenessProbe:
             exec:
               command:
@@ -90,6 +92,17 @@ spec:
                 - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockchaininfo 2>/dev/null || exit 1
             initialDelaySeconds: 120
             periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 6
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockchaininfo >/dev/null 2>&1
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 90
           resources:
             requests:
               cpu: 250m

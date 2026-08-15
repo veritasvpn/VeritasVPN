@@ -1,0 +1,10 @@
+[Unit]
+Description=Encrypted VeritasVPN Kubernetes backup
+After=k3s.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/jpg/VeritasVPN/deploy/backup/backup-k3s.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

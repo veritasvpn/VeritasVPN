@@ -41,14 +41,14 @@ spec:
       containers:
         - name: veritas-agent
           image: localhost:31500/veritas-agent:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           securityContext:
-            privileged: true
+            privileged: false
+            allowPrivilegeEscalation: false
             capabilities:
               add:
                 - NET_ADMIN
                 - NET_RAW
-                - SYS_MODULE
           env:
             - name: AGENT_AUTH_TOKEN
               valueFrom:

@@ -34,7 +34,7 @@ spec:
       containers:
         - name: veritas-proxy
           image: localhost:31500/veritas-proxy:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           env:
             - name: JWT_SECRET
               valueFrom:
