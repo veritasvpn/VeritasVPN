@@ -51,7 +51,8 @@ fi
 "$TC" class replace dev "$WG_IFACE" parent 1: classid 1:999 htb rate 1gbit ceil 1gbit quantum 1514
 
 # Ingress (VPN device -> server): police each peer's source /32 at 50 Mbps.
-"$TC" qdisc replace dev "$WG_IFACE" handle ffff: ingress
+"$TC" qdisc del dev "$WG_IFACE" ingress 2>/dev/null || true
+"$TC" qdisc add dev "$WG_IFACE" handle ffff: ingress
 
 priority=10
 for peer in "${peers[@]}"; do
