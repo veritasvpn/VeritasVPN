@@ -26,9 +26,12 @@ jobs:
             --exclude 'downloads/veritasvpn-linux.AppImage' \
             --exclude 'downloads/veritasvpn-android.apk' \
             --exclude 'downloads/veritasvpn-macos.dmg' \
+            --exclude 'functions' \
             --exclude 'README.md' \
             --exclude '.gitignore' \
             website/ dist-site/
+          # Wrangler discovers Pages Functions from the project root.
+          cp -a website/functions ./functions
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
