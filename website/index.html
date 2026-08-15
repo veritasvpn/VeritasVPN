@@ -313,6 +313,14 @@
                 <button type="button" class="auth-reset" id="authReset">Forgot password?</button>
                 <button type="submit" class="btn btn-primary btn-block" id="authSubmit">Sign in</button>
             </form>
+            <div id="authForgot" class="auth-forgot" hidden>
+                <label class="auth-field">
+                    <span>Email</span>
+                    <input type="email" id="authForgotEmail" autocomplete="email" required placeholder="you@example.com">
+                </label>
+                <button type="button" class="btn btn-primary btn-block" id="authForgotSubmit">Send reset link</button>
+                <button type="button" class="auth-forgot-back" id="authForgotBack">Back to sign in</button>
+            </div>
             <button type="button" class="auth-anon-link" id="authAnonSignup">Skip email — create anonymous account</button>
             <button type="button" class="auth-anon-link" id="authAnonSignin" hidden>Sign in with Account ID instead</button>
             <div class="auth-divider"><span>or</span></div>
