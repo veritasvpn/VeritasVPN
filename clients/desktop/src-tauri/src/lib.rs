@@ -617,6 +617,8 @@ if [[ -f "$IFACE_FILE" ]]; then
 fi
 ip route del 0.0.0.0/1 2>/dev/null || true
 ip route del 128.0.0.0/1 2>/dev/null || true
+# Remove only the dedicated Veritas kill-switch route left by an interrupted session.
+ip route del blackhole default metric 1 2>/dev/null || true
 pkill -f 'wireguard-go veritas0' 2>/dev/null || true
 rm -f /var/run/wireguard/*.sock 2>/dev/null || true
 
@@ -701,6 +703,22 @@ ip route del 128.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
 ip route add 0.0.0.0/1 dev "$IFACE_NAME"
 ip route add 128.0.0.0/1 dev "$IFACE_NAME"
 
+# Linux kill switch: keep a dedicated fail-closed default route beneath the
+# tunnel's /1 routes. If WireGuard disappears or the split routes are removed,
+# traffic hits this blackhole instead of falling back to the normal gateway.
+if ! ip route replace blackhole default metric 1 2>/tmp/veritas-wg-killswitch-error.log; then
+  ip route del 0.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
+  ip route del 128.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
+  ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
+  [[ -n "$ENDPOINT_IP" ]] && ip route del "$ENDPOINT_IP" 2>/dev/null || true
+  ip link set "$IFACE_NAME" down 2>/dev/null || true
+  kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
+  rm -f "$PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
+  echo "Could not install the VPN kill switch; normal internet was left unchanged" >&2
+  cat /tmp/veritas-wg-killswitch-error.log >&2 || true
+  exit 1
+fi
+
 # DNS: backup resolv.conf and set new DNS
 cp /etc/resolv.conf "$DNS_BACKUP" 2>/dev/null || true
 if [[ -w /etc/resolv.conf ]]; then
@@ -718,6 +736,7 @@ if ! curl -4 -fsS --connect-timeout 5 --max-time 12 https://api.ipify.org \
      >/tmp/veritas-wg-egress.log 2>/tmp/veritas-wg-egress-error.log; then
   ip route del 0.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
   ip route del 128.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
+  ip route del blackhole default metric 1 2>/dev/null || true
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
   [[ -n "$ENDPOINT_IP" ]] && ip route del "$ENDPOINT_IP" 2>/dev/null || true
   if [[ -f "$DNS_BACKUP" ]]; then
@@ -924,6 +943,9 @@ fi
 if [[ -z "$IFACE" && -f "$IFACE_FILE" ]]; then
   IFACE="$(cat "$IFACE_FILE")"
 fi
+
+# Remove the dedicated kill switch before intentionally restoring normal internet.
+ip route del blackhole default metric 1 2>/dev/null || true
 
 # Remove split-tunnel routes
 if [[ -n "$IFACE" ]]; then
