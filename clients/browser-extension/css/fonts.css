@@ -1,0 +1,33 @@
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("../fonts/inter_400.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("../fonts/inter_500.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("../fonts/inter_600.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("../fonts/inter_700.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 800; font-display: swap;
+  src: url("../fonts/inter_800.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Space Grotesk"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("../fonts/space_grotesk_500.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Space Grotesk"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("../fonts/space_grotesk_600.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Space Grotesk"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("../fonts/space_grotesk_700.ttf") format("truetype");
+}
+
