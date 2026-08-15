@@ -1,5 +1,5 @@
 /* VeritasVPN — South Atlantic night
-   Display: Syne · Body: Inter
+   Display: Inter · Body: Inter
    Accent: leaf green on deep ink (not purple / cyan-glow / cream-serif) */
 
 :root {
@@ -44,7 +44,7 @@
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-xl: 20px;
-  --font-display: "Syne", sans-serif;
+  --font-display: "Inter", sans-serif;
   --font-sans: "Inter", system-ui, sans-serif;
   --nav-h: 72px;
 }

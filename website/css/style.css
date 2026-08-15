@@ -1,6 +1,6 @@
 /* VeritasVPN brand palette (matches logo / Figma)
    Cyan #00D2FF → Royal #0047FF on charcoal #05070A
-   Display: Syne · Body: Inter */
+   Display: Inter · Body: Inter */
 
 :root {
   --ink: #05070a;
@@ -48,7 +48,7 @@
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-xl: 20px;
-  --font-display: "Syne", sans-serif;
+  --font-display: "Inter", sans-serif;
   --font-sans: "Inter", system-ui, sans-serif;
   --nav-h: 72px;
 }
