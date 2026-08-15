@@ -10,4 +10,3 @@ resources:
   - bitcoind.yaml
   - nbxplorer.yaml
   - btcpayserver.yaml
-  - monero-wallet-archive-pvc.yaml
