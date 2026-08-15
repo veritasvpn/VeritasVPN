@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"github.com/veritasvpn/services/billing-svc/internal/model"
+	"testing"
+)
 
 func TestPremiumDefaults(t *testing.T) {
 	s := &BillingService{cfg: BillingConfig{}}
@@ -15,5 +18,16 @@ func TestPremiumDefaults(t *testing.T) {
 	s.cfg.PremiumPeriodDays = 30
 	if s.PremiumAmountCents() != 300 {
 		t.Fatalf("expected configured 300")
+	}
+}
+
+func TestPlanCatalog(t *testing.T) {
+	monthly, ok := model.PlanByID(model.PlanMonthly)
+	if !ok || monthly.PriceCents != 300 || monthly.PeriodDays != 30 {
+		t.Fatalf("unexpected monthly plan: %+v", monthly)
+	}
+	annual, ok := model.PlanByID(model.PlanAnnual)
+	if !ok || annual.PriceCents != 3000 || annual.PeriodDays != 365 || annual.SavingsCents != 600 {
+		t.Fatalf("unexpected annual plan: %+v", annual)
 	}
 }

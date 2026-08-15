@@ -30,10 +30,10 @@ export async function fetchBillingStatus() {
   return api('/api/v1/billing/status');
 }
 
-export async function startPremiumCheckout(paymentMethod = 'btcpay') {
+export async function startPremiumCheckout(paymentMethod = 'btcpay', planId = 'premium_monthly') {
   const data = await api('/api/v1/billing/subscribe', {
     method: 'POST',
-    body: JSON.stringify({ tier: 'premium', payment_method: paymentMethod }),
+    body: JSON.stringify({ tier: 'premium', payment_method: paymentMethod, plan_id: planId }),
   });
   if (!data.checkout_url) {
     throw new Error('No checkout URL returned');
@@ -80,6 +80,20 @@ async function refreshStatus() {
   }
 }
 
+function initPricingPlanSelector() {
+  const options = document.querySelectorAll('.pricing-plan-option');
+  const checkout = document.querySelector('[data-billing-checkout]');
+  const price = document.querySelector('.pricing-price .price-value');
+  const period = document.querySelector('.pricing-price .period');
+  options.forEach((option) => option.addEventListener('click', () => {
+    options.forEach((item) => item.classList.toggle('is-selected', item === option));
+    const annual = option.dataset.planId === 'premium_annual';
+    if (checkout) checkout.dataset.planId = option.dataset.planId;
+    if (price) price.textContent = annual ? '30' : '3';
+    if (period) period.textContent = annual ? 'USD / year' : 'USD / month';
+  }));
+}
+
 export function initBillingUI() {
   document.querySelectorAll('[data-billing-checkout]').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
@@ -89,7 +103,7 @@ export function initBillingUI() {
       btn.disabled = true;
       btn.textContent = 'Starting checkout…';
       try {
-        await startPremiumCheckout(btn.dataset.paymentMethod || 'btcpay');
+        await startPremiumCheckout(btn.dataset.paymentMethod || 'btcpay', btn.dataset.planId || 'premium_monthly');
       } catch (err) {
         alert(err.message || 'Checkout failed');
         btn.disabled = false;
@@ -102,5 +116,6 @@ export function initBillingUI() {
     refreshStatus();
   });
 
+  initPricingPlanSelector();
   refreshStatus();
 }

@@ -11,9 +11,9 @@ class BillingRepository {
         data ?: throw Error("The server returned an invalid plan response.")
     }
 
-    fun createCheckout(token: String, paymentMethod: String): String = ApiClient.post(
+    fun createCheckout(token: String, paymentMethod: String, planId: String): String = ApiClient.post(
         "/api/v1/billing/subscribe",
-        mapOf("tier" to "premium", "payment_method" to paymentMethod),
+        mapOf("tier" to "premium", "payment_method" to paymentMethod, "plan_id" to planId),
         token
     ).use { response ->
         val data = ApiClient.parse<CheckoutResponse>(response)

@@ -29,7 +29,7 @@ func NewMockBTCPayProvider(publicBaseURL string) *MockBTCPayProvider {
 	}
 }
 
-func (m *MockBTCPayProvider) CreateInvoice(accountID, tier, paymentMethod string, amountUSD float64) (string, string, error) {
+func (m *MockBTCPayProvider) CreateInvoice(accountID, tier, paymentMethod, planID string, amountUSD float64) (string, string, error) {
 	id, err := randomID(16)
 	if err != nil {
 		return "", "", err
@@ -76,5 +76,5 @@ func randomID(nBytes int) (string, error) {
 
 // InvoiceCreator is implemented by real and mock BTCPay providers.
 type InvoiceCreator interface {
-	CreateInvoice(accountID, tier, paymentMethod string, amountUSD float64) (invoiceID, checkoutURL string, err error)
+	CreateInvoice(accountID, tier, paymentMethod, planID string, amountUSD float64) (invoiceID, checkoutURL string, err error)
 }

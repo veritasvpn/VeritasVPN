@@ -45,6 +45,7 @@ type BTCPayInvoiceRequest struct {
 	Metadata struct {
 		AccountID string `json:"account_id"`
 		Tier      string `json:"tier"`
+		PlanID    string `json:"plan_id"`
 	} `json:"metadata"`
 	Checkout struct {
 		RedirectURL          string   `json:"redirectURL"`
@@ -65,15 +66,17 @@ type WebhookEvent struct {
 	InvoiceID string
 	AccountID string
 	Tier      string
+	PlanID    string
 }
 
-func (b *BTCPayProvider) CreateInvoice(accountID, tier, paymentMethod string, amountUSD float64) (invoiceID, checkoutURL string, err error) {
+func (b *BTCPayProvider) CreateInvoice(accountID, tier, paymentMethod, planID string, amountUSD float64) (invoiceID, checkoutURL string, err error) {
 	invReq := BTCPayInvoiceRequest{
 		Amount:   fmt.Sprintf("%.2f", amountUSD),
 		Currency: "USD",
 	}
 	invReq.Metadata.AccountID = accountID
 	invReq.Metadata.Tier = tier
+	invReq.Metadata.PlanID = planID
 	invReq.Checkout.RedirectURL = b.redirectURL
 	invReq.Checkout.PaymentMethods = []string{"BTC-CHAIN"}
 	invReq.Checkout.DefaultPaymentMethod = "BTC-CHAIN"
@@ -136,6 +139,7 @@ func (b *BTCPayProvider) ParseWebhook(payload []byte, signature string) (*Webhoo
 		Metadata  struct {
 			AccountID string `json:"account_id"`
 			Tier      string `json:"tier"`
+			PlanID    string `json:"plan_id"`
 		} `json:"metadata"`
 	}
 	if err := json.Unmarshal(payload, &raw); err != nil {
@@ -147,6 +151,7 @@ func (b *BTCPayProvider) ParseWebhook(payload []byte, signature string) (*Webhoo
 		InvoiceID: raw.InvoiceID,
 		AccountID: raw.Metadata.AccountID,
 		Tier:      raw.Metadata.Tier,
+		PlanID:    raw.Metadata.PlanID,
 	}, nil
 }
 

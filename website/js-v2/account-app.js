@@ -122,7 +122,8 @@ function renderHome() {
       <div class="account-card upgrade-card">
         <div>
           <div class="upgrade-price">$3 <span>/ month</span></div>
-          <p class="plan-card-meta" style="margin-top:8px;">Bitcoin · 30-day period</p>
+          <p class="plan-card-meta" style="margin-top:8px;">Bitcoin · prepaid, no auto-renewal</p>
+          <div class="account-plan-options"><button type="button" class="btn btn-outline" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_monthly">$3 monthly</button><button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_annual">$30 annual <small>save $6</small></button></div>
         </div>
         <ul class="upgrade-features">
           <li>Access to the current network</li>
@@ -131,7 +132,7 @@ function renderHome() {
           <li>Priority support while we expand</li>
         </ul>
         <div class="account-actions">
-          ${showCheckout ? `<button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay">Pay with Bitcoin</button>` : ""}
+          ${showCheckout ? `<div class="account-plan-actions"><button type="button" class="btn btn-outline" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_monthly">$3 monthly</button><button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_annual">$30 annual · save $6</button></div>` : ""}
           <a class="btn btn-outline" href="#/downloads">Get apps</a>
         </div>
       </div>
@@ -159,7 +160,7 @@ function renderSubscription() {
           ${billingStatus?.cancel_at_period_end ? ' · Will cancel at period end' : ''}
         </p>
         <div class="account-actions">
-          ${showCheckout ? `<button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay">Pay with Bitcoin</button>` : ""}
+          ${showCheckout ? `<div class="account-plan-actions"><button type="button" class="btn btn-outline" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_monthly">$3 monthly</button><button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_annual">$30 annual · save $6</button></div>` : ""}
           ${
             premium && !billingStatus?.cancel_at_period_end
               ? `<button type="button" class="btn btn-outline" data-action="cancel">Cancel at period end</button>`
@@ -295,7 +296,7 @@ async function onAction(action, btn) {
     if (action === 'checkout') {
       btn.disabled = true;
       btn.textContent = 'Starting checkout…';
-      await startPremiumCheckout(btn.dataset.paymentMethod || 'btcpay');
+      await startPremiumCheckout(btn.dataset.paymentMethod || 'btcpay', btn.dataset.planId || 'premium_monthly');
       return;
     }
     if (action === 'cancel') {

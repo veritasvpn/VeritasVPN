@@ -1084,3 +1084,6 @@ body.auth-modal-open { overflow: hidden; }
   }
   .reveal { opacity: 1; transform: none; }
 }
+
+.pricing-plan-options{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 18px}.pricing-plan-option{display:grid;gap:4px;text-align:left;padding:12px 13px;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.03);color:var(--paper-muted,#aebdd0);cursor:pointer;transition:border-color .2s,background .2s,transform .2s}.pricing-plan-option strong{color:var(--paper,#fff);font-size:.82rem}.pricing-plan-option span{font-size:.7rem;color:var(--paper-dim,#77879d)}.pricing-plan-option:hover{transform:translateY(-1px);border-color:rgba(0,210,255,.45)}.pricing-plan-option.is-selected{border-color:var(--cyan,#00d2ff);background:rgba(0,210,255,.1);box-shadow:0 0 0 1px rgba(0,210,255,.16)}
+@media(max-width:560px){.pricing-plan-options{grid-template-columns:1fr}}

@@ -1,5 +1,5 @@
 import { initAuthUI } from './auth-release-11.js';
-import { initBillingUI } from './billing.js?v=4';
+import { initBillingUI } from './billing.js?v=5';
 import { mountNetworkMap } from './network-map.js';
 
 document.addEventListener('DOMContentLoaded', () => {

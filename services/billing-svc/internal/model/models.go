@@ -30,6 +30,10 @@ type Subscription struct {
 	CurrentPeriodStart time.Time `json:"current_period_start"`
 	CurrentPeriodEnd   time.Time `json:"current_period_end"`
 	CancelAtPeriodEnd  bool      `json:"cancel_at_period_end"`
+	PlanID             string    `json:"plan_id"`
+	BillingPeriod      string    `json:"billing_period"`
+	PriceCents         int64     `json:"price_cents"`
+	PeriodDays         int       `json:"period_days"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
@@ -43,6 +47,8 @@ type PaymentRecord struct {
 	Status                string    `json:"status"`
 	ProviderTransactionID string    `json:"provider_transaction_id"`
 	CreatedAt             time.Time `json:"created_at"`
+	PlanID                string    `json:"plan_id"`
+	PeriodDays            int       `json:"period_days"`
 }
 
 // StatusResponse is returned by GET /billing/status.
@@ -55,4 +61,8 @@ type StatusResponse struct {
 	CurrentPeriodEnd   *time.Time `json:"current_period_end,omitempty"`
 	CancelAtPeriodEnd  bool       `json:"cancel_at_period_end"`
 	IsPremium          bool       `json:"is_premium"`
+	PlanID             string     `json:"plan_id,omitempty"`
+	BillingPeriod      string     `json:"billing_period,omitempty"`
+	PriceCents         int64      `json:"price_cents,omitempty"`
+	PeriodDays         int        `json:"period_days,omitempty"`
 }

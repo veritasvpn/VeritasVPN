@@ -83,7 +83,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                fun startCheckout(paymentMethod: String) {
+                fun startCheckout(paymentMethod: String, planId: String) {
                     if (checkoutMethod != null) return
                     checkoutMethod = paymentMethod
                     billingError = null
@@ -93,7 +93,7 @@ class MainActivity : ComponentActivity() {
                                 authRepo.refreshSession()
                                 val token = authRepo.getAccessToken()
                                     ?: throw IllegalStateException("Your session expired. Sign in again.")
-                                billingRepo.createCheckout(token, paymentMethod)
+                                billingRepo.createCheckout(token, paymentMethod, planId)
                             }
                             checkoutUrl = createdCheckoutUrl
                         } catch (e: Exception) {
@@ -265,7 +265,7 @@ class MainActivity : ComponentActivity() {
                         error = billingError,
                         onBack = { showPlans = false },
                         onRefresh = { refreshBilling() },
-                        onCheckout = { startCheckout(it) },
+                        onCheckout = { method, plan -> startCheckout(method, plan) },
                         onCancel = { cancelSubscription() }
                     )
                 } else {

@@ -25,8 +25,8 @@ func (p *Postgres) Ping(ctx context.Context) error {
 
 func (p *Postgres) CreateSubscription(ctx context.Context, sub *model.Subscription) error {
 	query := `INSERT INTO subscriptions (account_id, tier, status, payment_method,
-	           current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	           current_period_start, current_period_end, cancel_at_period_end, plan_id, billing_period, price_cents, period_days, created_at, updated_at)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	           ON CONFLICT (account_id) DO UPDATE SET
 	               tier = EXCLUDED.tier,
 	               status = EXCLUDED.status,
@@ -34,6 +34,10 @@ func (p *Postgres) CreateSubscription(ctx context.Context, sub *model.Subscripti
 	               current_period_start = EXCLUDED.current_period_start,
 	               current_period_end = EXCLUDED.current_period_end,
 	               cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+	               plan_id = EXCLUDED.plan_id,
+	               billing_period = EXCLUDED.billing_period,
+	               price_cents = EXCLUDED.price_cents,
+	               period_days = EXCLUDED.period_days,
 	               updated_at = EXCLUDED.updated_at
 	           RETURNING id, created_at, updated_at`
 
@@ -44,6 +48,7 @@ func (p *Postgres) CreateSubscription(ctx context.Context, sub *model.Subscripti
 	return p.pool.QueryRow(ctx, query,
 		sub.AccountID, sub.Tier, sub.Status, sub.PaymentMethod,
 		sub.CurrentPeriodStart, sub.CurrentPeriodEnd, sub.CancelAtPeriodEnd,
+		sub.PlanID, sub.BillingPeriod, sub.PriceCents, sub.PeriodDays,
 		sub.CreatedAt, sub.UpdatedAt,
 	).Scan(&sub.ID, &sub.CreatedAt, &sub.UpdatedAt)
 }
@@ -51,6 +56,7 @@ func (p *Postgres) CreateSubscription(ctx context.Context, sub *model.Subscripti
 func (p *Postgres) GetSubscription(ctx context.Context, accountID string) (*model.Subscription, error) {
 	query := `SELECT id, account_id, tier, status, payment_method,
 	           current_period_start, current_period_end, cancel_at_period_end,
+	           plan_id, billing_period, price_cents, period_days,
 	           created_at, updated_at
 	           FROM subscriptions WHERE account_id = $1`
 
@@ -58,6 +64,7 @@ func (p *Postgres) GetSubscription(ctx context.Context, accountID string) (*mode
 	err := p.pool.QueryRow(ctx, query, accountID).Scan(
 		&sub.ID, &sub.AccountID, &sub.Tier, &sub.Status, &sub.PaymentMethod,
 		&sub.CurrentPeriodStart, &sub.CurrentPeriodEnd, &sub.CancelAtPeriodEnd,
+		&sub.PlanID, &sub.BillingPeriod, &sub.PriceCents, &sub.PeriodDays,
 		&sub.CreatedAt, &sub.UpdatedAt,
 	)
 	if err != nil {
@@ -73,12 +80,14 @@ func (p *Postgres) UpdateSubscription(ctx context.Context, sub *model.Subscripti
 	query := `UPDATE subscriptions SET
 	           tier = $2, status = $3, payment_method = $4,
 	           current_period_start = $5, current_period_end = $6,
-	           cancel_at_period_end = $7, updated_at = NOW()
+	           cancel_at_period_end = $7, plan_id = $8, billing_period = $9,
+	           price_cents = $10, period_days = $11, updated_at = NOW()
 	           WHERE id = $1`
 
 	_, err := p.pool.Exec(ctx, query,
 		sub.ID, sub.Tier, sub.Status, sub.PaymentMethod,
 		sub.CurrentPeriodStart, sub.CurrentPeriodEnd, sub.CancelAtPeriodEnd,
+		sub.PlanID, sub.BillingPeriod, sub.PriceCents, sub.PeriodDays,
 	)
 	return err
 }
@@ -99,8 +108,8 @@ func (p *Postgres) CancelSubscription(ctx context.Context, accountID string) err
 
 func (p *Postgres) CreatePaymentRecord(ctx context.Context, pr *model.PaymentRecord) error {
 	query := `INSERT INTO payment_records (subscription_id, account_id, amount, currency,
-	           status, provider_transaction_id, created_at)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7)
+	           status, provider_transaction_id, plan_id, period_days, created_at)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	           ON CONFLICT (provider_transaction_id) DO UPDATE SET
 	               provider_transaction_id = EXCLUDED.provider_transaction_id
 	           RETURNING id, created_at`
@@ -109,19 +118,19 @@ func (p *Postgres) CreatePaymentRecord(ctx context.Context, pr *model.PaymentRec
 
 	return p.pool.QueryRow(ctx, query,
 		pr.SubscriptionID, pr.AccountID, pr.Amount, pr.Currency,
-		pr.Status, pr.ProviderTransactionID, pr.CreatedAt,
+		pr.Status, pr.ProviderTransactionID, pr.PlanID, pr.PeriodDays, pr.CreatedAt,
 	).Scan(&pr.ID, &pr.CreatedAt)
 }
 
 func (p *Postgres) GetPaymentByProviderTxn(ctx context.Context, providerTxnID string) (*model.PaymentRecord, error) {
 	query := `SELECT id, subscription_id, COALESCE(account_id, ''), amount, currency, status,
-	           provider_transaction_id, created_at
+	           provider_transaction_id, plan_id, period_days, created_at
 	           FROM payment_records WHERE provider_transaction_id = $1`
 
 	pr := &model.PaymentRecord{}
 	err := p.pool.QueryRow(ctx, query, providerTxnID).Scan(
 		&pr.ID, &pr.SubscriptionID, &pr.AccountID, &pr.Amount, &pr.Currency,
-		&pr.Status, &pr.ProviderTransactionID, &pr.CreatedAt,
+		&pr.Status, &pr.ProviderTransactionID, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -143,6 +152,7 @@ func (p *Postgres) CompletePayment(ctx context.Context, providerTxnID string) er
 func (p *Postgres) ListExpiredPremium(ctx context.Context, now time.Time) ([]*model.Subscription, error) {
 	query := `SELECT id, account_id, tier, status, payment_method,
 	           current_period_start, current_period_end, cancel_at_period_end,
+	           plan_id, billing_period, price_cents, period_days,
 	           created_at, updated_at
 	           FROM subscriptions
 	           WHERE tier = $1 AND status = $2 AND current_period_end < $3`
@@ -159,6 +169,7 @@ func (p *Postgres) ListExpiredPremium(ctx context.Context, now time.Time) ([]*mo
 		if err := rows.Scan(
 			&sub.ID, &sub.AccountID, &sub.Tier, &sub.Status, &sub.PaymentMethod,
 			&sub.CurrentPeriodStart, &sub.CurrentPeriodEnd, &sub.CancelAtPeriodEnd,
+			&sub.PlanID, &sub.BillingPeriod, &sub.PriceCents, &sub.PeriodDays,
 			&sub.CreatedAt, &sub.UpdatedAt,
 		); err != nil {
 			return nil, err

@@ -17,8 +17,8 @@ import (
 )
 
 type StripeProvider struct {
-	log       *logging.Logger
-	secretKey string
+	log           *logging.Logger
+	secretKey     string
 	webhookSecret string
 	httpClient    *http.Client
 }
@@ -196,11 +196,11 @@ func (s *StripeProvider) handleSubscriptionDeleted(data json.RawMessage) error {
 func (s *StripeProvider) handleInvoicePaymentFailed(data json.RawMessage) error {
 	var wrapper struct {
 		Object struct {
-			ID             string `json:"id"`
-			Subscription   string `json:"subscription"`
-			BillingReason  string `json:"billing_reason"`
-			AmountPaid     int64  `json:"amount_paid"`
-			AmountDue      int64  `json:"amount_due"`
+			ID            string `json:"id"`
+			Subscription  string `json:"subscription"`
+			BillingReason string `json:"billing_reason"`
+			AmountPaid    int64  `json:"amount_paid"`
+			AmountDue     int64  `json:"amount_due"`
 		} `json:"object"`
 	}
 	if err := json.Unmarshal(data, &wrapper); err != nil {

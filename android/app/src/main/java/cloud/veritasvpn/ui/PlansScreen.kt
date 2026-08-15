@@ -35,10 +35,11 @@ fun PlansScreen(
     error: String?,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
-    onCheckout: (String) -> Unit,
+    onCheckout: (String, String) -> Unit,
     onCancel: () -> Unit
 ) {
     var showCancelConfirmation by remember { mutableStateOf(false) }
+    var selectedPlan by remember { mutableStateOf("premium_monthly") }
     val periodEnd = remember(billingStatus?.currentPeriodEnd) {
         formatBillingDate(billingStatus?.currentPeriodEnd)
     }
@@ -112,10 +113,18 @@ fun PlansScreen(
         Spacer(Modifier.height(18.dp))
 
         PlanCard(
-            name = "Premium", price = "$3", suffix = "/30 days", current = premium,
+            name = "Premium", price = if (selectedPlan == "premium_annual") "$30" else "$3",
+            suffix = if (selectedPlan == "premium_annual") "/year" else "/month", current = premium,
             features = listOf("Paraguay WireGuard egress", "Up to 5 VPN devices", "Private Bitcoin checkout", "Chrome, Android, and Linux access"),
             emphasized = true
         )
+        if (!premium) {
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                PlanChoice("Monthly", "$3 / 30 days", selectedPlan == "premium_monthly", { selectedPlan = "premium_monthly" }, Modifier.weight(1f))
+                PlanChoice("Annual", "$30 / 365 days", selectedPlan == "premium_annual", { selectedPlan = "premium_annual" }, Modifier.weight(1f))
+            }
+        }
 
         if (!premium) {
             Spacer(Modifier.height(18.dp))
@@ -123,7 +132,7 @@ fun PlansScreen(
             Text("Complete checkout securely inside VeritasVPN. Premium activates automatically after confirmation.", color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
             Spacer(Modifier.height(12.dp))
             Button(
-                onClick = { onCheckout("btcpay") },
+                onClick = { onCheckout("btcpay", selectedPlan) },
                 enabled = checkoutMethod == null,
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 shape = RoundedCornerShape(14.dp),
@@ -166,6 +175,18 @@ private fun formatBillingDate(value: String?): String {
     return runCatching {
         LocalDate.parse(value.take(10)).format(DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.getDefault()))
     }.getOrDefault(value.take(10))
+}
+
+@Composable
+private fun PlanChoice(name: String, detail: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    OutlinedButton(onClick = onClick, modifier = modifier, border = BorderStroke(1.dp, if (selected) Cyan else Line),
+        colors = ButtonDefaults.outlinedButtonColors(containerColor = if (selected) Cyan.copy(alpha = .12f) else Color.Transparent),
+        shape = RoundedCornerShape(12.dp)) {
+        Column(horizontalAlignment = Alignment.Start) {
+            Text(name, color = Paper, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text(detail, color = PaperDim, fontSize = 11.sp)
+        }
+    }
 }
 
 @Composable

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/veritasvpn/lib/logging"
+	"github.com/veritasvpn/services/billing-svc/internal/model"
 	"github.com/veritasvpn/services/billing-svc/internal/service"
 	"github.com/veritasvpn/services/billing-svc/internal/tokenauth"
 	"go.uber.org/zap"
@@ -41,6 +42,7 @@ func (h *BillingHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", h.handleHealth)
 	mux.HandleFunc("/readyz", h.handleReady)
 	mux.HandleFunc("/api/v1/billing/readyz", h.handleReady)
+	mux.HandleFunc("/api/v1/billing/plans", h.withCORS(h.handlePlans))
 	mux.HandleFunc("/api/v1/billing/subscribe", h.withCORS(h.handleSubscribe))
 	mux.HandleFunc("/api/v1/billing/cancel", h.withCORS(h.handleCancel))
 	mux.HandleFunc("/api/v1/billing/status", h.withCORS(h.handleStatus))
@@ -107,6 +109,14 @@ func (h *BillingHandler) requireUID(w http.ResponseWriter, r *http.Request) (str
 	return uid, true
 }
 
+func (h *BillingHandler) handlePlans(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"plans": model.Plans()})
+}
+
 func (h *BillingHandler) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -121,6 +131,7 @@ func (h *BillingHandler) handleSubscribe(w http.ResponseWriter, r *http.Request)
 	var req struct {
 		Tier          string `json:"tier"`
 		PaymentMethod string `json:"payment_method"`
+		PlanID        string `json:"plan_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -141,7 +152,7 @@ func (h *BillingHandler) handleSubscribe(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	checkoutURL, err := h.service.CreatePremiumCheckout(r.Context(), uid, req.PaymentMethod)
+	checkoutURL, err := h.service.CreatePremiumCheckout(r.Context(), uid, req.PaymentMethod, req.PlanID)
 	if err != nil {
 		h.log.Error("failed to create checkout", zap.Error(err))
 		if errors.Is(err, service.ErrBitcoinNotReady) {

@@ -127,6 +127,7 @@ function App() {
   const [showBilling, setShowBilling] = useState(false);
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingError, setBillingError] = useState("");
+  const [selectedPlan, setSelectedPlan] = useState<"premium_monthly" | "premium_annual">("premium_monthly");
   const [checkoutActive, setCheckoutActive] = useState(false);
   const [showCancelConfirmation, setShowCancelConfirmation] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -227,7 +228,7 @@ function App() {
     return status;
   }, []);
 
-  const startCheckout = useCallback(async (paymentMethod: "btcpay") => {
+  const startCheckout = useCallback(async (paymentMethod: "btcpay", planId: "premium_monthly" | "premium_annual") => {
     if (billingBusy || checkoutActive) return;
     setBillingBusy(true); setBillingError("");
     try {
@@ -236,7 +237,7 @@ function App() {
       if (!token) throw new Error("Your session expired. Sign in again.");
       const response = await fetch(`${AUTH_API}/api/v1/billing/subscribe`, {
         method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ tier: "premium", payment_method: paymentMethod }),
+        body: JSON.stringify({ tier: "premium", payment_method: paymentMethod, plan_id: planId }),
       });
       const data = await response.json() as { checkout_url?: string; error?: string };
       if (!response.ok || !data.checkout_url?.startsWith("https://btcpay.veritasvpn.cloud/")) {
@@ -581,12 +582,13 @@ function App() {
             <div className="billing-panel-head"><div><span>SUBSCRIPTION</span><h2>Plans & billing</h2></div><button onClick={() => { setShowCancelConfirmation(false); setShowBilling(false); }} aria-label="Close billing">×</button></div>
             <div className="billing-current"><div><span>CURRENT PLAN</span><strong>{billingStatus?.is_premium ? "Premium" : "No active subscription"}</strong></div><button onClick={() => refreshBillingStatus().catch((err) => setBillingError(err.message))}>Refresh</button></div>
             <div className="billing-plan-card">
-              <div className="billing-price"><span>$</span>3<small>/30 days</small></div>
+              <div className="billing-price"><span>$</span>{selectedPlan === "premium_annual" ? "30" : "3"}<small>/{selectedPlan === "premium_annual" ? "365 days" : "30 days"}</small></div>
+              {!billingStatus?.is_premium && <div className="billing-plan-options"><button className={selectedPlan === "premium_monthly" ? "selected" : ""} onClick={() => setSelectedPlan("premium_monthly")}>Monthly · $3</button><button className={selectedPlan === "premium_annual" ? "selected" : ""} onClick={() => setSelectedPlan("premium_annual")}>Annual · $30 · save $6</button></div>}
               <p>Complete VeritasVPN access on up to five devices.</p>
               <ul><li>✓ Paraguay WireGuard connection</li><li>✓ Chrome, Android, and Linux</li><li>✓ Anonymous account support</li><li>✓ Private Bitcoin payment</li></ul>
               {!billingStatus?.is_premium ? <>
                 <p className="billing-choice">Choose a payment method</p>
-                <div className="billing-actions"><button disabled={billingBusy || checkoutActive} onClick={() => startCheckout("btcpay")}>₿ Pay with Bitcoin</button></div>
+                <div className="billing-actions"><button disabled={billingBusy || checkoutActive} onClick={() => startCheckout("btcpay", selectedPlan)}>₿ Pay with Bitcoin</button></div>
                 <p className="billing-note">Checkout opens in a secure VeritasVPN payment window. Premium activates automatically after confirmation.</p>
               </> : <>
                 <div className="billing-active">● Premium access is active</div>

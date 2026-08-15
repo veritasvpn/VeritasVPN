@@ -114,6 +114,10 @@ func (s *BillingService) EnsureFree(ctx context.Context, accountID string) (*mod
 		Tier:               model.TierFree,
 		Status:             model.StatusActive,
 		PaymentMethod:      model.PaymentNone,
+		PlanID:             "free",
+		BillingPeriod:      "lifetime",
+		PriceCents:         0,
+		PeriodDays:         0,
 		CurrentPeriodStart: now,
 		CurrentPeriodEnd:   now.Add(100 * 365 * 24 * time.Hour),
 		CancelAtPeriodEnd:  false,
@@ -156,16 +160,24 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		CurrentPeriodEnd:   &end,
 		CancelAtPeriodEnd:  sub.CancelAtPeriodEnd,
 		IsPremium:          isPremium,
+		PlanID:             sub.PlanID,
+		BillingPeriod:      sub.BillingPeriod,
+		PriceCents:         sub.PriceCents,
+		PeriodDays:         sub.PeriodDays,
 	}, nil
 }
 
 // CreatePremiumCheckout starts a Bitcoin checkout for premium. Does NOT activate until paid.
-func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, paymentMethod string) (checkoutURL string, err error) {
+func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, paymentMethod, planID string) (checkoutURL string, err error) {
 	if err := s.bitcoinReady(ctx); err != nil {
 		return "", err
 	}
 	if accountID == "" {
 		return "", fmt.Errorf("account_id is required")
+	}
+	plan, ok := model.PlanByID(planID)
+	if !ok {
+		return "", fmt.Errorf("unknown billing plan")
 	}
 
 	existing, err := s.db.GetSubscription(ctx, accountID)
@@ -177,38 +189,49 @@ func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, p
 	}
 
 	now := time.Now().UTC()
-	sub := &model.Subscription{
-		AccountID:          accountID,
-		Tier:               model.TierPremium,
-		Status:             model.StatusPending,
-		PaymentMethod:      paymentMethod,
-		CurrentPeriodStart: now,
-		CurrentPeriodEnd:   now, // activated on settle
-		CancelAtPeriodEnd:  false,
-	}
-	// Keep existing active free/premium period visible until paid: if they had free, stay free until settle.
-	if existing != nil && existing.Tier == model.TierFree {
-		sub.Tier = model.TierFree
-		sub.Status = model.StatusActive
-		sub.PaymentMethod = paymentMethod
-		sub.CurrentPeriodStart = existing.CurrentPeriodStart
-		sub.CurrentPeriodEnd = existing.CurrentPeriodEnd
+	var sub *model.Subscription
+	keepActive := existing != nil && existing.Tier == model.TierPremium &&
+		existing.Status == model.StatusActive && existing.CancelAtPeriodEnd &&
+		now.Before(existing.CurrentPeriodEnd)
+	if keepActive {
+		// A canceled-at-period-end subscription stays active while the user
+		// pays for the next period; do not interrupt current VPN access.
+		sub = existing
+	} else {
+		sub = &model.Subscription{
+			AccountID:          accountID,
+			Tier:               model.TierPremium,
+			Status:             model.StatusPending,
+			PaymentMethod:      paymentMethod,
+			PlanID:             plan.ID,
+			BillingPeriod:      plan.BillingPeriod,
+			PriceCents:         plan.PriceCents,
+			PeriodDays:         plan.PeriodDays,
+			CurrentPeriodStart: now,
+			CurrentPeriodEnd:   now, // activated on settle
+			CancelAtPeriodEnd:  false,
+		}
+		// Keep an existing free subscription visible until payment settles.
+		if existing != nil && existing.Tier == model.TierFree {
+			sub.Tier = model.TierFree
+			sub.Status = model.StatusActive
+			sub.PaymentMethod = paymentMethod
+			sub.CurrentPeriodStart = existing.CurrentPeriodStart
+			sub.CurrentPeriodEnd = existing.CurrentPeriodEnd
+		}
+		if err := s.db.CreateSubscription(ctx, sub); err != nil {
+			return "", fmt.Errorf("upsert subscription: %w", err)
+		}
+		sub, err = s.db.GetSubscription(ctx, accountID)
+		if err != nil {
+			return "", err
+		}
 	}
 
-	if err := s.db.CreateSubscription(ctx, sub); err != nil {
-		return "", fmt.Errorf("upsert subscription: %w", err)
-	}
-
-	// Reload to get ID
-	sub, err = s.db.GetSubscription(ctx, accountID)
-	if err != nil {
-		return "", err
-	}
-
-	amountCents := s.PremiumAmountCents()
+	amountCents := plan.PriceCents
 	amountUSD := float64(amountCents) / 100.0
 
-	invoiceID, url, err := s.invoices.CreateInvoice(accountID, model.TierPremium, paymentMethod, amountUSD)
+	invoiceID, url, err := s.invoices.CreateInvoice(accountID, model.TierPremium, paymentMethod, plan.ID, amountUSD)
 	if err != nil {
 		return "", fmt.Errorf("create invoice: %w", err)
 	}
@@ -220,6 +243,8 @@ func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, p
 		Currency:              "usd",
 		Status:                model.PaymentPending,
 		ProviderTransactionID: invoiceID,
+		PlanID:                plan.ID,
+		PeriodDays:            plan.PeriodDays,
 	}); err != nil {
 		return "", fmt.Errorf("create payment record: %w", err)
 	}
@@ -228,6 +253,7 @@ func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, p
 		zap.String("account_hash", logging.HashIdentifier(accountID)),
 		zap.String("invoice_id", invoiceID),
 		zap.Int64("amount_cents", amountCents),
+		zap.String("plan_id", plan.ID),
 	)
 
 	return url, nil
@@ -309,12 +335,26 @@ func (s *BillingService) SettleInvoice(ctx context.Context, invoiceID, accountID
 	if sub.Tier == model.TierPremium && sub.Status == model.StatusActive && sub.CurrentPeriodEnd.After(now) {
 		periodStart = sub.CurrentPeriodEnd
 	}
-	periodEnd := periodStart.Add(s.periodDuration())
+	periodDays := pr.PeriodDays
+	planID := pr.PlanID
+	plan, ok := model.PlanByID(planID)
+	if !ok {
+		plan, _ = model.PlanByID(model.PlanMonthly)
+		planID = plan.ID
+	}
+	if periodDays <= 0 {
+		periodDays = plan.PeriodDays
+	}
+	periodEnd := periodStart.Add(time.Duration(periodDays) * 24 * time.Hour)
 
 	paymentMethod := model.PaymentBTCPay
 	sub.Tier = model.TierPremium
 	sub.Status = model.StatusActive
 	sub.PaymentMethod = paymentMethod
+	sub.PlanID = planID
+	sub.BillingPeriod = plan.BillingPeriod
+	sub.PriceCents = pr.Amount
+	sub.PeriodDays = periodDays
 	sub.CurrentPeriodStart = periodStart
 	sub.CurrentPeriodEnd = periodEnd
 	sub.CancelAtPeriodEnd = false
@@ -329,6 +369,8 @@ func (s *BillingService) SettleInvoice(ctx context.Context, invoiceID, accountID
 	s.publishEvent("subscription.renewed", map[string]interface{}{
 		"tier":           model.TierPremium,
 		"payment_method": paymentMethod,
+		"plan_id":        planID,
+		"period_days":    periodDays,
 	})
 
 	s.log.Info("premium activated",

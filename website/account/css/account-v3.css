@@ -434,3 +434,5 @@
     padding: 24px 16px 48px;
   }
 }
+
+.account-plan-options,.account-plan-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.account-plan-options .btn,.account-plan-actions .btn{flex:1;min-width:145px}.account-plan-options small{opacity:.8}.plan-card-meta{line-height:1.5}
