@@ -5,6 +5,7 @@ umask 077
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/veritasvpn}"
 KEY_FILE="${KEY_FILE:-/root/.config/veritasvpn/backup.key}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
+R2_UPLOAD_REQUIRED="${R2_UPLOAD_REQUIRED:-false}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 WORK="$(mktemp -d)"
 TEXTFILE_DIR="${TEXTFILE_DIR:-/var/lib/node_exporter/textfile_collector}"
@@ -41,6 +42,19 @@ actual_hmac="$(openssl dgst -sha256 -hmac "$hmac_key" -binary "$archive" | od -A
 test "$expected_hmac" = "$actual_hmac"
 openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$KEY_FILE" -in "$archive" | tar -tzf - >/dev/null
 
+offsite_success=0
+if [[ -n "${R2_ENDPOINT:-}" && -n "${R2_BUCKET:-}" && -n "${R2_ACCESS_KEY_ID:-}" && -n "${R2_SECRET_ACCESS_KEY:-}" ]]; then
+  python3 /home/jpg/VeritasVPN/deploy/backup/r2-upload.py \
+    --prefix "${R2_PREFIX:-veritasvpn/backups}/$STAMP" \
+    --file "$archive" --file "$archive.hmac" --file "$archive.sha256"
+  offsite_success=1
+elif [[ "${R2_UPLOAD_REQUIRED,,}" == "true" ]]; then
+  echo "[backup] ERROR: R2 credentials are missing; off-site upload is required" >&2
+  exit 1
+else
+  echo "[backup] warning: R2 credentials are not configured; local backup only" >&2
+fi
+
 install -d -m 755 "$TEXTFILE_DIR"
 tmp_metrics="$(mktemp "$TEXTFILE_DIR/veritas_backup.prom.XXXXXX")"
 cat > "$tmp_metrics" <<EOF
@@ -50,6 +64,9 @@ veritas_backup_last_success_timestamp $(date +%s)
 # HELP veritas_backup_archive_bytes Size of the last validated encrypted backup in bytes.
 # TYPE veritas_backup_archive_bytes gauge
 veritas_backup_archive_bytes $(stat -c %s "$archive")
+# HELP veritas_backup_offsite_last_success_timestamp Unix timestamp of the last successful R2 upload.
+# TYPE veritas_backup_offsite_last_success_timestamp gauge
+veritas_backup_offsite_last_success_timestamp $([[ "$offsite_success" -eq 1 ]] && date +%s || echo 0)
 EOF
 chown --reference="$TEXTFILE_DIR" "$tmp_metrics" 2>/dev/null || true
 mv "$tmp_metrics" "$TEXTFILE_DIR/veritas_backup.prom"

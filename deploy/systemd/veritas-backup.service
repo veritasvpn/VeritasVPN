@@ -4,6 +4,8 @@ After=k3s.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/veritasvpn/r2-backup.env
+Environment=R2_UPLOAD_REQUIRED=true
 ExecStart=/home/jpg/VeritasVPN/deploy/backup/backup-k3s.sh
 Nice=10
 IOSchedulingClass=best-effort
