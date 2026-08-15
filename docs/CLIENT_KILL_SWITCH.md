@@ -1,6 +1,6 @@
 # Linux desktop kill switch
 
-The Linux desktop WireGuard client uses a fail-closed route while connected.
+The Linux desktop WireGuard client uses fail-closed routing plus a dedicated nftables or iptables ruleset while connected.
 
 ## Behavior
 
@@ -10,10 +10,11 @@ The Linux desktop WireGuard client uses a fail-closed route while connected.
 - An intentional Disconnect removes only the Veritas kill-switch route before restoring the normal network.
 - A new connection removes a stale Veritas kill-switch route left by an interrupted session before rebuilding the tunnel.
 - If the kill-switch route cannot be installed, bring-up aborts and leaves the previous network route unchanged.
+- If firewall tooling is unavailable, the blackhole route remains as a safety fallback and the session is never silently treated as fully firewall-enforced.
 
 ## Scope
 
-This protects Linux desktop traffic managed by the Tauri client. The Dell OptiPlex is the VPN server, so installing a route there does not protect a user's device. Android needs Android VpnService/Always-on VPN integration, macOS needs a NetworkExtension or carefully managed pf policy, and the Chrome extension can only fail closed inside the browser proxy scope.
+This protects Linux desktop traffic managed by the Tauri client. The Dell OptiPlex is the VPN server, so installing a route there does not protect a user's device. Android and Chrome have their own platform-specific behavior described below.
 
 ## Recovery
 
@@ -22,3 +23,11 @@ If a client is intentionally disconnected, the normal network is restored by the
     sudo ip route del blackhole default metric 1
 
 Only remove this route when the VPN is intentionally disconnected; removing it while the tunnel is down re-enables normal egress.
+
+## Android
+
+The Android client uses a full-tunnel VpnService, persists the approved tunnel configuration for system restarts, and cleans up when Android revokes VPN permission. For a system-level kill switch, enable Always-on VPN and Block connections without VPN in Android VPN settings; the app now opens those settings from its account menu. Without the Android system block setting, Android may restore normal networking after a service failure.
+
+## Chrome extension
+
+The extension can only protect Chrome traffic. If the authenticated proxy reports an error, it installs a local discard proxy and shows BROWSER TRAFFIC BLOCKED instead of falling back to a direct browser connection. Other applications on the device are outside its scope.

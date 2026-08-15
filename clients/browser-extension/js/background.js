@@ -1,6 +1,22 @@
-import { getSession, disconnect } from './auth.js';
+import { getSession, disconnect, failClosedProxy } from './auth.js';
 
 let proxyAccessToken = null;
+let handlingProxyError = false;
+
+chrome.proxy.onProxyError?.addListener(async () => {
+  if (handlingProxyError) return;
+  const session = await getSession().catch(() => null);
+  if (!session?.connected || session.blocked) return;
+  handlingProxyError = true;
+  try {
+    await failClosedProxy();
+    proxyAccessToken = null;
+    await chrome.action.setBadgeText({ text: 'BLOCK' });
+    await chrome.action.setBadgeBackgroundColor({ color: '#F59E0B' });
+  } finally {
+    handlingProxyError = false;
+  }
+});
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'VERITAS_PROXY_AUTH_READY') {
@@ -41,8 +57,12 @@ chrome.webRequest.onAuthRequired.addListener(
 
 async function syncBadge() {
   const session = await getSession();
-  await chrome.action.setBadgeText({ text: session.connected ? 'ON' : '' });
-  if (session.connected) await chrome.action.setBadgeBackgroundColor({ color: '#09C7F5' });
+  await chrome.action.setBadgeText({ text: session.blocked ? 'BLOCK' : (session.connected ? 'ON' : '') });
+  if (session.blocked) {
+    await chrome.action.setBadgeBackgroundColor({ color: '#F59E0B' });
+  } else if (session.connected) {
+    await chrome.action.setBadgeBackgroundColor({ color: '#09C7F5' });
+  }
 }
 chrome.runtime.onInstalled.addListener(syncBadge);
 chrome.runtime.onStartup.addListener(syncBadge);

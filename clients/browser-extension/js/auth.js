@@ -12,6 +12,7 @@ const STORAGE_KEYS = {
   accessToken: 'veritas_access_token',
   refreshToken: 'veritas_refresh_token',
   connected: 'veritas_connected',
+  blocked: 'veritas_proxy_blocked',
   proxy: 'veritas_proxy',
   clientLocation: 'veritas_client_location',
 };
@@ -29,12 +30,14 @@ export async function getSession() {
     STORAGE_KEYS.user,
     STORAGE_KEYS.accessToken,
     STORAGE_KEYS.connected,
+    STORAGE_KEYS.blocked,
     STORAGE_KEYS.clientLocation,
   ]);
   return {
     user: data[STORAGE_KEYS.user] || null,
     idToken: data[STORAGE_KEYS.accessToken] || null,
     connected: Boolean(data[STORAGE_KEYS.connected]),
+    blocked: Boolean(data[STORAGE_KEYS.blocked]),
     proxy: { ...DEFAULT_PROXY },
     clientLocation: data[STORAGE_KEYS.clientLocation] || null,
   };
@@ -46,6 +49,7 @@ export async function clearSession() {
     STORAGE_KEYS.accessToken,
     STORAGE_KEYS.refreshToken,
     STORAGE_KEYS.connected,
+    STORAGE_KEYS.blocked,
     STORAGE_KEYS.clientLocation,
   ]);
   await clearProxy();
@@ -217,6 +221,8 @@ export async function getBillingStatus() {
 }
 
 export async function connect() {
+  const initial = await getSession();
+  if (initial.blocked) await clearProxy();
   await refreshSession();
   const session = await getSession();
   const clientLocation = await resolveClientLocation(true);
@@ -234,7 +240,7 @@ export async function connect() {
   });
   if (!authState?.ready) throw new Error('Could not prepare secure gateway authentication.');
 
-  await setStorage({ [STORAGE_KEYS.connected]: true });
+  await setStorage({ [STORAGE_KEYS.connected]: true, [STORAGE_KEYS.blocked]: false });
   const config = {
     mode: 'fixed_servers',
     rules: {
@@ -264,8 +270,23 @@ export async function connect() {
 export async function disconnect() {
   await clearProxy();
   await clearProxyAuth();
-  await setStorage({ [STORAGE_KEYS.connected]: false });
+  await setStorage({ [STORAGE_KEYS.connected]: false, [STORAGE_KEYS.blocked]: false });
   await chrome.action.setBadgeText({ text: '' });
+}
+
+export async function failClosedProxy() {
+  const blockedConfig = {
+    mode: 'fixed_servers',
+    rules: {
+      singleProxy: { scheme: 'http', host: '127.0.0.1', port: 9 },
+      bypassList: ['localhost', '127.0.0.1'],
+    },
+  };
+  try {
+    await chrome.proxy.settings.set({ value: blockedConfig, scope: 'regular' });
+  } finally {
+    await setStorage({ [STORAGE_KEYS.blocked]: true });
+  }
 }
 
 async function clearProxy() {

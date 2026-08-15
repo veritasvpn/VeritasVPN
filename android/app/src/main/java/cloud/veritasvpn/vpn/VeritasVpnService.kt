@@ -42,6 +42,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         when (intent?.action) {
             ACTION_CONNECT -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG) ?: return START_STICKY
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                    .putString(KEY_CONFIG, config)
+                    .apply()
                 startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
                 scope.launch {
                     try {
@@ -65,6 +68,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
             }
             ACTION_DISCONNECT -> {
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                    .remove(KEY_CONFIG)
+                    .apply()
                 scope.launch {
                     try {
                         backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
@@ -76,13 +82,53 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 stopSelf()
             }
             else -> {
-                // Re-started by the system (always-on VPN) without an action.
+                // Android may restart an Always-on VPN service without the original Intent.
+                // Keep the last approved configuration so the tunnel can be restored.
+                val savedConfig = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .getString(KEY_CONFIG, null)
+                if (savedConfig != null) {
+                    startForeground(NOTIFICATION_ID, buildNotification("Restoring secure tunnel…"))
+                    scope.launch {
+                        try {
+                            val parsed = Config.parse(
+                                ByteArrayInputStream(savedConfig.toByteArray(Charsets.UTF_8))
+                            )
+                            backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
+                            val egressIp = verifyTunnelEgress()
+                            broadcastState(true, null, egressIp)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Automatic VPN restore failed", e)
+                            runCatching {
+                                backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
+                            }
+                            broadcastState(
+                                false,
+                                "VPN restore failed. Enable Android Always-on VPN and Block connections without VPN."
+                            )
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopSelf()
+                        }
+                    }
+                }
             }
         }
         return START_STICKY
     }
 
+    override fun onRevoke() {
+        runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().remove(KEY_CONFIG).apply()
+        broadcastState(
+            false,
+            "VPN permission was revoked. Enable Always-on VPN and Block connections without VPN."
+        )
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        super.onRevoke()
+    }
+
     override fun onDestroy() {
+        runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
         scope.cancel()
         super.onDestroy()
     }
@@ -194,6 +240,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val EXTRA_CONNECTED = "connected"
         const val EXTRA_ERROR = "error"
         const val EXTRA_EGRESS_IP = "egress_ip"
+        const val PREFS_NAME = "veritas_vpn_state"
+        const val KEY_CONFIG = "last_approved_config"
         private const val TAG = "VeritasVpnService"
     }
 }

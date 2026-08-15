@@ -601,9 +601,56 @@ ADDR='{address}'
 DNS='{dns}'
 ENDPOINT='{endpoint}'
 IFACE_NAME="veritas0"
+ENDPOINT_PORT="${{ENDPOINT##*:}}"
+KILLSWITCH_TABLE="veritasvpn_killswitch"
+KILLSWITCH_CHAIN="VERITASVPN_KILLSWITCH"
+
+cleanup_killswitch() {{
+  if command -v nft >/dev/null 2>&1; then
+    nft delete table inet "$KILLSWITCH_TABLE" 2>/dev/null || true
+  fi
+  if command -v iptables >/dev/null 2>&1; then
+    while iptables -C OUTPUT -j "$KILLSWITCH_CHAIN" 2>/dev/null; do
+      iptables -D OUTPUT -j "$KILLSWITCH_CHAIN" 2>/dev/null || break
+    done
+    iptables -F "$KILLSWITCH_CHAIN" 2>/dev/null || true
+    iptables -X "$KILLSWITCH_CHAIN" 2>/dev/null || true
+  fi
+}}
+
+install_killswitch() {{
+  cleanup_killswitch
+  if command -v nft >/dev/null 2>&1; then
+    nft add table inet "$KILLSWITCH_TABLE" || return 1
+    nft "add chain inet $KILLSWITCH_TABLE output {{ type filter hook output priority -5; policy accept; }}" || return 1
+    nft add rule inet "$KILLSWITCH_TABLE" output oifname "lo" accept || return 1
+    nft add rule inet "$KILLSWITCH_TABLE" output oifname "$IFACE_NAME" accept || return 1
+    if [[ -n "$ENDPOINT_IP" && -n "$ENDPOINT_PORT" ]]; then
+      nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ENDPOINT_IP" udp dport "$ENDPOINT_PORT" accept || return 1
+    fi
+    nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" drop || return 1
+    return 0
+  fi
+  if command -v iptables >/dev/null 2>&1; then
+    iptables -N "$KILLSWITCH_CHAIN" 2>/dev/null || true
+    iptables -F "$KILLSWITCH_CHAIN" || return 1
+    iptables -C OUTPUT -j "$KILLSWITCH_CHAIN" 2>/dev/null || iptables -I OUTPUT 1 -j "$KILLSWITCH_CHAIN" || return 1
+    iptables -A "$KILLSWITCH_CHAIN" -o lo -j ACCEPT || return 1
+    iptables -A "$KILLSWITCH_CHAIN" -o "$IFACE_NAME" -j ACCEPT || return 1
+    if [[ -n "$ENDPOINT_IP" && -n "$ENDPOINT_PORT" ]]; then
+      iptables -A "$KILLSWITCH_CHAIN" -d "$ENDPOINT_IP" -p udp --dport "$ENDPOINT_PORT" -j ACCEPT || return 1
+    fi
+    iptables -A "$KILLSWITCH_CHAIN" -j DROP || return 1
+    return 0
+  fi
+  return 1
+}}
+
 trap 'rm -f "$UAPI"' EXIT
 
 # --- tear down any previous Veritas tunnel (best-effort) ---
+cleanup_killswitch
+ip -6 route del blackhole default metric 1 2>/dev/null || true
 if [[ -f "$PID_FILE" ]]; then
   kill "$(cat "$PID_FILE")" 2>/dev/null || true
   rm -f "$PID_FILE"
@@ -718,6 +765,14 @@ if ! ip route replace blackhole default metric 1 2>/tmp/veritas-wg-killswitch-er
   cat /tmp/veritas-wg-killswitch-error.log >&2 || true
   exit 1
 fi
+# If IPv6 is enabled, keep a fail-closed default as an additional safeguard.
+ip -6 route replace blackhole default metric 1 2>/tmp/veritas-wg-killswitch-v6-error.log || true
+
+# Firewall enforcement is preferred; blackhole routes remain as fallback.
+if ! install_killswitch; then
+  cleanup_killswitch
+  echo "Firewall kill-switch rules unavailable; fail-closed route protection remains active" >&2
+fi
 
 # DNS: backup resolv.conf and set new DNS
 cp /etc/resolv.conf "$DNS_BACKUP" 2>/dev/null || true
@@ -734,9 +789,11 @@ printf 'endpoint_ip=%s\ngateway=%s\niface=%s\ngw_if=%s\n' \
 # Verify internet connectivity through the tunnel
 if ! curl -4 -fsS --connect-timeout 5 --max-time 12 https://api.ipify.org \
      >/tmp/veritas-wg-egress.log 2>/tmp/veritas-wg-egress-error.log; then
+  cleanup_killswitch
   ip route del 0.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
   ip route del 128.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
   ip route del blackhole default metric 1 2>/dev/null || true
+  ip -6 route del blackhole default metric 1 2>/dev/null || true
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
   [[ -n "$ENDPOINT_IP" ]] && ip route del "$ENDPOINT_IP" 2>/dev/null || true
   if [[ -f "$DNS_BACKUP" ]]; then
@@ -946,6 +1003,19 @@ fi
 
 # Remove the dedicated kill switch before intentionally restoring normal internet.
 ip route del blackhole default metric 1 2>/dev/null || true
+
+if command -v nft >/dev/null 2>&1; then
+  nft delete table inet veritasvpn_killswitch 2>/dev/null || true
+fi
+if command -v iptables >/dev/null 2>&1; then
+  while iptables -C OUTPUT -j VERITASVPN_KILLSWITCH 2>/dev/null; do
+    iptables -D OUTPUT -j VERITASVPN_KILLSWITCH 2>/dev/null || break
+  done
+  iptables -F VERITASVPN_KILLSWITCH 2>/dev/null || true
+  iptables -X VERITASVPN_KILLSWITCH 2>/dev/null || true
+fi
+ip route del blackhole default metric 1 2>/dev/null || true
+ip -6 route del blackhole default metric 1 2>/dev/null || true
 
 # Remove split-tunnel routes
 if [[ -n "$IFACE" ]]; then

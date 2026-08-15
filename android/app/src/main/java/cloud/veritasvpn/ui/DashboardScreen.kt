@@ -44,6 +44,7 @@ fun DashboardScreen(
     onDisconnect: () -> Unit,
     onSignOut: () -> Unit,
     onPlans: () -> Unit,
+    onKillSwitchSettings: () -> Unit,
     isPremium: Boolean,
     statusMsg: String?,
     deviceLatitude: Double?,
@@ -111,6 +112,10 @@ fun DashboardScreen(
                     DropdownMenuItem(
                         text = { Text("Network map", color = Paper, fontWeight = FontWeight.SemiBold) },
                         onClick = { showSettingsMenu = false; showNetworkMap = true }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Android kill switch settings", color = Paper, fontWeight = FontWeight.SemiBold) },
+                        onClick = { showSettingsMenu = false; onKillSwitchSettings() }
                     )
                     HorizontalDivider(color = Line)
                     DropdownMenuItem(

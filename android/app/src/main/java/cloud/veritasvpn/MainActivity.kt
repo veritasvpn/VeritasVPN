@@ -11,6 +11,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
+import android.provider.Settings
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import androidx.activity.ComponentActivity
@@ -304,6 +305,9 @@ class MainActivity : ComponentActivity() {
                             user = null
                         },
                         onPlans = { showPlans = true },
+                        onKillSwitchSettings = {
+                            context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
+                        },
                         isPremium = billingStatus?.isPremium == true,
                         statusMsg = statusMsg,
                         deviceLatitude = deviceLocation?.first,

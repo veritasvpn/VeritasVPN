@@ -17,4 +17,7 @@ Connect refreshes the user session, enables Chrome's HTTP CONNECT proxy, supplie
 - `js/auth.js`: auth/session, fail-closed connection, and egress validation
 - `js/background.js`: proxy authentication and health cleanup
 - `js/config.js`: production gateway configuration
-- Live website artifact: `website/downloads/veritasvpn-chrome.zip`
+- Live website artifact: `website/downloads/veritasvpn-chrome.zip`\n
+Browser-scoped fail-closed behavior
+
+The extension cannot control traffic from other applications. While connected, if Chrome reports a proxy failure, the extension replaces the gateway with a local discard proxy at 127.0.0.1:9 and shows BROWSER TRAFFIC BLOCKED. It does not silently fall back to a direct browser connection. Disconnecting intentionally clears the proxy and restores normal Chrome browsing.
