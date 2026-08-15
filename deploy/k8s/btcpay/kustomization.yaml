@@ -10,3 +10,4 @@ resources:
   - bitcoind.yaml
   - nbxplorer.yaml
   - btcpayserver.yaml
+  - network-policies.yaml

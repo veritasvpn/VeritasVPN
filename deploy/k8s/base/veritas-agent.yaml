@@ -99,6 +99,10 @@ spec:
                 configMapKeyRef:
                   name: veritas-config
                   key: LOG_LEVEL
+            - name: DNS_LISTEN
+              value: "10.0.0.1:53"
+            - name: DNS_UPSTREAM
+              value: "https://cloudflare-dns.com/dns-query"
           ports:
             - containerPort: 9090
               name: metrics

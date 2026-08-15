@@ -51,6 +51,10 @@ func New(
 	}
 }
 
+func (s *BillingService) Ready(ctx context.Context) error {
+	return s.db.Ping(ctx)
+}
+
 func (s *BillingService) PremiumAmountCents() int64 {
 	if s.cfg.PremiumPriceUSDCents <= 0 {
 		return 500
@@ -190,7 +194,7 @@ func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, p
 	}
 
 	s.log.Info("premium checkout created",
-		zap.String("account_id", accountID),
+		zap.String("account_hash", logging.HashIdentifier(accountID)),
 		zap.String("invoice_id", invoiceID),
 		zap.Int64("amount_cents", amountCents),
 	)
@@ -298,7 +302,7 @@ func (s *BillingService) SettleInvoice(ctx context.Context, invoiceID, accountID
 	})
 
 	s.log.Info("premium activated",
-		zap.String("account_id", accountID),
+		zap.String("account_hash", logging.HashIdentifier(accountID)),
 		zap.String("invoice_id", invoiceID),
 		zap.Time("period_end", periodEnd),
 	)
@@ -332,7 +336,7 @@ func (s *BillingService) ExpireDueSubscriptions(ctx context.Context) (int, error
 	n := 0
 	for _, sub := range subs {
 		if err := s.expireOne(ctx, sub); err != nil {
-			s.log.Error("expire failed", zap.String("account_id", sub.AccountID), zap.Error(err))
+			s.log.Error("expire failed", zap.String("account_hash", logging.HashIdentifier(sub.AccountID)), zap.Error(err))
 			continue
 		}
 		n++

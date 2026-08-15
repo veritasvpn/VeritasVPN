@@ -6,6 +6,7 @@ resources:
   - exporters.yaml
   - grafana.yaml
   - network-policies.yaml
+  - network-policies-namespace.yaml
 configMapGenerator:
   - name: prometheus-config
     namespace: monitoring

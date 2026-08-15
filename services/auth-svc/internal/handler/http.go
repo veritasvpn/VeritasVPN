@@ -286,7 +286,7 @@ func (h *HTTPHandler) handleDeleteAccount(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.service.DeleteAccount(r.Context(), claims.AccountID); err != nil {
-		h.log.Error("delete account failed", zap.String("account_id", claims.AccountID), zap.Error(err))
+		h.log.Error("delete account failed", zap.String("account_hash", logging.HashIdentifier(claims.AccountID)), zap.Error(err))
 		writeHTTPError(w, http.StatusInternalServerError, "failed to delete account")
 		return
 	}

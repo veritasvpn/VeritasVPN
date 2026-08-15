@@ -24,7 +24,7 @@ jobs:
         working-directory: clients/desktop
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
         working-directory: clients/desktop
 
       - name: Build .dmg
@@ -61,7 +61,7 @@ jobs:
         working-directory: clients/desktop
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
         working-directory: clients/desktop
 
       - name: Build .deb and .AppImage

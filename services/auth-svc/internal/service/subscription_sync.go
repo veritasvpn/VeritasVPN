@@ -58,7 +58,7 @@ func (s *AuthService) StartSubscriptionSync(nc *nats.Conn, log *logging.Logger) 
 		defer cancel()
 		if err := s.db.UpdateAccountTier(ctx, ev.AccountID, tier, expiry); err != nil {
 			log.Error("failed to sync account tier from billing",
-				zap.String("account_id", ev.AccountID),
+				zap.String("account_hash", logging.HashIdentifier(ev.AccountID)),
 				zap.String("tier", tier),
 				zap.String("subject", msg.Subject),
 				zap.Error(err),
@@ -66,7 +66,7 @@ func (s *AuthService) StartSubscriptionSync(nc *nats.Conn, log *logging.Logger) 
 			return
 		}
 		log.Info("synced account tier from billing",
-			zap.String("account_id", ev.AccountID),
+			zap.String("account_hash", logging.HashIdentifier(ev.AccountID)),
 			zap.String("tier", tier),
 			zap.String("subject", msg.Subject),
 		)

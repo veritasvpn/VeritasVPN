@@ -72,7 +72,7 @@ func (c *TierCache) StartSync(nc *nats.Conn) error {
 
 		c.Set(ev.AccountID, tier)
 		c.log.Debug("tier cache updated",
-			zap.String("account_id", ev.AccountID),
+			zap.String("account_hash", logging.HashIdentifier(ev.AccountID)),
 			zap.String("tier", tier),
 			zap.String("subject", msg.Subject),
 		)

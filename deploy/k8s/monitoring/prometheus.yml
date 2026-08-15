@@ -40,6 +40,7 @@ scrape_configs:
       - targets:
           - https://veritasvpn.cloud/
           - https://api.veritasvpn.cloud/healthz
+          - https://api.veritasvpn.cloud/api/v1/billing/readyz
           - https://btcpay.veritasvpn.cloud/
     relabel_configs:
       - source_labels: [__address__]

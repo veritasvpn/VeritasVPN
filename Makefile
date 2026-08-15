@@ -107,7 +107,7 @@ go-mod-tidy:
 
 K8S_DIR := $(CURDIR)/deploy/k8s
 REGISTRY ?= localhost:31500
-TAG ?= latest
+TAG ?=
 
 k8s-up: k8s-btcpay
 	kubectl apply -k $(K8S_DIR)/overlays/dev/
@@ -126,6 +126,7 @@ k8s-status:
 	@kubectl get pods -A | grep -E "veritas|btcpay"
 
 k8s-images:
+	@test -n "$(TAG)" || (echo "TAG is required and must be immutable" >&2; exit 1)
 	REGISTRY=$(REGISTRY) TAG=$(TAG) bash $(K8S_DIR)/scripts/push-images.sh
 
 k8s-btcpay:

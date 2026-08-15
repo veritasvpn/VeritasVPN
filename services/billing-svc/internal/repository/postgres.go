@@ -19,6 +19,10 @@ func NewPostgres(pool *pgxpool.Pool) *Postgres {
 	return &Postgres{pool: pool}
 }
 
+func (p *Postgres) Ping(ctx context.Context) error {
+	return p.pool.Ping(ctx)
+}
+
 func (p *Postgres) CreateSubscription(ctx context.Context, sub *model.Subscription) error {
 	query := `INSERT INTO subscriptions (account_id, tier, status, payment_method,
 	           current_period_start, current_period_end, cancel_at_period_end, created_at, updated_at)

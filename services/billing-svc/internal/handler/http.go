@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/veritasvpn/lib/logging"
 	"github.com/veritasvpn/services/billing-svc/internal/service"
@@ -36,6 +38,8 @@ func NewBillingHandler(log *logging.Logger, svc *service.BillingService, verifie
 
 func (h *BillingHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", h.handleHealth)
+	mux.HandleFunc("/readyz", h.handleReady)
+	mux.HandleFunc("/api/v1/billing/readyz", h.handleReady)
 	mux.HandleFunc("/api/v1/billing/subscribe", h.withCORS(h.handleSubscribe))
 	mux.HandleFunc("/api/v1/billing/cancel", h.withCORS(h.handleCancel))
 	mux.HandleFunc("/api/v1/billing/status", h.withCORS(h.handleStatus))
@@ -48,6 +52,20 @@ func (h *BillingHandler) RegisterRoutes(mux *http.ServeMux) {
 
 func (h *BillingHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *BillingHandler) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := h.service.Ready(ctx); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "billing dependencies unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (h *BillingHandler) withCORS(next http.HandlerFunc) http.HandlerFunc {

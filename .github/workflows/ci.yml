@@ -42,14 +42,30 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           JWT_SECRET: test-secret-for-ci-purposes-only
           AGENT_AUTH_TOKEN: test-agent-token
-        run: go test ./lib/config/... ./lib/logging/... ./lib/crypto/... ./lib/jwt/... ./services/auth-svc/... ./services/wg-manager/... ./services/billing-svc/... ./services/veritas-agent/... -v -count=1
+        run: |
+          go test ./lib/config/... ./lib/logging/... ./lib/crypto/... ./lib/jwt/... ./services/auth-svc/... ./services/wg-manager/... ./services/billing-svc/... ./services/veritas-agent/... -v -count=1
+          go vet ./lib/config/... ./lib/logging/... ./lib/crypto/... ./lib/jwt/... ./services/auth-svc/... ./services/wg-manager/... ./services/billing-svc/... ./services/veritas-agent/... ./clients/cli/...
+
+  dependency-scan:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Run govulncheck
+        run: |
+          for module in api lib/config lib/logging lib/crypto lib/jwt services/auth-svc services/wg-manager services/billing-svc services/veritas-agent services/browser-proxy clients/cli; do
+            (cd "$module" && go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...)
+          done
 
   build-services:
     name: Build Services
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [auth-svc, wg-manager, billing-svc, veritas-agent]
+        service: [auth-svc, wg-manager, billing-svc, veritas-agent, browser-proxy]
     steps:
       - uses: actions/checkout@v4
 
@@ -64,6 +80,7 @@ jobs:
             wg-manager) go build ./services/wg-manager/cmd/server/ ;;
             billing-svc) go build ./services/billing-svc/cmd/server/ ;;
             veritas-agent) go build ./services/veritas-agent/cmd/agent/ ;;
+            browser-proxy) go build ./services/browser-proxy/ ;;
           esac
 
   build-cli:
@@ -136,6 +153,9 @@ jobs:
           node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('clients/browser-extension/manifest.json')); if(m.manifest_version!==3) throw new Error('Manifest V3 required'); if(m.host_permissions.includes('<all_urls>')) throw new Error('Broad <all_urls> permission is not allowed');"
           test -f clients/browser-extension/popup.html
           test -f clients/browser-extension/js/background.js
+          node --check clients/browser-extension/js/background.js
+          node --check clients/browser-extension/js/popup.js
+          node --check clients/browser-extension/js/auth.js
       - name: Validate website entry points
         run: |
           test -f website/index.html
@@ -196,6 +216,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ env.REGISTRY_OWNER }}/veritasvpn/${{ matrix.service }}:${{ github.sha }}
-            ghcr.io/${{ env.REGISTRY_OWNER }}/veritasvpn/${{ matrix.service }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true

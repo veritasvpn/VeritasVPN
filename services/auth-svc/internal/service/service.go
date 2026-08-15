@@ -91,7 +91,7 @@ func (s *AuthService) Register(ctx context.Context, deviceID, publicKey string) 
 	}
 
 	s.log.Info("account registered",
-		zap.String("account_id", acc.ID),
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
 		zap.String("tier", acc.SubscriptionTier),
 	)
 
@@ -173,7 +173,7 @@ func (s *AuthService) DeleteAccount(ctx context.Context, accountID string) error
 		return fmt.Errorf("delete account: %w", err)
 	}
 
-	s.log.Info("account permanently deleted", zap.String("account_id", accountID))
+	s.log.Info("account permanently deleted", zap.String("account_hash", logging.HashIdentifier(accountID)))
 	return nil
 }
 
@@ -237,7 +237,7 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email, password str
 	}
 
 	s.log.Info("account registered with email",
-		zap.String("account_id", acc.ID),
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
 		zap.String("email", email),
 	)
 
@@ -286,7 +286,7 @@ func (s *AuthService) SignInWithEmail(ctx context.Context, email, password strin
 	}
 
 	s.log.Info("user signed in with email",
-		zap.String("account_id", acc.ID),
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
 	)
 
 	return accessToken, refreshToken, acc.ID, expiresAt, nil
@@ -309,7 +309,7 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, emailAddr string
 	}
 
 	s.log.Info("password reset requested",
-		zap.String("account_id", acc.ID),
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
 	)
 
 	if s.email != nil {
@@ -322,7 +322,7 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, emailAddr string
 		}); err != nil {
 			s.log.Error("failed to send reset email", zap.Error(err))
 		} else {
-			s.log.Info("reset email sent", zap.String("account_id", acc.ID))
+			s.log.Info("reset email sent", zap.String("account_hash", logging.HashIdentifier(acc.ID)))
 		}
 	}
 
@@ -361,7 +361,7 @@ func (s *AuthService) ResetPassword(ctx context.Context, resetToken, newPassword
 	}
 
 	s.log.Info("password reset completed",
-		zap.String("account_id", acc.ID),
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
 	)
 
 	return nil
@@ -416,7 +416,7 @@ func (s *AuthService) RegisterAnonymous(ctx context.Context) (string, string, st
 	}
 
 	s.log.Info("anonymous account created",
-		zap.String("account_id", acc.ID),
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
 	)
 
 	return accessToken, refreshToken, acc.ID, expiresAt, nil
@@ -454,7 +454,7 @@ func (s *AuthService) SignInWithAccountID(ctx context.Context, accountID string)
 	}
 
 	s.log.Info("anonymous user signed in",
-		zap.String("account_id", acc.ID),
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
 	)
 
 	return accessToken, refreshToken, acc.ID, expiresAt, nil

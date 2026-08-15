@@ -57,7 +57,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`veritas — VeritasVPN CLI client
+	fmt.Print(`veritas — VeritasVPN CLI client
 
 Usage:
   veritas register                    Register a new account

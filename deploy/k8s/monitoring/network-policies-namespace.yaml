@@ -1,0 +1,68 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-default-deny-ingress
+  namespace: monitoring
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-allow-prometheus-scrapes
+  namespace: monitoring
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [blackbox-exporter, node-exporter, kube-state-metrics, postgres-exporter, redis-exporter]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - { port: 9115, protocol: TCP }
+        - { port: 9100, protocol: TCP }
+        - { port: 8080, protocol: TCP }
+        - { port: 9187, protocol: TCP }
+        - { port: 9121, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-allow-grafana
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app: prometheus
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: grafana
+      ports:
+        - { port: 9090, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-allow-ingress-grafana
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app: grafana
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - { port: 3000, protocol: TCP }

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-TAG="${TAG:-latest}"
+TAG="${TAG:?TAG must be set to an immutable version or digest}"
 REGISTRY="${REGISTRY:-localhost:31500}"
 
 need_cmd() { command -v "$1" >/dev/null || { echo "ERROR: $1 not found"; exit 1; }; }

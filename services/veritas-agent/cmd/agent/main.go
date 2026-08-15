@@ -23,6 +23,7 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/veritasvpn/lib/logging"
+	dnssvc "github.com/veritasvpn/services/veritas-agent/internal/dns"
 	"github.com/veritasvpn/services/veritas-agent/internal/firewall"
 	"github.com/veritasvpn/services/veritas-agent/internal/metrics"
 	"github.com/veritasvpn/services/veritas-agent/internal/peer"
@@ -254,6 +255,8 @@ type AgentConfig struct {
 	ServerRegion    string
 	ServerCity      string
 	ServerCountry   string
+	DNSListen       string
+	DNSUpstream     string
 }
 
 func LoadAgentConfig() *AgentConfig {
@@ -271,6 +274,8 @@ func LoadAgentConfig() *AgentConfig {
 		ServerRegion:    os.Getenv("SERVER_REGION"),
 		ServerCity:      os.Getenv("SERVER_CITY"),
 		ServerCountry:   os.Getenv("SERVER_COUNTRY"),
+		DNSListen:       envOrDefault("DNS_LISTEN", "10.0.0.1:53"),
+		DNSUpstream:     envOrDefault("DNS_UPSTREAM", "https://cloudflare-dns.com/dns-query"),
 	}
 }
 
@@ -287,6 +292,7 @@ type Agent struct {
 	wgManager     *wireguard.Manager
 	peerManager   *peer.Manager
 	fwManager     *firewall.Manager
+	dnsForwarder  *dnssvc.Forwarder
 	metrics       *metrics.Metrics
 	managerClient AgentManagerClient
 	serverID      string
@@ -328,6 +334,11 @@ func (a *Agent) Run() error {
 	}
 	if err := a.wgManager.EnsureInterface(privKey, a.cfg.WGPort, serverAddr); err != nil {
 		return fmt.Errorf("ensure wireguard interface: %w", err)
+	}
+
+	a.dnsForwarder = dnssvc.New(a.cfg.DNSListen, a.cfg.DNSUpstream, a.logger)
+	if err := a.dnsForwarder.Start(ctx); err != nil {
+		return fmt.Errorf("start encrypted DNS forwarder: %w", err)
 	}
 
 	if err := a.setupFirewall(); err != nil {
@@ -375,6 +386,12 @@ func (a *Agent) Run() error {
 	a.logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
 
 	cancel()
+
+	if a.dnsForwarder != nil {
+		if err := a.dnsForwarder.Shutdown(); err != nil {
+			a.logger.Error("DNS forwarder shutdown error", zap.Error(err))
+		}
+	}
 
 	a.logger.Info("Cleaning up firewall rules")
 	if err := a.fwManager.Cleanup(); err != nil {

@@ -3,7 +3,7 @@ set -euo pipefail
 
 REGISTRY="${REGISTRY:-localhost:31500}"
 IMAGE_PREFIX="${IMAGE_PREFIX:-}"
-TAG="${TAG:-latest}"
+TAG="${TAG:?TAG must be set to an immutable version or digest}"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 
 services=("auth-svc" "wg-manager" "billing-svc" "veritas-agent" "veritas-proxy")
