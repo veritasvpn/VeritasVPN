@@ -141,6 +141,9 @@ jobs:
           test -f website/index.html
           test -f website/privacy.html
           grep -q 'Content-Security-Policy' website/_headers
+      - name: Reject mutable production image tags
+        run: |
+          ! grep -nE 'newTag: latest|image: .*:latest' deploy/k8s/overlays/prod/kustomization.yaml
 
   build-images:
     name: Build & Push Images

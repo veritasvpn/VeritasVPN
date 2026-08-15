@@ -170,6 +170,9 @@ jobs:
           APK=$(ls veritasvpn-android/*.apk | head -1)
           cp "$APK" VeritasVPN-Android.apk
 
+      - name: Generate release checksums
+        run: sha256sum VeritasVPN-* > SHA256SUMS
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
@@ -180,3 +183,4 @@ jobs:
             VeritasVPN-Windows.exe
             VeritasVPN-Windows.msi
             VeritasVPN-Android.apk
+            SHA256SUMS
