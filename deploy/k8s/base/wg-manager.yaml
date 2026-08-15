@@ -22,6 +22,7 @@ metadata:
     app: wg-manager
 spec:
   replicas: 1
+  revisionHistoryLimit: 2
   selector:
     matchLabels:
       app: wg-manager
