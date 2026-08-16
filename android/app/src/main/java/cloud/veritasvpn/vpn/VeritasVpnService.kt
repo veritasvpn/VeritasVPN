@@ -173,13 +173,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private suspend fun verifyTunnelEgress(): String {
         var lastError: Throwable? = null
-        repeat(30) {
+        repeat(5) {
             try {
                 val stats = backend.getStatistics(this@VeritasVpnService)
                 if (stats.totalTx() > 0 && stats.totalRx() > 0) {
                     for (endpoint in EGRESS_ENDPOINTS) {
                         try {
-                            val egressIp = ApiClient.getText(endpoint)
+                            val egressIp = ApiClient.getText(endpoint, timeoutSeconds = 2)
                             ServiceCompat.startForeground(
                                 this,
                                 NOTIFICATION_ID,
@@ -198,7 +198,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             delay(1000)
         }
         throw IllegalStateException(
-            lastError?.message ?: "WireGuard handshake timed out; no encrypted traffic was received"
+            "VPN egress validation timed out; no encrypted traffic was confirmed"
         )
     }
 

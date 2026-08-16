@@ -45,9 +45,14 @@ object ApiClient {
         return client.newCall(builder.build()).execute()
     }
 
-    fun getText(url: String): String {
+    fun getText(url: String, timeoutSeconds: Long = 5): String {
         val request = Request.Builder().url(url).get().build()
-        return client.newCall(request).execute().use { response ->
+        val validationClient = client.newBuilder()
+            .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .build()
+        return validationClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 throw IOException("HTTP ${response.code} during VPN egress validation")
             }

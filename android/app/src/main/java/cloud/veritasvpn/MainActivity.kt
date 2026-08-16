@@ -107,6 +107,23 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(user, showPlans) {
                     if (user != null) refreshBilling()
                 }
+
+                LaunchedEffect(connecting) {
+                    if (connecting) {
+                        kotlinx.coroutines.delay(45_000)
+                        if (connecting) {
+                            runCatching {
+                                context.startService(
+                                    Intent(context, VeritasVpnService::class.java).apply {
+                                        action = VeritasVpnService.ACTION_DISCONNECT
+                                    }
+                                )
+                            }
+                            connecting = false
+                            statusMsg = "Connection timed out. Check your network and try again."
+                        }
+                    }
+                }
                 LaunchedEffect(checkoutUrl) {
                     while (checkoutUrl != null && user != null) {
                         kotlinx.coroutines.delay(3000)
