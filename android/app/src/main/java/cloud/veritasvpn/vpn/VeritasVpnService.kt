@@ -22,7 +22,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import java.io.ByteArrayInputStream
 
 class VeritasVpnService : GoBackend.VpnService(), Tunnel {
@@ -177,30 +180,37 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return e.message?.takeIf { it.isNotBlank() } ?: "Connection failed. Check your network and try again."
     }
 
-    private suspend fun verifyTunnelEgress(): String {
-        var lastError: Throwable? = null
-        // Try each independent endpoint once. Repeating all three endpoints five
-        // times made a transient DNS failure look like a 40-45 second connection.
-        // The WireGuard handshake is triggered by the first request; bounded
-        // fallbacks keep connection feedback fast without skipping validation.
-        for (endpoint in EGRESS_ENDPOINTS) {
-            try {
-                val egressIp = ApiClient.getText(endpoint, timeoutSeconds = 2)
-                ServiceCompat.startForeground(
-                    this,
-                    NOTIFICATION_ID,
-                    buildNotification("Connected · $egressIp"),
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                )
-                return egressIp
-            } catch (error: Throwable) {
-                lastError = error
+    private suspend fun verifyTunnelEgress(): String = coroutineScope {
+        // Race the independent egress endpoints. On an immediate reconnect the
+        // first request can be spent waking the tunnel or resolving DNS; a
+        // serial fallback would turn that transient delay into a false failure.
+        val results = Channel<String>(EGRESS_ENDPOINTS.size)
+        val jobs = EGRESS_ENDPOINTS.map { endpoint ->
+            launch(Dispatchers.IO) {
+                runCatching {
+                    ApiClient.getText(endpoint, timeoutSeconds = 2)
+                }.onSuccess { egressIp ->
+                    results.send(egressIp)
+                }
             }
         }
-        throw IllegalStateException(
-            "VPN egress validation timed out; no encrypted traffic was confirmed",
-            lastError
-        )
+        try {
+            val egressIp = withTimeout(8_000) { results.receive() }
+            ServiceCompat.startForeground(
+                this@VeritasVpnService,
+                NOTIFICATION_ID,
+                buildNotification("Connected · $egressIp"),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+            egressIp
+        } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+            throw IllegalStateException(
+                "VPN egress validation timed out; no encrypted traffic was confirmed"
+            )
+        } finally {
+            jobs.forEach { it.cancel() }
+            results.close()
+        }
     }
 
     private fun broadcastState(connected: Boolean, error: String?, egressIp: String? = null) {
