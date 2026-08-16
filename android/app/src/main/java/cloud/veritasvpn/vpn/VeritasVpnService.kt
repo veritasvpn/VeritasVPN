@@ -16,18 +16,20 @@ import com.wireguard.config.Config
 import cloud.veritasvpn.MainActivity
 import cloud.veritasvpn.R
 import cloud.veritasvpn.api.ApiClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import java.io.ByteArrayInputStream
 
 class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private val backend by lazy { GoBackend(applicationContext) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var transitionJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -46,7 +48,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     .putString(KEY_CONFIG, config)
                     .apply()
                 startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
-                scope.launch {
+                transitionJob?.cancel()
+                transitionJob = scope.launch {
                     try {
                         val parsed = Config.parse(ByteArrayInputStream(config.toByteArray(Charsets.UTF_8)))
                         val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
@@ -55,6 +58,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         }
                         val egressIp = verifyTunnelEgress()
                         broadcastState(true, null, egressIp)
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "Connect failed", e)
                         try {
@@ -71,15 +76,15 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                     .remove(KEY_CONFIG)
                     .apply()
-                scope.launch {
-                    try {
+                transitionJob?.cancel()
+                transitionJob = scope.launch {
+                    runCatching {
                         backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
-                    } catch (_: Exception) {
                     }
                     broadcastState(false, null)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf(startId)
                 }
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
             }
             else -> {
                 // Android may restart an Always-on VPN service without the original Intent.
@@ -116,6 +121,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     override fun onRevoke() {
+        transitionJob?.cancel()
         runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().remove(KEY_CONFIG).apply()
         broadcastState(
@@ -173,27 +179,27 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private suspend fun verifyTunnelEgress(): String {
         var lastError: Throwable? = null
-        repeat(5) {
-            for (endpoint in EGRESS_ENDPOINTS) {
-                try {
-                    // The request itself generates tunnel traffic and triggers the
-                    // WireGuard handshake; do not wait for receive statistics first.
-                    val egressIp = ApiClient.getText(endpoint, timeoutSeconds = 2)
-                    ServiceCompat.startForeground(
-                        this,
-                        NOTIFICATION_ID,
-                        buildNotification("Connected · $egressIp"),
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                    )
-                    return egressIp
-                } catch (error: Throwable) {
-                    lastError = error
-                }
+        // Try each independent endpoint once. Repeating all three endpoints five
+        // times made a transient DNS failure look like a 40-45 second connection.
+        // The WireGuard handshake is triggered by the first request; bounded
+        // fallbacks keep connection feedback fast without skipping validation.
+        for (endpoint in EGRESS_ENDPOINTS) {
+            try {
+                val egressIp = ApiClient.getText(endpoint, timeoutSeconds = 2)
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    buildNotification("Connected · $egressIp"),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+                return egressIp
+            } catch (error: Throwable) {
+                lastError = error
             }
-            delay(1000)
         }
         throw IllegalStateException(
-            "VPN egress validation timed out; no encrypted traffic was confirmed"
+            "VPN egress validation timed out; no encrypted traffic was confirmed",
+            lastError
         )
     }
 
