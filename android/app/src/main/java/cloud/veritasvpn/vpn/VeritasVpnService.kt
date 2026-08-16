@@ -174,26 +174,21 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private suspend fun verifyTunnelEgress(): String {
         var lastError: Throwable? = null
         repeat(5) {
-            try {
-                val stats = backend.getStatistics(this@VeritasVpnService)
-                if (stats.totalTx() > 0 && stats.totalRx() > 0) {
-                    for (endpoint in EGRESS_ENDPOINTS) {
-                        try {
-                            val egressIp = ApiClient.getText(endpoint, timeoutSeconds = 2)
-                            ServiceCompat.startForeground(
-                                this,
-                                NOTIFICATION_ID,
-                                buildNotification("Connected · $egressIp"),
-                                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                            )
-                            return egressIp
-                        } catch (error: Throwable) {
-                            lastError = error
-                        }
-                    }
+            for (endpoint in EGRESS_ENDPOINTS) {
+                try {
+                    // The request itself generates tunnel traffic and triggers the
+                    // WireGuard handshake; do not wait for receive statistics first.
+                    val egressIp = ApiClient.getText(endpoint, timeoutSeconds = 2)
+                    ServiceCompat.startForeground(
+                        this,
+                        NOTIFICATION_ID,
+                        buildNotification("Connected · $egressIp"),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                    )
+                    return egressIp
+                } catch (error: Throwable) {
+                    lastError = error
                 }
-            } catch (error: Throwable) {
-                lastError = error
             }
             delay(1000)
         }
