@@ -22,7 +22,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -37,6 +36,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var transitionJob: Job? = null
     private var disconnectJob: Job? = null
     private var validationJob: Job? = null
+    private var validationGeneration = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -106,7 +106,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 transitionJob?.cancel()
                 disconnectJob?.cancel()
                 disconnectJob = scope.launch {
-                    validationJob?.cancelAndJoin()
+                    // Tear the interface down first. A background egress probe
+                    // may be blocked in OkHttp and must not delay route removal.
+                    validationGeneration++
+                    validationJob?.cancel()
                     runCatching {
                         backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
                     }
@@ -159,6 +162,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     override fun onRevoke() {
         transitionJob?.cancel()
+        validationGeneration++
         validationJob?.cancel()
         runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().remove(KEY_CONFIG).apply()
@@ -236,9 +240,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun startBackgroundEgressValidation() {
         validationJob?.cancel()
+        val generation = ++validationGeneration
         validationJob = scope.launch {
             try {
                 val egressIp = verifyTunnelEgress()
+                if (generation != validationGeneration) return@launch
                 broadcastState(true, null, egressIp)
             } catch (e: CancellationException) {
                 throw e
