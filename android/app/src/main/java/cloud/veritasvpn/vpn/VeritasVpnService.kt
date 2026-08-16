@@ -207,12 +207,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         repeat(2) { cycle ->
             suppressStateBroadcast = true
             try {
-                // Recreate the local tunnel for the validation retry. This handles
-                // Android's occasional stale route/socket state after a rapid DOWN.
-                runCatching {
-                    backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
+                // The first cycle starts the backend directly. A fresh service
+                // does not need a blocking DOWN call, and skipping it avoids
+                // hanging the very first connection on some Android versions.
+                // A failed cycle is explicitly torn down before the retry to
+                // recover stale route/socket state after a rapid reconnect.
+                if (cycle > 0) {
+                    runCatching {
+                        backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
+                    }
+                    delay(500)
                 }
-                delay(if (cycle == 0) 300 else 500)
                 val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
                 if (state != Tunnel.State.UP) {
                     throw IllegalStateException(

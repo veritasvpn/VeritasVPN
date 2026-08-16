@@ -112,14 +112,28 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(connecting) {
                     if (connecting) {
-                        kotlinx.coroutines.delay(45_000)
+                        // The service has a bounded validation/recovery window;
+                        // clean up the server peer if Android never reports a result.
+                        kotlinx.coroutines.delay(25_000)
                         if (connecting) {
+                            val timedOutPeerId = peerIdForDisconnect()
                             runCatching {
                                 context.startService(
                                     Intent(context, VeritasVpnService::class.java).apply {
                                         action = VeritasVpnService.ACTION_DISCONNECT
                                     }
                                 )
+                            }
+                            if (timedOutPeerId != null) {
+                                peerCleanupJob = scope.launch(Dispatchers.IO) {
+                                    runCatching {
+                                        val token = authRepo.getAccessToken()
+                                            ?: return@runCatching
+                                        ApiClient.delete(
+                                            "/api/v1/wg/peers/$timedOutPeerId", token
+                                        ).close()
+                                    }
+                                }
                             }
                             connecting = false
                             statusMsg = "Connection timed out. Check your network and try again."
