@@ -53,6 +53,9 @@ patches:
         path: /data/SERVER_HOSTNAME
         value: "veritas-node"
       - op: replace
+        path: /data/PUBLIC_IP
+        value: "186.122.244.166"
+      - op: replace
         path: /data/SERVER_COUNTRY
         value: "PY"
       - op: replace
