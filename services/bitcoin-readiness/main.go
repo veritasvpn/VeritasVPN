@@ -49,7 +49,7 @@ func (s *state) refresh(ctx context.Context, rpcURL, user, password string) erro
 	}
 	req.SetBasicAuth(user, password)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: 4 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
 		s.rpcUp.Store(false)
 		return err
@@ -96,14 +96,14 @@ func main() {
 	user := required("BTC_RPC_USER")
 	password := required("BTC_RPC_PASSWORD")
 	var s state
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	_ = s.refresh(ctx, rpcURL, user, password)
 	cancel()
 	go func() {
 		t := time.NewTicker(15 * time.Second)
 		defer t.Stop()
 		for range t.C {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			if err := s.refresh(ctx, rpcURL, user, password); err != nil {
 				s.ready.Store(false)
 				log.Printf("bitcoin refresh failed: %v", err)

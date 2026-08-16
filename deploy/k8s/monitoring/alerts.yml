@@ -43,6 +43,13 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "A VeritasVPN container is repeatedly restarting"
+      - alert: ContainerImagePullFailure
+        expr: kube_pod_container_status_waiting_reason{reason=~"ImagePullBackOff|ErrImagePull"} > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "A container image cannot be pulled"
+          description: "A Kubernetes workload is waiting because its image is unavailable."
       - alert: WireGuardPeersNotHandshaking
         expr: veritas_agent_peer_count > 0 and veritas_agent_active_peer_count == 0
         for: 10m
@@ -56,12 +63,13 @@ groups:
         annotations:
           summary: "A required VeritasVPN monitoring scrape is missing"
 
-      - alert: BitcoinNodeNotReady
-        expr: kube_statefulset_status_replicas_ready{namespace="btcpay",statefulset="bitcoind"} < 1
-        for: 10m
+      - alert: BitcoinReadinessServiceUnavailable
+        expr: up{job="bitcoin-readiness"} == 0
+        for: 5m
         labels: { severity: critical }
         annotations:
-          summary: "Bitcoin node is not ready"
+          summary: "Bitcoin readiness service is unavailable"
+          description: "The Bitcoin readiness exporter cannot be scraped; payment readiness cannot be evaluated."
       - alert: CloudflareTunnelNotReady
         expr: kube_deployment_status_replicas_ready{namespace="ingress-nginx",deployment="cloudflared"} < 1
         for: 5m
@@ -91,7 +99,7 @@ groups:
           summary: "Bitcoin synchronization appears stalled"
           description: "Bitcoin block height has not advanced for 30 minutes while initial synchronization is active."
       - alert: BillingReadinessUnavailable
-        expr: probe_success{instance="https://api.veritasvpn.cloud/api/v1/billing/readyz"} == 0
+        expr: probe_success{instance="https://api.veritasvpn.cloud/api/v1/billing/readyz"} == 0 and bitcoin_initial_block_download{job="bitcoin-readiness"} == 0
         for: 15m
         labels: { severity: warning }
         annotations:

@@ -7,13 +7,16 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 2
+  progressDeadlineSeconds: 3600
+  strategy:
+    type: Recreate
   selector: {matchLabels: {app: bitcoin-readiness}}
   template:
     metadata: {labels: {app: bitcoin-readiness}}
     spec:
       containers:
         - name: bitcoin-readiness
-          image: localhost:31500/bitcoin-readiness@sha256:9a3d1965eec510856ab9a4e2e88b491a279192f207c40e5b6ee0abd27521e99e
+          image: localhost:31500/bitcoin-readiness@sha256:1f4ed01617c34e9fe26d048e68510da78d6b0e21676364bae980b80527dc98d4
           imagePullPolicy: IfNotPresent
           ports: [{containerPort: 8080}]
           env:
@@ -22,7 +25,7 @@ spec:
             - name: BTC_RPC_PASSWORD
               valueFrom: {secretKeyRef: {name: btcpay-secrets, key: BTC_RPC_PASSWORD}}
           startupProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 12}
-          readinessProbe: {httpGet: {path: /readyz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 15, timeoutSeconds: 3, failureThreshold: 2}
+          readinessProbe: {httpGet: {path: /readyz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 4}
           livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 20, periodSeconds: 30, timeoutSeconds: 3, failureThreshold: 3}
           securityContext:
             readOnlyRootFilesystem: true
