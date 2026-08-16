@@ -173,23 +173,29 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private suspend fun verifyTunnelEgress(): String {
         var lastError: Throwable? = null
-        repeat(20) {
+        repeat(30) {
             try {
                 val stats = backend.getStatistics(this@VeritasVpnService)
                 if (stats.totalTx() > 0 && stats.totalRx() > 0) {
-                    val egressIp = ApiClient.getText("https://api.ipify.org")
-                    ServiceCompat.startForeground(
-                        this,
-                        NOTIFICATION_ID,
-                        buildNotification("Connected · $egressIp"),
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                    )
-                    return egressIp
+                    for (endpoint in EGRESS_ENDPOINTS) {
+                        try {
+                            val egressIp = ApiClient.getText(endpoint)
+                            ServiceCompat.startForeground(
+                                this,
+                                NOTIFICATION_ID,
+                                buildNotification("Connected · $egressIp"),
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                            )
+                            return egressIp
+                        } catch (error: Throwable) {
+                            lastError = error
+                        }
+                    }
                 }
             } catch (error: Throwable) {
                 lastError = error
             }
-            delay(500)
+            delay(1000)
         }
         throw IllegalStateException(
             lastError?.message ?: "WireGuard handshake timed out; no encrypted traffic was received"
@@ -243,5 +249,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val PREFS_NAME = "veritas_vpn_state"
         const val KEY_CONFIG = "last_approved_config"
         private const val TAG = "VeritasVpnService"
+        private val EGRESS_ENDPOINTS = listOf(
+            "https://api.ipify.org",
+            "https://ifconfig.me/ip",
+            "https://icanhazip.com"
+        )
     }
 }

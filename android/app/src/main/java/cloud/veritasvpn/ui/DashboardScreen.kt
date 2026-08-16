@@ -46,6 +46,7 @@ fun DashboardScreen(
     onPlans: () -> Unit,
     onKillSwitchSettings: () -> Unit,
     isPremium: Boolean,
+    billingReady: Boolean,
     statusMsg: String?,
     deviceLatitude: Double?,
     deviceLongitude: Double?
@@ -154,6 +155,7 @@ fun DashboardScreen(
             if (!connected) {
                 DisconnectedActionContent(
                     isPremium = isPremium,
+                    billingReady = billingReady,
                     connecting = connecting,
                     onPlans = onPlans,
                     onConnect = onConnect
@@ -301,6 +303,7 @@ private fun NetworkMapView(
 @Composable
 private fun DisconnectedActionContent(
     isPremium: Boolean,
+    billingReady: Boolean,
     connecting: Boolean,
     onPlans: () -> Unit,
     onConnect: () -> Unit
@@ -368,11 +371,11 @@ private fun DisconnectedActionContent(
             .shadow(22.dp, RoundedCornerShape(28.dp), ambientColor = Royal.copy(alpha = glowAlpha), spotColor = Cyan.copy(alpha = glowAlpha))
             .clip(RoundedCornerShape(28.dp))
             .background(Brush.horizontalGradient(listOf(Cyan, RoyalHover, Royal)))
-            .clickable(enabled = !connecting, onClick = if (isPremium) onConnect else onPlans),
+            .clickable(enabled = billingReady && !connecting, onClick = if (isPremium) onConnect else onPlans),
         contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (connecting) {
+            if (connecting || !billingReady) {
                 CircularProgressIndicator(Modifier.size(19.dp), color = Color.White, strokeWidth = 2.dp)
             } else {
                 Icon(
@@ -383,8 +386,16 @@ private fun DisconnectedActionContent(
                 )
             }
             Spacer(Modifier.width(9.dp))
-            Text(if (connecting) "Connecting…" else if (isPremium) "Connect now" else "Get Premium", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
-            if (!connecting) {
+            Text(
+                if (connecting) "Connecting…"
+                else if (!billingReady) "Checking plan…"
+                else if (isPremium) "Connect now"
+                else "Get Premium",
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
+            if (!connecting && billingReady) {
                 Spacer(Modifier.width(10.dp))
                 Text("→", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }

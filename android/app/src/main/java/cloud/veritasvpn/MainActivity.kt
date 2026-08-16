@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
                 var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
                 var billingStatus by remember { mutableStateOf<BillingStatus?>(null) }
-                var billingLoading by remember { mutableStateOf(false) }
+                var billingLoading by remember { mutableStateOf(user != null) }
                 var billingError by remember { mutableStateOf<String?>(null) }
                 var checkoutMethod by remember { mutableStateOf<String?>(null) }
                 var checkoutUrl by remember { mutableStateOf<String?>(null) }
@@ -250,6 +250,8 @@ class MainActivity : ComponentActivity() {
 
                 if (user == null) {
                     AuthScreen(onAuthenticated = {
+                        billingStatus = null
+                        billingLoading = true
                         user = authRepo.getStoredUser()
                     })
                 } else if (checkoutUrl != null) {
@@ -309,6 +311,7 @@ class MainActivity : ComponentActivity() {
                             context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
                         },
                         isPremium = billingStatus?.isPremium == true,
+                        billingReady = billingStatus != null && !billingLoading,
                         statusMsg = statusMsg,
                         deviceLatitude = deviceLocation?.first,
                         deviceLongitude = deviceLocation?.second
