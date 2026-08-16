@@ -336,7 +336,7 @@ function App() {
       const allowed =
         peer.client_allowed_ips ||
         peer.allowed_ips ||
-        ["0.0.0.0/0", "::/0"];
+        ["0.0.0.0/0"];
 
       const result = await invoke<ConnectResult>("connect_wireguard", {
         config: {

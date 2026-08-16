@@ -324,7 +324,7 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 		DNSServer:        srv.DNSServer,
 		PresharedKey:     psk,
 		AllowedIPs:       []string{assignedIP},
-		ClientAllowedIPs: []string{"0.0.0.0/0", "::/0"},
+		ClientAllowedIPs: []string{"0.0.0.0/0"},
 	}, nil
 }
 

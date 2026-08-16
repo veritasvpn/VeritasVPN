@@ -211,7 +211,7 @@ func cmdConnect() {
 		allowed = result.AllowedIPs
 	}
 	if len(allowed) == 0 {
-		allowed = []string{"0.0.0.0/0", "::/0"}
+		allowed = []string{"0.0.0.0/0"}
 	}
 	dns := result.DNSServer
 	if dns == "" {

@@ -200,7 +200,7 @@ fn bring_up_wireguard_impl(
     let endpoint = config.endpoint.trim().to_string();
 
     let allowed = if config.allowed_ips.is_empty() {
-        vec!["0.0.0.0/0".into(), "::/0".into()]
+        vec!["0.0.0.0".into()]
     } else {
         config.allowed_ips.clone()
     };

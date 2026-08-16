@@ -60,7 +60,7 @@ func Up(ifaceName, confPath string) (*Tunnel, error) {
 
 	allowed := cfg.AllowedIPs
 	if len(allowed) == 0 {
-		allowed = []string{"0.0.0.0/0", "::/0"}
+		allowed = []string{"0.0.0.0/0"}
 	}
 
 	var uapi strings.Builder

@@ -524,7 +524,7 @@ class MainActivity : ComponentActivity() {
 
     private fun buildWireGuardConfig(peer: PeerResponse, keyPair: KeyPair): String {
         val dns = peer.dnsServer ?: "1.1.1.1"
-        val allowed = (peer.clientAllowedIps ?: peer.allowedIps ?: listOf("0.0.0.0/0", "::/0"))
+        val allowed = (peer.clientAllowedIps ?: peer.allowedIps ?: listOf("0.0.0.0/0"))
             .joinToString(",")
         return buildString {
             appendLine("[Interface]")
