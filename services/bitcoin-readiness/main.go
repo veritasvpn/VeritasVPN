@@ -135,7 +135,16 @@ func main() {
 		if headers > 0 {
 			syncPercent = 100 * float64(blocks) / float64(headers)
 		}
-		fmt.Fprintf(w, "bitcoin_readiness %d\\nbitcoin_rpc_up %d\\nbitcoin_initial_block_download %d\\nbitcoin_blocks %d\\nbitcoin_headers %d\\nbitcoin_sync_percent %.4f\\nbitcoin_last_refresh_timestamp_seconds %d\\nbitcoin_last_successful_refresh_timestamp_seconds %d\\nbitcoin_chain{chain=%q} 1\\n", ready, boolInt(s.rpcUp.Load()), boolInt(s.initial.Load()), blocks, headers, syncPercent, s.lastRefresh.Load(), s.lastSuccessfulRefresh.Load(), chain)
+		fmt.Fprintf(w, `bitcoin_readiness %d
+bitcoin_rpc_up %d
+bitcoin_initial_block_download %d
+bitcoin_blocks %d
+bitcoin_headers %d
+bitcoin_sync_percent %.4f
+bitcoin_last_refresh_timestamp_seconds %d
+bitcoin_last_successful_refresh_timestamp_seconds %d
+bitcoin_chain{chain=%q} 1
+`, ready, boolInt(s.rpcUp.Load()), boolInt(s.initial.Load()), blocks, headers, syncPercent, s.lastRefresh.Load(), s.lastSuccessfulRefresh.Load(), chain)
 	})
 	addr := env("LISTEN_ADDR", ":8080")
 	log.Printf("bitcoin readiness listening on %s", addr)

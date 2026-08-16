@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: bitcoin-readiness
-          image: localhost:31500/bitcoin-readiness@sha256:1f4ed01617c34e9fe26d048e68510da78d6b0e21676364bae980b80527dc98d4
+          image: localhost:31500/bitcoin-readiness@sha256:30dfe0d4378460af45f8fcd20082b1282660b76ae778627760a22dcd09a509e8
           imagePullPolicy: IfNotPresent
           ports: [{containerPort: 8080}]
           env:
@@ -45,5 +45,6 @@ metadata:
   labels: {app: bitcoin-readiness}
 spec:
   type: ClusterIP
+  publishNotReadyAddresses: true
   selector: {app: bitcoin-readiness}
   ports: [{name: http, port: 8080, targetPort: 8080}]
