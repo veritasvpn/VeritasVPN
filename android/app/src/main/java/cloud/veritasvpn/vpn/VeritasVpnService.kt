@@ -27,8 +27,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import java.io.ByteArrayInputStream
 
 class VeritasVpnService : GoBackend.VpnService(), Tunnel {
@@ -37,8 +35,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var transitionJob: Job? = null
     private var disconnectJob: Job? = null
-    private val stateMutex = Mutex()
-    @Volatile private var suppressStateBroadcast = false
 
     override fun onCreate() {
         super.onCreate()
@@ -63,25 +59,26 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
                 transitionJob = scope.launch {
                     try {
-                        // A reconnect must never race a prior teardown. The previous
-                        // disconnect is allowed to finish before this transition enters
-                        // the serialized backend state section.
+                        // Wait for a prior teardown, but keep the first startup
+                        // path direct and free of an extra DOWN call.
                         pendingDisconnect?.join()
-                        stateMutex.withLock {
-                            val parsed = Config.parse(
-                                ByteArrayInputStream(config.toByteArray(Charsets.UTF_8))
+                        val parsed = Config.parse(
+                            ByteArrayInputStream(config.toByteArray(Charsets.UTF_8))
+                        )
+                        val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
+                        if (state != Tunnel.State.UP) {
+                            throw IllegalStateException(
+                                "WireGuard backend did not enter the UP state"
                             )
-                            val egressIp = establishTunnel(parsed)
-                            broadcastState(true, null, egressIp)
                         }
+                        val egressIp = verifyTunnelEgress()
+                        broadcastState(true, null, egressIp)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "Connect failed", e)
                         runCatching {
-                            stateMutex.withLock {
-                                backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
-                            }
+                            backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
                         }
                         broadcastState(false, friendlyError(e))
                         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -96,15 +93,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 transitionJob?.cancel()
                 disconnectJob?.cancel()
                 disconnectJob = scope.launch {
-                    stateMutex.withLock {
-                        runCatching {
-                            backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
-                        }
-                        broadcastState(false, null)
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        // Keep the service instance alive after teardown so an
-                        // immediate reconnect cannot race service destruction.
+                    runCatching {
+                        backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
                     }
+                    broadcastState(false, null)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    // Keep the service alive so a new connect can reuse it
+                    // immediately without racing stopSelf/onDestroy.
                 }
                 transitionJob = disconnectJob
             }
@@ -117,13 +112,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     startForeground(NOTIFICATION_ID, buildNotification("Restoring secure tunnel…"))
                     scope.launch {
                         try {
-                            stateMutex.withLock {
-                                val parsed = Config.parse(
-                                    ByteArrayInputStream(savedConfig.toByteArray(Charsets.UTF_8))
-                                )
-                                val egressIp = establishTunnel(parsed)
-                                broadcastState(true, null, egressIp)
-                            }
+                            val parsed = Config.parse(
+                                ByteArrayInputStream(savedConfig.toByteArray(Charsets.UTF_8))
+                            )
+                            backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
+                            val egressIp = verifyTunnelEgress()
+                            broadcastState(true, null, egressIp)
                         } catch (e: Exception) {
                             Log.e(TAG, "Automatic VPN restore failed", e)
                             runCatching {
@@ -176,9 +170,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             else -> {
                 stopForeground(STOP_FOREGROUND_REMOVE)
-                if (!suppressStateBroadcast) {
-                    broadcastState(false, null)
-                }
+                broadcastState(false, null)
             }
         }
     }
@@ -202,49 +194,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return e.message?.takeIf { it.isNotBlank() } ?: "Connection failed. Check your network and try again."
     }
 
-    private suspend fun establishTunnel(parsed: Config): String {
-        var lastError: Exception? = null
-        repeat(2) { cycle ->
-            suppressStateBroadcast = true
-            try {
-                // The first cycle starts the backend directly. A fresh service
-                // does not need a blocking DOWN call, and skipping it avoids
-                // hanging the very first connection on some Android versions.
-                // A failed cycle is explicitly torn down before the retry to
-                // recover stale route/socket state after a rapid reconnect.
-                if (cycle > 0) {
-                    runCatching {
-                        backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
-                    }
-                    delay(500)
-                }
-                val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
-                if (state != Tunnel.State.UP) {
-                    throw IllegalStateException(
-                        "WireGuard backend did not enter the UP state"
-                    )
-                }
-                delay(250)
-                return verifyTunnelEgress()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                lastError = e
-                Log.w(TAG, "Tunnel validation cycle " + (cycle + 1) + " failed; retrying", e)
-            } finally {
-                suppressStateBroadcast = false
-            }
-        }
-        throw lastError ?: IllegalStateException(
-            "VPN egress validation timed out; no encrypted traffic was confirmed"
-        )
-    }
-
     private suspend fun verifyTunnelEgress(): String {
-        // Race the independent endpoints, then retry the race briefly. Android
-        // may need a few milliseconds to install routes/DNS after a rapid
-        // WireGuard teardown; treating that window as a hard failure makes the
-        // second connection flaky even though the peer is already active.
         repeat(3) { attempt ->
             val egressIp = raceEgressEndpoints()
             if (egressIp != null) {
