@@ -24,8 +24,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayInputStream
 
 class VeritasVpnService : GoBackend.VpnService(), Tunnel {
@@ -55,6 +56,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 transitionJob = scope.launch {
                     try {
                         val parsed = Config.parse(ByteArrayInputStream(config.toByteArray(Charsets.UTF_8)))
+                        // A rapid disconnect/connect can leave the previous GoBackend
+                        // device teardown just a moment behind the next start. Force
+                        // a clean down transition and give the kernel a short settle
+                        // window before creating the new tunnel.
+                        runCatching { backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null) }
+                        delay(300)
                         val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
                         if (state != Tunnel.State.UP) {
                             throw IllegalStateException("WireGuard backend did not enter the UP state")
@@ -180,33 +187,42 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return e.message?.takeIf { it.isNotBlank() } ?: "Connection failed. Check your network and try again."
     }
 
-    private suspend fun verifyTunnelEgress(): String = coroutineScope {
-        // Race the independent egress endpoints. On an immediate reconnect the
-        // first request can be spent waking the tunnel or resolving DNS; a
-        // serial fallback would turn that transient delay into a false failure.
+    private suspend fun verifyTunnelEgress(): String {
+        // Race the independent endpoints, then retry the race briefly. Android
+        // may need a few milliseconds to install routes/DNS after a rapid
+        // WireGuard teardown; treating that window as a hard failure makes the
+        // second connection flaky even though the peer is already active.
+        repeat(3) { attempt ->
+            val egressIp = raceEgressEndpoints()
+            if (egressIp != null) {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    buildNotification("Connected · $egressIp"),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+                return egressIp
+            }
+            if (attempt < 2) delay(250)
+        }
+        throw IllegalStateException(
+            "VPN egress validation timed out; no encrypted traffic was confirmed"
+        )
+    }
+
+    private suspend fun raceEgressEndpoints(): String? = coroutineScope {
         val results = Channel<String>(EGRESS_ENDPOINTS.size)
         val jobs = EGRESS_ENDPOINTS.map { endpoint ->
             launch(Dispatchers.IO) {
                 runCatching {
                     ApiClient.getText(endpoint, timeoutSeconds = 2)
                 }.onSuccess { egressIp ->
-                    results.send(egressIp)
+                    results.trySend(egressIp)
                 }
             }
         }
         try {
-            val egressIp = withTimeout(8_000) { results.receive() }
-            ServiceCompat.startForeground(
-                this@VeritasVpnService,
-                NOTIFICATION_ID,
-                buildNotification("Connected · $egressIp"),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-            egressIp
-        } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
-            throw IllegalStateException(
-                "VPN egress validation timed out; no encrypted traffic was confirmed"
-            )
+            withTimeoutOrNull(2_500) { results.receive() }
         } finally {
             jobs.forEach { it.cancel() }
             results.close()
