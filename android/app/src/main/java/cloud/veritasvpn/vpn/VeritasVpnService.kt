@@ -27,6 +27,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.ByteArrayInputStream
 
 class VeritasVpnService : GoBackend.VpnService(), Tunnel {
@@ -34,6 +36,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private val backend by lazy { GoBackend(applicationContext) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var transitionJob: Job? = null
+    private var disconnectJob: Job? = null
+    private val stateMutex = Mutex()
 
     override fun onCreate() {
         super.onCreate()
@@ -52,29 +56,41 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     .putString(KEY_CONFIG, config)
                     .apply()
                 startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
-                transitionJob?.cancel()
+                val pendingDisconnect = disconnectJob?.takeIf { it.isActive }
+                if (transitionJob?.isActive == true && transitionJob !== pendingDisconnect) {
+                    transitionJob?.cancel()
+                }
                 transitionJob = scope.launch {
                     try {
-                        val parsed = Config.parse(ByteArrayInputStream(config.toByteArray(Charsets.UTF_8)))
-                        // A rapid disconnect/connect can leave the previous GoBackend
-                        // device teardown just a moment behind the next start. Force
-                        // a clean down transition and give the kernel a short settle
-                        // window before creating the new tunnel.
-                        runCatching { backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null) }
-                        delay(300)
-                        val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
-                        if (state != Tunnel.State.UP) {
-                            throw IllegalStateException("WireGuard backend did not enter the UP state")
+                        // A reconnect must never race a prior teardown. The previous
+                        // disconnect is allowed to finish before this transition enters
+                        // the serialized backend state section.
+                        pendingDisconnect?.join()
+                        stateMutex.withLock {
+                            val parsed = Config.parse(
+                                ByteArrayInputStream(config.toByteArray(Charsets.UTF_8))
+                            )
+                            runCatching {
+                                backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
+                            }
+                            delay(300)
+                            val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
+                            if (state != Tunnel.State.UP) {
+                                throw IllegalStateException(
+                                    "WireGuard backend did not enter the UP state"
+                                )
+                            }
+                            val egressIp = verifyTunnelEgress()
+                            broadcastState(true, null, egressIp)
                         }
-                        val egressIp = verifyTunnelEgress()
-                        broadcastState(true, null, egressIp)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "Connect failed", e)
-                        try {
-                            backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
-                        } catch (_: Exception) {
+                        runCatching {
+                            stateMutex.withLock {
+                                backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
+                            }
                         }
                         broadcastState(false, friendlyError(e))
                         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -87,14 +103,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     .remove(KEY_CONFIG)
                     .apply()
                 transitionJob?.cancel()
-                transitionJob = scope.launch {
-                    runCatching {
-                        backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
+                disconnectJob?.cancel()
+                disconnectJob = scope.launch {
+                    stateMutex.withLock {
+                        runCatching {
+                            backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
+                        }
+                        broadcastState(false, null)
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        // Keep the service instance alive after teardown so an
+                        // immediate reconnect cannot race service destruction.
                     }
-                    broadcastState(false, null)
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf(startId)
                 }
+                transitionJob = disconnectJob
             }
             else -> {
                 // Android may restart an Always-on VPN service without the original Intent.
@@ -105,12 +126,18 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     startForeground(NOTIFICATION_ID, buildNotification("Restoring secure tunnel…"))
                     scope.launch {
                         try {
-                            val parsed = Config.parse(
-                                ByteArrayInputStream(savedConfig.toByteArray(Charsets.UTF_8))
-                            )
-                            backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
-                            val egressIp = verifyTunnelEgress()
-                            broadcastState(true, null, egressIp)
+                            stateMutex.withLock {
+                                val parsed = Config.parse(
+                                    ByteArrayInputStream(savedConfig.toByteArray(Charsets.UTF_8))
+                                )
+                                runCatching {
+                                    backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
+                                }
+                                delay(300)
+                                backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
+                                val egressIp = verifyTunnelEgress()
+                                broadcastState(true, null, egressIp)
+                            }
                         } catch (e: Exception) {
                             Log.e(TAG, "Automatic VPN restore failed", e)
                             runCatching {

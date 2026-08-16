@@ -164,25 +164,65 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val vpnPermissionLauncher = rememberLauncherForActivityResult(
-                    ActivityResultContracts.StartActivityForResult()
-                ) { result ->
-                    if (result.resultCode == Activity.RESULT_OK) {
-                        statusMsg = null
+                var pendingNotificationStart by remember { mutableStateOf(false) }
+                val notificationPermissionLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) {
+                    val shouldStart = pendingNotificationStart
+                    pendingNotificationStart = false
+                    if (shouldStart) {
                         startConnection(
                             context, scope,
                             setStatus = { msg -> statusMsg = msg },
                             setConnecting = { connecting = it }
                         )
+                    }
+                }
+
+                fun startAfterPermissions() {
+                    val notificationManager =
+                        context.getSystemService(NotificationManager::class.java)
+                    val permissionPrefs = context.getSharedPreferences(
+                        "veritasvpn_permissions",
+                        Context.MODE_PRIVATE
+                    )
+                    val promptAlreadyShown = permissionPrefs.getBoolean(
+                        "notification_permission_prompted",
+                        false
+                    )
+                    val needsNotificationPermission =
+                        Build.VERSION.SDK_INT >= 33 &&
+                            notificationManager != null &&
+                            !notificationManager.areNotificationsEnabled() &&
+                            !promptAlreadyShown
+                    if (needsNotificationPermission) {
+                        permissionPrefs.edit()
+                            .putBoolean("notification_permission_prompted", true)
+                            .apply()
+                        pendingNotificationStart = true
+                        notificationPermissionLauncher.launch(
+                            Manifest.permission.POST_NOTIFICATIONS
+                        )
+                    } else {
+                        startConnection(
+                            context, scope,
+                            setStatus = { msg -> statusMsg = msg },
+                            setConnecting = { connecting = it }
+                        )
+                    }
+                }
+
+                val vpnPermissionLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.StartActivityForResult()
+                ) { result ->
+                    if (result.resultCode == Activity.RESULT_OK) {
+                        statusMsg = null
+                        startAfterPermissions()
                     } else {
                         connecting = false
                         statusMsg = "VPN permission not granted."
                     }
                 }
-
-                val notificationPermissionLauncher = rememberLauncherForActivityResult(
-                    ActivityResultContracts.RequestPermission()
-                ) { }
 
                 val locationPermissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission()
@@ -251,17 +291,7 @@ class MainActivity : ComponentActivity() {
                         vpnPermissionLauncher.launch(consentIntent)
                         return
                     }
-                    if (Build.VERSION.SDK_INT >= 33) {
-                        val nm = context.getSystemService(NotificationManager::class.java)
-                        if (nm != null && !nm.areNotificationsEnabled()) {
-                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }
-                    }
-                    startConnection(
-                        context, scope,
-                        setStatus = { msg -> statusMsg = msg },
-                        setConnecting = { connecting = it }
-                    )
+                    startAfterPermissions()
                 }
 
                 if (user == null) {
