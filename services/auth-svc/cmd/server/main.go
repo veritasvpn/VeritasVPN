@@ -35,18 +35,11 @@ func main() {
 	}
 	defer log.Sync()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	dbPool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	dbPool, err := connectDatabase(cfg.DatabaseURL, log)
 	if err != nil {
-		log.Fatal("failed to connect to database", zap.Error(err))
+		log.Fatal("database unavailable after retries", zap.Error(err))
 	}
 	defer dbPool.Close()
-
-	if err := dbPool.Ping(ctx); err != nil {
-		log.Fatal("database ping failed", zap.Error(err))
-	}
 	log.Info("connected to PostgreSQL")
 
 	redisClient, err := repository.NewRedis(cfg.RedisURL)
@@ -158,6 +151,33 @@ func main() {
 		log.Fatal("HTTP server forced to shutdown", zap.Error(err))
 	}
 	log.Info("auth-svc stopped")
+}
+
+func connectDatabase(databaseURL string, log *logging.Logger) (*pgxpool.Pool, error) {
+	var lastErr error
+	deadline := time.Now().Add(5 * time.Minute)
+	for attempt := 1; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pool, err := pgxpool.New(ctx, databaseURL)
+		if err == nil {
+			err = pool.Ping(ctx)
+		}
+		cancel()
+		if err == nil {
+			return pool, nil
+		}
+		if pool != nil {
+			pool.Close()
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return nil, lastErr
+		}
+		if attempt == 1 || attempt%10 == 0 {
+			log.Warn("PostgreSQL unavailable; retrying", zap.Int("attempt", attempt), zap.Error(err))
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func securityHeaders(next http.Handler) http.Handler {

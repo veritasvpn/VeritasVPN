@@ -36,15 +36,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	pool, err := connectDatabase(ctx, cfg.DatabaseURL, log)
 	if err != nil {
-		log.Fatal("failed to connect to postgres", "error", err)
+		log.Fatal("postgres unavailable after retries", "error", err)
 	}
 	defer pool.Close()
-
-	if err := pool.Ping(ctx); err != nil {
-		log.Fatal("postgres ping failed", "error", err)
-	}
 	log.Info("connected to postgres")
 
 	if err := migrate.Up(ctx, pool); err != nil {
@@ -131,6 +127,37 @@ func connectNATS(ctx context.Context, url string, log *logging.Logger) (*nats.Co
 		case <-ctx.Done():
 			return nil, fmt.Errorf("nats connection canceled: %w", lastErr)
 		case <-time.After(time.Second):
+		}
+	}
+}
+
+func connectDatabase(ctx context.Context, databaseURL string, log *logging.Logger) (*pgxpool.Pool, error) {
+	var lastErr error
+	deadline := time.Now().Add(5 * time.Minute)
+	for attempt := 1; ; attempt++ {
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		pool, err := pgxpool.New(pingCtx, databaseURL)
+		if err == nil {
+			err = pool.Ping(pingCtx)
+		}
+		cancel()
+		if err == nil {
+			return pool, nil
+		}
+		if pool != nil {
+			pool.Close()
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return nil, lastErr
+		}
+		if attempt == 1 || attempt%10 == 0 {
+			log.Warn("PostgreSQL unavailable; retrying", "attempt", attempt, "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
 		}
 	}
 }

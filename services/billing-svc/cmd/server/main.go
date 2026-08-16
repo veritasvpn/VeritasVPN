@@ -42,20 +42,14 @@ func main() {
 		log.Warn("ALLOW_MOCK_BTCPAY=true is set but real BTCPay credentials are present — mock mode will NOT be used")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	dbPool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	dbPool, err := connectDatabase(cfg.DatabaseURL, log)
 	if err != nil {
-		log.Fatal("failed to connect to database", zap.Error(err))
+		log.Fatal("database unavailable after retries", zap.Error(err))
 	}
 	defer dbPool.Close()
-
-	if err := dbPool.Ping(ctx); err != nil {
-		log.Fatal("database ping failed", zap.Error(err))
-	}
 	log.Info("connected to PostgreSQL")
 
+	ctx := context.Background()
 	if err := migrate.Up(ctx, dbPool); err != nil {
 		log.Fatal("failed to apply billing migrations", zap.Error(err))
 	}
@@ -173,6 +167,33 @@ func main() {
 		log.Fatal("server forced to shutdown", zap.Error(err))
 	}
 	log.Info("billing-svc stopped")
+}
+
+func connectDatabase(databaseURL string, log *logging.Logger) (*pgxpool.Pool, error) {
+	var lastErr error
+	deadline := time.Now().Add(5 * time.Minute)
+	for attempt := 1; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pool, err := pgxpool.New(ctx, databaseURL)
+		if err == nil {
+			err = pool.Ping(ctx)
+		}
+		cancel()
+		if err == nil {
+			return pool, nil
+		}
+		if pool != nil {
+			pool.Close()
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return nil, lastErr
+		}
+		if attempt == 1 || attempt%10 == 0 {
+			log.Warn("PostgreSQL unavailable; retrying", "attempt", attempt, "error", err)
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func securityHeaders(next http.Handler) http.Handler {

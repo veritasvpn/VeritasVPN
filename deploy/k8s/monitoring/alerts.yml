@@ -38,11 +38,18 @@ groups:
         annotations:
           summary: "Dell memory usage exceeds 90%"
       - alert: KubernetesContainerRestarting
-        expr: increase(kube_pod_container_status_restarts_total{namespace="veritas"}[15m]) > 2
+        expr: increase(kube_pod_container_status_restarts_total{namespace=~"veritas|btcpay|ingress-nginx"}[15m]) > 2
         for: 5m
         labels: { severity: warning }
         annotations:
-          summary: "A VeritasVPN container is repeatedly restarting"
+          summary: "A production container is repeatedly restarting"
+      - alert: KubernetesContainerOOMKilled
+        expr: kube_pod_container_status_last_terminated_reason{namespace=~"veritas|btcpay|ingress-nginx",reason="OOMKilled"} == 1 and increase(kube_pod_container_status_restarts_total{namespace=~"veritas|btcpay|ingress-nginx"}[1h]) > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "A production container was OOM-killed"
+          description: "A workload exceeded its memory limit and was terminated."
       - alert: ContainerImagePullFailure
         expr: kube_pod_container_status_waiting_reason{reason=~"ImagePullBackOff|ErrImagePull"} > 0
         for: 5m
@@ -98,6 +105,13 @@ groups:
         annotations:
           summary: "Bitcoin synchronization appears stalled"
           description: "Bitcoin block height has not advanced for 30 minutes while initial synchronization is active."
+      - alert: BillingReadinessRouteBroken
+        expr: probe_http_status_code{instance="https://api.veritasvpn.cloud/api/v1/billing/readyz"} == 404
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Public billing readiness route is broken"
+          description: "The monitoring endpoint returned 404 instead of billing readiness."
       - alert: BillingReadinessUnavailable
         expr: probe_success{instance="https://api.veritasvpn.cloud/api/v1/billing/readyz"} == 0 and bitcoin_initial_block_download{job="bitcoin-readiness"} == 0
         for: 15m
