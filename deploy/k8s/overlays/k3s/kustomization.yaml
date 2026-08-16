@@ -18,7 +18,7 @@ images:
     newTag: latest
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    newTag: analytics-20260814
+    newTag: firewall-input-20260816
   - name: localhost:31500/veritas-proxy
     newName: 192.168.0.5:30500/veritas-proxy
     newTag: latest

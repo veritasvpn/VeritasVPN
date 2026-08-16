@@ -452,6 +452,9 @@ func (a *Agent) setupFirewall() error {
 	if err := ensureForwardAccept(a.cfg.WGInterface); err != nil {
 		a.logger.Warn("iptables FORWARD accept failed (non-fatal)", zap.Error(err))
 	}
+	if err := ensureInputAccept(a.cfg.WGPort); err != nil {
+		a.logger.Warn("iptables INPUT WireGuard allow failed (non-fatal)", zap.Error(err))
+	}
 
 	if err := a.fwManager.SetupNAT(a.cfg.WGInterface); err != nil {
 		a.logger.Warn("NAT setup failed (non-fatal)", zap.Error(err))
@@ -498,6 +501,18 @@ func ensureMasquerade(subnet, wgIface string) error {
 
 // ensureForwardAccept inserts ACCEPT rules at the top of FORWARD so WG traffic is
 // not dropped by a default DROP policy / UFW reject rules later in the chain.
+// ensureInputAccept inserts an explicit UDP allow for the WireGuard listener.
+// The node INPUT policy is DROP in production, so forwarding rules alone are
+// insufficient for packets arriving from the router.
+func ensureInputAccept(wgPort int) error {
+	if wgPort <= 0 {
+		wgPort = 51820
+	}
+	port := strconv.Itoa(wgPort)
+	_ = exec.Command("iptables", "-D", "INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT").Run()
+	return exec.Command("iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", port, "-j", "ACCEPT").Run()
+}
+
 func ensureForwardAccept(wgIface string) error {
 	if wgIface == "" {
 		wgIface = "wg0"
