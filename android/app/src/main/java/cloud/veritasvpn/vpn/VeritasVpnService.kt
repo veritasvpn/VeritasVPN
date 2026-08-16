@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -35,6 +36,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var transitionJob: Job? = null
     private var disconnectJob: Job? = null
+    private var validationJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -53,6 +55,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     .putString(KEY_CONFIG, config)
                     .apply()
                 startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
+                validationJob?.cancel()
                 val pendingDisconnect = disconnectJob?.takeIf { it.isActive }
                 if (transitionJob?.isActive == true && transitionJob !== pendingDisconnect) {
                     transitionJob?.cancel()
@@ -71,8 +74,18 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                                 "WireGuard backend did not enter the UP state"
                             )
                         }
-                        val egressIp = verifyTunnelEgress()
-                        broadcastState(true, null, egressIp)
+                        // The WireGuard interface is ready at this point. Do not
+                        // block the UI on a public-IP probe: DNS/egress services
+                        // can be transiently slow immediately after a reconnect.
+                        // Keep the tunnel up and verify egress in the background.
+                        ServiceCompat.startForeground(
+                            this@VeritasVpnService,
+                            NOTIFICATION_ID,
+                            buildNotification("Connected · checking route…"),
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                        )
+                        broadcastState(true, null)
+                        startBackgroundEgressValidation()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -93,6 +106,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 transitionJob?.cancel()
                 disconnectJob?.cancel()
                 disconnectJob = scope.launch {
+                    validationJob?.cancelAndJoin()
                     runCatching {
                         backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
                     }
@@ -116,8 +130,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                                 ByteArrayInputStream(savedConfig.toByteArray(Charsets.UTF_8))
                             )
                             backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
-                            val egressIp = verifyTunnelEgress()
-                            broadcastState(true, null, egressIp)
+                            ServiceCompat.startForeground(
+                                this@VeritasVpnService,
+                                NOTIFICATION_ID,
+                                buildNotification("Connected · checking route…"),
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                            )
+                            broadcastState(true, null)
+                            startBackgroundEgressValidation()
                         } catch (e: Exception) {
                             Log.e(TAG, "Automatic VPN restore failed", e)
                             runCatching {
@@ -139,6 +159,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     override fun onRevoke() {
         transitionJob?.cancel()
+        validationJob?.cancel()
         runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().remove(KEY_CONFIG).apply()
         broadcastState(
@@ -211,6 +232,23 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         throw IllegalStateException(
             "VPN egress validation timed out; no encrypted traffic was confirmed"
         )
+    }
+
+    private fun startBackgroundEgressValidation() {
+        validationJob?.cancel()
+        validationJob = scope.launch {
+            try {
+                val egressIp = verifyTunnelEgress()
+                broadcastState(true, null, egressIp)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A transient egress probe failure must not tear down the
+                // WireGuard interface. The tunnel remains available and the
+                // next health check/connect cycle can validate it again.
+                Log.w(TAG, "Background egress validation did not complete", e)
+            }
+        }
     }
 
     private suspend fun raceEgressEndpoints(): String? = coroutineScope {
