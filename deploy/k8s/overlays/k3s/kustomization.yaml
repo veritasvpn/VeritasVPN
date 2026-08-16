@@ -61,6 +61,9 @@ patches:
       - op: replace
         path: /data/SERVER_CITY
         value: "asuncion"
+      - op: replace
+        path: /data/BITCOIN_READINESS_URL
+        value: "http://bitcoin-readiness.btcpay.svc.cluster.local:8080/readyz"
 
   # Auth env with Redis/NATS auth
   - target:
