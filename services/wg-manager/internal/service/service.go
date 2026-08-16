@@ -271,33 +271,33 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 	endpoint := fmt.Sprintf("%s:%d", srv.PublicIP, srv.WGPort)
 	serverID := srv.ID
 
-	// Notify the agent asynchronously. Remove the superseded key first so a
-	// reconnect is an actual replacement instead of leaking peers on wg0.
-	// Peer stays "pending" until the agent applies it and reports completion.
-	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if replacedPeer != nil && replacedPeer.Pubkey != peer.Pubkey {
-			if err := s.communicator.PushPeerRemoved(bgCtx, serverID, replacedPeer); err != nil {
-				s.log.Warn("failed to remove superseded peer",
-					"peer_id", replacedPeer.ID,
-					"server_id", serverID,
-					"error", err.Error(),
-				)
-				return
-			}
-			if replacedPeer.AssignedIP != assignedIP {
-				_ = s.redis.ReleaseIP(bgCtx, serverID, replacedPeer.AssignedIP)
-			}
+	// Apply the update before returning the client configuration. Returning
+	// before the agent has the peer creates a handshake race: the client can
+	// bring up WireGuard while the server still has no matching public key.
+	// This synchronous acknowledgement also makes rapid reconnects deterministic.
+	syncCtx, syncCancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer syncCancel()
+	if replacedPeer != nil && replacedPeer.Pubkey != peer.Pubkey {
+		if err := s.communicator.PushPeerRemoved(syncCtx, serverID, replacedPeer); err != nil {
+			_ = s.postgres.DeletePeer(context.Background(), peer.ID, accountID)
+			_ = s.redis.ReleaseIP(context.Background(), serverID, assignedIP)
+			return nil, fmt.Errorf("remove existing WireGuard peer: %w", err)
 		}
-		if err := s.communicator.PushPeerAdded(bgCtx, serverID, peer); err != nil {
-			s.log.Warn("agent notification failed for new peer",
-				"peer_id", peer.ID,
-				"server_id", serverID,
-				"error", err.Error(),
-			)
+		if replacedPeer.AssignedIP != assignedIP {
+			_ = s.redis.ReleaseIP(syncCtx, serverID, replacedPeer.AssignedIP)
 		}
-	}()
+	}
+	if err := s.communicator.PushPeerAdded(syncCtx, serverID, peer); err != nil {
+		_ = s.postgres.DeletePeer(context.Background(), peer.ID, accountID)
+		_ = s.redis.ReleaseIP(context.Background(), serverID, assignedIP)
+		return nil, fmt.Errorf("apply WireGuard peer: %w", err)
+	}
+	if err := s.waitForPeerActive(syncCtx, peer.ID, accountID); err != nil {
+		_ = s.communicator.PushPeerRemoved(context.Background(), serverID, peer)
+		_ = s.postgres.DeletePeer(context.Background(), peer.ID, accountID)
+		_ = s.redis.ReleaseIP(context.Background(), serverID, assignedIP)
+		return nil, fmt.Errorf("wait for WireGuard peer acknowledgement: %w", err)
+	}
 
 	s.log.Info("peer created",
 		"peer_id", peer.ID,
@@ -326,6 +326,33 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 		AllowedIPs:       []string{assignedIP},
 		ClientAllowedIPs: []string{"0.0.0.0/0", "::/0"},
 	}, nil
+}
+
+func (s *Service) waitForPeerActive(ctx context.Context, peerID, accountID string) error {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		peer, err := s.postgres.GetPeer(ctx, peerID, accountID)
+		if err == nil {
+			if peer.Status == "active" {
+				return nil
+			}
+			if peer.Status == "removed" {
+				return fmt.Errorf("peer was removed before acknowledgement")
+			}
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return lastErr
+			}
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *Service) DeletePeer(ctx context.Context, peerID, accountID string) error {
