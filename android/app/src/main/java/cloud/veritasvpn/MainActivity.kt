@@ -39,6 +39,41 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+
+private const val BILLING_CACHE_PREFS = "veritas_billing_cache"
+
+private fun billingCacheKey(accountId: String, field: String): String =
+    "billing_" + accountId + "_" + field
+
+private fun readCachedBillingStatus(context: Context, accountId: String): BillingStatus? {
+    val prefs = context.getSharedPreferences(BILLING_CACHE_PREFS, Context.MODE_PRIVATE)
+    if (!prefs.contains(billingCacheKey(accountId, "premium"))) return null
+    return BillingStatus(
+        tier = prefs.getString(billingCacheKey(accountId, "tier"), "free") ?: "free",
+        status = prefs.getString(billingCacheKey(accountId, "status"), "active") ?: "active",
+        paymentMethod = prefs.getString(billingCacheKey(accountId, "payment_method"), "none") ?: "none",
+        currentPeriodEnd = prefs.getString(billingCacheKey(accountId, "period_end"), null),
+        cancelAtPeriodEnd = prefs.getBoolean(billingCacheKey(accountId, "cancel_at_end"), false),
+        isPremium = prefs.getBoolean(billingCacheKey(accountId, "premium"), false)
+    )
+}
+
+private fun writeCachedBillingStatus(
+    context: Context,
+    accountId: String,
+    status: BillingStatus
+) {
+    context.getSharedPreferences(BILLING_CACHE_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(billingCacheKey(accountId, "tier"), status.tier)
+        .putString(billingCacheKey(accountId, "status"), status.status)
+        .putString(billingCacheKey(accountId, "payment_method"), status.paymentMethod)
+        .putString(billingCacheKey(accountId, "period_end"), status.currentPeriodEnd)
+        .putBoolean(billingCacheKey(accountId, "cancel_at_end"), status.cancelAtPeriodEnd)
+        .putBoolean(billingCacheKey(accountId, "premium"), status.isPremium)
+        .apply()
+}
 
 class MainActivity : ComponentActivity() {
     private lateinit var authRepo: AuthRepository
@@ -72,12 +107,22 @@ class MainActivity : ComponentActivity() {
                     billingError = null
                     scope.launch {
                         try {
-                            billingStatus = withContext(Dispatchers.IO) {
-                                val token = authRepo.getAccessToken()
-                                    ?: throw IllegalStateException("Your session expired. Sign in again.")
-                                billingRepo.status(token)
+                            val status = withTimeout(8_000) {
+                                withContext(Dispatchers.IO) {
+                                    authRepo.refreshSession()
+                                    val token = authRepo.getAccessToken()
+                                        ?: throw IllegalStateException("Your session expired. Sign in again.")
+                                    billingRepo.status(token)
+                                }
                             }
+                            billingStatus = status
+                            writeCachedBillingStatus(context, user!!.accountId, status)
+                            billingError = null
                         } catch (e: Exception) {
+                            // Never leave the dashboard in an indeterminate loading
+                            // state. A cached status remains usable; without one,
+                            // fail closed to the plans flow.
+                            if (billingStatus == null) billingStatus = BillingStatus()
                             billingError = e.message ?: "Could not load your plan."
                         } finally {
                             billingLoading = false
@@ -106,8 +151,15 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(user, showPlans) {
-                    if (user != null) refreshBilling()
+                LaunchedEffect(user?.accountId, showPlans) {
+                    if (user != null) {
+                        // Use the last verified plan for this account immediately,
+                        // then refresh it in the background without blocking the
+                        // dashboard or the Connect button.
+                        billingStatus = readCachedBillingStatus(context, user!!.accountId)
+                        billingLoading = false
+                        refreshBilling()
+                    }
                 }
 
                 LaunchedEffect(connecting) {
@@ -373,7 +425,7 @@ class MainActivity : ComponentActivity() {
                             context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
                         },
                         isPremium = billingStatus?.isPremium == true,
-                        billingReady = billingStatus != null && !billingLoading,
+                        billingReady = billingStatus != null,
                         statusMsg = statusMsg,
                         deviceLatitude = deviceLocation?.first,
                         deviceLongitude = deviceLocation?.second
