@@ -56,7 +56,7 @@ class MainActivity : ComponentActivity() {
                 var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
                 var billingStatus by remember { mutableStateOf<BillingStatus?>(null) }
-                var billingLoading by remember { mutableStateOf(user != null) }
+                var billingLoading by remember { mutableStateOf(false) }
                 var billingError by remember { mutableStateOf<String?>(null) }
                 var checkoutMethod by remember { mutableStateOf<String?>(null) }
                 var checkoutUrl by remember { mutableStateOf<String?>(null) }
@@ -71,7 +71,6 @@ class MainActivity : ComponentActivity() {
                     scope.launch {
                         try {
                             billingStatus = withContext(Dispatchers.IO) {
-                                authRepo.refreshSession()
                                 val token = authRepo.getAccessToken()
                                     ?: throw IllegalStateException("Your session expired. Sign in again.")
                                 billingRepo.status(token)
@@ -251,7 +250,7 @@ class MainActivity : ComponentActivity() {
                 if (user == null) {
                     AuthScreen(onAuthenticated = {
                         billingStatus = null
-                        billingLoading = true
+                        billingLoading = false
                         user = authRepo.getStoredUser()
                     })
                 } else if (checkoutUrl != null) {
