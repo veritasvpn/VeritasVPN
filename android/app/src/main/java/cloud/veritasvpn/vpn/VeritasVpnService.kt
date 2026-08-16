@@ -38,6 +38,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var transitionJob: Job? = null
     private var disconnectJob: Job? = null
     private val stateMutex = Mutex()
+    @Volatile private var suppressStateBroadcast = false
 
     override fun onCreate() {
         super.onCreate()
@@ -70,17 +71,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                             val parsed = Config.parse(
                                 ByteArrayInputStream(config.toByteArray(Charsets.UTF_8))
                             )
-                            runCatching {
-                                backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
-                            }
-                            delay(300)
-                            val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
-                            if (state != Tunnel.State.UP) {
-                                throw IllegalStateException(
-                                    "WireGuard backend did not enter the UP state"
-                                )
-                            }
-                            val egressIp = verifyTunnelEgress()
+                            val egressIp = establishTunnel(parsed)
                             broadcastState(true, null, egressIp)
                         }
                     } catch (e: CancellationException) {
@@ -130,12 +121,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                                 val parsed = Config.parse(
                                     ByteArrayInputStream(savedConfig.toByteArray(Charsets.UTF_8))
                                 )
-                                runCatching {
-                                    backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
-                                }
-                                delay(300)
-                                backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
-                                val egressIp = verifyTunnelEgress()
+                                val egressIp = establishTunnel(parsed)
                                 broadcastState(true, null, egressIp)
                             }
                         } catch (e: Exception) {
@@ -190,7 +176,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             else -> {
                 stopForeground(STOP_FOREGROUND_REMOVE)
-                broadcastState(false, null)
+                if (!suppressStateBroadcast) {
+                    broadcastState(false, null)
+                }
             }
         }
     }
@@ -212,6 +200,39 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
         }
         return e.message?.takeIf { it.isNotBlank() } ?: "Connection failed. Check your network and try again."
+    }
+
+    private suspend fun establishTunnel(parsed: Config): String {
+        var lastError: Exception? = null
+        repeat(2) { cycle ->
+            suppressStateBroadcast = true
+            try {
+                // Recreate the local tunnel for the validation retry. This handles
+                // Android's occasional stale route/socket state after a rapid DOWN.
+                runCatching {
+                    backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
+                }
+                delay(if (cycle == 0) 300 else 500)
+                val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
+                if (state != Tunnel.State.UP) {
+                    throw IllegalStateException(
+                        "WireGuard backend did not enter the UP state"
+                    )
+                }
+                delay(250)
+                return verifyTunnelEgress()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e
+                Log.w(TAG, "Tunnel validation cycle " + (cycle + 1) + " failed; retrying", e)
+            } finally {
+                suppressStateBroadcast = false
+            }
+        }
+        throw lastError ?: IllegalStateException(
+            "VPN egress validation timed out; no encrypted traffic was confirmed"
+        )
     }
 
     private suspend fun verifyTunnelEgress(): String {

@@ -36,11 +36,13 @@ import cloud.veritasvpn.vpn.VeritasVpnService
 import com.wireguard.crypto.KeyPair
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     private lateinit var authRepo: AuthRepository
+    private var peerCleanupJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -256,7 +258,7 @@ class MainActivity : ComponentActivity() {
                                 if (error != null) {
                                     val failedPeerId = peerIdForDisconnect()
                                     if (failedPeerId != null) {
-                                        scope.launch(Dispatchers.IO) {
+                                        peerCleanupJob = scope.launch(Dispatchers.IO) {
                                             runCatching {
                                                 val token = authRepo.getAccessToken()
                                                     ?: return@runCatching
@@ -330,7 +332,7 @@ class MainActivity : ComponentActivity() {
                             }
                             context.startService(intent)
                             connected = false
-                            scope.launch(Dispatchers.IO) {
+                            peerCleanupJob = scope.launch(Dispatchers.IO) {
                                 try {
                                     val token = authRepo.getAccessToken()
                                     if (token != null && disconnectedPeerId != null) {
@@ -415,6 +417,10 @@ class MainActivity : ComponentActivity() {
         setStatus("Connecting...")
         scope.launch {
             try {
+                // Do not create a replacement peer until the previous DELETE has
+                // completed; the API upserts by account/server and an old
+                // asynchronous cleanup could otherwise remove the new peer.
+                peerCleanupJob?.join()
                 val (keyPair, peer) = withContext(Dispatchers.IO) {
                     authRepo.refreshSession()
                     val token = authRepo.getAccessToken()
