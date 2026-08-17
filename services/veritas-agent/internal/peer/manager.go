@@ -122,6 +122,34 @@ func (m *Manager) SyncPeers(desired []PeerConfig) error {
 // StalePeers returns peers that stopped handshaking. Clients use a 25-second
 // keepalive, so a multi-minute grace period avoids removing healthy peers
 // during a short network transition while still cleaning abandoned sessions.
+// ReconcileOrphans removes kernel peers that are no longer represented in the
+// manager stream. A grace period protects peers while the initial SSE catch-up
+// is still being applied after an agent restart.
+func (m *Manager) ReconcileOrphans(now time.Time, orphanAfter time.Duration) (removed, remaining int, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	kernelPeers, err := m.wg.ListPeers()
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, kernel := range kernelPeers {
+		if _, known := m.peers[kernel.PublicKey]; known {
+			continue
+		}
+		if kernel.LastHandshakeAt.IsZero() || now.Sub(kernel.LastHandshakeAt) >= orphanAfter {
+			if removeErr := m.wg.RemovePeer(kernel.PublicKey); removeErr != nil {
+				err = removeErr
+				remaining++
+				continue
+			}
+			removed++
+			continue
+		}
+		remaining++
+	}
+	return removed, remaining, err
+}
+
 func (m *Manager) StalePeers(now time.Time, noHandshakeGrace, staleAfter time.Duration) []PeerConfig {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -194,7 +222,7 @@ func (m *Manager) GetStats() (rxBytes, txBytes int64, peerCount, activePeerCount
 			activePeerCount++
 		}
 	}
-	return rxBytes, txBytes, int32(len(m.peers)), activePeerCount
+	return rxBytes, txBytes, int32(len(wgPeers)), activePeerCount
 }
 
 func cidrsToIPNets(cidrs []string) []net.IPNet {

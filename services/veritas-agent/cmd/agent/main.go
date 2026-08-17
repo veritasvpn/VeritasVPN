@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -551,11 +552,8 @@ func ensureDNSInputAccept(wgIface string) error {
 	}
 	for _, proto := range []string{"udp", "tcp"} {
 		args := []string{"INPUT", "-i", wgIface, "-p", proto, "--dport", "53", "-j", "ACCEPT"}
-		check := exec.Command("iptables", append([]string{"-C"}, args...)...)
-		if check.Run() == nil {
-			continue
-		}
-		if err := exec.Command("iptables", append([]string{"-I", "INPUT", "1"}, args[1:]...)...).Run(); err != nil {
+		deleteAllIptables("INPUT", args[1:]...)
+		if err := exec.Command("iptables", append([]string{"-w", "5", "-I", "INPUT", "1"}, args[1:]...)...).Run(); err != nil {
 			return err
 		}
 	}
@@ -566,21 +564,54 @@ func ensureForwardAccept(wgIface string) error {
 	if wgIface == "" {
 		wgIface = "wg0"
 	}
-	_ = exec.Command("iptables", "-D", "FORWARD", "-i", wgIface, "-j", "ACCEPT").Run()
-	_ = exec.Command("iptables", "-D", "FORWARD", "-o", wgIface, "-j", "ACCEPT").Run()
-	_ = exec.Command("iptables", "-D", "FORWARD", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run()
+	deleteIptablesLinesContaining(wgIface, "ACCEPT")
+	deleteIptablesLinesContaining("TCPMSS", "")
+	deleteIptablesLinesContaining("ctstate RELATED,ESTABLISHED", "ACCEPT")
+	deleteAllIptables("FORWARD", "-i", wgIface, "-j", "ACCEPT")
+	deleteAllIptables("FORWARD", "-o", wgIface, "-j", "ACCEPT")
+	deleteAllIptables("FORWARD", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
 
-	if err := exec.Command("iptables", "-I", "FORWARD", "1", "-o", wgIface, "-j", "ACCEPT").Run(); err != nil {
+	if err := exec.Command("iptables", "-w", "5", "-I", "FORWARD", "1", "-o", wgIface, "-j", "ACCEPT").Run(); err != nil {
 		return err
 	}
-	if err := exec.Command("iptables", "-I", "FORWARD", "1", "-i", wgIface, "-j", "ACCEPT").Run(); err != nil {
+	if err := exec.Command("iptables", "-w", "5", "-I", "FORWARD", "1", "-i", wgIface, "-j", "ACCEPT").Run(); err != nil {
 		return err
 	}
-	if err := exec.Command("iptables", "-I", "FORWARD", "1", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run(); err != nil {
+	if err := exec.Command("iptables", "-w", "5", "-I", "FORWARD", "1", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run(); err != nil {
 		return err
 	}
-	_ = exec.Command("iptables", "-D", "FORWARD", "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu").Run()
-	return exec.Command("iptables", "-I", "FORWARD", "1", "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu").Run()
+	deleteAllIptables("FORWARD", "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
+	return exec.Command("iptables", "-w", "5", "-I", "FORWARD", "1", "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu").Run()
+}
+
+func deleteIptablesLinesContaining(needle, required string) {
+	out, err := exec.Command("iptables", "-w", "5", "-L", "FORWARD", "--line-numbers", "-n").Output()
+	if err != nil {
+		return
+	}
+	var lines []int
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		number, parseErr := strconv.Atoi(fields[0])
+		if parseErr == nil && strings.Contains(line, needle) && (required == "" || strings.Contains(line, required)) {
+			lines = append(lines, number)
+		}
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(lines)))
+	for _, number := range lines {
+		_ = exec.Command("iptables", "-w", "5", "-D", "FORWARD", strconv.Itoa(number)).Run()
+	}
+}
+
+func deleteAllIptables(chain string, args ...string) {
+	for {
+		if err := exec.Command("iptables", append([]string{"-w", "5", "-D", chain}, args...)...).Run(); err != nil {
+			return
+		}
+	}
 }
 
 func (a *Agent) registerWithManager(ctx context.Context) (*RegisterServerResponse, error) {
@@ -612,6 +643,16 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		}
 
 		now := time.Now()
+		removedOrphans, remainingOrphans, orphanErr := a.peerManager.ReconcileOrphans(now, a.cfg.PeerStaleAfter)
+		if orphanErr != nil {
+			a.metrics.PeerExpiryFailures.Inc()
+			a.logger.Warn("orphan peer reconciliation partially failed", zap.Error(orphanErr))
+		}
+		if removedOrphans > 0 {
+			a.metrics.OrphanPeerRemovals.Add(float64(removedOrphans))
+			a.logger.Info("orphan peers removed", zap.Int("count", removedOrphans))
+		}
+		a.metrics.OrphanPeerCount.Set(float64(remainingOrphans))
 		for _, stale := range a.peerManager.StalePeers(now, a.cfg.PeerNoHandshakeGrace, a.cfg.PeerStaleAfter) {
 			expireCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err := a.managerClient.ReportPeerExpired(expireCtx, a.serverID, stale.PeerID, a.cfg.AuthToken)

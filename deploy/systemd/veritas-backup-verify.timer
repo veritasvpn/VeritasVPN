@@ -1,8 +1,8 @@
 [Unit]
-Description=Weekly encrypted backup verification
+Description=Daily encrypted backup verification
 
 [Timer]
-OnCalendar=Sun *-*-* 04:00:00
+OnCalendar=*-*-* 04:00:00
 Persistent=true
 
 [Install]

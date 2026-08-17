@@ -21,6 +21,6 @@ ufw allow 80/tcp comment 'HTTP ingress'
 ufw allow 443/tcp comment 'HTTPS ingress'
 ufw allow from 192.168.0.0/24 to any port 6443 proto tcp comment 'LAN Kubernetes API'
 ufw allow in on tailscale0 to any port 6443 proto tcp comment 'Tailscale Kubernetes API'
-ufw allow from 192.168.0.0/24 to any port 31500 proto tcp comment 'LAN image registry'
-ufw allow in on tailscale0 to any port 31500 proto tcp comment 'Tailscale image registry'
+ufw delete allow from 192.168.0.0/24 to any port 31500 proto tcp >/dev/null 2>&1 || true
+ufw allow in on tailscale0 to any port 31500 proto tcp comment 'Tailscale-only image registry'
 ufw --force enable

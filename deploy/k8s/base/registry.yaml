@@ -17,7 +17,7 @@ metadata:
   namespace: veritas
 spec:
   type: NodePort
-  # The host UFW policy restricts this build-only endpoint to LAN/Tailscale.
+  # The host UFW policy restricts this build-only endpoint to Tailscale.
   # Local traffic policy preserves the source address for that enforcement.
   externalTrafficPolicy: Local
   ports:

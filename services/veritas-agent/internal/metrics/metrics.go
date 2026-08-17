@@ -18,6 +18,8 @@ type Metrics struct {
 	MemoryUsage        prometheus.Gauge
 	StalePeerCount     prometheus.Gauge
 	PeerExpiryFailures prometheus.Counter
+	OrphanPeerCount    prometheus.Gauge
+	OrphanPeerRemovals prometheus.Counter
 
 	registry *prometheus.Registry
 	port     string
@@ -63,6 +65,14 @@ func New(port string) *Metrics {
 			Name: "veritas_agent_peer_expiry_failures_total",
 			Help: "Failed stale WireGuard peer reconciliation attempts.",
 		}),
+		OrphanPeerCount: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "veritas_agent_orphan_peer_count",
+			Help: "Kernel WireGuard peers not yet represented in the manager stream.",
+		}),
+		OrphanPeerRemovals: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "veritas_agent_orphan_peer_removals_total",
+			Help: "Kernel peers removed because they were no longer managed.",
+		}),
 		registry: reg,
 		port:     port,
 	}
@@ -76,6 +86,8 @@ func New(port string) *Metrics {
 	reg.MustRegister(m.MemoryUsage)
 	reg.MustRegister(m.StalePeerCount)
 	reg.MustRegister(m.PeerExpiryFailures)
+	reg.MustRegister(m.OrphanPeerCount)
+	reg.MustRegister(m.OrphanPeerRemovals)
 
 	return m
 }

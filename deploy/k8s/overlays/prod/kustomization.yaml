@@ -11,7 +11,7 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:c55bed093ccc35807467aae9e12971beb2e3a6b170fc2449b8e73dfebc064567
+    digest: sha256:45a6f1a962abacb0eb52c529e9a3355c78d49b7dd4300aef4945344334b5c073
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
     digest: sha256:ec33cc94485723b36eed42318a86650dbd4d28a04bd366fb2e73d49f0ff55e61
@@ -20,7 +20,7 @@ images:
     digest: sha256:3d792487fe717cac46b52ecea377be7845701bba02453b241261afccbae271b2
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    digest: sha256:e25a86435b7b6411af7f913694e16144dad6897c731d828b1e983bde5df7d58a
+    digest: sha256:a1c1cab57c87013d4a00d3324693f3b372556263722a069f2d947deae4c900cd
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
     digest: sha256:735d0c4463bf3f0e87133f5e62e17749bb47efe7d83d9daac9c7e9c8c9ce7579

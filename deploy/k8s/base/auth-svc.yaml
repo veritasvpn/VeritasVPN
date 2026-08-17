@@ -89,6 +89,13 @@ spec:
                   name: veritas-config
                   key: PUBLIC_BASE_URL
                   optional: true
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 360
           readinessProbe:
             httpGet:
               path: /healthz
