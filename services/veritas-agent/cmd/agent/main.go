@@ -452,9 +452,6 @@ func (a *Agent) setupFirewall() error {
 	if err := ensureForwardAccept(a.cfg.WGInterface); err != nil {
 		a.logger.Warn("iptables FORWARD accept failed (non-fatal)", zap.Error(err))
 	}
-	if err := ensureInputAccept(a.cfg.WGPort); err != nil {
-		a.logger.Warn("iptables INPUT WireGuard allow failed (non-fatal)", zap.Error(err))
-	}
 
 	if err := ensureDNSInputAccept(a.cfg.WGInterface); err != nil {
 		a.logger.Warn("iptables INPUT VPN DNS allow failed (non-fatal)", zap.Error(err))
@@ -476,6 +473,13 @@ func (a *Agent) setupFirewall() error {
 }
 
 func enableIPForward() error {
+	current, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(current)) == "1" {
+		return nil
+	}
 	return os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
 }
 
@@ -501,31 +505,16 @@ func ensureMasquerade(subnet, wgIface string) error {
 	}
 	return exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", subnet, "-o", egress, "-j", "MASQUERADE").Run()
 }
-
-// ensureForwardAccept inserts ACCEPT rules at the top of FORWARD so WG traffic is
-// not dropped by a default DROP policy / UFW reject rules later in the chain.
-// ensureInputAccept inserts an explicit UDP allow for the WireGuard listener.
-// The node INPUT policy is DROP in production, so forwarding rules alone are
-// insufficient for packets arriving from the router.
-func ensureInputAccept(wgPort int) error {
-	if wgPort <= 0 {
-		wgPort = 51820
-	}
-	port := strconv.Itoa(wgPort)
-	_ = exec.Command("iptables", "-D", "INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT").Run()
-	return exec.Command("iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", port, "-j", "ACCEPT").Run()
-}
-
-// ensureDNSInputAccept allows only DNS traffic on the WireGuard interface.
-// The host firewall denies inbound traffic by default, so VPN clients need a
-// scoped TCP/UDP 53 exception to use the private encrypted DNS forwarder.
 func ensureDNSInputAccept(wgIface string) error {
 	if wgIface == "" {
 		wgIface = "wg0"
 	}
 	for _, proto := range []string{"udp", "tcp"} {
 		args := []string{"INPUT", "-i", wgIface, "-p", proto, "--dport", "53", "-j", "ACCEPT"}
-		_ = exec.Command("iptables", append([]string{"-D"}, args...)...).Run()
+		check := exec.Command("iptables", append([]string{"-C"}, args...)...)
+		if check.Run() == nil {
+			continue
+		}
 		if err := exec.Command("iptables", append([]string{"-I", "INPUT", "1"}, args[1:]...)...).Run(); err != nil {
 			return err
 		}

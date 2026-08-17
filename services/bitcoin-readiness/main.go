@@ -87,6 +87,23 @@ func (s *state) refresh(ctx context.Context, rpcURL, user, password string) erro
 	return nil
 }
 
+func (s *state) refreshWithRetry(rpcURL, user, password string) error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := s.refresh(ctx, rpcURL, user, password)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+		}
+	}
+	return lastErr
+}
+
 func bitcoinReady(i info) bool {
 	return i.Chain == "main" && !i.InitialBlockDownload && i.Headers >= i.Blocks && i.Headers-i.Blocks <= 6
 }
@@ -96,19 +113,17 @@ func main() {
 	user := required("BTC_RPC_USER")
 	password := required("BTC_RPC_PASSWORD")
 	var s state
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	_ = s.refresh(ctx, rpcURL, user, password)
-	cancel()
+	if err := s.refreshWithRetry(rpcURL, user, password); err != nil {
+		log.Printf("initial bitcoin refresh failed: %v", err)
+	}
 	go func() {
 		t := time.NewTicker(15 * time.Second)
 		defer t.Stop()
 		for range t.C {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			if err := s.refresh(ctx, rpcURL, user, password); err != nil {
+			if err := s.refreshWithRetry(rpcURL, user, password); err != nil {
 				s.ready.Store(false)
-				log.Printf("bitcoin refresh failed: %v", err)
+				log.Printf("bitcoin refresh failed after retries: %v", err)
 			}
-			cancel()
 		}
 	}()
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -140,11 +155,12 @@ bitcoin_rpc_up %d
 bitcoin_initial_block_download %d
 bitcoin_blocks %d
 bitcoin_headers %d
+bitcoin_header_lag %d
 bitcoin_sync_percent %.4f
 bitcoin_last_refresh_timestamp_seconds %d
 bitcoin_last_successful_refresh_timestamp_seconds %d
 bitcoin_chain{chain=%q} 1
-`, ready, boolInt(s.rpcUp.Load()), boolInt(s.initial.Load()), blocks, headers, syncPercent, s.lastRefresh.Load(), s.lastSuccessfulRefresh.Load(), chain)
+`, ready, boolInt(s.rpcUp.Load()), boolInt(s.initial.Load()), blocks, headers, headers-blocks, syncPercent, s.lastRefresh.Load(), s.lastSuccessfulRefresh.Load(), chain)
 	})
 	addr := env("LISTEN_ADDR", ":8080")
 	log.Printf("bitcoin readiness listening on %s", addr)

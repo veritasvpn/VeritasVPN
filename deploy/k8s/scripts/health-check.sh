@@ -38,7 +38,18 @@ check_http() {
   if curl -fsS --max-time 10 "$url" >/dev/null 2>&1; then ok "$label"; else bad "$label"; fi
 }
 check_http 'public API health' 'https://api.veritasvpn.cloud/healthz'
-check_http 'public API billing readiness' 'https://api.veritasvpn.cloud/api/v1/billing/readyz'
+billing_code="$(curl -sS --max-time 10 -o /dev/null -w "%{http_code}" https://api.veritasvpn.cloud/api/v1/billing/readyz || true)"
+bitcoin_metrics="$(kubectl -n btcpay exec deploy/bitcoin-readiness -- wget -qO- http://127.0.0.1:8080/metrics 2>/dev/null || true)"
+bitcoin_ibd="$(awk '$1 == "bitcoin_initial_block_download" { print $2 }' <<<"$bitcoin_metrics")"
+if [[ "$billing_code" == "200" ]]; then
+  ok 'public API billing readiness'
+elif [[ "$billing_code" == "503" && "$bitcoin_ibd" == "1" ]]; then
+  warn 'Bitcoin payments intentionally gated while node synchronizes'
+elif [[ "$billing_code" == "000" ]]; then
+  bad 'public API billing readiness is unreachable'
+else
+  bad "public API billing readiness returned HTTP $billing_code"
+fi
 check_http 'public website' 'https://veritasvpn.cloud/'
 check_http 'public BTCPay' 'https://btcpay.veritasvpn.cloud/'
 

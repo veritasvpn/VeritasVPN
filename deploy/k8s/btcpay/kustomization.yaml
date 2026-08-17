@@ -16,4 +16,4 @@ resources:
 images:
   - name: localhost:31500/bitcoin-readiness
     newName: localhost:31500/bitcoin-readiness
-    digest: sha256:59644d04f9c4b7baf349165283a6001b2d45786fe4deef02895b14402bea2ab5
+    digest: sha256:6c48a002c727115c3b7aa9ed3870fff5367a87a3284858b61787c0b85451187a

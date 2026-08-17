@@ -127,6 +127,13 @@ groups:
           summary: "Bitcoin node is behind its advertised chain tip"
           description: "Bitcoin block validation is more than six headers behind."
 
+      - alert: BitcoinReadinessExporterStale
+        expr: time() - bitcoin_last_successful_refresh_timestamp_seconds{job="bitcoin-readiness"} > 120
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Bitcoin readiness exporter is stale"
+          description: "The exporter has not completed a successful Bitcoin RPC refresh in over two minutes."
       - alert: VeritasBackupStale
         expr: time() - veritas_backup_last_success_timestamp > 172800
         for: 30m
