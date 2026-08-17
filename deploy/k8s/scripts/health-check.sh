@@ -59,6 +59,11 @@ if [[ "$dns_http_code" != "000" ]]; then
 else
   bad "encrypted DNS upstream unavailable"
 fi
+if command -v dig >/dev/null 2>&1 && dig +short +time=3 +tries=1 @10.0.0.1 api.veritasvpn.cloud A | grep -Eq "^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$"; then
+  ok "VPN DNS forwarder resolves api.veritasvpn.cloud"
+else
+  bad "VPN DNS forwarder failed to resolve api.veritasvpn.cloud"
+fi
 
 if kubectl -n btcpay get pod bitcoind-0 >/dev/null 2>&1; then
   if kubectl -n btcpay exec bitcoind-0 -- sh -c 'bitcoin-cli -rpcuser="$BTC_RPC_USER" -rpcpassword="$BTC_RPC_PASSWORD" getblockchaininfo >/dev/null 2>&1' >/dev/null 2>&1; then

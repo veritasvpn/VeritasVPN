@@ -5,7 +5,7 @@
 <p id="statusBanner" class="banner" hidden></p>
 <section id="authView" class="view auth-view">
   <div class="tabs"><button class="tab is-active" data-mode="signin">Sign in</button><button class="tab" data-mode="signup">Sign up</button></div>
-  <form id="authForm"><div id="emailFields"><label>Email<input type="email" id="email" autocomplete="username" placeholder="you@example.com"></label><label>Password<input type="password" id="password" autocomplete="current-password" minlength="6" placeholder="••••••••"></label></div><div id="accountIdFields" hidden><label>Account ID<input type="text" id="accountId" autocomplete="off" spellcheck="false" placeholder="Your private Account ID"></label></div><p id="anonHint" class="hint" hidden>Create a private account with no email. Save the Account ID—it cannot be recovered.</p><button type="submit" class="btn primary" id="authSubmit">Sign in</button></form>
+  <form id="authForm"><div id="emailFields"><label>Email<input type="email" id="email" autocomplete="username" placeholder="you@example.com"></label><label>Password<input type="password" id="password" autocomplete="current-password" minlength="10" placeholder="••••••••"></label></div><div id="accountIdFields" hidden><label>Account ID<input type="text" id="accountId" autocomplete="off" spellcheck="false" placeholder="Your private Account ID"></label></div><p id="anonHint" class="hint" hidden>Create a private account with no email. Save the Account ID—it cannot be recovered.</p><button type="submit" class="btn primary" id="authSubmit">Sign in</button></form>
   <button class="linkish auth-alt" id="authMethodToggle">Sign in with Account ID instead</button>
 </section>
 <section id="mainView" class="view" hidden>

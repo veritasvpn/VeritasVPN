@@ -156,11 +156,16 @@ jobs:
           node --check clients/browser-extension/js/background.js
           node --check clients/browser-extension/js/popup.js
           node --check clients/browser-extension/js/auth.js
+          mkdir -p "$RUNNER_TEMP/veritasvpn-extension"
+          cp -R clients/browser-extension/. "$RUNNER_TEMP/veritasvpn-extension/"
+          (cd "$RUNNER_TEMP/veritasvpn-extension" && zip -qr "$RUNNER_TEMP/veritasvpn-extension.zip" .)
+          unzip -t "$RUNNER_TEMP/veritasvpn-extension.zip" >/dev/null
       - name: Validate website entry points
         run: |
           test -f website/index.html
           test -f website/privacy.html
           grep -q 'Content-Security-Policy' website/_headers
+          ! grep -RIn 'minlength="6"' website clients/browser-extension
       - name: Validate shell scripts
         run: |
           find deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n

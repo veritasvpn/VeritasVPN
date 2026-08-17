@@ -29,7 +29,6 @@ echo "[bootstrap] iface=$WG_IFACE addr=$WG_ADDR port=$WG_PORT egress=$EGRESS_IFA
 SYSCTL_CONF="/etc/sysctl.d/99-veritas-vpn.conf"
 if [[ ! -f "$SYSCTL_CONF" ]]; then
   echo "net.ipv4.ip_forward = 1" > "$SYSCTL_CONF"
-  echo "net.ipv6.conf.all.forwarding = 1" >> "$SYSCTL_CONF"
 fi
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 mkdir -p "$KEY_DIR"

@@ -34,7 +34,7 @@ spec:
             limits: {cpu: 200m, memory: 256Mi}
       volumes:
         - {name: config, secret: {secretName: alertmanager-config-secret}}
-        - {name: data, emptyDir: {}}
+        - {name: data, persistentVolumeClaim: {claimName: alertmanager-data}}
 ---
 apiVersion: v1
 kind: Service

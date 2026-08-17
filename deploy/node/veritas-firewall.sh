@@ -47,16 +47,6 @@ table inet veritas_filter {
     }
   }
 
-  set cloudflare_ipv6 {
-    type ipv6_addr
-    flags interval
-    elements = {
-      2400:cb00::/32, 2606:4700::/32, 2803:f800::/32,
-      2405:b500::/32, 2405:8100::/32, 2a06:98c0::/29,
-      2c0f:f248::/32
-    }
-  }
-
   chain input {
     type filter hook input priority -20; policy accept;
 
@@ -71,11 +61,8 @@ table inet veritas_filter {
     # Preserve DHCP, diagnostics, and LAN-only recovery SSH.
     iifname "$EGRESS_IFACE" udp sport 67 udp dport 68 accept
     iifname "$EGRESS_IFACE" ip protocol icmp accept
-    iifname "$EGRESS_IFACE" ip6 nexthdr icmpv6 accept
     iifname "$EGRESS_IFACE" ip saddr $LAN_SUBNET tcp dport 22 accept
-    iifname "$EGRESS_IFACE" ip6 saddr fd00::/8 tcp dport 22 accept
     iifname "$EGRESS_IFACE" ip saddr @cloudflare_ipv4 tcp dport $ORIGIN_PORT accept
-    iifname "$EGRESS_IFACE" ip6 saddr @cloudflare_ipv6 tcp dport $ORIGIN_PORT accept
     iifname "$EGRESS_IFACE" ip saddr $TUNNEL_RELAY_IP tcp dport $ORIGIN_PORT accept
 
     # Reject every other unsolicited packet arriving from Ethernet.
@@ -92,7 +79,6 @@ table inet veritas_filter {
     # Until api.veritasvpn.cloud is migrated to Tunnel ingress, allow the
     # published origin only from Cloudflare's authoritative proxy ranges.
     iifname "$EGRESS_IFACE" ip saddr @cloudflare_ipv4 tcp dport $ORIGIN_PORT accept
-    iifname "$EGRESS_IFACE" ip6 saddr @cloudflare_ipv6 tcp dport $ORIGIN_PORT accept
     iifname "$EGRESS_IFACE" ip saddr $TUNNEL_RELAY_IP tcp dport $ORIGIN_PORT accept
     iifname "$EGRESS_IFACE" tcp dport $ORIGIN_PORT counter drop
   }

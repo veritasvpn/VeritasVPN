@@ -4,7 +4,7 @@ resources:
   - namespace.yaml
   - prometheus.yaml
   - alertmanager.yaml
-  - alertmanager-configmap.yaml
+  - alertmanager-data-pvc.yaml
   - exporters.yaml
   - grafana.yaml
   - network-policies.yaml

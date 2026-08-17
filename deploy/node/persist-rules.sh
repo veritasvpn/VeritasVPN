@@ -12,7 +12,6 @@ echo "[persist] Ensuring ip_forward survives reboot..."
 SYSCTL_FILE="/etc/sysctl.d/99-veritas-vpn.conf"
 if [[ ! -f "$SYSCTL_FILE" ]]; then
   echo "net.ipv4.ip_forward = 1" > "$SYSCTL_FILE"
-  echo "net.ipv6.conf.all.forwarding = 1" >> "$SYSCTL_FILE"
   sysctl -p "$SYSCTL_FILE"
   echo "[persist] sysctl drop-in created at $SYSCTL_FILE"
 else
@@ -27,12 +26,10 @@ if command -v iptables-save >/dev/null; then
     echo "[persist] iptables rules saved via netfilter-persistent"
   elif [[ -d /etc/iptables ]]; then
     iptables-save > /etc/iptables/rules.v4
-    ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
     echo "[persist] iptables rules saved to /etc/iptables/"
   else
     mkdir -p /etc/iptables
     iptables-save > /etc/iptables/rules.v4
-    ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
     echo "[persist] /etc/iptables/ created and rules saved"
   fi
 else
