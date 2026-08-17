@@ -190,6 +190,33 @@ func (p *Postgres) ListPeersByAccount(ctx context.Context, accountID string) ([]
 	return peers, rows.Err()
 }
 
+func (p *Postgres) GetPeerForServer(ctx context.Context, peerID, serverID string) (*model.Peer, error) {
+	query := `SELECT id, account_id, server_id, pubkey, preshared_key,
+	           allowed_ips, assigned_ip, status, created_at, expires_at
+	           FROM peers WHERE id = $1 AND server_id = $2
+	             AND status IN ('pending', 'active')`
+	peer := &model.Peer{}
+	err := p.pool.QueryRow(ctx, query, peerID, serverID).Scan(
+		&peer.ID, &peer.AccountID, &peer.ServerID, &peer.Pubkey,
+		&peer.PresharedKey, &peer.AllowedIPs, &peer.AssignedIP,
+		&peer.Status, &peer.CreatedAt, &peer.ExpiresAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get peer for server: %w", err)
+	}
+	return peer, nil
+}
+
+func (p *Postgres) MarkPeerRemovedForServer(ctx context.Context, peerID, serverID string) (bool, error) {
+	result, err := p.pool.Exec(ctx,
+		`UPDATE peers SET status = 'removed' WHERE id = $1 AND server_id = $2
+		  AND status IN ('pending', 'active')`, peerID, serverID)
+	if err != nil {
+		return false, fmt.Errorf("mark peer removed: %w", err)
+	}
+	return result.RowsAffected() > 0, nil
+}
+
 func (p *Postgres) ListPeersByServer(ctx context.Context, serverID string) ([]model.Peer, error) {
 	query := `SELECT id, account_id, server_id, pubkey, preshared_key,
 	           allowed_ips, assigned_ip, status, created_at, expires_at

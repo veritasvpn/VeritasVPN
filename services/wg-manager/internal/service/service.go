@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/nats-io/nats.go"
 	"github.com/veritasvpn/lib/logging"
 	"github.com/veritasvpn/services/wg-manager/internal/communicator"
@@ -387,6 +389,36 @@ func (s *Service) DeletePeer(ctx context.Context, peerID, accountID string) erro
 		"server_id":  peer.ServerID,
 	})
 
+	return nil
+}
+
+// ExpirePeer reconciles an abandoned WireGuard session. The agent notification
+// is delivered before the database state is changed so kernel and database
+// cannot silently diverge.
+func (s *Service) ExpirePeer(ctx context.Context, serverID, peerID string) error {
+	peer, err := s.postgres.GetPeerForServer(ctx, peerID, serverID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("get stale peer: %w", err)
+	}
+	pushCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	err = s.communicator.PushPeerRemoved(pushCtx, serverID, peer)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("remove stale peer from agent: %w", err)
+	}
+	changed, err := s.postgres.MarkPeerRemovedForServer(ctx, peerID, serverID)
+	if err != nil {
+		return err
+	}
+	if changed {
+		_ = s.redis.ReleaseIP(ctx, serverID, peer.AssignedIP)
+		s.publishEvent("peer.expired", map[string]interface{}{
+			"peer_id": peerID, "account_id": peer.AccountID, "server_id": serverID,
+		})
+	}
 	return nil
 }
 

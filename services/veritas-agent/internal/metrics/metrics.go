@@ -9,13 +9,15 @@ import (
 )
 
 type Metrics struct {
-	PeerCount       prometheus.Gauge
-	ActivePeerCount prometheus.Gauge
-	RXBytesTotal    prometheus.Counter
-	TXBytesTotal    prometheus.Counter
-	UptimeSeconds   prometheus.Counter
-	CPUUsage        prometheus.Gauge
-	MemoryUsage     prometheus.Gauge
+	PeerCount          prometheus.Gauge
+	ActivePeerCount    prometheus.Gauge
+	RXBytesTotal       prometheus.Counter
+	TXBytesTotal       prometheus.Counter
+	UptimeSeconds      prometheus.Counter
+	CPUUsage           prometheus.Gauge
+	MemoryUsage        prometheus.Gauge
+	StalePeerCount     prometheus.Gauge
+	PeerExpiryFailures prometheus.Counter
 
 	registry *prometheus.Registry
 	port     string
@@ -53,6 +55,14 @@ func New(port string) *Metrics {
 			Name: "veritas_agent_memory_usage_bytes",
 			Help: "Memory usage in bytes.",
 		}),
+		StalePeerCount: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "veritas_agent_stale_peer_count",
+			Help: "WireGuard peers that exceeded the stale-session threshold.",
+		}),
+		PeerExpiryFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "veritas_agent_peer_expiry_failures_total",
+			Help: "Failed stale WireGuard peer reconciliation attempts.",
+		}),
 		registry: reg,
 		port:     port,
 	}
@@ -64,6 +74,8 @@ func New(port string) *Metrics {
 	reg.MustRegister(m.UptimeSeconds)
 	reg.MustRegister(m.CPUUsage)
 	reg.MustRegister(m.MemoryUsage)
+	reg.MustRegister(m.StalePeerCount)
+	reg.MustRegister(m.PeerExpiryFailures)
 
 	return m
 }

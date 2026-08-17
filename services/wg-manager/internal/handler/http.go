@@ -40,6 +40,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	mux.HandleFunc("/api/v1/agents/heartbeat", h.handleAgentHeartbeat)
 	mux.HandleFunc("/api/v1/agents/peers/stream", h.handlePeerStream)
 	mux.HandleFunc("/api/v1/agents/peers/applied", h.handlePeerApplied)
+	mux.HandleFunc("/api/v1/agents/peers/expired", h.handlePeerExpired)
 	mux.HandleFunc("/api/v1/wg/peers", h.handlePeers)
 	mux.HandleFunc("/api/v1/wg/peers/", h.handlePeerByID)
 	mux.HandleFunc("/api/v1/wg/servers", h.handleListServers)
@@ -229,6 +230,32 @@ func (h *HTTPHandler) handlePeerStream(w http.ResponseWriter, r *http.Request) {
 type peerAppliedRequest struct {
 	PeerID   string `json:"peer_id"`
 	ServerID string `json:"server_id"`
+}
+
+func (h *HTTPHandler) handlePeerExpired(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if token := extractBearer(r); token == "" || token != h.authToken {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var req peerAppliedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if req.PeerID == "" || req.ServerID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer_id and server_id are required"})
+		return
+	}
+	if err := h.svc.ExpirePeer(r.Context(), req.ServerID, req.PeerID); err != nil {
+		h.log.Warn("stale peer expiry failed", "peer_id", req.PeerID, "server_id", req.ServerID, "error", err)
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *HTTPHandler) handlePeerApplied(w http.ResponseWriter, r *http.Request) {

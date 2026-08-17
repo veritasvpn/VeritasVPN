@@ -57,12 +57,22 @@ groups:
         annotations:
           summary: "A container image cannot be pulled"
           description: "A Kubernetes workload is waiting because its image is unavailable."
-      - alert: WireGuardPeersNotHandshaking
-        expr: veritas_agent_peer_count > 0 and veritas_agent_active_peer_count == 0
-        for: 10m
-        labels: { severity: warning }
+      - alert: WireGuardStalePeers
+        expr: veritas_agent_stale_peer_count > 0
+        for: 5m
+        labels:
+          severity: warning
         annotations:
-          summary: "Configured WireGuard peers have no recent handshakes"
+          summary: "WireGuard peers are awaiting expiry"
+          description: "A peer stopped sending keepalives and could not yet be reconciled with the manager."
+      - alert: WireGuardPeerExpiryFailures
+        expr: increase(veritas_agent_peer_expiry_failures_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "WireGuard stale-peer cleanup is failing"
+          description: "The agent cannot reconcile stale WireGuard peers with the manager; reconnect reliability may degrade."
       - alert: PrometheusScrapeMissing
         expr: absent(up{job="veritas-agent"}) or absent(up{job="blackbox"})
         for: 5m

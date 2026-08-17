@@ -69,6 +69,7 @@ type AgentManagerClient interface {
 	SendHeartbeat(ctx context.Context, req *HeartbeatRequest) error
 	StreamPeerUpdates(ctx context.Context, serverID, authToken string) (<-chan *PeerUpdate, <-chan error)
 	ReportPeerApplied(ctx context.Context, serverID, peerID, authToken string) error
+	ReportPeerExpired(ctx context.Context, serverID, peerID, authToken string) error
 }
 
 type httpAgentClient struct {
@@ -240,24 +241,49 @@ func (c *httpAgentClient) ReportPeerApplied(ctx context.Context, serverID, peerI
 	return nil
 }
 
+func (c *httpAgentClient) ReportPeerExpired(ctx context.Context, serverID, peerID, authToken string) error {
+	body, err := json.Marshal(map[string]string{"server_id": serverID, "peer_id": peerID})
+	if err != nil {
+		return fmt.Errorf("marshal expired request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/agents/peers/expired", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create expired request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+authToken)
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("expired request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("expired returned %d: %s", resp.StatusCode, string(data))
+	}
+	return nil
+}
+
 func urlQueryEscape(s string) string {
 	return strings.ReplaceAll(s, " ", "%20")
 }
 
 type AgentConfig struct {
-	AuthToken          string
-	WGInterface        string
-	WGPort             int
-	WGSubnet           string
-	ManagerEndpoint    string
-	MetricsPort        string
-	ServerHostname     string
-	ServerRegion       string
-	ServerCity         string
-	ServerCountry      string
-	DNSListen          string
-	DNSUpstream        string
-	BandwidthLimitMbps int
+	AuthToken            string
+	WGInterface          string
+	WGPort               int
+	WGSubnet             string
+	ManagerEndpoint      string
+	MetricsPort          string
+	ServerHostname       string
+	ServerRegion         string
+	ServerCity           string
+	ServerCountry        string
+	DNSListen            string
+	DNSUpstream          string
+	BandwidthLimitMbps   int
+	PeerNoHandshakeGrace time.Duration
+	PeerStaleAfter       time.Duration
 }
 
 func LoadAgentConfig() *AgentConfig {
@@ -266,19 +292,21 @@ func LoadAgentConfig() *AgentConfig {
 	bandwidth, _ := strconv.Atoi(envOrDefault("PEER_BANDWIDTH_LIMIT_MBPS", "50"))
 
 	return &AgentConfig{
-		AuthToken:          os.Getenv("AGENT_AUTH_TOKEN"),
-		WGInterface:        envOrDefault("WG_INTERFACE", "wg0"),
-		WGPort:             port,
-		WGSubnet:           os.Getenv("WG_SUBNET"),
-		ManagerEndpoint:    envOrDefault("MANAGER_ENDPOINT", "http://wg-manager:8080"),
-		MetricsPort:        envOrDefault("METRICS_PORT", "9090"),
-		ServerHostname:     envOrDefault("SERVER_HOSTNAME", hostname),
-		ServerRegion:       os.Getenv("SERVER_REGION"),
-		ServerCity:         os.Getenv("SERVER_CITY"),
-		ServerCountry:      os.Getenv("SERVER_COUNTRY"),
-		DNSListen:          envOrDefault("DNS_LISTEN", "10.0.0.1:53"),
-		DNSUpstream:        envOrDefault("DNS_UPSTREAM", "https://cloudflare-dns.com/dns-query"),
-		BandwidthLimitMbps: bandwidth,
+		AuthToken:            os.Getenv("AGENT_AUTH_TOKEN"),
+		WGInterface:          envOrDefault("WG_INTERFACE", "wg0"),
+		WGPort:               port,
+		WGSubnet:             os.Getenv("WG_SUBNET"),
+		ManagerEndpoint:      envOrDefault("MANAGER_ENDPOINT", "http://wg-manager:8080"),
+		MetricsPort:          envOrDefault("METRICS_PORT", "9090"),
+		ServerHostname:       envOrDefault("SERVER_HOSTNAME", hostname),
+		ServerRegion:         os.Getenv("SERVER_REGION"),
+		ServerCity:           os.Getenv("SERVER_CITY"),
+		ServerCountry:        os.Getenv("SERVER_COUNTRY"),
+		DNSListen:            envOrDefault("DNS_LISTEN", "10.0.0.1:53"),
+		DNSUpstream:          envOrDefault("DNS_UPSTREAM", "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query"),
+		BandwidthLimitMbps:   bandwidth,
+		PeerNoHandshakeGrace: durationOrDefault("PEER_NO_HANDSHAKE_GRACE", 3*time.Minute),
+		PeerStaleAfter:       durationOrDefault("PEER_STALE_AFTER", 5*time.Minute),
 	}
 }
 
@@ -287,6 +315,18 @@ func envOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+func durationOrDefault(key string, defaultVal time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultVal
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return defaultVal
+	}
+	return parsed
 }
 
 type Agent struct {
@@ -571,6 +611,24 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			return
 		}
 
+		now := time.Now()
+		for _, stale := range a.peerManager.StalePeers(now, a.cfg.PeerNoHandshakeGrace, a.cfg.PeerStaleAfter) {
+			expireCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := a.managerClient.ReportPeerExpired(expireCtx, a.serverID, stale.PeerID, a.cfg.AuthToken)
+			cancel()
+			if err != nil {
+				a.metrics.PeerExpiryFailures.Inc()
+				a.logger.Warn("stale peer reconciliation failed", zap.String("peer_id", stale.PeerID), zap.Error(err))
+				continue
+			}
+			if err := a.peerManager.RemovePeer(stale.PublicKey); err != nil {
+				a.metrics.PeerExpiryFailures.Inc()
+				a.logger.Warn("stale peer local removal failed", zap.String("peer_id", stale.PeerID), zap.Error(err))
+				continue
+			}
+			a.logger.Info("stale peer expired", zap.String("peer_id", stale.PeerID))
+		}
+
 		rx, tx, count, activeCount := a.peerManager.GetStats()
 		loadFactor := getLoadFactor()
 
@@ -599,6 +657,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 
 		a.metrics.PeerCount.Set(float64(count))
 		a.metrics.ActivePeerCount.Set(float64(activeCount))
+		a.metrics.StalePeerCount.Set(float64(a.peerManager.StalePeerCount(now, a.cfg.PeerNoHandshakeGrace, a.cfg.PeerStaleAfter)))
 		a.metrics.UptimeSeconds.Add(30)
 		a.metrics.CPUUsage.Set(loadFactor * 100)
 		a.metrics.MemoryUsage.Set(float64(getMemoryUsage()))

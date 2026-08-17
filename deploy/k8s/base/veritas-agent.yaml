@@ -40,7 +40,7 @@ spec:
         - operator: Exists
       containers:
         - name: veritas-agent
-          image: localhost:31500/veritas-agent@sha256:1971f2da2942af3be9641db537e5cd262478aac447a7584a0ffbfebf5789fd16
+          image: localhost:31500/veritas-agent@sha256:e25a86435b7b6411af7f913694e16144dad6897c731d828b1e983bde5df7d58a
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: false
@@ -104,7 +104,11 @@ spec:
             - name: DNS_LISTEN
               value: "10.0.0.1:53"
             - name: DNS_UPSTREAM
-              value: "https://cloudflare-dns.com/dns-query"
+              value: "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query"
+            - name: PEER_NO_HANDSHAKE_GRACE
+              value: "3m"
+            - name: PEER_STALE_AFTER
+              value: "5m"
           ports:
             - containerPort: 9090
               name: metrics

@@ -15,16 +15,18 @@ type PeerConfig struct {
 	PublicKey    string
 	PresharedKey string
 	AllowedIPs   []string
+	AddedAt      time.Time
 }
 
 type Manager struct {
-	wg    *wireguard.Manager
-	mu    sync.RWMutex
-	peers map[string]*PeerConfig
+	wg              *wireguard.Manager
+	mu              sync.RWMutex
+	peers           map[string]*PeerConfig
+	lastStaleReport map[string]time.Time
 }
 
 func New(wgManager *wireguard.Manager) *Manager {
-	return &Manager{wg: wgManager, peers: make(map[string]*PeerConfig)}
+	return &Manager{wg: wgManager, peers: make(map[string]*PeerConfig), lastStaleReport: make(map[string]time.Time)}
 }
 
 func (m *Manager) AddPeer(peerID, pubkey, psk string, allowedIPs []string) error {
@@ -41,17 +43,31 @@ func (m *Manager) AddPeer(peerID, pubkey, psk string, allowedIPs []string) error
 	if err := m.wg.AddPeer(pubkey, ipNets, pskPtr); err != nil {
 		return fmt.Errorf("peer add %s: %w", peerID, err)
 	}
-	m.peers[pubkey] = &PeerConfig{PeerID: peerID, PublicKey: pubkey, PresharedKey: psk, AllowedIPs: allowedIPs}
+	addedAt := time.Now()
+	if existing, ok := m.peers[pubkey]; ok && !existing.AddedAt.IsZero() {
+		addedAt = existing.AddedAt
+	}
+	m.peers[pubkey] = &PeerConfig{PeerID: peerID, PublicKey: pubkey, PresharedKey: psk, AllowedIPs: allowedIPs, AddedAt: addedAt}
 	return nil
 }
 
 func (m *Manager) RemovePeer(pubkey string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := m.wg.RemovePeer(pubkey); err != nil {
-		return fmt.Errorf("peer remove %s: %w", pubkey, err)
+	kernelPeers, err := m.wg.ListPeers()
+	if err != nil {
+		return fmt.Errorf("list peers before remove %s: %w", pubkey, err)
+	}
+	for _, p := range kernelPeers {
+		if p.PublicKey == pubkey {
+			if err := m.wg.RemovePeer(pubkey); err != nil {
+				return fmt.Errorf("peer remove %s: %w", pubkey, err)
+			}
+			break
+		}
 	}
 	delete(m.peers, pubkey)
+	delete(m.lastStaleReport, pubkey)
 	return nil
 }
 
@@ -75,6 +91,7 @@ func (m *Manager) SyncPeers(desired []PeerConfig) error {
 			if err := m.wg.RemovePeer(pubkey); err != nil {
 				return fmt.Errorf("sync remove %s: %w", pubkey, err)
 			}
+			delete(m.lastStaleReport, pubkey)
 		}
 	}
 	for pubkey, cfg := range want {
@@ -90,8 +107,76 @@ func (m *Manager) SyncPeers(desired []PeerConfig) error {
 			return fmt.Errorf("sync apply %s: %w", pubkey, err)
 		}
 	}
+	for pubkey, cfg := range want {
+		if existingCfg, ok := m.peers[pubkey]; ok && !existingCfg.AddedAt.IsZero() {
+			cfg.AddedAt = existingCfg.AddedAt
+		}
+		if cfg.AddedAt.IsZero() {
+			cfg.AddedAt = time.Now()
+		}
+	}
 	m.peers = want
 	return nil
+}
+
+// StalePeers returns peers that stopped handshaking. Clients use a 25-second
+// keepalive, so a multi-minute grace period avoids removing healthy peers
+// during a short network transition while still cleaning abandoned sessions.
+func (m *Manager) StalePeers(now time.Time, noHandshakeGrace, staleAfter time.Duration) []PeerConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	kernelPeers, err := m.wg.ListPeers()
+	if err != nil {
+		return nil
+	}
+	stale := make([]PeerConfig, 0)
+	for _, kernel := range kernelPeers {
+		cfg, ok := m.peers[kernel.PublicKey]
+		if !ok {
+			continue
+		}
+		age := now.Sub(kernel.LastHandshakeAt)
+		if kernel.LastHandshakeAt.IsZero() {
+			age = now.Sub(cfg.AddedAt)
+			if age < noHandshakeGrace {
+				continue
+			}
+		} else if age < staleAfter {
+			continue
+		}
+		if last := m.lastStaleReport[kernel.PublicKey]; !last.IsZero() && now.Sub(last) < 2*time.Minute {
+			continue
+		}
+		m.lastStaleReport[kernel.PublicKey] = now
+		stale = append(stale, *cfg)
+	}
+	return stale
+}
+
+func (m *Manager) StalePeerCount(now time.Time, noHandshakeGrace, staleAfter time.Duration) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	kernelPeers, err := m.wg.ListPeers()
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, kernel := range kernelPeers {
+		cfg, ok := m.peers[kernel.PublicKey]
+		if !ok {
+			continue
+		}
+		age := now.Sub(kernel.LastHandshakeAt)
+		if kernel.LastHandshakeAt.IsZero() {
+			age = now.Sub(cfg.AddedAt)
+			if age >= noHandshakeGrace {
+				count++
+			}
+		} else if age >= staleAfter {
+			count++
+		}
+	}
+	return count
 }
 
 func (m *Manager) GetStats() (rxBytes, txBytes int64, peerCount, activePeerCount int32) {
