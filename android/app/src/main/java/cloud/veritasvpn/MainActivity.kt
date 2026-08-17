@@ -531,7 +531,7 @@ class MainActivity : ComponentActivity() {
             appendLine("PrivateKey = ${keyPair.privateKey.toBase64()}")
             appendLine("Address = ${peer.assignedIp}")
             appendLine("DNS = $dns")
-            appendLine("MTU = 1420")
+            appendLine("MTU = 1280")
             appendLine()
             appendLine("[Peer]")
             appendLine("PublicKey = ${peer.serverPublicKey}")

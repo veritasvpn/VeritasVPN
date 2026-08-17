@@ -365,7 +365,7 @@ if "errno=0" not in resp:
 PY
 
 ifconfig "$IFACE" inet "$ADDR" "$ADDR" netmask 255.255.255.255 up
-ifconfig "$IFACE" mtu 1420
+ifconfig "$IFACE" mtu 1280
 
 # Prove that WireGuard is exchanging encrypted traffic before changing the
 # machine-wide default route or DNS. A failed handshake must never take the
@@ -725,7 +725,7 @@ PY
 
 ip addr add "$ADDR" dev "$IFACE_NAME"
 ip link set "$IFACE_NAME" up
-ip link set "$IFACE_NAME" mtu 1420
+ip link set "$IFACE_NAME" mtu 1280
 
 # Prove WireGuard handshake before changing system routes
 ip route add 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null
