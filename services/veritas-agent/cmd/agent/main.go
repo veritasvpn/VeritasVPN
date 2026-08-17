@@ -456,6 +456,9 @@ func (a *Agent) setupFirewall() error {
 		a.logger.Warn("iptables INPUT WireGuard allow failed (non-fatal)", zap.Error(err))
 	}
 
+	if err := ensureDNSInputAccept(a.cfg.WGInterface); err != nil {
+		a.logger.Warn("iptables INPUT VPN DNS allow failed (non-fatal)", zap.Error(err))
+	}
 	if err := a.fwManager.SetupNAT(a.cfg.WGInterface); err != nil {
 		a.logger.Warn("NAT setup failed (non-fatal)", zap.Error(err))
 	}
@@ -511,6 +514,23 @@ func ensureInputAccept(wgPort int) error {
 	port := strconv.Itoa(wgPort)
 	_ = exec.Command("iptables", "-D", "INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT").Run()
 	return exec.Command("iptables", "-I", "INPUT", "1", "-p", "udp", "--dport", port, "-j", "ACCEPT").Run()
+}
+
+// ensureDNSInputAccept allows only DNS traffic on the WireGuard interface.
+// The host firewall denies inbound traffic by default, so VPN clients need a
+// scoped TCP/UDP 53 exception to use the private encrypted DNS forwarder.
+func ensureDNSInputAccept(wgIface string) error {
+	if wgIface == "" {
+		wgIface = "wg0"
+	}
+	for _, proto := range []string{"udp", "tcp"} {
+		args := []string{"INPUT", "-i", wgIface, "-p", proto, "--dport", "53", "-j", "ACCEPT"}
+		_ = exec.Command("iptables", append([]string{"-D"}, args...)...).Run()
+		if err := exec.Command("iptables", append([]string{"-I", "INPUT", "1"}, args[1:]...)...).Run(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureForwardAccept(wgIface string) error {
