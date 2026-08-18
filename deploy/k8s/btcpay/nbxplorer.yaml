@@ -36,7 +36,7 @@ spec:
           image: nicolasdorier/nbxplorer@sha256:c49a66e76526c7f7c8328043082c24bde8f5c8ebcbe859def8805c4d591f2411
           env:
             - name: NBXPLORER_NETWORK
-              value: "mainnet"
+              value: "testnet"
             - name: NBXPLORER_BTCRPCURL
               value: "http://bitcoind:8332/"
             - name: NBXPLORER_BTCRPCUSER

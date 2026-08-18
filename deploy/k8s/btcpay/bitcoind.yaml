@@ -40,7 +40,7 @@ spec:
           image: btcpayserver/bitcoin@sha256:0c34551ebc67c569026592b94a152a1d1955f0014975ab0d35edd0d1b2ca567e
           env:
             - name: BITCOIN_NETWORK
-              value: "mainnet"
+              value: "testnet"
             - name: BTC_RPC_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -54,7 +54,7 @@ spec:
             - |
               exec bitcoind \
                 -datadir=/home/bitcoin/.bitcoin \
-                -testnet=0 \
+                -testnet=1 \
                 -prune=10000 \
                 -dbcache=1024 \
                 -rpcuser="${BTC_RPC_USER}" \

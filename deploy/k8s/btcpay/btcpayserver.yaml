@@ -35,7 +35,7 @@ spec:
           image: btcpayserver/btcpayserver@sha256:7c4b79fd578d919da1bc3bb52fd4695c156fe309ab8c0b6602c36026f1780d27
           env:
             - name: BTCPAY_NETWORK
-              value: "mainnet"
+              value: "testnet"
             - name: BTCPAY_CHAINS
               value: "btc"
             - name: BTCPAY_BIND
