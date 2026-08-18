@@ -493,18 +493,14 @@ func (a *Agent) setupFirewall() error {
 	if err := ensureForwardAccept(a.cfg.WGInterface); err != nil {
 		a.logger.Warn("iptables FORWARD accept failed (non-fatal)", zap.Error(err))
 	}
-
 	if err := ensureDNSInputAccept(a.cfg.WGInterface); err != nil {
 		a.logger.Warn("iptables INPUT VPN DNS allow failed (non-fatal)", zap.Error(err))
 	}
-	if err := a.fwManager.SetupNAT(a.cfg.WGInterface); err != nil {
-		a.logger.Warn("NAT setup failed (non-fatal)", zap.Error(err))
-	}
-	if err := a.fwManager.SetupKillSwitch(a.cfg.WGInterface, a.cfg.WGPort); err != nil {
-		a.logger.Warn("Kill switch setup failed (non-fatal)", zap.Error(err))
-	}
-	if err := a.fwManager.SetupBandwidth(a.cfg.WGInterface, a.cfg.BandwidthLimitMbps); err != nil {
-		a.logger.Warn("per-peer nftables bandwidth shaping unavailable", zap.Error(err))
+
+	// The nftables transaction is atomic and fail-closed. A failure stops
+	// startup so the agent never advertises a VPN without its kill switch.
+	if err := a.fwManager.Reconcile(a.cfg.WGInterface, a.cfg.WGPort, a.cfg.BandwidthLimitMbps); err != nil {
+		return fmt.Errorf("reconcile nftables firewall: %w", err)
 	}
 
 	a.logger.Info("Firewall rules configured",
