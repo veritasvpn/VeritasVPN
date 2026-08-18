@@ -1,0 +1,12 @@
+[Unit]
+Description=Pin K3s system images to audited immutable digests
+After=k3s.service
+Requires=k3s.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/veritas-k3s-image-pinning
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

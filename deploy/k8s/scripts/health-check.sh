@@ -33,6 +33,16 @@ for target in \
   fi
 done
 
+# A Running pod is not sufficient for payment readiness. Report the
+# dedicated Bitcoin readiness deployment explicitly; billing remains gated
+# until it is ready, but the health timer stays non-failing during IBD.
+bitcoin_ready_replicas="$(kubectl -n btcpay get deployment bitcoin-readiness -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+if [[ "$bitcoin_ready_replicas" == "1" ]]; then
+  ok 'btcpay/bitcoin-readiness ready'
+else
+  warn 'btcpay/bitcoin-readiness is not ready; Bitcoin payments remain gated'
+fi
+
 check_http() {
   local label="$1" url="$2"
   if curl -fsS --max-time 10 "$url" >/dev/null 2>&1; then ok "$label"; else bad "$label"; fi
@@ -42,7 +52,11 @@ billing_code="$(curl -sS --max-time 10 -o /dev/null -w "%{http_code}" https://ap
 bitcoin_metrics="$(kubectl -n btcpay exec deploy/bitcoin-readiness -- wget -qO- http://127.0.0.1:8080/metrics 2>/dev/null || true)"
 bitcoin_ibd="$(awk '$1 == "bitcoin_initial_block_download" { print $2 }' <<<"$bitcoin_metrics")"
 if [[ "$billing_code" == "200" ]]; then
-  ok 'public API billing readiness'
+  if [[ "$bitcoin_ibd" == "1" ]]; then
+    bad 'public API billing readiness is incorrectly healthy while Bitcoin is synchronizing'
+  else
+    ok 'public API billing readiness'
+  fi
 elif [[ "$billing_code" == "503" && "$bitcoin_ibd" == "1" ]]; then
   warn 'Bitcoin payments intentionally gated while node synchronizes'
 elif [[ "$billing_code" == "000" ]]; then

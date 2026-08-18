@@ -17,7 +17,7 @@ images:
     digest: sha256:ec33cc94485723b36eed42318a86650dbd4d28a04bd366fb2e73d49f0ff55e61
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    digest: sha256:3d792487fe717cac46b52ecea377be7845701bba02453b241261afccbae271b2
+    digest: sha256:1e91e3f982dc1d87cefa860cbe457b00a2b11989aaa0b644df89eed7a77b66a
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     digest: sha256:9da09990bcda3b279363398a333070edddc3547b81207a5acc117879925c76be
