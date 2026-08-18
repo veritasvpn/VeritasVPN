@@ -20,7 +20,7 @@ images:
     digest: sha256:3d792487fe717cac46b52ecea377be7845701bba02453b241261afccbae271b2
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    digest: sha256:bd5910ac6da78df2415125e4d4658277d1f24b5b732221f556c2d72aeaa967c0
+    digest: sha256:9da09990bcda3b279363398a333070edddc3547b81207a5acc117879925c76be
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
     digest: sha256:735d0c4463bf3f0e87133f5e62e17749bb47efe7d83d9daac9c7e9c8c9ce7579

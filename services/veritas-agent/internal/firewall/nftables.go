@@ -3,6 +3,7 @@ package firewall
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -78,8 +79,36 @@ func (m *Manager) Reconcile(wgIface string, wgPort, mbps int) error {
 	if !validInterfaceName(egress) {
 		return fmt.Errorf("invalid egress interface %q", egress)
 	}
+	podCIDR, serviceCIDR, err := detectKubernetesCIDRs()
+	if err != nil {
+		return err
+	}
 
-	return m.runScript(buildRuleset(m.tableName, wgIface, egress, wgPort, mbps))
+	return m.runScript(buildRuleset(m.tableName, wgIface, egress, podCIDR, serviceCIDR, wgPort, mbps))
+}
+
+func detectKubernetesCIDRs() (string, string, error) {
+	podCIDR := os.Getenv("K8S_POD_CIDR")
+	if podCIDR == "" {
+		out, err := exec.Command("sh", "-c", "ip route show dev cni0 | awk '{print $1; exit}'").Output()
+		if err != nil {
+			return "", "", fmt.Errorf("detect Kubernetes pod CIDR: %w", err)
+		}
+		podCIDR = strings.TrimSpace(string(out))
+	}
+	if podCIDR == "" {
+		podCIDR = "10.42.0.0/24"
+	}
+	serviceCIDR := os.Getenv("K8S_SERVICE_CIDR")
+	if serviceCIDR == "" {
+		serviceCIDR = "10.43.0.0/16"
+	}
+	for label, value := range map[string]string{"pod": podCIDR, "service": serviceCIDR} {
+		if _, _, err := net.ParseCIDR(value); err != nil {
+			return "", "", fmt.Errorf("invalid Kubernetes %s CIDR %q: %w", label, value, err)
+		}
+	}
+	return podCIDR, serviceCIDR, nil
 }
 
 func validInterfaceName(name string) bool {
@@ -94,7 +123,7 @@ func validInterfaceName(name string) bool {
 	return true
 }
 
-func buildRuleset(table, wgIface, egress string, wgPort, mbps int) string {
+func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR string, wgPort, mbps int) string {
 	bytesRate := fmt.Sprintf("%d kbytes/second", mbps*125)
 	q := strconv.Quote
 
@@ -106,6 +135,10 @@ func buildRuleset(table, wgIface, egress string, wgPort, mbps int) string {
 		"add chain inet " + table + " forward { type filter hook forward priority filter; policy drop; }",
 		"add chain inet " + table + " input { type filter hook input priority filter; policy accept; }",
 		"add rule inet " + table + " nat iifname " + q(wgIface) + " oifname " + q(egress) + " masquerade",
+		"add rule inet " + table + " forward ip saddr " + podCIDR + " accept",
+		"add rule inet " + table + " forward ip daddr " + podCIDR + " accept",
+		"add rule inet " + table + " forward ip saddr " + serviceCIDR + " accept",
+		"add rule inet " + table + " forward ip daddr " + serviceCIDR + " accept",
 		"add rule inet " + table + " forward iifname " + q(wgIface) + " meter vpn_upload { ip saddr limit rate over " + bytesRate + " burst 1 mbytes } counter drop",
 		"add rule inet " + table + " forward oifname " + q(wgIface) + " meter vpn_download { ip daddr limit rate over " + bytesRate + " burst 1 mbytes } counter drop",
 		"add rule inet " + table + " forward iifname " + q(wgIface) + " tcp flags syn tcp option maxseg size set 1380",

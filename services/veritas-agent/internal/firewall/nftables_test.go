@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildRulesetIsFailClosedAndConvergent(t *testing.T) {
-	rules := buildRuleset("veritas", "wg0", "enp1s0", 51820, 50)
+	rules := buildRuleset("veritas", "wg0", "enp1s0", "10.42.0.0/24", "10.43.0.0/16", 51820, 50)
 	for _, want := range []string{
 		"destroy table inet veritas",
 		"policy drop",
