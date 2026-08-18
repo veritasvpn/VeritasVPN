@@ -23,10 +23,10 @@ spec:
             - tunnel
             - --no-autoupdate
             - run
-            - --token
-            - $(CLOUDFLARE_TUNNEL_TOKEN)
           env:
-            - name: CLOUDFLARE_TUNNEL_TOKEN
+            # cloudflared reads the token from $TUNNEL_TOKEN; keeping it out of
+            # argv so it is not visible in the process list.
+            - name: TUNNEL_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: cloudflared-token

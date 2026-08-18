@@ -41,24 +41,28 @@ spec:
           env:
             - name: BITCOIN_NETWORK
               value: "testnet"
-            - name: BTC_RPC_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: btcpay-secrets
-                  key: BTC_RPC_PASSWORD
-            - name: BTC_RPC_USER
-              value: "btcpay_rpc"
           command:
             - /bin/sh
             - -c
             - |
+              set -e
+              # Remove stale docker-compose era conf (its settings are all passed
+              # via argv/conf below; it also embedded the old RPC password).
+              rm -f /home/bitcoin/.bitcoin/bitcoin.conf
+              # Render RPC credentials into a memory-backed conf file so the
+              # password never appears in the process argv or on disk.
+              umask 077
+              {
+                echo "rpcuser=$(cat /etc/bitcoin-creds/BTC_RPC_USER)"
+                echo "rpcpassword=$(cat /etc/bitcoin-creds/BTC_RPC_PASSWORD)"
+              } > /etc/bitcoin-rpc/bitcoin.conf
               exec bitcoind \
                 -datadir=/home/bitcoin/.bitcoin \
+                -conf=/etc/bitcoin-rpc/bitcoin.conf \
+                -printtoconsole \
                 -testnet=1 \
                 -prune=10000 \
                 -dbcache=1024 \
-                -rpcuser="${BTC_RPC_USER}" \
-                -rpcpassword="${BTC_RPC_PASSWORD}" \
                 -rpcallowip=10.42.0.0/16 \
                 -rpcbind=0.0.0.0 \
                 -rpcport=8332 \
@@ -67,19 +71,24 @@ spec:
                 -txindex=0 \
                 -server=1
           ports:
-            - containerPort: 8332
-              name: rpc
-            - containerPort: 8333
-              name: p2p
+            - name: rpc
+              containerPort: 8332
+            - name: p2p
+              containerPort: 8333
           volumeMounts:
             - name: bitcoind-data
               mountPath: /home/bitcoin/.bitcoin
+            - name: bitcoin-creds
+              mountPath: /etc/bitcoin-creds
+              readOnly: true
+            - name: bitcoin-rpc-conf
+              mountPath: /etc/bitcoin-rpc
           readinessProbe:
             exec:
               command:
                 - /bin/sh
                 - -c
-                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockcount 2>/dev/null | grep -Eq "^[0-9]+$"
+                - bitcoin-cli -conf=/etc/bitcoin-rpc/bitcoin.conf getblockcount 2>/dev/null | grep -Eq "^[0-9]+$"
             initialDelaySeconds: 30
             periodSeconds: 30
             timeoutSeconds: 30
@@ -101,7 +110,7 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - bitcoin-cli -rpcuser=$BTC_RPC_USER -rpcpassword=$BTC_RPC_PASSWORD getblockcount >/dev/null 2>&1
+                - bitcoin-cli -conf=/etc/bitcoin-rpc/bitcoin.conf getblockcount >/dev/null 2>&1
             periodSeconds: 20
             timeoutSeconds: 30
             failureThreshold: 180
@@ -112,6 +121,20 @@ spec:
             limits:
               cpu: 2000m
               memory: 4Gi
+      volumes:
+        - name: bitcoin-creds
+          secret:
+            secretName: btcpay-secrets
+            defaultMode: 0400
+            items:
+              - key: BTC_RPC_USER
+                path: BTC_RPC_USER
+              - key: BTC_RPC_PASSWORD
+                path: BTC_RPC_PASSWORD
+        - name: bitcoin-rpc-conf
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
   volumeClaimTemplates:
     - metadata:
         name: bitcoind-data
