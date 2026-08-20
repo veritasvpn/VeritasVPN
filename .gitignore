@@ -91,6 +91,7 @@ containers/proxy-gateway/data/
 deploy/security/.env.prod
 deploy/k8s/base/secrets.yaml
 deploy/k8s/btcpay/secrets.yaml
+deploy/k8s/btcpay-mainnet/secrets.yaml
 
 # Downloaded binaries (local only)
 services/veritas-agent/agent

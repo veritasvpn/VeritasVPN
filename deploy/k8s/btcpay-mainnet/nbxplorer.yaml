@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nbxplorer-mainnet
+  namespace: btcpay-mainnet
+  labels:
+    app: nbxplorer-mainnet
+spec:
+  type: ClusterIP
+  ports:
+    - port: 32838
+      targetPort: 32838
+  selector:
+    app: nbxplorer-mainnet
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nbxplorer-mainnet
+  namespace: btcpay-mainnet
+  labels:
+    app: nbxplorer-mainnet
+spec:
+  serviceName: nbxplorer-mainnet
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nbxplorer-mainnet
+  template:
+    metadata:
+      labels:
+        app: nbxplorer-mainnet
+    spec:
+      containers:
+        - name: nbxplorer-mainnet
+          image: nicolasdorier/nbxplorer@sha256:c49a66e76526c7f7c8328043082c24bde8f5c8ebcbe859def8805c4d591f2411
+          env:
+            - name: NBXPLORER_NETWORK
+              value: "mainnet"
+            - name: NBXPLORER_BTCRPCURL
+              value: "http://bitcoind-mainnet:8332/"
+            - name: NBXPLORER_BTCRPCUSER
+              value: "btcpay_mainnet_rpc"
+            - name: NBXPLORER_BTCRPCPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: btcpay-mainnet-secrets
+                  key: BTC_RPC_PASSWORD
+            - name: NBXPLORER_BTCNODEENDPOINT
+              value: "bitcoind-mainnet:8333"
+            - name: NBXPLORER_CHAINS
+              value: "btc"
+            - name: NBXPLORER_BIND
+              value: "0.0.0.0:32838"
+            - name: NBXPLORER_NOAUTH
+              value: "true"
+            - name: NBXPLORER_AUTOMIGRATE
+              value: "true"
+            - name: DOTNET_USE_POLLING_FILE_WATCHER
+              value: "true"
+            - name: NBXPLORER_DATADIR
+              value: "/data"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              eval "export NBXPLORER_POSTGRES=\"User ID=btcpay;Password=$BTCPAY_POSTGRES_PASSWORD;Host=postgres-btcpay-mainnet;Port=5432;Database=nbxplorer\""
+              exec dotnet NBXplorer.dll
+          envFrom:
+            - secretRef:
+                name: btcpay-mainnet-secrets
+          ports:
+            - containerPort: 32838
+          volumeMounts:
+            - name: nbxplorer-data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 32838
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            # Keep NBXplorer alive while Bitcoin RPC is temporarily unavailable.
+            tcpSocket:
+              port: 32838
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: nbxplorer-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

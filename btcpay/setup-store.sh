@@ -41,6 +41,20 @@ echo "  -> Authenticated"
 
 # Step 2: Create store
 echo "[2/5] Creating store 'VeritasVPN'..."
+
+# Refuse to create another identically named store. Store selection must be
+# explicit once a deployment has been initialized, so network migrations do not
+# silently split invoices, API keys, and webhooks across duplicates.
+EXISTING_STORE_IDS=$(curl -s -b /tmp/btcpay_cookies.txt "$BTCPAY_URL/api/v1/stores" | python3 -c 'import sys,json; print("\n".join(s["id"] for s in json.load(sys.stdin) if s.get("name") == "VeritasVPN"))' 2>/dev/null) || {
+    echo "ERROR: Could not safely list existing BTCPay stores."
+    exit 1
+}
+if [ -n "$EXISTING_STORE_IDS" ]; then
+    echo "ERROR: A VeritasVPN store already exists. Refusing to create a duplicate."
+    echo "Select the intended existing store explicitly and update its API key and webhook configuration instead."
+    exit 1
+fi
+
 STORE_RESP=$(curl -s -b /tmp/btcpay_cookies.txt -X POST "$BTCPAY_URL/api/v1/stores" \
     -H "Content-Type: application/json" \
     -d '{"name":"VeritasVPN"}')
@@ -59,7 +73,7 @@ echo "  -> Store created: $STORE_ID"
 echo "[3/5] Creating API key..."
 API_KEY_RESP=$(curl -s -b /tmp/btcpay_cookies.txt -X POST "$BTCPAY_URL/api/v1/api-keys" \
     -H "Content-Type: application/json" \
-    -d "{\"label\":\"VeritasVPN API\",\"permissions\":[\"btcpay.store.cancreateinvoice\",\"btcpay.store.canviewinvoices\",\"btcpay.store.webhooks.canmodify\"],\"storeId\":\"$STORE_ID\"}")
+    -d "{\"label\":\"VeritasVPN API\",\"permissions\":[\"btcpay.store.cancreateinvoice:$STORE_ID\",\"btcpay.store.canviewinvoices:$STORE_ID\",\"btcpay.store.webhooks.canmodifywebhooks:$STORE_ID\"],\"storeId\":\"$STORE_ID\"}")
 
 API_KEY=$(echo "$API_KEY_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('apiKey',''))" 2>/dev/null)
 if [ -z "$API_KEY" ]; then

@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-btcpay-mainnet
+  namespace: btcpay-mainnet
+  labels:
+    app: postgres-btcpay-mainnet
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: postgres-btcpay-mainnet
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-btcpay-mainnet
+  namespace: btcpay-mainnet
+  labels:
+    app: postgres-btcpay-mainnet
+spec:
+  serviceName: postgres-btcpay-mainnet
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-btcpay-mainnet
+  template:
+    metadata:
+      labels:
+        app: postgres-btcpay-mainnet
+    spec:
+      containers:
+        - name: postgres
+          image: postgres@sha256:44c4ee9810eff91f7eab4d822642e01115b1a9eccce4bcbdde7604752d68eac6
+          env:
+            - name: POSTGRES_USER
+              value: "btcpay"
+            - name: POSTGRES_DB
+              value: "btcpay"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: btcpay-mainnet-secrets
+                  key: BTCPAY_POSTGRES_PASSWORD
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "btcpay"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "btcpay"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+        labels:
+          app: postgres-btcpay-mainnet
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

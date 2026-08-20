@@ -1,0 +1,144 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: bitcoind-mainnet
+  namespace: btcpay-mainnet
+  labels:
+    app: bitcoind-mainnet
+spec:
+  type: ClusterIP
+  ports:
+    - name: rpc
+      port: 8332
+      targetPort: 8332
+    - name: p2p
+      port: 8333
+      targetPort: 8333
+  selector:
+    app: bitcoind-mainnet
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bitcoind-mainnet
+  namespace: btcpay-mainnet
+  labels:
+    app: bitcoind-mainnet
+spec:
+  serviceName: bitcoind-mainnet
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bitcoind-mainnet
+  template:
+    metadata:
+      labels:
+        app: bitcoind-mainnet
+    spec:
+      containers:
+        - name: bitcoind-mainnet
+          image: btcpayserver/bitcoin@sha256:0c34551ebc67c569026592b94a152a1d1955f0014975ab0d35edd0d1b2ca567e
+          env:
+            - name: BITCOIN_NETWORK
+              value: "mainnet"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              # Remove stale docker-compose era conf (its settings are all passed
+              # via argv/conf below; it also embedded the old RPC password).
+              rm -f /home/bitcoin/.bitcoin/bitcoin.conf
+              # Render RPC credentials into a memory-backed conf file so the
+              # password never appears in the process argv or on disk.
+              umask 077
+              {
+                echo "rpcuser=$(cat /etc/bitcoin-creds/BTC_RPC_USER)"
+                echo "rpcpassword=$(cat /etc/bitcoin-creds/BTC_RPC_PASSWORD)"
+              } > /etc/bitcoin-rpc/bitcoin.conf
+              exec bitcoind \
+                -datadir=/home/bitcoin/.bitcoin \
+                -conf=/etc/bitcoin-rpc/bitcoin.conf \
+                -printtoconsole \
+                -prune=10000 \
+                -dbcache=512 \
+                -rpcallowip=10.42.0.0/16 \
+                -rpcbind=0.0.0.0 \
+                -rpcport=8332 \
+                -whitelist=10.42.0.0/16 \
+                -port=8333 \
+                -txindex=0 \
+                -server=1
+          ports:
+            - name: rpc
+              containerPort: 8332
+            - name: p2p
+              containerPort: 8333
+          volumeMounts:
+            - name: bitcoind-mainnet-data
+              mountPath: /home/bitcoin/.bitcoin
+            - name: bitcoin-creds
+              mountPath: /etc/bitcoin-creds
+              readOnly: true
+            - name: bitcoin-rpc-conf
+              mountPath: /etc/bitcoin-rpc
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - bitcoin-cli -conf=/etc/bitcoin-rpc/bitcoin.conf getblockcount 2>/dev/null | grep -Eq "^[0-9]+$"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 30
+            failureThreshold: 10
+          livenessProbe:
+            # Do not restart Bitcoin Core merely because RPC is slow during sync.
+            # A crashed process exits and is still detected by this probe.
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - kill -0 1
+            initialDelaySeconds: 180
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - bitcoin-cli -conf=/etc/bitcoin-rpc/bitcoin.conf getblockcount >/dev/null 2>&1
+            periodSeconds: 20
+            timeoutSeconds: 30
+            failureThreshold: 180
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 3Gi
+      volumes:
+        - name: bitcoin-creds
+          secret:
+            secretName: btcpay-mainnet-secrets
+            defaultMode: 0400
+            items:
+              - key: BTC_RPC_USER
+                path: BTC_RPC_USER
+              - key: BTC_RPC_PASSWORD
+                path: BTC_RPC_PASSWORD
+        - name: bitcoin-rpc-conf
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: bitcoind-mainnet-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 40Gi
