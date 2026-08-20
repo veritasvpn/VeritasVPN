@@ -44,3 +44,25 @@ sudo install -m 0644 deploy/systemd/veritas-bandwidth.service /etc/systemd/syste
 sudo install -m 0644 deploy/systemd/veritas-bandwidth.timer /etc/systemd/system/veritas-bandwidth.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now veritas-bandwidth.timer
+
+
+## Host firewall
+
+```bash
+sudo install -m 0755 deploy/node/veritas-firewall.sh /usr/local/sbin/veritas-firewall
+sudo install -m 0644 deploy/node/veritas-firewall.service /etc/systemd/system/veritas-firewall.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now veritas-firewall.service
+```
+
+WireGuard private key path on k3s nodes: `/etc/wireguard/private.key` (agent hostPath). Bandwidth caps remain host-owned via `veritas-bandwidth.timer` (tc); the agent no longer installs nft meters.
+
+## Backup metrics
+
+Backup freshness and R2 upload timestamps are exposed through node-exporter’s textfile collector. The metrics directory is intentionally separate from encrypted archives and keys:
+
+```bash
+sudo install -m 0644 deploy/systemd/veritas-metrics-dir.service /etc/systemd/system/veritas-metrics-dir.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now veritas-metrics-dir.service
+```

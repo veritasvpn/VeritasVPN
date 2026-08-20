@@ -324,17 +324,18 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"peer_id":            cfg.PeerID,
-			"server_id":          cfg.ServerID,
-			"server_hostname":    cfg.ServerHostname,
-			"server_public_key":  cfg.ServerPublicKey,
-			"server_endpoint":    cfg.ServerEndpoint,
-			"assigned_ip":        cfg.AssignedIP,
-			"address":            cfg.AssignedIP,
-			"dns_server":         cfg.DNSServer,
-			"preshared_key":      cfg.PresharedKey,
-			"allowed_ips":        cfg.ClientAllowedIPs,
-			"client_allowed_ips": cfg.ClientAllowedIPs,
+			"peer_id":               cfg.PeerID,
+			"server_id":             cfg.ServerID,
+			"server_hostname":       cfg.ServerHostname,
+			"server_public_key":     cfg.ServerPublicKey,
+			"server_endpoint":       cfg.ServerEndpoint,
+			"assigned_ip":           cfg.AssignedIP,
+			"address":               cfg.AssignedIP,
+			"dns_server":            cfg.DNSServer,
+			"preshared_key":         cfg.PresharedKey,
+			"allowed_ips":           cfg.ClientAllowedIPs,
+			"client_allowed_ips":    cfg.ClientAllowedIPs,
+			"persistent_keepalive":  cfg.PersistentKeepaliveSec,
 		})
 	case http.MethodGet:
 		peers, err := h.svc.ListPeers(r.Context(), accountID)

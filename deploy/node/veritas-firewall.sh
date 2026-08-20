@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Minimal host firewall for a VeritasVPN Raspberry Pi node.
+# Host firewall for a VeritasVPN k3s/WireGuard node.
+# Coexists with the agent-owned inet veritas table (NAT + VPN isolation).
 set -euo pipefail
 
 WG_PORT="${WG_PORT:-51820}"
 TAILSCALE_PORT="${TAILSCALE_PORT:-41641}"
-ORIGIN_PORT="${ORIGIN_PORT:-8000}"
-TUNNEL_RELAY_IP="${TUNNEL_RELAY_IP:-192.168.0.5}"
 EGRESS_IFACE="${EGRESS_IFACE:-}"
 LAN_SUBNET="${LAN_SUBNET:-}"
+K3S_FLANNEL_PORT="${K3S_FLANNEL_PORT:-8472}"
+ALLOW_LAN_SSH="${ALLOW_LAN_SSH:-1}"
+ALLOW_LAN_K3S_API="${ALLOW_LAN_K3S_API:-1}"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run as root: sudo $0" >&2
@@ -33,54 +35,60 @@ fi
 RULESET="$(mktemp)"
 trap 'rm -f "$RULESET"' EXIT
 
+LAN_SSH_RULE=""
+if [[ "$ALLOW_LAN_SSH" == "1" ]]; then
+  LAN_SSH_RULE="iifname \"$EGRESS_IFACE\" ip saddr $LAN_SUBNET tcp dport 22 accept"
+fi
+
+LAN_K3S_RULE=""
+if [[ "$ALLOW_LAN_K3S_API" == "1" ]]; then
+  LAN_K3S_RULE="iifname \"$EGRESS_IFACE\" ip saddr $LAN_SUBNET tcp dport 6443 accept"
+fi
+
 cat >"$RULESET" <<EOF
 table inet veritas_filter {
-  set cloudflare_ipv4 {
-    type ipv4_addr
-    flags interval
-    elements = {
-      173.245.48.0/20, 103.21.244.0/22, 103.22.200.0/22,
-      103.31.4.0/22, 141.101.64.0/18, 108.162.192.0/18,
-      190.93.240.0/20, 188.114.96.0/20, 197.234.240.0/22,
-      198.41.128.0/17, 162.158.0.0/15, 104.16.0.0/13,
-      104.24.0.0/14, 172.64.0.0/13, 131.0.72.0/22
-    }
-  }
-
   chain input {
-    type filter hook input priority -20; policy accept;
+    type filter hook input priority -10; policy drop;
 
+    ct state invalid drop
     ct state established,related accept
     iifname "lo" accept
     iifname "tailscale0" accept
+    iifname "wg0" accept
+    iifname "cni0" accept
+    iifname "flannel.1" accept
+    iifname "docker0" accept
+    iifname "br-*" accept
 
-    # Keep Tailscale and WireGuard reachable from the internet.
-    iifname "$EGRESS_IFACE" udp dport $TAILSCALE_PORT accept
+    # Public VPN + Tailscale data plane.
     iifname "$EGRESS_IFACE" udp dport $WG_PORT accept
+    iifname "$EGRESS_IFACE" udp dport $TAILSCALE_PORT accept
 
-    # Preserve DHCP, diagnostics, and LAN-only recovery SSH.
+    # DHCP client + limited ICMP diagnostics on the LAN uplink.
     iifname "$EGRESS_IFACE" udp sport 67 udp dport 68 accept
-    iifname "$EGRESS_IFACE" ip protocol icmp accept
-    iifname "$EGRESS_IFACE" ip saddr $LAN_SUBNET tcp dport 22 accept
-    iifname "$EGRESS_IFACE" ip saddr @cloudflare_ipv4 tcp dport $ORIGIN_PORT accept
-    iifname "$EGRESS_IFACE" ip saddr $TUNNEL_RELAY_IP tcp dport $ORIGIN_PORT accept
+    iifname "$EGRESS_IFACE" ip protocol icmp icmp type { echo-request, destination-unreachable, time-exceeded } accept
 
-    # Reject every other unsolicited packet arriving from Ethernet.
+    $LAN_SSH_RULE
+    $LAN_K3S_RULE
+
+    # Explicitly deny management/metrics on the uplink before the catch-all.
+    iifname "$EGRESS_IFACE" tcp dport { 22, 9090, 9100, 10250, 10255, 6443, 31500, 5000, 2375, 2376 } counter drop
+    iifname "$EGRESS_IFACE" udp dport { 9090, 9100 } counter drop
+
+    # Drop unsolicited WAN/LAN traffic (SSH from WAN, kubelet, registry, ...).
     iifname "$EGRESS_IFACE" counter drop
   }
 
   chain forward {
-    type filter hook forward priority -20; policy accept;
+    type filter hook forward priority -10; policy accept;
 
+    # Agent table veritas (priority filter/0) enforces VPN isolation.
+    # Keep k8s CNI paths unrestricted here.
     ct state established,related accept
-    iifname "wg0" oifname "$EGRESS_IFACE" accept
-    iifname "$EGRESS_IFACE" oifname "wg0" accept
-
-    # Until api.veritasvpn.cloud is migrated to Tunnel ingress, allow the
-    # published origin only from Cloudflare's authoritative proxy ranges.
-    iifname "$EGRESS_IFACE" ip saddr @cloudflare_ipv4 tcp dport $ORIGIN_PORT accept
-    iifname "$EGRESS_IFACE" ip saddr $TUNNEL_RELAY_IP tcp dport $ORIGIN_PORT accept
-    iifname "$EGRESS_IFACE" tcp dport $ORIGIN_PORT counter drop
+    iifname "cni0" accept
+    oifname "cni0" accept
+    iifname "flannel.1" accept
+    oifname "flannel.1" accept
   }
 }
 EOF
@@ -94,3 +102,4 @@ fi
 nft delete table inet veritas_filter 2>/dev/null || true
 nft -f "$RULESET"
 nft list table inet veritas_filter
+echo "veritas_filter applied egress=$EGRESS_IFACE lan=$LAN_SUBNET wg=$WG_PORT"

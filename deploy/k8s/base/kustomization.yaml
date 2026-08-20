@@ -21,3 +21,4 @@ resources:
   - ingress.yaml
   - veritas-agent.yaml
   - veritas-proxy.yaml
+  - pdb.yaml

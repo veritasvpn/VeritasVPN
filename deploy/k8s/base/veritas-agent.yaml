@@ -94,6 +94,12 @@ spec:
                   key: WG_PORT
             - name: WG_PRIVATE_KEY_FILE
               value: "/etc/wireguard/private.key"
+            - name: WG_SUBNET
+              value: "10.0.0.0/24"
+            - name: DNS_GATEWAY_IP
+              value: "10.0.0.1"
+            - name: EGRESS_IFACE
+              value: "enp1s0"
             - name: LOG_LEVEL
               valueFrom:
                 configMapKeyRef:
@@ -109,26 +115,32 @@ spec:
               value: "3m"
             - name: PEER_STALE_AFTER
               value: "5m"
+            # hostNetwork + in-cluster scrape require a non-loopback bind.
+            # WAN/LAN exposure is blocked by deploy/node/veritas-firewall.sh.
+            - name: METRICS_BIND
+              value: "0.0.0.0"
+            - name: METRICS_PORT
+              value: "9090"
           ports:
             - containerPort: 9090
               name: metrics
           startupProbe:
             httpGet:
-              path: /metrics
+              path: /healthz
               port: metrics
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 12
           readinessProbe:
             httpGet:
-              path: /metrics
+              path: /healthz
               port: metrics
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /metrics
+              path: /healthz
               port: metrics
             periodSeconds: 30
             timeoutSeconds: 5
@@ -136,6 +148,7 @@ spec:
           volumeMounts:
             - name: wireguard
               mountPath: /etc/wireguard
+              readOnly: true
           resources:
             requests:
               cpu: 50m
@@ -146,5 +159,5 @@ spec:
       volumes:
         - name: wireguard
           hostPath:
-            path: /home/jpg/VeritasVPN/data/wireguard
+            path: /etc/wireguard
             type: Directory

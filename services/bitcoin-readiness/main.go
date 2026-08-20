@@ -39,6 +39,22 @@ func env(name, fallback string) string {
 	return fallback
 }
 
+// expectedChain maps BTCPAY_NETWORK / BITCOIN_NETWORK to bitcoind chain names.
+func expectedChain(network string) string {
+	switch strings.ToLower(strings.TrimSpace(network)) {
+	case "", "mainnet", "main":
+		return "main"
+	case "testnet", "test":
+		return "test"
+	case "signet":
+		return "signet"
+	case "regtest":
+		return "regtest"
+	default:
+		return strings.ToLower(strings.TrimSpace(network))
+	}
+}
+
 func (s *state) refresh(ctx context.Context, rpcURL, user, password string) error {
 	s.lastRefresh.Store(time.Now().Unix())
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "1.0", "id": "readiness", "method": "getblockchaininfo", "params": []any{}})
@@ -82,8 +98,6 @@ func (s *state) refresh(ctx context.Context, rpcURL, user, password string) erro
 	s.blocks.Store(envelope.Result.Blocks)
 	s.headers.Store(envelope.Result.Headers)
 	s.initial.Store(envelope.Result.InitialBlockDownload)
-	ready := bitcoinReady(envelope.Result)
-	s.ready.Store(ready)
 	return nil
 }
 
@@ -104,17 +118,34 @@ func (s *state) refreshWithRetry(rpcURL, user, password string) error {
 	return lastErr
 }
 
-func bitcoinReady(i info) bool {
-	return i.Chain == "main" && !i.InitialBlockDownload && i.Headers >= i.Blocks && i.Headers-i.Blocks <= 6
+func bitcoinReady(i info, wantChain string) bool {
+	if wantChain == "" {
+		wantChain = "main"
+	}
+	return i.Chain == wantChain && !i.InitialBlockDownload && i.Headers >= i.Blocks && i.Headers-i.Blocks <= 6
+}
+
+func (s *state) evaluateReady(wantChain string) {
+	chain, _ := s.chain.Load().(string)
+	ready := bitcoinReady(info{
+		Chain:                chain,
+		Blocks:               s.blocks.Load(),
+		Headers:              s.headers.Load(),
+		InitialBlockDownload: s.initial.Load(),
+	}, wantChain)
+	s.ready.Store(ready)
 }
 
 func main() {
 	rpcURL := env("BTC_RPC_URL", "http://bitcoind.btcpay.svc.cluster.local:8332")
 	user := required("BTC_RPC_USER")
 	password := required("BTC_RPC_PASSWORD")
+	wantChain := expectedChain(env("BITCOIN_NETWORK", env("BTCPAY_NETWORK", "mainnet")))
 	var s state
 	if err := s.refreshWithRetry(rpcURL, user, password); err != nil {
 		log.Printf("initial bitcoin refresh failed: %v", err)
+	} else {
+		s.evaluateReady(wantChain)
 	}
 	go func() {
 		t := time.NewTicker(15 * time.Second)
@@ -123,7 +154,9 @@ func main() {
 			if err := s.refreshWithRetry(rpcURL, user, password); err != nil {
 				s.ready.Store(false)
 				log.Printf("bitcoin refresh failed after retries: %v", err)
+				continue
 			}
+			s.evaluateReady(wantChain)
 		}
 	}()
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {

@@ -1,4 +1,4 @@
-.PHONY: help build build-all test lint clean dev-up dev-down proto k8s-up k8s-down k8s-status k8s-images k8s-btcpay prod-up prod-down backup restore inventory health
+.PHONY: help build build-all test lint clean dev-up dev-down proto k8s-up k8s-down k8s-status k8s-images k8s-btcpay prod-up prod-down backup restore inventory health verify-deployment
 
 help:
 	@echo "VeritasVPN Makefile"
@@ -81,7 +81,7 @@ build-cli:
 	@echo "Built CLI client -> $(BUILD_DIR)/veritas"
 
 test:
-	go test ./lib/... ./services/... ./clients/...
+	@set -e; for module in api clients/cli lib/config lib/crypto lib/jwt lib/logging services/auth-svc services/bitcoin-readiness services/billing-svc services/browser-proxy services/veritas-agent services/telegram-notifier services/wg-manager; do echo "-- module"; (cd "$$module" && go test ./...); done
 
 lint:
 	golangci-lint run ./...
@@ -156,3 +156,6 @@ inventory:
 
 health:
 	bash deploy/monitoring/health-check.sh
+
+verify-deployment:
+	bash deploy/verify/deployment-drift.sh

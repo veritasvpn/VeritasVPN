@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: bitcoin-readiness
-          image: localhost:31500/bitcoin-readiness@sha256:6c48a002c727115c3b7aa9ed3870fff5367a87a3284858b61787c0b85451187a
+          image: localhost:31500/bitcoin-readiness@sha256:9a67ab674a82a45e13af76c538d5bda6ee1fd314c557462ab3b3455a84804fb9
           imagePullPolicy: IfNotPresent
           ports: [{containerPort: 8080}]
           env:
@@ -24,6 +24,10 @@ spec:
               valueFrom: {secretKeyRef: {name: btcpay-secrets, key: BTC_RPC_USER}}
             - name: BTC_RPC_PASSWORD
               valueFrom: {secretKeyRef: {name: btcpay-secrets, key: BTC_RPC_PASSWORD}}
+            - name: BITCOIN_NETWORK
+              value: "testnet"
+            - name: BTCPAY_NETWORK
+              value: "testnet"
           startupProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 12}
           readinessProbe: {httpGet: {path: /readyz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 15, timeoutSeconds: 10, failureThreshold: 6}
           livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 20, periodSeconds: 30, timeoutSeconds: 3, failureThreshold: 3}

@@ -5,7 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# Uplink: low-latency AQM. WireGuard peer caps are owned by veritas-bandwidth.
 ExecStart=/sbin/tc qdisc replace dev enp1s0 root fq_codel
+ExecStartPost=/bin/bash -c 'if /sbin/ip link show wg0 >/dev/null 2>&1 && ! /sbin/tc qdisc show dev wg0 2>/dev/null | grep -q "qdisc htb 1:"; then /sbin/tc qdisc replace dev wg0 root fq_codel || true; fi'
 RemainAfterExit=yes
 
 [Install]

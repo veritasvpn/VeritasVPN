@@ -16,9 +16,25 @@ metadata:
   name: registry
   namespace: veritas
 spec:
+  type: ClusterIP
+  ports:
+    - port: 5000
+      targetPort: 5000
+  selector:
+    app: registry
+---
+# Host-local build/push endpoint. Bound only on loopback via hostPort so the
+# registry is never reachable from LAN/WAN. Prefer:
+#   docker tag ... localhost:31500/svc:tag && docker push localhost:31500/svc:tag
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry-hostlocal
+  namespace: veritas
+  labels:
+    app: registry
+spec:
   type: NodePort
-  # The host UFW policy restricts this build-only endpoint to Tailscale.
-  # Local traffic policy preserves the source address for that enforcement.
   externalTrafficPolicy: Local
   ports:
     - port: 5000
@@ -63,6 +79,11 @@ spec:
             limits:
               cpu: 200m
               memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: false
       volumes:
         - name: data
           persistentVolumeClaim:

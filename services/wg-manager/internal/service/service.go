@@ -27,8 +27,9 @@ type PeerConfig struct {
 	AssignedIP       string
 	DNSServer        string
 	PresharedKey     string
-	AllowedIPs       []string // server-side peer AllowedIPs (client /32)
-	ClientAllowedIPs []string // client tunnel AllowedIPs (full tunnel)
+	AllowedIPs             []string // server-side peer AllowedIPs (client /32)
+	ClientAllowedIPs       []string // client tunnel AllowedIPs (full tunnel)
+	PersistentKeepaliveSec int
 }
 
 type Service struct {
@@ -325,8 +326,9 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 		AssignedIP:       assignedIP,
 		DNSServer:        srv.DNSServer,
 		PresharedKey:     psk,
-		AllowedIPs:       []string{assignedIP},
-		ClientAllowedIPs: []string{"0.0.0.0/0"},
+		AllowedIPs:             []string{assignedIP},
+		ClientAllowedIPs:       []string{"0.0.0.0/0"},
+		PersistentKeepaliveSec: 25,
 	}, nil
 }
 

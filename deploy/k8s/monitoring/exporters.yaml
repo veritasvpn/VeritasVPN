@@ -17,9 +17,11 @@ spec:
           image: quay.io/prometheus/node-exporter@sha256:d00a542e409ee618a4edc67da14dd48c5da66726bbd5537ab2af9c1dfc442c8a
           args:
             - --path.rootfs=/host
+            - --web.listen-address=0.0.0.0:9100
             - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)
-            - --collector.textfile.directory=/host/var/lib/node_exporter/textfile_collector
+            - --collector.textfile.directory=/host/var/lib/veritasvpn/metrics
           ports:
+            # Uplink exposure is blocked by veritas-firewall (enp1s0 drop 9100).
             - { name: metrics, containerPort: 9100, hostPort: 9100 }
           resources:
             requests: { cpu: 25m, memory: 32Mi }

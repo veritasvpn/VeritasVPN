@@ -10,11 +10,9 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -276,6 +274,7 @@ type AgentConfig struct {
 	WGSubnet             string
 	ManagerEndpoint      string
 	MetricsPort          string
+	MetricsBind          string
 	ServerHostname       string
 	ServerRegion         string
 	ServerCity           string
@@ -299,6 +298,7 @@ func LoadAgentConfig() *AgentConfig {
 		WGSubnet:             os.Getenv("WG_SUBNET"),
 		ManagerEndpoint:      envOrDefault("MANAGER_ENDPOINT", "http://wg-manager:8080"),
 		MetricsPort:          envOrDefault("METRICS_PORT", "9090"),
+		MetricsBind:          envOrDefault("METRICS_BIND", "0.0.0.0"),
 		ServerHostname:       envOrDefault("SERVER_HOSTNAME", hostname),
 		ServerRegion:         os.Getenv("SERVER_REGION"),
 		ServerCity:           os.Getenv("SERVER_CITY"),
@@ -407,7 +407,7 @@ func (a *Agent) Run() error {
 	a.logger.Info("Registered with wg-manager",
 		zap.String("server_id", resp.ServerID))
 
-	a.metrics = metrics.New(a.cfg.MetricsPort)
+	a.metrics = metrics.NewWithBind(a.cfg.MetricsPort, a.cfg.MetricsBind)
 
 	go func() {
 		if err := a.metrics.Start(); err != nil {
@@ -437,11 +437,8 @@ func (a *Agent) Run() error {
 		}
 	}
 
-	a.logger.Info("Cleaning up firewall rules")
-	if err := a.fwManager.Cleanup(); err != nil {
-		a.logger.Error("Firewall cleanup error", zap.Error(err))
-	}
-
+	// Leave nftables table veritas in place across restarts so isolation never
+	// disappears while the agent is down.
 	a.logger.Info("Closing WireGuard client")
 	if err := a.wgManager.Close(); err != nil {
 		a.logger.Error("WireGuard close error", zap.Error(err))
@@ -487,18 +484,9 @@ func (a *Agent) setupFirewall() error {
 	if err := enableIPForward(); err != nil {
 		a.logger.Warn("ip_forward enable failed (non-fatal)", zap.Error(err))
 	}
-	if err := ensureMasquerade(a.cfg.WGSubnet, a.cfg.WGInterface); err != nil {
-		a.logger.Warn("iptables MASQUERADE failed (non-fatal)", zap.Error(err))
-	}
-	if err := ensureForwardAccept(a.cfg.WGInterface); err != nil {
-		a.logger.Warn("iptables FORWARD accept failed (non-fatal)", zap.Error(err))
-	}
-	if err := ensureDNSInputAccept(a.cfg.WGInterface); err != nil {
-		a.logger.Warn("iptables INPUT VPN DNS allow failed (non-fatal)", zap.Error(err))
-	}
 
-	// The nftables transaction is atomic and fail-closed. A failure stops
-	// startup so the agent never advertises a VPN without its kill switch.
+	// nftables owns NAT + fail-closed forward isolation. Host tc owns bandwidth.
+	// A failure stops startup so the agent never advertises a VPN without isolation.
 	if err := a.fwManager.Reconcile(a.cfg.WGInterface, a.cfg.WGPort, a.cfg.BandwidthLimitMbps); err != nil {
 		return fmt.Errorf("reconcile nftables firewall: %w", err)
 	}
@@ -518,96 +506,6 @@ func enableIPForward() error {
 		return nil
 	}
 	return os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
-}
-
-func ensureMasquerade(subnet, wgIface string) error {
-	if subnet == "" {
-		subnet = "10.0.0.0/24"
-	}
-	egress := os.Getenv("EGRESS_IFACE")
-	if egress == "" {
-		out, err := exec.Command("sh", "-c", "ip route show default | awk '{print $5; exit}'").Output()
-		if err != nil {
-			return err
-		}
-		egress = strings.TrimSpace(string(out))
-	}
-	if egress == "" {
-		return fmt.Errorf("no egress iface")
-	}
-	_ = wgIface
-	check := exec.Command("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", subnet, "-o", egress, "-j", "MASQUERADE")
-	if check.Run() == nil {
-		return nil
-	}
-	return exec.Command("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", subnet, "-o", egress, "-j", "MASQUERADE").Run()
-}
-func ensureDNSInputAccept(wgIface string) error {
-	if wgIface == "" {
-		wgIface = "wg0"
-	}
-	for _, proto := range []string{"udp", "tcp"} {
-		args := []string{"INPUT", "-i", wgIface, "-p", proto, "--dport", "53", "-j", "ACCEPT"}
-		deleteAllIptables("INPUT", args[1:]...)
-		if err := exec.Command("iptables", append([]string{"-w", "5", "-I", "INPUT", "1"}, args[1:]...)...).Run(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func ensureForwardAccept(wgIface string) error {
-	if wgIface == "" {
-		wgIface = "wg0"
-	}
-	deleteIptablesLinesContaining(wgIface, "ACCEPT")
-	deleteIptablesLinesContaining("TCPMSS", "")
-	deleteIptablesLinesContaining("ctstate RELATED,ESTABLISHED", "ACCEPT")
-	deleteAllIptables("FORWARD", "-i", wgIface, "-j", "ACCEPT")
-	deleteAllIptables("FORWARD", "-o", wgIface, "-j", "ACCEPT")
-	deleteAllIptables("FORWARD", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
-
-	if err := exec.Command("iptables", "-w", "5", "-I", "FORWARD", "1", "-o", wgIface, "-j", "ACCEPT").Run(); err != nil {
-		return err
-	}
-	if err := exec.Command("iptables", "-w", "5", "-I", "FORWARD", "1", "-i", wgIface, "-j", "ACCEPT").Run(); err != nil {
-		return err
-	}
-	if err := exec.Command("iptables", "-w", "5", "-I", "FORWARD", "1", "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT").Run(); err != nil {
-		return err
-	}
-	deleteAllIptables("FORWARD", "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu")
-	return exec.Command("iptables", "-w", "5", "-I", "FORWARD", "1", "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu").Run()
-}
-
-func deleteIptablesLinesContaining(needle, required string) {
-	out, err := exec.Command("iptables", "-w", "5", "-L", "FORWARD", "--line-numbers", "-n").Output()
-	if err != nil {
-		return
-	}
-	var lines []int
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
-		}
-		number, parseErr := strconv.Atoi(fields[0])
-		if parseErr == nil && strings.Contains(line, needle) && (required == "" || strings.Contains(line, required)) {
-			lines = append(lines, number)
-		}
-	}
-	sort.Sort(sort.Reverse(sort.IntSlice(lines)))
-	for _, number := range lines {
-		_ = exec.Command("iptables", "-w", "5", "-D", "FORWARD", strconv.Itoa(number)).Run()
-	}
-}
-
-func deleteAllIptables(chain string, args ...string) {
-	for {
-		if err := exec.Command("iptables", append([]string{"-w", "5", "-D", chain}, args...)...).Run(); err != nil {
-			return
-		}
-	}
 }
 
 func (a *Agent) registerWithManager(ctx context.Context) (*RegisterServerResponse, error) {
@@ -771,22 +669,10 @@ func (a *Agent) handlePeerUpdate(update *PeerUpdate) {
 }
 
 func getPublicIP() (string, error) {
-	if ip := os.Getenv("PUBLIC_IP"); ip != "" {
+	if ip := strings.TrimSpace(os.Getenv("PUBLIC_IP")); ip != "" {
 		return ip, nil
 	}
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("https://api.ipify.org?format=text")
-	if err != nil {
-		return "", fmt.Errorf("fetch public ip: %w", err)
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read public ip: %w", err)
-	}
-	return strings.TrimSpace(string(data)), nil
+	return "", fmt.Errorf("PUBLIC_IP is required; refusing to discover endpoint via third-party service")
 }
 
 func getLoadFactor() float64 {

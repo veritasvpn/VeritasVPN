@@ -22,15 +22,36 @@ const (
 	dialTimeout  = 5 * time.Second
 	readTimeout  = 5 * time.Second
 	maxDNSPacket = 4096
+	defaultTTL   = 30 * time.Second
+	maxCacheTTL  = 5 * time.Minute
+	ratePerSec   = 20
+	rateBurst    = 50
 )
+
+type cacheEntry struct {
+	response []byte
+	expires  time.Time
+}
+
+type clientBucket struct {
+	tokens float64
+	last   time.Time
+}
 
 type Forwarder struct {
 	listenAddr   string
 	upstreams    []string
 	nextUpstream uint32
-	conn         *net.UDPConn
+	udpConn      *net.UDPConn
+	tcpLn        net.Listener
 	wg           sync.WaitGroup
 	log          *logging.Logger
+
+	cacheMu sync.Mutex
+	cache   map[string]cacheEntry
+
+	rateMu  sync.Mutex
+	buckets map[string]*clientBucket
 }
 
 func New(listenAddr, upstreamAddr string, log *logging.Logger) *Forwarder {
@@ -50,47 +71,91 @@ func New(listenAddr, upstreamAddr string, log *logging.Logger) *Forwarder {
 	if len(upstreams) == 0 {
 		upstreams = []string{"https://cloudflare-dns.com/dns-query", "https://dns.google/dns-query"}
 	}
-	return &Forwarder{listenAddr: listenAddr, upstreams: upstreams, log: log}
+	return &Forwarder{
+		listenAddr: listenAddr,
+		upstreams:  upstreams,
+		log:        log,
+		cache:      make(map[string]cacheEntry),
+		buckets:    make(map[string]*clientBucket),
+	}
 }
 
 func (f *Forwarder) Start(ctx context.Context) error {
-	addr, err := net.ResolveUDPAddr("udp", f.listenAddr)
+	udpAddr, err := net.ResolveUDPAddr("udp", f.listenAddr)
 	if err != nil {
 		return fmt.Errorf("resolve listen address %s: %w", f.listenAddr, err)
 	}
-
-	conn, err := net.ListenUDP("udp", addr)
+	udpConn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		return fmt.Errorf("listen udp %s: %w", f.listenAddr, err)
 	}
-	f.conn = conn
+	f.udpConn = udpConn
+
+	tcpLn, err := net.Listen("tcp", f.listenAddr)
+	if err != nil {
+		_ = udpConn.Close()
+		return fmt.Errorf("listen tcp %s: %w", f.listenAddr, err)
+	}
+	f.tcpLn = tcpLn
 
 	f.log.Info("DNS forwarder started",
 		zap.String("listen", f.listenAddr),
 		zap.Strings("upstreams", f.upstreams),
 	)
 
-	f.wg.Add(1)
+	f.wg.Add(3)
 	go func() {
 		defer f.wg.Done()
-		f.serve(ctx)
+		f.serveUDP(ctx)
 	}()
-
+	go func() {
+		defer f.wg.Done()
+		f.serveTCP(ctx)
+	}()
+	go func() {
+		defer f.wg.Done()
+		f.janitor(ctx)
+	}()
 	return nil
 }
 
-func (f *Forwarder) serve(ctx context.Context) {
-	buf := make([]byte, maxDNSPacket)
+func (f *Forwarder) janitor(ctx context.Context) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now()
+			f.cacheMu.Lock()
+			for k, v := range f.cache {
+				if now.After(v.expires) {
+					delete(f.cache, k)
+				}
+			}
+			f.cacheMu.Unlock()
+			f.rateMu.Lock()
+			for k, b := range f.buckets {
+				if now.Sub(b.last) > 2*time.Minute {
+					delete(f.buckets, k)
+				}
+			}
+			f.rateMu.Unlock()
+		}
+	}
+}
 
+func (f *Forwarder) serveUDP(ctx context.Context) {
+	buf := make([]byte, maxDNSPacket)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
-
-		_ = f.conn.SetReadDeadline(time.Now().Add(readTimeout))
-		n, clientAddr, err := f.conn.ReadFromUDP(buf)
+		_ = f.udpConn.SetReadDeadline(time.Now().Add(readTimeout))
+		n, clientAddr, err := f.udpConn.ReadFromUDP(buf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
@@ -100,29 +165,118 @@ func (f *Forwarder) serve(ctx context.Context) {
 				return
 			default:
 			}
-			f.log.Error("DNS read error", zap.Error(err))
+			f.log.Error("DNS UDP read error", zap.Error(err))
 			continue
 		}
-
 		query := make([]byte, n)
 		copy(query, buf[:n])
-
-		clientAddrCopy := &net.UDPAddr{
-			IP:   make([]byte, len(clientAddr.IP)),
-			Port: clientAddr.Port,
-			Zone: clientAddr.Zone,
-		}
-		copy(clientAddrCopy.IP, clientAddr.IP)
-
-		go f.handleQuery(query, clientAddrCopy)
+		addrCopy := copyUDPAddr(clientAddr)
+		go f.handleQuery(query, func(resp []byte) error {
+			_, err := f.udpConn.WriteToUDP(resp, addrCopy)
+			return err
+		}, addrCopy.IP.String())
 	}
 }
 
-func (f *Forwarder) handleQuery(query []byte, clientAddr *net.UDPAddr) {
-	if len(query) > 65535 {
-		f.log.Warn("DNS query too large", zap.Int("bytes", len(query)))
+func (f *Forwarder) serveTCP(ctx context.Context) {
+	go func() {
+		<-ctx.Done()
+		_ = f.tcpLn.Close()
+	}()
+	for {
+		conn, err := f.tcpLn.Accept()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			f.log.Error("DNS TCP accept error", zap.Error(err))
+			continue
+		}
+		go f.handleTCP(conn)
+	}
+}
+
+func (f *Forwarder) handleTCP(conn net.Conn) {
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(dialTimeout))
+	var length [2]byte
+	if _, err := io.ReadFull(conn, length[:]); err != nil {
 		return
 	}
+	n := int(binary.BigEndian.Uint16(length[:]))
+	if n == 0 || n > maxDNSPacket {
+		return
+	}
+	query := make([]byte, n)
+	if _, err := io.ReadFull(conn, query); err != nil {
+		return
+	}
+	clientIP := ""
+	if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+		clientIP = host
+	}
+	_ = f.handleQuery(query, func(resp []byte) error {
+		var outLen [2]byte
+		binary.BigEndian.PutUint16(outLen[:], uint16(len(resp)))
+		if _, err := conn.Write(outLen[:]); err != nil {
+			return err
+		}
+		_, err := conn.Write(resp)
+		return err
+	}, clientIP)
+}
+
+func copyUDPAddr(a *net.UDPAddr) *net.UDPAddr {
+	out := &net.UDPAddr{Port: a.Port, Zone: a.Zone, IP: make(net.IP, len(a.IP))}
+	copy(out.IP, a.IP)
+	return out
+}
+
+func (f *Forwarder) allow(clientIP string) bool {
+	if clientIP == "" {
+		return true
+	}
+	now := time.Now()
+	f.rateMu.Lock()
+	defer f.rateMu.Unlock()
+	b, ok := f.buckets[clientIP]
+	if !ok {
+		f.buckets[clientIP] = &clientBucket{tokens: rateBurst - 1, last: now}
+		return true
+	}
+	elapsed := now.Sub(b.last).Seconds()
+	b.tokens += elapsed * ratePerSec
+	if b.tokens > rateBurst {
+		b.tokens = rateBurst
+	}
+	b.last = now
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+func (f *Forwarder) handleQuery(query []byte, write func([]byte) error, clientIP string) error {
+	if len(query) < 12 || len(query) > 65535 {
+		return nil
+	}
+	if !f.allow(clientIP) {
+		f.log.Warn("DNS rate limit", zap.String("client", clientIP))
+		return nil
+	}
+
+	cacheKey := string(query[2:]) // exclude TXID
+	if resp, ok := f.cacheGet(cacheKey, query); ok {
+		if err := write(resp); err != nil {
+			f.log.Error("write client", zap.Error(err))
+			return err
+		}
+		return nil
+	}
+
 	start := int(atomic.AddUint32(&f.nextUpstream, 1)-1) % len(f.upstreams)
 	var lastErr error
 	for i := 0; i < len(f.upstreams); i++ {
@@ -138,12 +292,190 @@ func (f *Forwarder) handleQuery(query []byte, clientAddr *net.UDPAddr) {
 			lastErr = err
 			continue
 		}
-		if _, err := f.conn.WriteToUDP(response, clientAddr); err != nil {
+		response = filterRebinding(response)
+		f.cachePut(cacheKey, response)
+		if err := write(response); err != nil {
 			f.log.Error("write client", zap.Error(err))
+			return err
 		}
-		return
+		return nil
 	}
 	f.log.Warn("all encrypted DNS upstreams failed", zap.Error(lastErr))
+	return lastErr
+}
+
+func (f *Forwarder) cacheGet(key string, query []byte) ([]byte, bool) {
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	ent, ok := f.cache[key]
+	if !ok || time.Now().After(ent.expires) {
+		if ok {
+			delete(f.cache, key)
+		}
+		return nil, false
+	}
+	out := make([]byte, len(ent.response))
+	copy(out, ent.response)
+	if len(out) >= 2 && len(query) >= 2 {
+		out[0], out[1] = query[0], query[1]
+	}
+	return out, true
+}
+
+func (f *Forwarder) cachePut(key string, response []byte) {
+	if len(response) < 12 {
+		return
+	}
+	ttl := defaultTTL
+	if parsed := minAnswerTTL(response); parsed > 0 && parsed < maxCacheTTL {
+		ttl = parsed
+	}
+	stored := make([]byte, len(response))
+	copy(stored, response)
+	f.cacheMu.Lock()
+	f.cache[key] = cacheEntry{response: stored, expires: time.Now().Add(ttl)}
+	f.cacheMu.Unlock()
+}
+
+func minAnswerTTL(msg []byte) time.Duration {
+	if len(msg) < 12 {
+		return 0
+	}
+	qd := binary.BigEndian.Uint16(msg[4:6])
+	an := binary.BigEndian.Uint16(msg[6:8])
+	off := 12
+	for i := 0; i < int(qd); i++ {
+		n, ok := skipName(msg, off)
+		if !ok {
+			return 0
+		}
+		off = n + 4
+		if off > len(msg) {
+			return 0
+		}
+	}
+	var minTTL uint32
+	for i := 0; i < int(an); i++ {
+		n, ok := skipName(msg, off)
+		if !ok || n+10 > len(msg) {
+			return 0
+		}
+		ttl := binary.BigEndian.Uint32(msg[n+4 : n+8])
+		rdlen := int(binary.BigEndian.Uint16(msg[n+8 : n+10]))
+		off = n + 10 + rdlen
+		if off > len(msg) {
+			return 0
+		}
+		if i == 0 || ttl < minTTL {
+			minTTL = ttl
+		}
+	}
+	if minTTL == 0 {
+		return 0
+	}
+	return time.Duration(minTTL) * time.Second
+}
+
+func skipName(msg []byte, off int) (int, bool) {
+	for off < len(msg) {
+		l := int(msg[off])
+		if l == 0 {
+			return off + 1, true
+		}
+		if l&0xC0 == 0xC0 {
+			if off+2 > len(msg) {
+				return 0, false
+			}
+			return off + 2, true
+		}
+		off += 1 + l
+	}
+	return 0, false
+}
+
+// filterRebinding removes A/AAAA answers that point at private or link-local
+// addresses so VPN clients cannot be steered at LAN/metadata targets via DNS.
+func filterRebinding(msg []byte) []byte {
+	if len(msg) < 12 {
+		return msg
+	}
+	qd := int(binary.BigEndian.Uint16(msg[4:6]))
+	an := int(binary.BigEndian.Uint16(msg[6:8]))
+	ns := int(binary.BigEndian.Uint16(msg[8:10]))
+	ar := int(binary.BigEndian.Uint16(msg[10:12]))
+	off := 12
+	for i := 0; i < qd; i++ {
+		n, ok := skipName(msg, off)
+		if !ok {
+			return msg
+		}
+		off = n + 4
+		if off > len(msg) {
+			return msg
+		}
+	}
+	out := make([]byte, off)
+	copy(out, msg[:off])
+	keptAN := 0
+	sections := []int{an, ns, ar}
+	keptCounts := make([]int, 3)
+	for s, count := range sections {
+		for i := 0; i < count; i++ {
+			nameStart := off
+			n, ok := skipName(msg, off)
+			if !ok || n+10 > len(msg) {
+				return msg
+			}
+			typ := binary.BigEndian.Uint16(msg[n : n+2])
+			rdlen := int(binary.BigEndian.Uint16(msg[n+8 : n+10]))
+			rdataStart := n + 10
+			rdataEnd := rdataStart + rdlen
+			if rdataEnd > len(msg) {
+				return msg
+			}
+			off = rdataEnd
+			drop := false
+			if s == 0 && (typ == 1 || typ == 28) {
+				if isDisallowedAnswer(msg[rdataStart:rdataEnd]) {
+					drop = true
+				}
+			}
+			if drop {
+				continue
+			}
+			out = append(out, msg[nameStart:rdataEnd]...)
+			keptCounts[s]++
+			if s == 0 {
+				keptAN++
+			}
+		}
+	}
+	_ = keptAN
+	binary.BigEndian.PutUint16(out[6:8], uint16(keptCounts[0]))
+	binary.BigEndian.PutUint16(out[8:10], uint16(keptCounts[1]))
+	binary.BigEndian.PutUint16(out[10:12], uint16(keptCounts[2]))
+	return out
+}
+
+func isDisallowedAnswer(rdata []byte) bool {
+	switch len(rdata) {
+	case 4:
+		ip := net.IP(rdata)
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() || isCGNAT(ip)
+	case 16:
+		ip := net.IP(rdata)
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
+	default:
+		return false
+	}
+}
+
+func isCGNAT(ip net.IP) bool {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	return ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
 }
 
 func (f *Forwarder) queryDoT(query []byte, upstream string) ([]byte, error) {
@@ -209,12 +541,18 @@ func (f *Forwarder) queryDoH(query []byte, upstream string) ([]byte, error) {
 }
 
 func (f *Forwarder) Shutdown() error {
-	if f.conn != nil {
-		if err := f.conn.Close(); err != nil {
-			return err
+	var first error
+	if f.udpConn != nil {
+		if err := f.udpConn.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	if f.tcpLn != nil {
+		if err := f.tcpLn.Close(); err != nil && first == nil {
+			first = err
 		}
 	}
 	f.wg.Wait()
 	f.log.Info("DNS forwarder stopped")
-	return nil
+	return first
 }

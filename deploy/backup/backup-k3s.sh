@@ -8,7 +8,7 @@ RETENTION_DAYS="${RETENTION_DAYS:-14}"
 R2_UPLOAD_REQUIRED="${R2_UPLOAD_REQUIRED:-false}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 WORK="$(mktemp -d)"
-TEXTFILE_DIR="${TEXTFILE_DIR:-/var/lib/node_exporter/textfile_collector}"
+TEXTFILE_DIR="${TEXTFILE_DIR:-/var/lib/veritasvpn/metrics}"
 trap 'rm -rf "$WORK"' EXIT
 
 install -d -m 700 "$BACKUP_ROOT" "$(dirname "$KEY_FILE")"
@@ -68,5 +68,6 @@ veritas_backup_archive_bytes $(stat -c %s "$archive")
 # TYPE veritas_backup_offsite_last_success_timestamp gauge
 veritas_backup_offsite_last_success_timestamp $([[ "$offsite_success" -eq 1 ]] && date +%s || echo 0)
 EOF
-chown --reference="$TEXTFILE_DIR" "$tmp_metrics" 2>/dev/null || true
+chown root:root "$tmp_metrics" 2>/dev/null || true
+chmod 0644 "$tmp_metrics"
 mv "$tmp_metrics" "$TEXTFILE_DIR/veritas_backup.prom"

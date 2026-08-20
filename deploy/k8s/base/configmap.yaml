@@ -35,9 +35,6 @@ data:
   ALLOW_MOCK_BTCPAY: "true"
   BITCOIN_READINESS_URL: ""
   BTCPAY_SERVER_URL: "http://btcpayserver.btcpay.svc.cluster.local:49392"
-  BTCPAY_API_KEY: ""
-  BTCPAY_STORE_ID: ""
-  BTCPAY_WEBHOOK_SECRET: ""
   BTCPAY_PUBLIC_URL: "https://btcpay.veritasvpn.cloud"
 
   FREE_ALLOWED_REGIONS: ""

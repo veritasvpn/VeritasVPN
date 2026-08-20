@@ -1,0 +1,54 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: auth-svc
+  namespace: veritas
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: auth-svc
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: wg-manager
+  namespace: veritas
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: wg-manager
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: billing-svc
+  namespace: veritas
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: billing-svc
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres
+  namespace: veritas
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: postgres
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nginx
+  namespace: veritas
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: nginx

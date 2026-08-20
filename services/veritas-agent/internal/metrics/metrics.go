@@ -23,9 +23,19 @@ type Metrics struct {
 
 	registry *prometheus.Registry
 	port     string
+	bind     string
 }
 
 func New(port string) *Metrics {
+	// Default stays world-bind for hostNetwork agents; host firewall must
+	// drop unsolicited access on the uplink. Override with METRICS_BIND.
+	return NewWithBind(port, "0.0.0.0")
+}
+
+func NewWithBind(port, bind string) *Metrics {
+	if bind == "" {
+		bind = "0.0.0.0"
+	}
 	reg := prometheus.NewRegistry()
 
 	m := &Metrics{
@@ -75,6 +85,7 @@ func New(port string) *Metrics {
 		}),
 		registry: reg,
 		port:     port,
+		bind:     bind,
 	}
 
 	reg.MustRegister(m.PeerCount)
@@ -98,9 +109,14 @@ func (m *Metrics) Handler() http.Handler {
 
 func (m *Metrics) Server() *http.Server {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+	})
 	mux.Handle("/metrics", m.Handler())
 	return &http.Server{
-		Addr:              ":" + m.port,
+		Addr:              m.bind + ":" + m.port,
 		Handler:           mux,
 		ReadTimeout:       5 * time.Second,
 		WriteTimeout:      10 * time.Second,
