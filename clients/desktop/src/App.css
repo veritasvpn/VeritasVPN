@@ -569,3 +569,5 @@ input::placeholder {
 
 .billing-plan-options{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:14px 0}.billing-plan-options button{padding:11px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.03);color:#aebdd0;font-weight:700;cursor:pointer}.billing-plan-options button.selected{border-color:#09c7f5;background:rgba(9,199,245,.12);color:#fff}
 @media(max-width:700px){.billing-plan-options{grid-template-columns:1fr}}
+
+.billing-loading{display:grid;place-items:center;min-height:180px;padding:24px;color:#9aabc0;font-size:14px;text-align:center}

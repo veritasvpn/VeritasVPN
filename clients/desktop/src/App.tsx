@@ -126,6 +126,7 @@ function App() {
   const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
   const [showBilling, setShowBilling] = useState(false);
   const [billingBusy, setBillingBusy] = useState(false);
+  const [billingLoading, setBillingLoading] = useState(false);
   const [billingError, setBillingError] = useState("");
   const [selectedPlan, setSelectedPlan] = useState<"premium_monthly" | "premium_annual">("premium_monthly");
   const [checkoutActive, setCheckoutActive] = useState(false);
@@ -216,17 +217,33 @@ function App() {
   );
 
   const refreshBillingStatus = useCallback(async () => {
-    await refreshSession();
-    const token = getStoredToken();
-    if (!token) throw new Error("Your session expired. Sign in again.");
-    const response = await fetch(`${AUTH_API}/api/v1/billing/status`, { headers: { Authorization: `Bearer ${token}` } });
-    const status = (await response.json()) as BillingStatus;
-    if (!response.ok) throw new Error(status.error || "Could not load your subscription.");
-    setBillingStatus(status);
-    setSubscriptionActive(status.is_premium === true);
-    setSubscriptionChecked(true);
-    return status;
+    setBillingLoading(true);
+    try {
+      await refreshSession();
+      const token = getStoredToken();
+      if (!token) throw new Error("Your session expired. Sign in again.");
+      const response = await fetch(`${AUTH_API}/api/v1/billing/status`, { headers: { Authorization: `Bearer ${token}` } });
+      const status = (await response.json()) as BillingStatus;
+      if (!response.ok) throw new Error(status.error || "Could not load your subscription.");
+      setBillingStatus(status);
+      setSubscriptionActive(status.is_premium === true);
+      setSubscriptionChecked(true);
+      return status;
+    } finally {
+      setBillingLoading(false);
+    }
   }, []);
+
+  const openBilling = useCallback(() => {
+    setShowSettings(false);
+    setShowBilling(true);
+    // Never carry a cancellation confirmation or error into a fresh panel.
+    // The panel stays neutral until this request returns a current status.
+    setShowCancelConfirmation(false);
+    setBillingError("");
+    setBillingStatus(null);
+    refreshBillingStatus().catch((err) => setBillingError(err instanceof Error ? err.message : "Could not load your subscription."));
+  }, [refreshBillingStatus]);
 
   const startCheckout = useCallback(async (paymentMethod: "btcpay", planId: "premium_monthly" | "premium_annual") => {
     if (billingBusy || checkoutActive) return;
@@ -556,7 +573,7 @@ function App() {
         <div className="blueprint-settings-wrap">
           <button className="blueprint-cog" onClick={() => setShowSettings((open) => !open)} aria-label="Open settings" aria-expanded={showSettings}>⚙</button>
           {showSettings && <div className="blueprint-menu">
-            <button onClick={() => { setShowSettings(false); setShowBilling(true); refreshBillingStatus().catch((err) => setBillingError(err.message)); }}>{subscriptionActive ? "Premium" : "Plans"}</button>
+            <button onClick={openBilling}>{subscriptionActive ? "Premium" : "Plans"}</button>
             <button onClick={() => { setShowSettings(false); setShowNetworkMap(true); }}>Network map</button>
             <hr/><button className="danger" onClick={() => { setShowSettings(false); handleSignOut(); }}>Sign out</button>
           </div>}
@@ -580,8 +597,9 @@ function App() {
         <div className="billing-overlay" role="dialog" aria-modal="true" aria-label="Plans and billing">
           <section className="billing-panel">
             <div className="billing-panel-head"><div><span>SUBSCRIPTION</span><h2>Plans & billing</h2></div><button onClick={() => { setShowCancelConfirmation(false); setShowBilling(false); }} aria-label="Close billing">×</button></div>
-            <div className="billing-current"><div><span>CURRENT PLAN</span><strong>{billingStatus?.is_premium ? "Premium" : "No active subscription"}</strong></div><button onClick={() => refreshBillingStatus().catch((err) => setBillingError(err.message))}>Refresh</button></div>
+            <div className="billing-current"><div><span>CURRENT PLAN</span><strong>{billingLoading ? "Checking subscription…" : billingStatus?.is_premium ? "Premium" : "No active subscription"}</strong></div><button disabled={billingLoading} onClick={() => refreshBillingStatus().catch((err) => setBillingError(err.message))}>{billingLoading ? "Checking…" : "Refresh"}</button></div>
             <div className="billing-plan-card">
+              {billingLoading ? <div className="billing-loading" role="status">Confirming your current plan…</div> : <>
               <div className="billing-price"><span>$</span>{selectedPlan === "premium_annual" ? "30" : "3"}<small>/{selectedPlan === "premium_annual" ? "365 days" : "30 days"}</small></div>
               {!billingStatus?.is_premium && <div className="billing-plan-options"><button className={selectedPlan === "premium_monthly" ? "selected" : ""} onClick={() => setSelectedPlan("premium_monthly")}>Monthly · $3</button><button className={selectedPlan === "premium_annual" ? "selected" : ""} onClick={() => setSelectedPlan("premium_annual")}>Annual · $30 · save $6</button></div>}
               <p>Complete VeritasVPN access on up to five devices.</p>
@@ -610,6 +628,7 @@ function App() {
               </>}
               {checkoutActive && <div className="billing-waiting">Waiting for payment confirmation…</div>}
               {billingError && <div className="billing-error">{billingError}</div>}
+              </>}
             </div>
           </section>
         </div>
