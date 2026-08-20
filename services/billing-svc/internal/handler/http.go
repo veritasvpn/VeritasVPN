@@ -65,7 +65,7 @@ func (h *BillingHandler) handleReady(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 	if err := h.service.Ready(ctx); err != nil {
-		if errors.Is(err, service.ErrBitcoinNotReady) {
+		if errors.Is(err, service.ErrBitcoinNotReady) || errors.Is(err, service.ErrBitcoinWalletNotConfigured) {
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}

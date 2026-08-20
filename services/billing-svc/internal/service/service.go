@@ -55,7 +55,10 @@ func New(
 	}
 }
 
-var ErrBitcoinNotReady = errors.New("Bitcoin payments are temporarily unavailable while the node synchronizes")
+var (
+	ErrBitcoinNotReady            = errors.New("Bitcoin payments are temporarily unavailable while the node synchronizes")
+	ErrBitcoinWalletNotConfigured = errors.New("Bitcoin payments are temporarily unavailable while the payment wallet is being configured")
+)
 
 func (s *BillingService) bitcoinReady(ctx context.Context) error {
 	if s.cfg.BitcoinReadinessURL == "" {
@@ -233,6 +236,9 @@ func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, p
 
 	invoiceID, url, err := s.invoices.CreateInvoice(accountID, model.TierPremium, paymentMethod, plan.ID, amountUSD)
 	if err != nil {
+		if errors.Is(err, provider.ErrStoreWalletNotConfigured) {
+			return "", ErrBitcoinWalletNotConfigured
+		}
 		return "", fmt.Errorf("create invoice: %w", err)
 	}
 

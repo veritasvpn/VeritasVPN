@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +27,12 @@ type BTCPayProvider struct {
 	redirectURL   string
 	httpClient    *http.Client
 }
+
+// ErrStoreWalletNotConfigured indicates that BTCPay authenticated the request
+// but cannot issue an invoice because the selected store has no wallet source.
+// Callers can present a safe operational message without exposing provider
+// response details.
+var ErrStoreWalletNotConfigured = errors.New("BTCPay store wallet is not configured")
 
 func NewBTCPayProvider(log *logging.Logger, serverURL, apiKey, storeID, webhookSecret, redirectURL string) *BTCPayProvider {
 	return &BTCPayProvider{
@@ -105,11 +112,14 @@ func (b *BTCPayProvider) CreateInvoice(accountID, tier, paymentMethod, planID st
 		return "", "", fmt.Errorf("read btcpay response: %w", err)
 	}
 	if resp.StatusCode >= 400 {
+		responseText := strings.ToLower(string(respBody))
 		b.log.Error("btcpay api error",
 			zap.Int("status", resp.StatusCode),
-			zap.String("body", string(respBody)),
 		)
-		return "", "", fmt.Errorf("btcpay api error: %d %s", resp.StatusCode, string(respBody))
+		if strings.Contains(responseText, "no wallet has been linked to your btcpay store") {
+			return "", "", fmt.Errorf("%w (status %d)", ErrStoreWalletNotConfigured, resp.StatusCode)
+		}
+		return "", "", fmt.Errorf("btcpay rejected invoice creation (status %d)", resp.StatusCode)
 	}
 
 	var invoice BTCPayInvoiceResponse
