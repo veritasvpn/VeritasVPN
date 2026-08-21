@@ -126,11 +126,16 @@ class MainActivity : ComponentActivity() {
                             writeCachedBillingStatus(context, user!!.accountId, status)
                             billingError = null
                         } catch (e: Exception) {
-                            // Never leave the dashboard in an indeterminate loading
-                            // state. A cached status remains usable; without one,
-                            // fail closed to the plans flow.
-                            if (billingStatus == null) billingStatus = BillingStatus()
-                            billingError = e.message ?: "Could not load your plan."
+                            // Preserve the last verified plan during a transient
+                            // network failure. It is safer and clearer than
+                            // replacing an active cached plan with an error state.
+                            val hadCachedStatus = billingStatus != null
+                            if (!hadCachedStatus) billingStatus = BillingStatus()
+                            billingError = if (!hadCachedStatus) {
+                                e.message ?: "Could not load your plan."
+                            } else {
+                                null
+                            }
                         } finally {
                             billingRefreshing = false
                         }
@@ -200,15 +205,16 @@ class MainActivity : ComponentActivity() {
                     while (checkoutUrl != null && user != null) {
                         kotlinx.coroutines.delay(3000)
                         try {
-                            val status = withContext(Dispatchers.IO) {
-                                billingRepo.status(requireBillingToken())
-                            }
-                            if (status != null) {
-                                billingStatus = status
-                                if (status.isPremium) {
-                                    checkoutUrl = null
-                                    billingError = null
+                            val status = withTimeout(7_000) {
+                                withContext(Dispatchers.IO) {
+                                    billingRepo.status(requireBillingToken())
                                 }
+                            }
+                            billingStatus = status
+                            writeCachedBillingStatus(context, user!!.accountId, status)
+                            if (status.isPremium) {
+                                checkoutUrl = null
+                                billingError = null
                             }
                         } catch (_: Exception) { }
                     }

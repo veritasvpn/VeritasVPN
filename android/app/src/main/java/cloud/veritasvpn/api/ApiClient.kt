@@ -53,7 +53,7 @@ object ApiClient {
      * the general API retry budget.  Billing status is safe to retry manually,
      * so it gets a small, single-attempt deadline instead.
      */
-    fun getFast(path: String, token: String, timeoutSeconds: Long = 4): Response {
+    fun getFast(path: String, token: String, timeoutSeconds: Long = 6): Response {
         val request = Request.Builder().url("$BASE_URL$path").get()
             .header("Authorization", "Bearer $token")
             .build()
