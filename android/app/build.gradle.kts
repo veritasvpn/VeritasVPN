@@ -4,6 +4,24 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseStoreFile = providers.gradleProperty("VERITAS_RELEASE_STORE_FILE").orNull
+val releaseStorePassword = providers.gradleProperty("VERITAS_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.gradleProperty("VERITAS_RELEASE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.gradleProperty("VERITAS_RELEASE_KEY_PASSWORD").orNull
+val releaseSigningConfigured = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+val releaseTaskRequested = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true)
+}
+
+if (releaseTaskRequested && !releaseSigningConfigured) {
+    throw GradleException("A signed VeritasVPN release requires the VERITAS_RELEASE_* signing properties.")
+}
+
 android {
     namespace = "cloud.veritasvpn"
     compileSdk = 35
@@ -16,9 +34,21 @@ android {
         versionName = "0.1.3"
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("veritasRelease") {
+                storeFile = file(requireNotNull(releaseStoreFile))
+                storePassword = requireNotNull(releaseStorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
+            signingConfig = signingConfigs.findByName("veritasRelease")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

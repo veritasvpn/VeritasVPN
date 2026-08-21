@@ -23,6 +23,13 @@ kubectl -n veritas get configmap,secret -o yaml > "$WORK/veritas-k8s.yaml"
 kubectl -n btcpay get configmap,secret -o yaml > "$WORK/btcpay-k8s.yaml"
 install -m 600 /home/jpg/VeritasVPN/data/wireguard/private.key "$WORK/wireguard-private.key"
 wg show all dump > "$WORK/wireguard-state.txt"
+# The Android signing identity is an irreplaceable release credential. Include
+# it only inside this already encrypted and authenticated off-site backup.
+if [[ -s /etc/veritasvpn/android-signing/veritasvpn-release.p12 && -s /etc/veritasvpn/android-signing/signing.env ]]; then
+  install -d -m 700 "$WORK/android-signing"
+  install -m 600 /etc/veritasvpn/android-signing/veritasvpn-release.p12 "$WORK/android-signing/veritasvpn-release.p12"
+  install -m 600 /etc/veritasvpn/android-signing/signing.env "$WORK/android-signing/signing.env"
+fi
 
 archive="$BACKUP_ROOT/veritasvpn-$STAMP.tar.gz.enc"
 tar -C "$WORK" -czf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:$KEY_FILE" -out "$archive"
