@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -29,5 +30,25 @@ func TestCreateInvoiceClassifiesWalletNotConfigured(t *testing.T) {
 	_, _, err := b.CreateInvoice("account", "premium", "btcpay", "monthly", 3)
 	if !errors.Is(err, ErrStoreWalletNotConfigured) {
 		t.Fatalf("expected ErrStoreWalletNotConfigured, got %v", err)
+	}
+}
+
+func TestGetInvoiceStatus(t *testing.T) {
+	log, _ := logging.New("error")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET, got %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "token key" {
+			t.Fatalf("unexpected authorization header %q", got)
+		}
+		_, _ = w.Write([]byte(`{"id":"invoice","status":"Settled"}`))
+	}))
+	defer server.Close()
+
+	b := NewBTCPayProvider(log, server.URL, "key", "store", "secret", "https://ok")
+	status, err := b.GetInvoiceStatus(context.Background(), "invoice")
+	if err != nil || status != "Settled" {
+		t.Fatalf("expected settled status, got %q, err=%v", status, err)
 	}
 }

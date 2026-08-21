@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -136,6 +137,34 @@ func (b *BTCPayProvider) CreateInvoice(accountID, tier, paymentMethod, planID st
 
 func (b *BTCPayProvider) SetPublicURL(publicURL string) {
 	b.publicURL = strings.TrimRight(publicURL, "/")
+}
+
+// GetInvoiceStatus reads BTCPay's authoritative state for a previously
+// created invoice. It is used only as a recovery path for a local pending
+// payment; webhooks remain the normal activation mechanism.
+func (b *BTCPayProvider) GetInvoiceStatus(ctx context.Context, invoiceID string) (string, error) {
+	if invoiceID == "" {
+		return "", fmt.Errorf("invoice_id required")
+	}
+	url := fmt.Sprintf("%s/api/v1/stores/%s/invoices/%s", b.serverURL, b.storeID, invoiceID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("create btcpay status request: %w", err)
+	}
+	req.Header.Set("Authorization", "token "+b.apiKey)
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("btcpay status request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("btcpay status rejected (status %d)", resp.StatusCode)
+	}
+	var invoice BTCPayInvoiceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&invoice); err != nil {
+		return "", fmt.Errorf("decode btcpay invoice status: %w", err)
+	}
+	return invoice.Status, nil
 }
 
 func (b *BTCPayProvider) ParseWebhook(payload []byte, signature string) (*WebhookEvent, error) {

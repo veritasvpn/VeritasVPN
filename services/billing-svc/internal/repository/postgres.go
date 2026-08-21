@@ -141,6 +141,29 @@ func (p *Postgres) GetPaymentByProviderTxn(ctx context.Context, providerTxnID st
 	return pr, nil
 }
 
+// GetLatestPendingPayment returns at most one outstanding checkout for an
+// account. A pending payment is the only time status reconciliation may call
+// BTCPay, so normal plan reads remain local and fast.
+func (p *Postgres) GetLatestPendingPayment(ctx context.Context, accountID string) (*model.PaymentRecord, error) {
+	query := `SELECT id, subscription_id, COALESCE(account_id, ''), amount, currency, status,
+	          provider_transaction_id, plan_id, period_days, created_at
+	          FROM payment_records
+	          WHERE account_id = $1 AND status = $2
+	          ORDER BY created_at DESC LIMIT 1`
+	pr := &model.PaymentRecord{}
+	err := p.pool.QueryRow(ctx, query, accountID, model.PaymentPending).Scan(
+		&pr.ID, &pr.SubscriptionID, &pr.AccountID, &pr.Amount, &pr.Currency,
+		&pr.Status, &pr.ProviderTransactionID, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, pgx.ErrNoRows
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get latest pending payment: %w", err)
+	}
+	return pr, nil
+}
+
 func (p *Postgres) CompletePayment(ctx context.Context, providerTxnID string) error {
 	query := `UPDATE payment_records SET status = $2
 	           WHERE provider_transaction_id = $1 AND status = $3`

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -138,6 +139,21 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		return nil, err
 	}
 
+	// Webhooks are the primary payment signal. If an account has an outstanding
+	// checkout, also ask BTCPay for its authoritative invoice state. This makes
+	// the return-to-app and Refresh flows recover from delayed webhook delivery
+	// without ever activating an unpaid invoice.
+	if sub.Tier != model.TierPremium {
+		if err := s.reconcilePendingPayment(ctx, accountID); err != nil {
+			s.log.Warn("pending payment reconciliation failed",
+				zap.String("account_hash", logging.HashIdentifier(accountID)),
+				zap.Error(err),
+			)
+		} else if refreshed, err := s.db.GetSubscription(ctx, accountID); err == nil {
+			sub = refreshed
+		}
+	}
+
 	// Treat expired premium as free for API consumers.
 	if sub.Tier == model.TierPremium && sub.Status == model.StatusActive && time.Now().UTC().After(sub.CurrentPeriodEnd) {
 		if err := s.expireOne(ctx, sub); err != nil {
@@ -168,6 +184,27 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		PriceCents:         sub.PriceCents,
 		PeriodDays:         sub.PeriodDays,
 	}, nil
+}
+
+func (s *BillingService) reconcilePendingPayment(ctx context.Context, accountID string) error {
+	if s.btcpay == nil {
+		return nil
+	}
+	payment, err := s.db.GetLatestPendingPayment(ctx, accountID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	status, err := s.btcpay.GetInvoiceStatus(ctx, payment.ProviderTransactionID)
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(status, "settled") {
+		return s.SettleInvoice(ctx, payment.ProviderTransactionID, accountID)
+	}
+	return nil
 }
 
 // CreatePremiumCheckout starts a Bitcoin checkout for premium. Does NOT activate until paid.
