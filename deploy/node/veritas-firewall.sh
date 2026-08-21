@@ -53,7 +53,12 @@ table inet veritas_filter {
     ct state invalid drop
     ct state established,related accept
     iifname "lo" accept
-    iifname "tailscale0" accept
+    # Treat the Tailnet as an administration network, not a trusted LAN.  The
+    # Tailscale iptables chain otherwise accepts every host port before UFW
+    # can filter it, so allow only the services intentionally administered
+    # over Tailscale.  The local tailscaled listener is retained for transport.
+    iifname "tailscale0" tcp dport { 22, 6443, 31500, 64462 } accept
+    iifname "tailscale0" counter drop
     iifname "wg0" accept
     iifname "cni0" accept
     iifname "flannel.1" accept

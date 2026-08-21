@@ -133,10 +133,17 @@ if command -v nft >/dev/null 2>&1; then
   fi
 fi
 
-if nft list table inet veritas_filter 2>/dev/null | grep -q '9090'; then
+FILTER_TABLE="$(nft list table inet veritas_filter 2>/dev/null || true)"
+if grep -Fq '9090' <<<"$FILTER_TABLE"; then
   ok 'host firewall protects agent metrics on uplink'
 else
   warn 'host firewall metrics protection not detected'
+fi
+if grep -Fq 'iifname "tailscale0" tcp dport' <<<"$FILTER_TABLE" \
+  && grep -Eq 'iifname "tailscale0" counter.*drop' <<<"$FILTER_TABLE"; then
+  ok 'Tailnet host access is explicitly allowlisted'
+else
+  bad 'Tailnet host access is not explicitly restricted'
 fi
 if curl -fsS --max-time 2 http://127.0.0.1:9090/healthz >/dev/null 2>&1; then
   ok 'agent /healthz responds on localhost'
