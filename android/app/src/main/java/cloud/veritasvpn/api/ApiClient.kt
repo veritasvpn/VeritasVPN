@@ -48,6 +48,24 @@ object ApiClient {
         return executeWithRetry(requestFactory = { builder.build() })
     }
 
+    /**
+     * Read-only UI updates must never keep the screen in a loading state behind
+     * the general API retry budget.  Billing status is safe to retry manually,
+     * so it gets a small, single-attempt deadline instead.
+     */
+    fun getFast(path: String, token: String, timeoutSeconds: Long = 4): Response {
+        val request = Request.Builder().url("$BASE_URL$path").get()
+            .header("Authorization", "Bearer $token")
+            .build()
+        val fastClient = client.newBuilder()
+            .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .build()
+        return fastClient.newCall(request).execute()
+    }
+
     fun getText(url: String, timeoutSeconds: Long = 5): String {
         val request = Request.Builder().url(url).get().build()
         val validationClient = client.newBuilder()

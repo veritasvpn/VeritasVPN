@@ -5,7 +5,7 @@ import cloud.veritasvpn.api.BillingStatus
 import cloud.veritasvpn.api.CheckoutResponse
 
 class BillingRepository {
-    fun status(token: String): BillingStatus = ApiClient.get("/api/v1/billing/status", token).use { response ->
+    fun status(token: String): BillingStatus = ApiClient.getFast("/api/v1/billing/status", token).use { response ->
         val data = ApiClient.parse<BillingStatus>(response)
         if (!response.isSuccessful) throw Error(data?.error ?: "Could not load your plan.")
         data ?: throw Error("The server returned an invalid plan response.")
