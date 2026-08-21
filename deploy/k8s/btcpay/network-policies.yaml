@@ -89,3 +89,93 @@ spec:
               kubernetes.io/metadata.name: monitoring
       ports:
         - { port: 8080, protocol: TCP }
+---
+# Testnet payment workloads do not need unrestricted outbound access. Keep DNS,
+# Bitcoin P2P, their explicit internal dependencies, and BTCPay rate lookups.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: btcpay-bitcoind-egress
+  namespace: btcpay
+spec:
+  podSelector:
+    matchLabels: { app: bitcoind }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { port: 8333, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: btcpay-nbxplorer-egress
+  namespace: btcpay
+spec:
+  podSelector:
+    matchLabels: { app: nbxplorer }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app: bitcoind }
+      ports:
+        - { port: 8332, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: btcpay-server-egress
+  namespace: btcpay
+spec:
+  podSelector:
+    matchLabels: { app: btcpayserver }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
+        - podSelector:
+            matchLabels: { app: nbxplorer }
+      ports:
+        - { port: 32838, protocol: TCP }
+    - to:
+        - podSelector:
+            matchLabels: { app: postgres-btcpay }
+      ports:
+        - { port: 5432, protocol: TCP }
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { port: 443, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: btcpay-readiness-egress
+  namespace: btcpay
+spec:
+  podSelector:
+    matchLabels: { app: bitcoin-readiness }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app: bitcoind }
+      ports:
+        - { port: 8332, protocol: TCP }

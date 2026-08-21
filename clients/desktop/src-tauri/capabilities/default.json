@@ -5,8 +5,6 @@
   "windows": ["main", "billing-checkout"],
   "permissions": [
     "core:default",
-    "shell:allow-execute",
-    "shell:allow-spawn",
     "opener:default",
     {
       "identifier": "http:allow-fetch",

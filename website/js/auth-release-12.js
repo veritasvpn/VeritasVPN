@@ -285,9 +285,20 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
 
   if (googleBtn) googleBtn.remove();
 
-  function setError(message, { success = false } = {}) {
+  function setError(message, { success = false, action = null } = {}) {
     if (!errorEl) return;
-    errorEl.innerHTML = message || '';
+    errorEl.replaceChildren();
+    if (message) {
+      errorEl.append(document.createTextNode(message));
+      if (action) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'auth-inline-action';
+        button.dataset.resendVerification = '';
+        button.textContent = action;
+        errorEl.append(document.createElement('br'), button);
+      }
+    }
     errorEl.hidden = !message;
     errorEl.classList.toggle('is-success', Boolean(message) && success);
   }
@@ -590,7 +601,7 @@ function renderUser(user) {
           try { document.body.removeChild(dl); } catch (_) {}
         }, 5000);
 
-        setError(`Account created. Account ID: <strong>${data.account_id}</strong> — check your downloads.`, { success: true });
+        setError(`Account created. Account ID: ${data.account_id} — check your downloads.`, { success: true });
         setTimeout(() => {
           closeModal();
           enterDashboard();
@@ -642,7 +653,7 @@ function renderUser(user) {
       });
       if (data.verification_required) {
         pendingDashboardRedirect = false;
-        setError(`Check <strong>${email}</strong> for a verification link. You must verify it before signing in.<br><button type="button" class="auth-inline-action" data-resend-verification>Resend verification email</button>`, { success: true });
+        setError(`Check ${email} for a verification link. You must verify it before signing in.`, { success: true, action: 'Resend verification email' });
       } else {
         const user = { email: email, account_id: data.account_id };
         setSession(user, data.access_token, data.refresh_token);

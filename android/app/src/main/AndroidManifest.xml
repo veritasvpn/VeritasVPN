@@ -10,7 +10,9 @@
 
     <application
         android:name=".VeritasVpnApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:restoreAnyVersion="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="VeritasVPN"
