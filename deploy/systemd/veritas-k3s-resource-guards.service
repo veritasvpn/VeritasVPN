@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply VeritasVPN K3s add-on resource guards
+After=k3s.service network-online.target
+Wants=k3s.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/veritas-k3s-resource-guards
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

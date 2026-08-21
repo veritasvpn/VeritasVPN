@@ -31,6 +31,20 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "Dell root disk usage exceeds 85%"
+      - alert: DellDiskCapacityReserveLow
+        expr: 100 * (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) > 75
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Dell disk capacity reserve is below 25%"
+          description: "Local Kubernetes volumes share the Dell root disk. Investigate growth before the critical 85% threshold."
+      - alert: KubernetesPersistentVolumeNearCapacity
+        expr: 100 * (1 - kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes) > 85
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "A Kubernetes persistent volume is above 85% utilization"
+          description: "Inspect the affected volume before it can disrupt payment, database, monitoring, or registry workloads."
       - alert: DellMemoryPressure
         expr: 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 90
         for: 10m
@@ -152,6 +166,41 @@ groups:
         annotations:
           summary: "Bitcoin readiness exporter is stale"
           description: "The exporter has not completed a successful Bitcoin RPC refresh in over two minutes."
+      - alert: BitcoinMainnetReadinessExporterStale
+        expr: time() - bitcoin_last_successful_refresh_timestamp_seconds{job="bitcoin-readiness-mainnet"} > 120
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Mainnet Bitcoin readiness exporter is stale"
+          description: "The mainnet exporter has not completed a successful Bitcoin RPC refresh in over two minutes."
+      - alert: BitcoinMainnetSyncStalled
+        expr: bitcoin_initial_block_download{job="bitcoin-readiness-mainnet"} == 1 and changes(bitcoin_blocks{job="bitcoin-readiness-mainnet"}[30m]) == 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Mainnet Bitcoin synchronization appears stalled"
+          description: "Mainnet block height has not advanced for 30 minutes while initial synchronization is active."
+      - alert: BitcoinMainnetHeaderLag
+        expr: (bitcoin_headers{job="bitcoin-readiness-mainnet"} - bitcoin_blocks{job="bitcoin-readiness-mainnet"}) > 6
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Mainnet Bitcoin node is behind its advertised chain tip"
+          description: "Mainnet block validation is more than six headers behind."
+      - alert: BitcoinMainnetRPCUnavailable
+        expr: bitcoin_rpc_up{job="bitcoin-readiness-mainnet"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Mainnet Bitcoin RPC is unavailable"
+          description: "The mainnet readiness exporter cannot reach Bitcoin Core."
+      - alert: MainnetNBXplorerRestarting
+        expr: increase(kube_pod_container_status_restarts_total{namespace="btcpay-mainnet",pod=~"nbxplorer-mainnet-0"}[15m]) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Mainnet NBXplorer restarted"
+          description: "NBXplorer restarted while tracking the mainnet payment stack."
       - alert: VeritasBackupStale
         expr: time() - veritas_backup_last_success_timestamp > 172800
         for: 30m

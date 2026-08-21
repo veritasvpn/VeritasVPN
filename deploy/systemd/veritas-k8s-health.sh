@@ -7,7 +7,7 @@ bad() { printf '[FAIL] %s\n' "$1" >&2; FAIL=1; }
 warn() { printf '[WARN] %s\n' "$1"; }
 
 if kubectl wait --for=condition=Ready node --all --timeout=10s >/dev/null 2>&1; then ok 'k3s node ready'; else bad 'k3s node is not ready'; fi
-for ns in veritas btcpay monitoring ingress-nginx; do
+for ns in veritas btcpay btcpay-mainnet monitoring ingress-nginx; do
   if kubectl get namespace "$ns" >/dev/null 2>&1; then ok "namespace $ns exists"; else bad "namespace $ns is missing"; fi
 done
 if kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded --no-headers 2>/dev/null | grep -q .; then
@@ -21,8 +21,11 @@ for target in \
   'deployment/wg-manager:veritas' \
   'deployment/billing-svc:veritas' \
   'statefulset/bitcoind:btcpay' \
+  'statefulset/bitcoind-mainnet:btcpay-mainnet' \
   'statefulset/nbxplorer:btcpay' \
+  'statefulset/nbxplorer-mainnet:btcpay-mainnet' \
   'deployment/btcpayserver:btcpay' \
+  'deployment/btcpayserver-mainnet:btcpay-mainnet' \
   'deployment/prometheus:monitoring' \
   'deployment/grafana:monitoring'; do
   resource=${target%%:*}; namespace=${target##*:}
@@ -39,6 +42,13 @@ if [[ "$bitcoin_ready_replicas" == "1" ]]; then
   ok 'btcpay/bitcoin-readiness ready'
 else
   warn 'btcpay/bitcoin-readiness is not ready; Bitcoin payments remain gated'
+fi
+
+bitcoin_mainnet_ready_replicas="$(kubectl -n btcpay-mainnet get deployment bitcoin-readiness-mainnet -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+if [[ "$bitcoin_mainnet_ready_replicas" == "1" ]]; then
+  ok 'btcpay-mainnet/bitcoin-readiness-mainnet ready'
+else
+  warn 'btcpay-mainnet/bitcoin-readiness-mainnet is not ready; mainnet billing remains intentionally unavailable'
 fi
 
 check_http() {

@@ -56,12 +56,15 @@ spec:
                 echo "rpcuser=$(cat /etc/bitcoin-creds/BTC_RPC_USER)"
                 echo "rpcpassword=$(cat /etc/bitcoin-creds/BTC_RPC_PASSWORD)"
               } > /etc/bitcoin-rpc/bitcoin.conf
+              # Mainnet initial block download is CPU/disk intensive.  A 1.5 GiB
+              # cache is safe on the Dell and reduces repeated chainstate disk
+              # reads without changing validation or pruning.
               exec bitcoind \
                 -datadir=/home/bitcoin/.bitcoin \
                 -conf=/etc/bitcoin-rpc/bitcoin.conf \
                 -printtoconsole \
                 -prune=10000 \
-                -dbcache=512 \
+                -dbcache=1536 \
                 -rpcallowip=10.42.0.0/16 \
                 -rpcbind=0.0.0.0 \
                 -rpcport=8332 \
@@ -119,7 +122,7 @@ spec:
               memory: 1Gi
             limits:
               cpu: 2000m
-              memory: 3Gi
+              memory: 4Gi
       volumes:
         - name: bitcoin-creds
           secret:

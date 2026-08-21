@@ -31,6 +31,9 @@ spec:
       labels:
         app: billing-svc
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: billing-svc
           image: localhost:31500/billing-svc@sha256:891bcca9d15113915b0641b7781cc07dfd954fbaeab715676662ba632efa0abf
@@ -152,6 +155,14 @@ spec:
               port: 8080
             initialDelaySeconds: 15
             periodSeconds: 10
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
               cpu: 50m

@@ -7,6 +7,93 @@ spec:
   podSelector: {}
   policyTypes: [Ingress]
 ---
+# Mainnet payments are deliberately isolated from every other namespace.  The
+# following egress policy permits only DNS, local payment-plane traffic, and
+# Bitcoin Core's outbound peer connections.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: btcpay-mainnet-default-deny-egress
+  namespace: btcpay-mainnet
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: btcpay-mainnet-allow-dns-egress
+  namespace: btcpay-mainnet
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: btcpay-mainnet-allow-payment-plane-egress
+  namespace: btcpay-mainnet
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [bitcoind-mainnet, nbxplorer-mainnet, btcpayserver-mainnet, postgres-btcpay-mainnet, bitcoin-readiness-mainnet]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        # Be explicit about the namespace.  This keeps the policy portable
+        # across CNI implementations and permits only the mainnet payment
+        # plane, not cross-namespace traffic.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: btcpay-mainnet
+          podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: btcpay-mainnet-allow-bitcoin-p2p-egress
+  namespace: btcpay-mainnet
+spec:
+  podSelector:
+    matchLabels: {app: bitcoind-mainnet}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+      ports:
+        - {port: 8333, protocol: TCP}
+---
+# BTCPay obtains the exchange rate used to quote USD subscriptions over HTTPS.
+# No other mainnet workload receives unrestricted Internet egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: btcpay-mainnet-allow-rate-egress
+  namespace: btcpay-mainnet
+spec:
+  podSelector:
+    matchLabels: {app: btcpayserver-mainnet}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+      ports:
+        - {port: 443, protocol: TCP}
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -67,3 +154,20 @@ spec:
               kubernetes.io/metadata.name: monitoring
       ports:
         - { port: 5432, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: btcpay-mainnet-allow-readiness
+  namespace: btcpay-mainnet
+spec:
+  podSelector:
+    matchLabels: {app: bitcoin-readiness-mainnet}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - {port: 8080, protocol: TCP}

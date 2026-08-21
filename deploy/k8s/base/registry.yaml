@@ -58,6 +58,9 @@ spec:
       labels:
         app: registry
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: registry
           image: registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
@@ -80,6 +83,9 @@ spec:
               cpu: 200m
               memory: 256Mi
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]

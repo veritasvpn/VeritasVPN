@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bitcoin-readiness-mainnet
+  namespace: btcpay-mainnet
+  labels: {app: bitcoin-readiness-mainnet}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  progressDeadlineSeconds: 3600
+  strategy:
+    type: Recreate
+  selector: {matchLabels: {app: bitcoin-readiness-mainnet}}
+  template:
+    metadata: {labels: {app: bitcoin-readiness-mainnet}}
+    spec:
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: bitcoin-readiness-mainnet
+          image: localhost:31500/bitcoin-readiness@sha256:9a67ab674a82a45e13af76c538d5bda6ee1fd314c557462ab3b3455a84804fb9
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8080}]
+          env:
+            - name: BTC_RPC_URL
+              value: "http://bitcoind-mainnet.btcpay-mainnet.svc.cluster.local:8332"
+            - name: BTC_RPC_USER
+              valueFrom: {secretKeyRef: {name: btcpay-mainnet-secrets, key: BTC_RPC_USER}}
+            - name: BTC_RPC_PASSWORD
+              valueFrom: {secretKeyRef: {name: btcpay-mainnet-secrets, key: BTC_RPC_PASSWORD}}
+            - name: BITCOIN_NETWORK
+              value: "mainnet"
+            - name: BTCPAY_NETWORK
+              value: "mainnet"
+          startupProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 12}
+          readinessProbe: {httpGet: {path: /readyz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 15, timeoutSeconds: 10, failureThreshold: 6}
+          livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 20, periodSeconds: 30, timeoutSeconds: 3, failureThreshold: 3}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bitcoin-readiness-mainnet
+  namespace: btcpay-mainnet
+  labels: {app: bitcoin-readiness-mainnet}
+spec:
+  type: ClusterIP
+  # The readiness endpoint remains 503 during initial block download, while
+  # Prometheus still needs its metrics to distinguish healthy sync from a stall.
+  publishNotReadyAddresses: true
+  selector: {app: bitcoin-readiness-mainnet}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
