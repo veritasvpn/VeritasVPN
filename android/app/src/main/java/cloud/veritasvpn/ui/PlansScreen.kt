@@ -30,7 +30,8 @@ import java.util.Locale
 @Composable
 fun PlansScreen(
     billingStatus: BillingStatus?,
-    loading: Boolean,
+    refreshing: Boolean,
+    cancelling: Boolean,
     checkoutMethod: String?,
     error: String?,
     onBack: () -> Unit,
@@ -49,7 +50,7 @@ fun PlansScreen(
 
     if (showCancelConfirmation) {
         AlertDialog(
-            onDismissRequest = { if (!loading) showCancelConfirmation = false },
+            onDismissRequest = { if (!cancelling) showCancelConfirmation = false },
             title = { Text("Schedule cancellation?", color = Paper, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
@@ -61,12 +62,12 @@ fun PlansScreen(
             confirmButton = {
                 Button(
                     onClick = { onCancel() },
-                    enabled = !loading,
+                    enabled = !cancelling,
                     colors = ButtonDefaults.buttonColors(containerColor = Royal)
-                ) { Text(if (loading) "Scheduling…" else "Confirm cancellation", color = Color.White) }
+                ) { Text(if (cancelling) "Scheduling…" else "Confirm cancellation", color = Color.White) }
             },
             dismissButton = {
-                TextButton(onClick = { showCancelConfirmation = false }, enabled = !loading) {
+                TextButton(onClick = { showCancelConfirmation = false }, enabled = !cancelling) {
                     Text("Keep Premium", color = CyanHover)
                 }
             },
@@ -100,9 +101,18 @@ fun PlansScreen(
         ) {
             Column(Modifier.weight(1f)) {
                 Text("CURRENT PLAN", color = PaperDim, fontSize = 11.sp, letterSpacing = 1.4.sp)
-                Text(if (premium) "Premium" else "No active subscription", color = if (premium) CyanHover else Paper, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    when {
+                        refreshing && billingStatus == null -> "Checking subscription…"
+                        premium -> "Premium"
+                        else -> "No active subscription"
+                    },
+                    color = if (premium) CyanHover else Paper,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
-            if (loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Cyan)
+            if (refreshing) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Cyan)
             else TextButton(onClick = onRefresh) { Text("Refresh", color = CyanHover) }
         }
 
@@ -161,8 +171,8 @@ fun PlansScreen(
                     }
                 }
             } else {
-                OutlinedButton(onClick = { showCancelConfirmation = true }, enabled = !loading, modifier = Modifier.fillMaxWidth(), border = BorderStroke(1.dp, LineStrong)) {
-                    Text(if (loading) "Scheduling cancellation…" else "Cancel at period end", color = PaperMuted)
+                OutlinedButton(onClick = { showCancelConfirmation = true }, enabled = !cancelling, modifier = Modifier.fillMaxWidth(), border = BorderStroke(1.dp, LineStrong)) {
+                    Text(if (cancelling) "Scheduling cancellation…" else "Cancel at period end", color = PaperMuted)
                 }
             }
         }

@@ -93,7 +93,8 @@ class MainActivity : ComponentActivity() {
                 var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
                 var billingStatus by remember { mutableStateOf<BillingStatus?>(null) }
-                var billingLoading by remember { mutableStateOf(false) }
+                var billingRefreshing by remember { mutableStateOf(false) }
+                var cancellationInProgress by remember { mutableStateOf(false) }
                 var billingError by remember { mutableStateOf<String?>(null) }
                 var checkoutMethod by remember { mutableStateOf<String?>(null) }
                 var checkoutUrl by remember { mutableStateOf<String?>(null) }
@@ -101,18 +102,24 @@ class MainActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
                 val billingRepo = remember { BillingRepository() }
 
+                fun requireBillingToken(): String {
+                    authRepo.getAccessToken()?.takeIf { it.isNotBlank() }?.let { return it }
+                    if (authRepo.refreshSession()) {
+                        return authRepo.getAccessToken()
+                            ?: throw IllegalStateException("Your session expired. Sign in again.")
+                    }
+                    throw IllegalStateException("Your session expired. Sign in again.")
+                }
+
                 fun refreshBilling() {
-                    if (user == null || billingLoading) return
-                    billingLoading = true
+                    if (user == null || billingRefreshing) return
+                    billingRefreshing = true
                     billingError = null
                     scope.launch {
                         try {
                             val status = withTimeout(8_000) {
                                 withContext(Dispatchers.IO) {
-                                    authRepo.refreshSession()
-                                    val token = authRepo.getAccessToken()
-                                        ?: throw IllegalStateException("Your session expired. Sign in again.")
-                                    billingRepo.status(token)
+                                    billingRepo.status(requireBillingToken())
                                 }
                             }
                             billingStatus = status
@@ -125,7 +132,7 @@ class MainActivity : ComponentActivity() {
                             if (billingStatus == null) billingStatus = BillingStatus()
                             billingError = e.message ?: "Could not load your plan."
                         } finally {
-                            billingLoading = false
+                            billingRefreshing = false
                         }
                     }
                 }
@@ -137,10 +144,7 @@ class MainActivity : ComponentActivity() {
                     scope.launch {
                         try {
                             val createdCheckoutUrl = withContext(Dispatchers.IO) {
-                                authRepo.refreshSession()
-                                val token = authRepo.getAccessToken()
-                                    ?: throw IllegalStateException("Your session expired. Sign in again.")
-                                billingRepo.createCheckout(token, paymentMethod, planId)
+                                billingRepo.createCheckout(requireBillingToken(), paymentMethod, planId)
                             }
                             checkoutUrl = createdCheckoutUrl
                         } catch (e: Exception) {
@@ -151,13 +155,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(user?.accountId, showPlans) {
+                LaunchedEffect(user?.accountId) {
                     if (user != null) {
                         // Use the last verified plan for this account immediately,
                         // then refresh it in the background without blocking the
                         // dashboard or the Connect button.
                         billingStatus = readCachedBillingStatus(context, user!!.accountId)
-                        billingLoading = false
+                        billingRefreshing = false
                         refreshBilling()
                     }
                 }
@@ -197,9 +201,7 @@ class MainActivity : ComponentActivity() {
                         kotlinx.coroutines.delay(3000)
                         try {
                             val status = withContext(Dispatchers.IO) {
-                                authRepo.refreshSession()
-                                val token = authRepo.getAccessToken() ?: return@withContext null
-                                billingRepo.status(token)
+                                billingRepo.status(requireBillingToken())
                             }
                             if (status != null) {
                                 billingStatus = status
@@ -213,22 +215,19 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun cancelSubscription() {
-                    if (billingLoading) return
-                    billingLoading = true
+                    if (cancellationInProgress) return
+                    cancellationInProgress = true
                     scope.launch {
                         try {
                             withContext(Dispatchers.IO) {
-                                authRepo.refreshSession()
-                                val token = authRepo.getAccessToken() ?: throw IllegalStateException("Your session expired. Sign in again.")
-                                billingRepo.cancel(token)
+                                billingRepo.cancel(requireBillingToken())
                             }
                             billingStatus = withContext(Dispatchers.IO) {
-                                val token = authRepo.getAccessToken() ?: throw IllegalStateException("Your session expired. Sign in again.")
-                                billingRepo.status(token)
+                                billingRepo.status(requireBillingToken())
                             }
                         } catch (e: Exception) {
                             billingError = e.message ?: "Could not cancel your subscription."
-                        } finally { billingLoading = false }
+                        } finally { cancellationInProgress = false }
                     }
                 }
 
@@ -365,7 +364,8 @@ class MainActivity : ComponentActivity() {
                 if (user == null) {
                     AuthScreen(onAuthenticated = {
                         billingStatus = null
-                        billingLoading = false
+                        billingRefreshing = false
+                        cancellationInProgress = false
                         user = authRepo.getStoredUser()
                     })
                 } else if (checkoutUrl != null) {
@@ -377,7 +377,8 @@ class MainActivity : ComponentActivity() {
                 } else if (showPlans) {
                     PlansScreen(
                         billingStatus = billingStatus,
-                        loading = billingLoading,
+                        refreshing = billingRefreshing,
+                        cancelling = cancellationInProgress,
                         checkoutMethod = checkoutMethod,
                         error = billingError,
                         onBack = { showPlans = false },
@@ -420,7 +421,10 @@ class MainActivity : ComponentActivity() {
                             showPlans = false
                             user = null
                         },
-                        onPlans = { showPlans = true },
+                        onPlans = {
+                            showPlans = true
+                            if (billingStatus == null) refreshBilling()
+                        },
                         onKillSwitchSettings = {
                             context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
                         },
