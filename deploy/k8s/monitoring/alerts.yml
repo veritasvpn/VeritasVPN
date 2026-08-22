@@ -215,3 +215,15 @@ groups:
         annotations:
           summary: "Off-site VeritasVPN backup is stale"
           description: "No encrypted backup has been uploaded and verified in R2 in the last 48 hours."
+      - alert: DNSBlocklistStale
+        expr: veritas_agent_dns_blocklist_last_successful_refresh_timestamp_seconds > 0 and time() - veritas_agent_dns_blocklist_last_successful_refresh_timestamp_seconds > 43200
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "VeritasVPN DNS malware/phishing blocklist has not refreshed in 12 hours"
+      - alert: DNSUpstreamsFailing
+        expr: increase(veritas_agent_dns_upstream_failures_total[10m]) > 5
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "VeritasVPN encrypted DNS upstreams are repeatedly failing"

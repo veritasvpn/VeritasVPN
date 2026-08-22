@@ -9,17 +9,23 @@ import (
 )
 
 type Metrics struct {
-	PeerCount          prometheus.Gauge
-	ActivePeerCount    prometheus.Gauge
-	RXBytesTotal       prometheus.Counter
-	TXBytesTotal       prometheus.Counter
-	UptimeSeconds      prometheus.Counter
-	CPUUsage           prometheus.Gauge
-	MemoryUsage        prometheus.Gauge
-	StalePeerCount     prometheus.Gauge
-	PeerExpiryFailures prometheus.Counter
-	OrphanPeerCount    prometheus.Gauge
-	OrphanPeerRemovals prometheus.Counter
+	PeerCount                   prometheus.Gauge
+	ActivePeerCount             prometheus.Gauge
+	RXBytesTotal                prometheus.Counter
+	TXBytesTotal                prometheus.Counter
+	UptimeSeconds               prometheus.Counter
+	CPUUsage                    prometheus.Gauge
+	MemoryUsage                 prometheus.Gauge
+	StalePeerCount              prometheus.Gauge
+	PeerExpiryFailures          prometheus.Counter
+	OrphanPeerCount             prometheus.Gauge
+	OrphanPeerRemovals          prometheus.Counter
+	DNSQueriesTotal             prometheus.Counter
+	DNSBlockedTotal             prometheus.Counter
+	DNSUpstreamFailures         prometheus.Counter
+	DNSBlocklistDomains         prometheus.Gauge
+	DNSBlocklistLastRefresh     prometheus.Gauge
+	DNSBlocklistRefreshFailures prometheus.Counter
 
 	registry *prometheus.Registry
 	port     string
@@ -83,6 +89,30 @@ func NewWithBind(port, bind string) *Metrics {
 			Name: "veritas_agent_orphan_peer_removals_total",
 			Help: "Kernel peers removed because they were no longer managed.",
 		}),
+		DNSQueriesTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "veritas_agent_dns_queries_total",
+			Help: "Total DNS requests handled by the VPN DNS gateway. No query names or client identifiers are recorded.",
+		}),
+		DNSBlockedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "veritas_agent_dns_blocked_total",
+			Help: "DNS requests blocked by the malware and phishing policy. No query names or client identifiers are recorded.",
+		}),
+		DNSUpstreamFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "veritas_agent_dns_upstream_failures_total",
+			Help: "Requests for which every encrypted DNS upstream failed.",
+		}),
+		DNSBlocklistDomains: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "veritas_agent_dns_blocklist_domains",
+			Help: "Number of domains in the active malware and phishing blocklist.",
+		}),
+		DNSBlocklistLastRefresh: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "veritas_agent_dns_blocklist_last_successful_refresh_timestamp_seconds",
+			Help: "Unix timestamp of the most recent successful DNS blocklist refresh.",
+		}),
+		DNSBlocklistRefreshFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "veritas_agent_dns_blocklist_refresh_failures_total",
+			Help: "Failed DNS blocklist refresh attempts.",
+		}),
 		registry: reg,
 		port:     port,
 		bind:     bind,
@@ -99,9 +129,33 @@ func NewWithBind(port, bind string) *Metrics {
 	reg.MustRegister(m.PeerExpiryFailures)
 	reg.MustRegister(m.OrphanPeerCount)
 	reg.MustRegister(m.OrphanPeerRemovals)
+	reg.MustRegister(m.DNSQueriesTotal)
+	reg.MustRegister(m.DNSBlockedTotal)
+	reg.MustRegister(m.DNSUpstreamFailures)
+	reg.MustRegister(m.DNSBlocklistDomains)
+	reg.MustRegister(m.DNSBlocklistLastRefresh)
+	reg.MustRegister(m.DNSBlocklistRefreshFailures)
 
 	return m
 }
+
+// DNSQuery records only aggregate DNS activity. It intentionally has no
+// labels, so monitoring cannot become a record of users' browsing activity.
+func (m *Metrics) DNSQuery(blocked bool) {
+	m.DNSQueriesTotal.Inc()
+	if blocked {
+		m.DNSBlockedTotal.Inc()
+	}
+}
+
+func (m *Metrics) DNSUpstreamFailure() { m.DNSUpstreamFailures.Inc() }
+
+func (m *Metrics) DNSBlocklistRefreshed(domains int, at time.Time) {
+	m.DNSBlocklistDomains.Set(float64(domains))
+	m.DNSBlocklistLastRefresh.Set(float64(at.Unix()))
+}
+
+func (m *Metrics) DNSBlocklistRefreshFailed() { m.DNSBlocklistRefreshFailures.Inc() }
 
 func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})

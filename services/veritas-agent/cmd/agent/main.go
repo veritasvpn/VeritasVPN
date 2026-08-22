@@ -268,22 +268,25 @@ func urlQueryEscape(s string) string {
 }
 
 type AgentConfig struct {
-	AuthToken            string
-	WGInterface          string
-	WGPort               int
-	WGSubnet             string
-	ManagerEndpoint      string
-	MetricsPort          string
-	MetricsBind          string
-	ServerHostname       string
-	ServerRegion         string
-	ServerCity           string
-	ServerCountry        string
-	DNSListen            string
-	DNSUpstream          string
-	BandwidthLimitMbps   int
-	PeerNoHandshakeGrace time.Duration
-	PeerStaleAfter       time.Duration
+	AuthToken             string
+	WGInterface           string
+	WGPort                int
+	WGSubnet              string
+	ManagerEndpoint       string
+	MetricsPort           string
+	MetricsBind           string
+	ServerHostname        string
+	ServerRegion          string
+	ServerCity            string
+	ServerCountry         string
+	DNSListen             string
+	DNSUpstream           string
+	DNSBlocklistURLs      string
+	DNSBlocklistRefresh   time.Duration
+	DNSBlocklistStateFile string
+	BandwidthLimitMbps    int
+	PeerNoHandshakeGrace  time.Duration
+	PeerStaleAfter        time.Duration
 }
 
 func LoadAgentConfig() *AgentConfig {
@@ -292,22 +295,25 @@ func LoadAgentConfig() *AgentConfig {
 	bandwidth, _ := strconv.Atoi(envOrDefault("PEER_BANDWIDTH_LIMIT_MBPS", "50"))
 
 	return &AgentConfig{
-		AuthToken:            os.Getenv("AGENT_AUTH_TOKEN"),
-		WGInterface:          envOrDefault("WG_INTERFACE", "wg0"),
-		WGPort:               port,
-		WGSubnet:             os.Getenv("WG_SUBNET"),
-		ManagerEndpoint:      envOrDefault("MANAGER_ENDPOINT", "http://wg-manager:8080"),
-		MetricsPort:          envOrDefault("METRICS_PORT", "9090"),
-		MetricsBind:          envOrDefault("METRICS_BIND", "0.0.0.0"),
-		ServerHostname:       envOrDefault("SERVER_HOSTNAME", hostname),
-		ServerRegion:         os.Getenv("SERVER_REGION"),
-		ServerCity:           os.Getenv("SERVER_CITY"),
-		ServerCountry:        os.Getenv("SERVER_COUNTRY"),
-		DNSListen:            envOrDefault("DNS_LISTEN", "10.0.0.1:53"),
-		DNSUpstream:          envOrDefault("DNS_UPSTREAM", "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query"),
-		BandwidthLimitMbps:   bandwidth,
-		PeerNoHandshakeGrace: durationOrDefault("PEER_NO_HANDSHAKE_GRACE", 3*time.Minute),
-		PeerStaleAfter:       durationOrDefault("PEER_STALE_AFTER", 5*time.Minute),
+		AuthToken:             os.Getenv("AGENT_AUTH_TOKEN"),
+		WGInterface:           envOrDefault("WG_INTERFACE", "wg0"),
+		WGPort:                port,
+		WGSubnet:              os.Getenv("WG_SUBNET"),
+		ManagerEndpoint:       envOrDefault("MANAGER_ENDPOINT", "http://wg-manager:8080"),
+		MetricsPort:           envOrDefault("METRICS_PORT", "9090"),
+		MetricsBind:           envOrDefault("METRICS_BIND", "0.0.0.0"),
+		ServerHostname:        envOrDefault("SERVER_HOSTNAME", hostname),
+		ServerRegion:          os.Getenv("SERVER_REGION"),
+		ServerCity:            os.Getenv("SERVER_CITY"),
+		ServerCountry:         os.Getenv("SERVER_COUNTRY"),
+		DNSListen:             envOrDefault("DNS_LISTEN", "10.0.0.1:53"),
+		DNSUpstream:           envOrDefault("DNS_UPSTREAM", "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query"),
+		DNSBlocklistURLs:      os.Getenv("DNS_BLOCKLIST_URLS"),
+		DNSBlocklistRefresh:   durationOrDefault("DNS_BLOCKLIST_REFRESH", 6*time.Hour),
+		DNSBlocklistStateFile: envOrDefault("DNS_BLOCKLIST_STATE_FILE", "/var/lib/veritasvpn/dns/blocklist.txt"),
+		BandwidthLimitMbps:    bandwidth,
+		PeerNoHandshakeGrace:  durationOrDefault("PEER_NO_HANDSHAKE_GRACE", 3*time.Minute),
+		PeerStaleAfter:        durationOrDefault("PEER_STALE_AFTER", 5*time.Minute),
 	}
 }
 
@@ -380,7 +386,14 @@ func (a *Agent) Run() error {
 		return fmt.Errorf("ensure wireguard interface: %w", err)
 	}
 
-	a.dnsForwarder = dnssvc.New(a.cfg.DNSListen, a.cfg.DNSUpstream, a.logger)
+	a.metrics = metrics.NewWithBind(a.cfg.MetricsPort, a.cfg.MetricsBind)
+	a.dnsForwarder = dnssvc.New(dnssvc.Config{
+		ListenAddr:         a.cfg.DNSListen,
+		UpstreamAddr:       a.cfg.DNSUpstream,
+		BlocklistURLs:      a.cfg.DNSBlocklistURLs,
+		BlocklistRefresh:   a.cfg.DNSBlocklistRefresh,
+		BlocklistStateFile: a.cfg.DNSBlocklistStateFile,
+	}, a.metrics, a.logger)
 	if err := a.dnsForwarder.Start(ctx); err != nil {
 		return fmt.Errorf("start encrypted DNS forwarder: %w", err)
 	}
@@ -406,8 +419,6 @@ func (a *Agent) Run() error {
 
 	a.logger.Info("Registered with wg-manager",
 		zap.String("server_id", resp.ServerID))
-
-	a.metrics = metrics.NewWithBind(a.cfg.MetricsPort, a.cfg.MetricsBind)
 
 	go func() {
 		if err := a.metrics.Start(); err != nil {

@@ -57,6 +57,12 @@ sudo systemctl enable --now veritas-firewall.service
 
 WireGuard private key path on k3s nodes: `/etc/wireguard/private.key` (agent hostPath). Bandwidth caps remain host-owned via `veritas-bandwidth.timer` (tc); the agent no longer installs nft meters.
 
+## VPN DNS protection
+
+The WireGuard server provides `10.0.0.1` as the DNS resolver for Android and Linux peers. The agent forwards queries only through encrypted upstream DNS, blocks known malware and phishing domains from automatically refreshed security feeds, and keeps no query names or client identifiers in metrics or logs. The host firewall prevents VPN clients from bypassing the gateway through ordinary DNS (`53`) or DNS-over-TLS (`853`); DNS-over-HTTPS cannot be blocked generically without breaking normal HTTPS traffic.
+
+The active blocklist cache is stored at `/var/lib/veritasvpn/dns/blocklist.txt`. It is not sensitive and is retained so protection continues through a temporary feed outage. Monitor the aggregate `veritas_agent_dns_*` metrics and the `DNSBlocklistStale` / `DNSUpstreamsFailing` alerts.
+
 ## Backup metrics
 
 Backup freshness and R2 upload timestamps are exposed through node-exporter’s textfile collector. The metrics directory is intentionally separate from encrypted archives and keys:

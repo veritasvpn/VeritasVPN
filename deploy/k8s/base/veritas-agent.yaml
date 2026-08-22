@@ -111,6 +111,12 @@ spec:
               value: "10.0.0.1:53"
             - name: DNS_UPSTREAM
               value: "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query"
+            - name: DNS_BLOCKLIST_URLS
+              value: "https://urlhaus.abuse.ch/downloads/hostfile/,https://phishing.army/download/phishing_army_blocklist_extended.txt"
+            - name: DNS_BLOCKLIST_REFRESH
+              value: "6h"
+            - name: DNS_BLOCKLIST_STATE_FILE
+              value: "/var/lib/veritasvpn/dns/blocklist.txt"
             - name: PEER_NO_HANDSHAKE_GRACE
               value: "3m"
             - name: PEER_STALE_AFTER
@@ -149,6 +155,8 @@ spec:
             - name: wireguard
               mountPath: /etc/wireguard
               readOnly: true
+            - name: dns-state
+              mountPath: /var/lib/veritasvpn/dns
           resources:
             requests:
               cpu: 50m
@@ -161,3 +169,7 @@ spec:
           hostPath:
             path: /etc/wireguard
             type: Directory
+        - name: dns-state
+          hostPath:
+            path: /var/lib/veritasvpn/dns
+            type: DirectoryOrCreate

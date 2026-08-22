@@ -42,10 +42,11 @@
       <h2>2. What we do not collect</h2>
       <p>We do not intentionally log or store:</p>
       <ul>
-        <li>Browsing history or DNS query contents for VPN traffic</li>
+        <li>Browsing history or DNS query contents for VPN traffic, including DNS-protection block decisions</li>
         <li>Destination IP/port pairs of your VPN sessions for later inspection</li>
         <li>Payload contents of WireGuard traffic</li>
       </ul>
+      <p>Our DNS-protection service keeps only aggregate operational counts such as total requests, blocked-request totals, resolver errors, and blocklist freshness. Those measurements contain no domain names, account IDs, or client IP addresses.</p>
 
       <h2>3. What we do collect</h2>
       <p>To run authentication, billing, and WireGuard peer management we may store:</p>

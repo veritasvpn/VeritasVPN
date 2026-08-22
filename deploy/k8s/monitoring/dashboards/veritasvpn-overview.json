@@ -196,8 +196,27 @@
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}
     },
     {
+      "type": "timeseries", "title": "VPN protected DNS", "id": 25,
+      "gridPos": {"h": 8, "w": 18, "x": 0, "y": 46},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum(rate(veritas_agent_dns_queries_total[5m]))", "legendFormat": "DNS requests / sec", "refId": "A"},
+        {"expr": "sum(rate(veritas_agent_dns_blocked_total[5m]))", "legendFormat": "Threat domains blocked / sec", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops", "min": 0}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi"}}
+    },
+    {
+      "type": "stat", "title": "DNS threat domains loaded", "id": 26,
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 46},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(veritas_agent_dns_blocklist_domains)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1000}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+    },
+    {
       "type": "alertlist", "title": "Active operational alerts", "id": 24,
-      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 46},
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 54},
       "options": {"alertInstanceLabelFilter": "", "alertName": "", "dashboardAlerts": false, "groupBy": ["alertname"], "groupMode": "default", "maxItems": 20, "sortOrder": 1, "stateFilter": {"alerting": true, "error": true, "firing": true, "noData": true, "normal": false, "pending": true}}
     }
   ],

@@ -179,6 +179,15 @@ func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP 
 		"add rule inet " + table + " forward iifname " + q(wgIface) + " ip daddr 127.0.0.0/8 counter drop",
 		"add rule inet " + table + " forward iifname " + q(wgIface) + " ip daddr 100.64.0.0/10 counter drop",
 
+		// DNS protection is mandatory for WireGuard clients. Permit only the
+		// in-tunnel gateway (handled by input below), and prevent plain DNS or
+		// DNS-over-TLS from bypassing its malware/phishing policy. DNS-over-HTTPS
+		// cannot be blocked generically without breaking ordinary HTTPS traffic.
+		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(egress) + " udp dport 53 counter drop",
+		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(egress) + " tcp dport 53 counter drop",
+		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(egress) + " udp dport 853 counter drop",
+		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(egress) + " tcp dport 853 counter drop",
+
 		// MSS clamp + allow only VPN -> public egress.
 		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(egress) + " tcp flags syn tcp option maxseg size set 1380",
 		"add rule inet " + table + " forward oifname " + q(wgIface) + " tcp flags syn tcp option maxseg size set 1380",

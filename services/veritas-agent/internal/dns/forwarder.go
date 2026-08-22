@@ -50,16 +50,29 @@ type Forwarder struct {
 	cacheMu sync.Mutex
 	cache   map[string]cacheEntry
 
-	rateMu  sync.Mutex
-	buckets map[string]*clientBucket
+	rateMu    sync.Mutex
+	buckets   map[string]*clientBucket
+	blocklist *Blocklist
+	observer  Observer
 }
 
-func New(listenAddr, upstreamAddr string, log *logging.Logger) *Forwarder {
-	if upstreamAddr == "" {
-		upstreamAddr = "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query"
+type Config struct {
+	ListenAddr         string
+	UpstreamAddr       string
+	BlocklistURLs      string
+	BlocklistRefresh   time.Duration
+	BlocklistStateFile string
+}
+
+func New(cfg Config, observer Observer, log *logging.Logger) *Forwarder {
+	if cfg.UpstreamAddr == "" {
+		cfg.UpstreamAddr = "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query"
+	}
+	if observer == nil {
+		observer = noopObserver{}
 	}
 	var upstreams []string
-	for _, raw := range strings.FieldsFunc(upstreamAddr, func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
+	for _, raw := range strings.FieldsFunc(cfg.UpstreamAddr, func(r rune) bool { return r == ',' || r == ';' || r == ' ' }) {
 		if raw == "" {
 			continue
 		}
@@ -72,11 +85,13 @@ func New(listenAddr, upstreamAddr string, log *logging.Logger) *Forwarder {
 		upstreams = []string{"https://cloudflare-dns.com/dns-query", "https://dns.google/dns-query"}
 	}
 	return &Forwarder{
-		listenAddr: listenAddr,
+		listenAddr: cfg.ListenAddr,
 		upstreams:  upstreams,
 		log:        log,
 		cache:      make(map[string]cacheEntry),
 		buckets:    make(map[string]*clientBucket),
+		blocklist:  NewBlocklist(cfg.BlocklistURLs, cfg.BlocklistStateFile, cfg.BlocklistRefresh, observer, log),
+		observer:   observer,
 	}
 }
 
@@ -116,6 +131,7 @@ func (f *Forwarder) Start(ctx context.Context) error {
 		defer f.wg.Done()
 		f.janitor(ctx)
 	}()
+	f.blocklist.Start(ctx)
 	return nil
 }
 
@@ -264,9 +280,18 @@ func (f *Forwarder) handleQuery(query []byte, write func([]byte) error, clientIP
 		return nil
 	}
 	if !f.allow(clientIP) {
-		f.log.Warn("DNS rate limit", zap.String("client", clientIP))
+		f.log.Warn("DNS rate limit")
 		return nil
 	}
+	if name, questionEnd, ok := queryName(query); ok && f.blocklist.Blocked(name) {
+		f.observer.DNSQuery(true)
+		if err := write(blockedResponse(query, questionEnd)); err != nil {
+			f.log.Error("write blocked DNS response", zap.Error(err))
+			return err
+		}
+		return nil
+	}
+	f.observer.DNSQuery(false)
 
 	cacheKey := string(query[2:]) // exclude TXID
 	if resp, ok := f.cacheGet(cacheKey, query); ok {
@@ -301,7 +326,47 @@ func (f *Forwarder) handleQuery(query []byte, write func([]byte) error, clientIP
 		return nil
 	}
 	f.log.Warn("all encrypted DNS upstreams failed", zap.Error(lastErr))
+	f.observer.DNSUpstreamFailure()
 	return lastErr
+}
+
+func queryName(msg []byte) (string, int, bool) {
+	if len(msg) < 17 || binary.BigEndian.Uint16(msg[4:6]) != 1 {
+		return "", 0, false
+	}
+	off := 12
+	labels := make([]string, 0, 4)
+	for {
+		if off >= len(msg) {
+			return "", 0, false
+		}
+		length := int(msg[off])
+		if length == 0 {
+			off++
+			break
+		}
+		if length > 63 || off+1+length > len(msg) {
+			return "", 0, false
+		}
+		labels = append(labels, string(msg[off+1:off+1+length]))
+		off += length + 1
+	}
+	if off+4 > len(msg) || len(labels) == 0 {
+		return "", 0, false
+	}
+	return strings.ToLower(strings.Join(labels, ".")), off + 4, true
+}
+
+func blockedResponse(query []byte, questionEnd int) []byte {
+	response := append([]byte(nil), query[:questionEnd]...)
+	flags := binary.BigEndian.Uint16(query[2:4])
+	flags |= 0x8080                    // response + recursion available
+	flags = (flags &^ 0x000F) | 0x0003 // NXDOMAIN
+	binary.BigEndian.PutUint16(response[2:4], flags)
+	binary.BigEndian.PutUint16(response[6:8], 0)
+	binary.BigEndian.PutUint16(response[8:10], 0)
+	binary.BigEndian.PutUint16(response[10:12], 0)
+	return response
 }
 
 func (f *Forwarder) cacheGet(key string, query []byte) ([]byte, bool) {
