@@ -18,6 +18,8 @@ func TestBuildRulesetIsFailClosedAndConvergent(t *testing.T) {
 		"ip daddr 10.0.0.1 udp dport 53 accept",
 		"iifname != \"wg0\" ip saddr 10.42.0.0/24 accept",
 		"masquerade",
+		"type nat hook prerouting priority dstnat",
+		"iifname \"wg0\" udp dport 53 redirect to :53",
 	} {
 		if !strings.Contains(rules, want) {
 			t.Fatalf("ruleset missing %q:\n%s", want, rules)

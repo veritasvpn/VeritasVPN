@@ -147,6 +147,13 @@ func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP 
 		"destroy table inet " + table,
 		"add table inet " + table,
 
+		// Enforce the VPN DNS resolver even when a client attempts to use an
+		// external plain-DNS server. Redirecting happens before forwarding, so
+		// these queries reach the local resolver and never leave the host.
+		"add chain inet " + table + " dns_redirect { type nat hook prerouting priority dstnat; policy accept; }",
+		"add rule inet " + table + " dns_redirect iifname " + q(wgIface) + " udp dport 53 redirect to :53",
+		"add rule inet " + table + " dns_redirect iifname " + q(wgIface) + " tcp dport 53 redirect to :53",
+
 		// NAT only for VPN clients leaving via the real uplink.
 		"add chain inet " + table + " nat { type nat hook postrouting priority srcnat; policy accept; }",
 		"add rule inet " + table + " nat iifname " + q(wgIface) + " oifname " + q(egress) + " masquerade",
