@@ -29,3 +29,10 @@ func TestBlocklistMatchesSubdomains(t *testing.T) {
 		t.Fatal("unexpected block")
 	}
 }
+
+func TestBlocklistIncludesHarmlessProtectionTestDomain(t *testing.T) {
+	b := NewBlocklist("", "", 0, nil, nil)
+	if !b.Blocked(ProtectedDNSTestDomain) {
+		t.Fatal("expected built-in DNS protection test domain to be blocked")
+	}
+}

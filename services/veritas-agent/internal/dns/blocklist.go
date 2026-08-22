@@ -15,7 +15,14 @@ import (
 	"go.uber.org/zap"
 )
 
-const blocklistFetchTimeout = 20 * time.Second
+const (
+	blocklistFetchTimeout = 20 * time.Second
+
+	// ProtectedDNSTestDomain is a harmless, reserved name that lets an
+	// administrator verify the DNS protection path without visiting a real
+	// malicious website. It is deliberately included in every policy version.
+	ProtectedDNSTestDomain = "dns-protection-test.veritasvpn.invalid"
+)
 
 // Observer intentionally exposes aggregate events only. Implementations must
 // never receive a queried domain or a client address.
@@ -60,7 +67,7 @@ func NewBlocklist(sourceList, statePath string, refreshEvery time.Duration, obse
 		client:       &http.Client{Timeout: blocklistFetchTimeout},
 		log:          log,
 		observer:     observer,
-		domains:      make(map[string]struct{}),
+		domains:      map[string]struct{}{ProtectedDNSTestDomain: struct{}{}},
 	}
 }
 
@@ -103,6 +110,7 @@ func (b *Blocklist) refresh(parent context.Context) {
 	defer cancel()
 
 	next := make(map[string]struct{})
+	addBuiltInProtectionDomains(next)
 	loadedSources := 0
 	for _, source := range b.sources {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
@@ -237,6 +245,7 @@ func (b *Blocklist) loadState() error {
 	if _, err := parseBlocklist(file, domains); err != nil {
 		return err
 	}
+	addBuiltInProtectionDomains(domains)
 	if len(domains) == 0 {
 		return fmt.Errorf("cached DNS blocklist is empty")
 	}
@@ -247,6 +256,10 @@ func (b *Blocklist) loadState() error {
 	b.replace(domains, info.ModTime().UTC())
 	b.log.Info("loaded cached DNS malware/phishing blocklist", zap.Int("domains", len(domains)))
 	return nil
+}
+
+func addBuiltInProtectionDomains(domains map[string]struct{}) {
+	domains[ProtectedDNSTestDomain] = struct{}{}
 }
 
 func (b *Blocklist) writeState(domains map[string]struct{}, _ time.Time) error {

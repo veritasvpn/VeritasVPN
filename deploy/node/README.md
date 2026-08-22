@@ -63,6 +63,8 @@ The WireGuard server provides `10.0.0.1` as the DNS resolver for Android and Lin
 
 The active blocklist cache is stored at `/var/lib/veritasvpn/dns/blocklist.txt`. It is not sensitive and is retained so protection continues through a temporary feed outage. Monitor the aggregate `veritas_agent_dns_*` metrics and the `DNSBlocklistStale` / `DNSUpstreamsFailing` alerts.
 
+To test the protection safely while connected to the VPN, open `https://dns-protection-test.veritasvpn.invalid`. The browser should fail to load and Grafana's blocked-DNS count should increase. This is a harmless reserved test name, not a real malicious site.
+
 ## Backup metrics
 
 Backup freshness and R2 upload timestamps are exposed through node-exporter’s textfile collector. The metrics directory is intentionally separate from encrypted archives and keys:
