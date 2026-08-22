@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -17,6 +18,7 @@ import (
 type state struct {
 	ready                 atomic.Bool
 	rpcUp                 atomic.Bool
+	kubernetesDNSUp       atomic.Bool
 	chain                 atomic.Value
 	blocks                atomic.Int64
 	headers               atomic.Int64
@@ -57,6 +59,9 @@ func expectedChain(network string) string {
 
 func (s *state) refresh(ctx context.Context, rpcURL, user, password string) error {
 	s.lastRefresh.Store(time.Now().Unix())
+	// Bitcoin RPC uses the injected Service IP. Check CoreDNS independently so
+	// a DNS outage is visible without making payment readiness depend on it.
+	s.checkKubernetesDNS(ctx)
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "1.0", "id": "readiness", "method": "getblockchaininfo", "params": []any{}})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(body))
 	if err != nil {
@@ -99,6 +104,22 @@ func (s *state) refresh(ctx context.Context, rpcURL, user, password string) erro
 	s.headers.Store(envelope.Result.Headers)
 	s.initial.Store(envelope.Result.InitialBlockDownload)
 	return nil
+}
+
+func (s *state) checkKubernetesDNS(ctx context.Context) {
+	server := env("KUBERNETES_DNS_ADDR", "10.43.0.10:53")
+	name := env("KUBERNETES_DNS_NAME", "kubernetes.default.svc.cluster.local")
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			dialer := net.Dialer{Timeout: 3 * time.Second}
+			return dialer.DialContext(ctx, network, server)
+		},
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	_, err := resolver.LookupHost(lookupCtx, name)
+	s.kubernetesDNSUp.Store(err == nil)
 }
 
 func (s *state) refreshWithRetry(rpcURL, user, password string) error {
@@ -185,6 +206,7 @@ func main() {
 		}
 		fmt.Fprintf(w, `bitcoin_readiness %d
 bitcoin_rpc_up %d
+kubernetes_dns_up %d
 bitcoin_initial_block_download %d
 bitcoin_blocks %d
 bitcoin_headers %d
@@ -193,7 +215,7 @@ bitcoin_sync_percent %.4f
 bitcoin_last_refresh_timestamp_seconds %d
 bitcoin_last_successful_refresh_timestamp_seconds %d
 bitcoin_chain{chain=%q} 1
-`, ready, boolInt(s.rpcUp.Load()), boolInt(s.initial.Load()), blocks, headers, headers-blocks, syncPercent, s.lastRefresh.Load(), s.lastSuccessfulRefresh.Load(), chain)
+`, ready, boolInt(s.rpcUp.Load()), boolInt(s.kubernetesDNSUp.Load()), boolInt(s.initial.Load()), blocks, headers, headers-blocks, syncPercent, s.lastRefresh.Load(), s.lastSuccessfulRefresh.Load(), chain)
 	})
 	addr := env("LISTEN_ADDR", ":8080")
 	log.Printf("bitcoin readiness listening on %s", addr)

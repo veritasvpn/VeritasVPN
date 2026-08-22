@@ -20,6 +20,10 @@ spec:
           imagePullPolicy: IfNotPresent
           ports: [{containerPort: 8080}]
           env:
+            # Kubernetes injects bitcoind's Service IP here. Using it keeps
+            # checkout readiness working through a transient CoreDNS outage.
+            - name: BTC_RPC_URL
+              value: "http://$(BITCOIND_SERVICE_HOST):$(BITCOIND_SERVICE_PORT_RPC)"
             - name: BTC_RPC_USER
               valueFrom: {secretKeyRef: {name: btcpay-secrets, key: BTC_RPC_USER}}
             - name: BTC_RPC_PASSWORD
@@ -28,6 +32,8 @@ spec:
               value: "testnet"
             - name: BTCPAY_NETWORK
               value: "testnet"
+            - name: KUBERNETES_DNS_ADDR
+              value: "10.43.0.10:53"
           startupProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 12}
           readinessProbe: {httpGet: {path: /readyz, port: 8080}, initialDelaySeconds: 10, periodSeconds: 15, timeoutSeconds: 10, failureThreshold: 6}
           livenessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 20, periodSeconds: 30, timeoutSeconds: 3, failureThreshold: 3}

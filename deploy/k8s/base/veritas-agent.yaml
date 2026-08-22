@@ -92,6 +92,11 @@ spec:
                 configMapKeyRef:
                   name: veritas-config
                   key: WG_PORT
+            - name: WG_PUBLIC_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: WG_PUBLIC_PORT
             - name: WG_PRIVATE_KEY_FILE
               value: "/etc/wireguard/private.key"
             - name: WG_SUBNET

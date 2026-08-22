@@ -1,0 +1,9 @@
+[Unit]
+Description=VeritasVPN isolated encrypted backup restore rehearsal
+After=k3s.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/jpg/VeritasVPN/deploy/backup/restore-test.sh
+

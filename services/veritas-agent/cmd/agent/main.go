@@ -268,9 +268,12 @@ func urlQueryEscape(s string) string {
 }
 
 type AgentConfig struct {
-	AuthToken             string
-	WGInterface           string
+	AuthToken   string
+	WGInterface string
+	// WGPort is the local listener; WGPublicPort is advertised to clients.
+	// They differ when the router forwards public UDP 443 to Dell UDP 51820.
 	WGPort                int
+	WGPublicPort          int
 	WGSubnet              string
 	ManagerEndpoint       string
 	MetricsPort           string
@@ -292,12 +295,14 @@ type AgentConfig struct {
 func LoadAgentConfig() *AgentConfig {
 	hostname, _ := os.Hostname()
 	port, _ := strconv.Atoi(envOrDefault("WG_PORT", "51820"))
+	publicPort, _ := strconv.Atoi(envOrDefault("WG_PUBLIC_PORT", strconv.Itoa(port)))
 	bandwidth, _ := strconv.Atoi(envOrDefault("PEER_BANDWIDTH_LIMIT_MBPS", "50"))
 
 	return &AgentConfig{
 		AuthToken:             os.Getenv("AGENT_AUTH_TOKEN"),
 		WGInterface:           envOrDefault("WG_INTERFACE", "wg0"),
 		WGPort:                port,
+		WGPublicPort:          publicPort,
 		WGSubnet:              os.Getenv("WG_SUBNET"),
 		ManagerEndpoint:       envOrDefault("MANAGER_ENDPOINT", "http://wg-manager:8080"),
 		MetricsPort:           envOrDefault("METRICS_PORT", "9090"),
@@ -526,7 +531,7 @@ func (a *Agent) registerWithManager(ctx context.Context) (*RegisterServerRespons
 		Hostname:  a.cfg.ServerHostname,
 		PublicKey: a.publicKey,
 		PublicIP:  publicIP,
-		WGPort:    int32(a.cfg.WGPort),
+		WGPort:    int32(a.cfg.WGPublicPort),
 		Region:    a.cfg.ServerRegion,
 		City:      a.cfg.ServerCity,
 		Country:   a.cfg.ServerCountry,

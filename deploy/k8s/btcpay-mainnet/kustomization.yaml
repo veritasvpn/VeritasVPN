@@ -16,6 +16,4 @@ resources:
 images:
   - name: localhost:31500/bitcoin-readiness
     newName: localhost:31500/bitcoin-readiness
-    # Match the already-running testnet readiness image, which is present in
-    # the Dell's local immutable registry cache.
-    digest: sha256:9a67ab674a82a45e13af76c538d5bda6ee1fd314c557462ab3b3455a84804fb9
+    digest: sha256:f3a7a96b3d5e48bcde396602a8f72ffb9314c4d0a6900ef88a10a5789444e001

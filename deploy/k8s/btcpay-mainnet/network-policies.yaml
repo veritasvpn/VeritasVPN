@@ -171,3 +171,21 @@ spec:
               kubernetes.io/metadata.name: monitoring
       ports:
         - {port: 8080, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: btcpay-mainnet-readiness-rpc
+  namespace: btcpay-mainnet
+spec:
+  podSelector:
+    matchLabels: {app: bitcoin-readiness-mainnet}
+  policyTypes: [Egress]
+  egress:
+    # Keep the payment-readiness path explicit. Generic namespace egress does
+    # not reliably cover ClusterIP translation on every CNI implementation.
+    - to:
+        - podSelector:
+            matchLabels: {app: bitcoind-mainnet}
+      ports:
+        - {port: 8332, protocol: TCP}

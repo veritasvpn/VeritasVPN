@@ -166,6 +166,13 @@ groups:
         annotations:
           summary: "Bitcoin readiness exporter is stale"
           description: "The exporter has not completed a successful Bitcoin RPC refresh in over two minutes."
+      - alert: KubernetesDNSUnavailableFromPaymentPlane
+        expr: min(kubernetes_dns_up{job=~"bitcoin-readiness|bitcoin-readiness-mainnet"}) < 1
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Kubernetes DNS is unavailable from the payment plane"
+          description: "A Bitcoin readiness workload cannot resolve kubernetes.default through kube-dns. RPC uses a Service-IP fallback, but cluster DNS needs repair."
       - alert: BitcoinMainnetReadinessExporterStale
         expr: time() - bitcoin_last_successful_refresh_timestamp_seconds{job="bitcoin-readiness-mainnet"} > 120
         for: 5m
@@ -215,6 +222,31 @@ groups:
         annotations:
           summary: "Off-site VeritasVPN backup is stale"
           description: "No encrypted backup has been uploaded and verified in R2 in the last 48 hours."
+      - alert: VeritasBackupRestoreRehearsalStale
+        expr: absent(veritas_backup_restore_rehearsal_last_success_timestamp) or time() - veritas_backup_restore_rehearsal_last_success_timestamp > 172800
+        for: 30m
+        labels: { severity: critical }
+        annotations:
+          summary: "VeritasVPN backup restore rehearsal is stale"
+          description: "No isolated encrypted-backup restore rehearsal has succeeded in the last 48 hours."
+      - alert: DellSMARTFailing
+        expr: veritas_hardware_smart_available == 1 and veritas_hardware_smart_healthy == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Dell storage reports an unhealthy SMART state"
+      - alert: DellThermalWarning
+        expr: veritas_hardware_max_temperature_celsius > 75
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Dell temperature is above 75°C"
+      - alert: DellThermalCritical
+        expr: veritas_hardware_max_temperature_celsius > 85
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Dell temperature is above 85°C"
       - alert: DNSBlocklistStale
         expr: veritas_agent_dns_blocklist_last_successful_refresh_timestamp_seconds > 0 and time() - veritas_agent_dns_blocklist_last_successful_refresh_timestamp_seconds > 43200
         for: 15m

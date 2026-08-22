@@ -29,6 +29,9 @@ data:
   MANAGER_ENDPOINT: "http://wg-manager:8080"
 
   WG_INTERFACE: "wg0"
+  # Router forwards public UDP 443 to Dell UDP 51820. Keep the advertised
+  # endpoint distinct so an agent restart cannot publish 51820 to clients.
+  WG_PUBLIC_PORT: "443"
   WG_PORT: "51820"
   WG_PRIVATE_KEY_FILE: "/etc/wireguard/private.key"
 

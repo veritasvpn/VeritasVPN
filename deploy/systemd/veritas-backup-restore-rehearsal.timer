@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily VeritasVPN backup restore rehearsal
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+Persistent=true
+Unit=veritas-backup-restore-rehearsal.service
+
+[Install]
+WantedBy=timers.target
+

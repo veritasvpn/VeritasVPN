@@ -84,35 +84,29 @@ spec:
             - name: bitcoin-rpc-conf
               mountPath: /etc/bitcoin-rpc
           readinessProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -c
-                - bitcoin-cli -conf=/etc/bitcoin-rpc/bitcoin.conf getblockcount 2>/dev/null | grep -Eq "^[0-9]+$"
+            # Do not exec bitcoin-cli inside a container whose PID 1 is
+            # bitcoind: repeated exec probes can leave zombie CLI children.
+            # Synchronization readiness is evaluated by bitcoin-readiness.
+            tcpSocket:
+              port: rpc
             initialDelaySeconds: 30
             periodSeconds: 30
-            timeoutSeconds: 30
+            timeoutSeconds: 5
             failureThreshold: 10
           livenessProbe:
-            # Do not restart Bitcoin Core merely because RPC is slow during sync.
-            # A crashed process exits and is still detected by this probe.
-            exec:
-              command:
-                - /bin/sh
-                - -c
-                - kill -0 1
+            # A TCP probe detects a wedged RPC listener without spawning a
+            # child process inside bitcoind.
+            tcpSocket:
+              port: rpc
             initialDelaySeconds: 180
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 5
           startupProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -c
-                - bitcoin-cli -conf=/etc/bitcoin-rpc/bitcoin.conf getblockcount >/dev/null 2>&1
+            tcpSocket:
+              port: rpc
             periodSeconds: 20
-            timeoutSeconds: 30
+            timeoutSeconds: 5
             failureThreshold: 180
           resources:
             requests:
