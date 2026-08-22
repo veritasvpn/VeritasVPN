@@ -4,6 +4,8 @@
 set -euo pipefail
 
 WG_PORT="${WG_PORT:-51820}"
+WG_INTERFACE="${WG_INTERFACE:-wg0}"
+VPN_DNS_ADDRESS="${VPN_DNS_ADDRESS:-10.0.0.1}"
 TAILSCALE_PORT="${TAILSCALE_PORT:-41641}"
 EGRESS_IFACE="${EGRESS_IFACE:-}"
 LAN_SUBNET="${LAN_SUBNET:-}"
@@ -106,5 +108,14 @@ fi
 
 nft delete table inet veritas_filter 2>/dev/null || true
 nft -f "$RULESET"
+
+# UFW evaluates later in the INPUT hook than this table. Its default-deny policy
+# would otherwise drop DNS queries to the WireGuard gateway before the DNS agent.
+# Keep the persistent exception limited to the VPN gateway DNS listener.
+if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "^Status: active$"; then
+  ufw allow in on "$WG_INTERFACE" to "$VPN_DNS_ADDRESS" port 53 proto udp comment "Veritas VPN DNS"
+  ufw allow in on "$WG_INTERFACE" to "$VPN_DNS_ADDRESS" port 53 proto tcp comment "Veritas VPN DNS"
+fi
+
 nft list table inet veritas_filter
-echo "veritas_filter applied egress=$EGRESS_IFACE lan=$LAN_SUBNET wg=$WG_PORT"
+echo "veritas_filter applied egress=$EGRESS_IFACE lan=$LAN_SUBNET wg=$WG_PORT dns=$VPN_DNS_ADDRESS"
