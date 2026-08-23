@@ -55,6 +55,18 @@ data:
             add_header Content-Type text/plain;
         }
 
+        # Binary downloads must never fall back to HTML pages.
+        location /downloads/ {
+            try_files $uri =404;
+            add_header Cache-Control "public, max-age=300";
+            types {
+                application/vnd.android.package-archive apk;
+                application/zip zip;
+                application/vnd.debian-package deb;
+                application/x-executable AppImage;
+            }
+        }
+
         # Short TTL so Cloudflare/browsers pick up CSS/JS deploys (also bust ?v=).
         location ~* \.(css|js)$ {
             expires 5m;

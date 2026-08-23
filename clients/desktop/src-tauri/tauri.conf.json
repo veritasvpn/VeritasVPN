@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; img-src 'self' asset: data: https:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://veritasvpn.cloud https://api.veritasvpn.cloud; worker-src 'self' blob:"
+      "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; img-src 'self' asset: data: https:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://veritasvpn.cloud https://api.veritasvpn.cloud https://btcpay.veritasvpn.cloud https://api.ipify.org https://ifconfig.me https://icanhazip.com; frame-src https://btcpay.veritasvpn.cloud; worker-src 'self' blob:"
     }
   },
   "bundle": {

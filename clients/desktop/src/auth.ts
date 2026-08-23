@@ -37,6 +37,9 @@ function humanizeError(msg: string): string {
   }
   if (m.includes("password must be at least")) return "Password must be at least 10 characters.";
   if (m.includes("password")) return "Incorrect email or password.";
+  if (m.includes("email_not_verified") || m.includes("verify your email")) {
+    return "Verify your email before signing in.";
+  }
   if (m.includes("already exists")) return "An account with this email already exists.";
   if (m.includes("account") && (m.includes("invalid") || m.includes("not found") || m.includes("id"))) {
     return "Account ID not found.";
@@ -122,19 +125,86 @@ export async function signIn(
   );
 }
 
+export class VerificationRequiredError extends Error {
+  readonly email: string;
+  constructor(email: string) {
+    super(`Check ${email} for a verification link. Verify it before signing in.`);
+    this.name = "VerificationRequiredError";
+    this.email = email;
+  }
+}
+
+export class AccountAlreadyExistsError extends Error {
+  readonly email: string;
+  constructor(email: string) {
+    super("An account with this email already exists.");
+    this.name = "AccountAlreadyExistsError";
+    this.email = email;
+  }
+}
+
+export function validateSignupPassword(password: string, confirmPassword: string): string | null {
+  if (password.length < 10) return "Password must be at least 10 characters.";
+  if (!/[A-Z]/.test(password)) return "Password must include an uppercase letter.";
+  if (!/[a-z]/.test(password)) return "Password must include a lowercase letter.";
+  if (!/[0-9]/.test(password)) return "Password must include a number.";
+  if (!confirmPassword) return "Confirm your password.";
+  if (password !== confirmPassword) return "Passwords do not match.";
+  return null;
+}
+
+export function passwordStrengthScore(password: string): number {
+  let score = 0;
+  if (password.length >= 10) score++;
+  if (/[A-Z]/.test(password)) score++;
+  if (/[a-z]/.test(password)) score++;
+  if (/[0-9]/.test(password)) score++;
+  if (/[^A-Za-z0-9]/.test(password)) score++;
+  return score;
+}
+
 export async function signUp(
   email: string,
   password: string
 ): Promise<User> {
   const normalizedEmail = email.trim().toLowerCase();
-  const data = await authAPI("/api/v1/auth/register", {
-    email: normalizedEmail,
-    password,
+  const url = `${AUTH_API}/api/v1/auth/register`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: normalizedEmail, password }),
+    maxRedirections: 0,
   });
+  const text = await res.text();
+  let data: AuthResponse & AuthError;
+  try {
+    data = JSON.parse(text) as AuthResponse & AuthError;
+  } catch {
+    data = { error: text || `Request failed (${res.status})` } as AuthResponse & AuthError;
+  }
+  if (!res.ok) {
+    const msg = humanizeError(data.error || `Request failed (${res.status})`);
+    if (msg === "An account with this email already exists.") {
+      throw new AccountAlreadyExistsError(normalizedEmail);
+    }
+    throw new Error(msg);
+  }
   if (data.verification_required) {
-    throw new Error(`Check ${normalizedEmail} for a verification link. Verify it before signing in.`);
+    throw new VerificationRequiredError(normalizedEmail);
   }
   return persistSession({ email: normalizedEmail, account_id: data.account_id || "" }, data);
+}
+
+export async function resetPassword(email: string): Promise<void> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) throw new Error("Enter your email address.");
+  await authAPI("/api/v1/auth/reset-password", { email: normalizedEmail });
+}
+
+export async function resendVerification(email: string): Promise<void> {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) throw new Error("Enter your email address.");
+  await authAPI("/api/v1/auth/resend-verification", { email: normalizedEmail });
 }
 
 /** Sign in with an anonymous (or any) account ID — no password. */
