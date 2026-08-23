@@ -5,4 +5,5 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+Environment=VERITAS_DEVICE_RATE=100mbit
 ExecStart=/usr/local/sbin/veritas-bandwidth.sh

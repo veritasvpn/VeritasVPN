@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Apply an independent 50 Mbps ceiling to every IPv4 /32 WireGuard peer.
+# Apply an independent 100 Mbps ceiling to every IPv4 /32 WireGuard peer.
 # The script is idempotent and only rebuilds qdiscs when the peer set changes.
 set -euo pipefail
 
 WG_IFACE="${WG_IFACE:-wg0}"
-DEVICE_RATE="${VERITAS_DEVICE_RATE:-50mbit}"
+DEVICE_RATE="${VERITAS_DEVICE_RATE:-100mbit}"
 STATE_FILE="${VERITAS_BANDWIDTH_STATE:-/run/veritas-bandwidth.peers}"
 TC="${TC_BIN:-/sbin/tc}"
 WG="${WG_BIN:-/usr/bin/wg}"
@@ -45,12 +45,12 @@ if [[ "$desired" == "$current" ]] &&
 fi
 
 # Egress (server -> VPN device): HTB class/filter per peer, with fq_codel
-# leaves for fair queueing inside each 50 Mbps class.
+# leaves for fair queueing inside each 100 Mbps class.
 "$TC" qdisc del dev "$WG_IFACE" root 2>/dev/null || true
 "$TC" qdisc add dev "$WG_IFACE" root handle 1: htb default 999 r2q 100
 "$TC" class replace dev "$WG_IFACE" parent 1: classid 1:999 htb rate 1gbit ceil 1gbit quantum 1514
 
-# Ingress (VPN device -> server): police each peer's source /32 at 50 Mbps.
+# Ingress (VPN device -> server): police each peer's source /32 at 100 Mbps.
 "$TC" qdisc del dev "$WG_IFACE" ingress 2>/dev/null || true
 "$TC" qdisc add dev "$WG_IFACE" handle ffff: ingress
 
