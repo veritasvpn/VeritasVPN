@@ -175,12 +175,12 @@ jobs:
       - name: Rename assets to fixed names
         run: |
           DMG=$(ls veritasvpn-macos/*.dmg | head -1)
-          cp "$DMG" VeritasVPN-macOS.dmg
+          cp "$DMG" veritasvpn-macos.dmg
 
           DEB=$(ls veritasvpn-linux-deb/*.deb | head -1)
-          cp "$DEB" VeritasVPN-Linux.deb
+          cp "$DEB" veritasvpn-linux.deb
           AI=$(ls veritasvpn-linux-appimage/*.AppImage | head -1)
-          cp "$AI" VeritasVPN-Linux.AppImage
+          cp "$AI" veritasvpn-linux.AppImage
 
           EXE=$(ls veritasvpn-windows-exe/*.exe | head -1)
           cp "$EXE" VeritasVPN-Windows.exe
@@ -188,19 +188,19 @@ jobs:
           cp "$MSI" VeritasVPN-Windows.msi
 
           APK=$(ls veritasvpn-android/*.apk | head -1)
-          cp "$APK" VeritasVPN-Android.apk
+          cp "$APK" veritasvpn-android.apk
 
       - name: Generate release checksums
-        run: sha256sum VeritasVPN-* > SHA256SUMS
+        run: sha256sum veritasvpn-* VeritasVPN-* > SHA256SUMS 2>/dev/null || sha256sum * > SHA256SUMS
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            VeritasVPN-macOS.dmg
-            VeritasVPN-Linux.deb
-            VeritasVPN-Linux.AppImage
+            veritasvpn-macos.dmg
+            veritasvpn-linux.deb
+            veritasvpn-linux.AppImage
             VeritasVPN-Windows.exe
             VeritasVPN-Windows.msi
-            VeritasVPN-Android.apk
+            veritasvpn-android.apk
             SHA256SUMS

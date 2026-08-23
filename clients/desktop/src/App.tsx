@@ -171,19 +171,24 @@ function PlansScreen({
   onCancelDismiss: () => void;
 }) {
   const premium = billingStatus?.is_premium === true;
+  const price = selectedPlan === "premium_annual" ? "$30" : "$3";
+  const suffix = selectedPlan === "premium_annual" ? "/year" : "/month";
   return (
     <section className="plans-screen">
       <div className="plans-head">
-        <button type="button" className="plans-back" onClick={onBack}>← Back</button>
+        <button type="button" className="plans-back" onClick={onBack} aria-label="Back">←</button>
         <div>
           <h2>Plans & billing</h2>
           <p>Choose the privacy plan that fits you</p>
         </div>
       </div>
+
       <div className="billing-current">
         <div>
           <span>CURRENT PLAN</span>
-          <strong>{billingLoading ? "Checking subscription…" : premium ? "Premium" : "No active subscription"}</strong>
+          <strong className={premium ? "premium" : ""}>
+            {billingLoading && !billingStatus ? "Checking subscription…" : premium ? "Premium" : "No active subscription"}
+          </strong>
           {!billingLoading && premium && billingStatus?.current_period_end && (
             <small className="billing-period-end">
               {billingStatus.cancel_at_period_end ? "Premium ends" : "Current access ends"}{" "}
@@ -191,52 +196,79 @@ function PlansScreen({
             </small>
           )}
         </div>
-        <button type="button" disabled={billingLoading} onClick={onRefresh}>{billingLoading ? "Checking…" : "Refresh"}</button>
+        <button type="button" disabled={billingLoading} onClick={onRefresh}>
+          {billingLoading ? <i className="button-spinner" /> : "Refresh"}
+        </button>
       </div>
-      <div className="billing-plan-card">
-        {billingLoading ? (
-          <div className="billing-loading" role="status">Confirming your current plan…</div>
-        ) : (
-          <>
-            <div className="billing-price"><span>$</span>{selectedPlan === "premium_annual" ? "30" : "3"}<small>/{selectedPlan === "premium_annual" ? "365 days" : "30 days"}</small></div>
-            {!premium && (
-              <div className="billing-plan-options">
-                <button type="button" className={selectedPlan === "premium_monthly" ? "selected" : ""} onClick={() => onSelectPlan("premium_monthly")}>Monthly · $3</button>
-                <button type="button" className={selectedPlan === "premium_annual" ? "selected" : ""} onClick={() => onSelectPlan("premium_annual")}>Annual · $30 · save $6</button>
+
+      {billingError && <div className="billing-error">{billingError}</div>}
+
+      <div className="plan-card">
+        <div className="plan-card-top">
+          <h3>Premium</h3>
+          {premium && <span className="plan-current-pill">CURRENT</span>}
+        </div>
+        <div className="plan-price">{price}<small>{suffix}</small></div>
+        <ul className="plan-features">
+          <li>Paraguay WireGuard egress</li>
+          <li>Up to 5 VPN devices</li>
+          <li>Private Bitcoin checkout</li>
+          <li>Chrome, Android, and Linux access</li>
+        </ul>
+      </div>
+
+      {!premium && (
+        <div className="billing-plan-options">
+          <button type="button" className={selectedPlan === "premium_monthly" ? "selected" : ""} onClick={() => onSelectPlan("premium_monthly")}>
+            <strong>Monthly</strong>
+            <span>$3 / 30 days</span>
+          </button>
+          <button type="button" className={selectedPlan === "premium_annual" ? "selected" : ""} onClick={() => onSelectPlan("premium_annual")}>
+            <strong>Annual</strong>
+            <span>$30 / 365 days</span>
+          </button>
+        </div>
+      )}
+
+      {!premium ? (
+        <>
+          <div className="billing-pay-copy">
+            <h4>Pay privately</h4>
+            <p>Complete checkout securely inside VeritasVPN. Premium activates automatically after confirmation.</p>
+          </div>
+          <div className="billing-actions">
+            <button type="button" disabled={billingBusy || checkoutMethod !== null} onClick={onCheckout}>
+              {checkoutMethod === "btcpay" ? "Opening Bitcoin checkout…" : "Pay with Bitcoin"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="billing-active">Premium is active</div>
+          {billingStatus?.cancel_at_period_end ? (
+            <div className="billing-cancellation-scheduled" role="status">
+              <strong>Cancellation scheduled</strong>
+              <span>
+                Your VPN remains active until {formatBillingDate(billingStatus.current_period_end)}. After that, Premium ends automatically. You can purchase another period whenever you want.
+              </span>
+            </div>
+          ) : (
+            <button type="button" className="billing-cancel" disabled={billingBusy} onClick={onCancelClick}>
+              Cancel at period end
+            </button>
+          )}
+          {showCancelConfirmation && (
+            <div className="billing-cancel-confirm" role="alertdialog" aria-modal="true">
+              <strong>Schedule cancellation?</strong>
+              <p>Your VPN will stay active until {formatBillingDate(billingStatus?.current_period_end)}. After that date, Premium will end and you will not be charged again.</p>
+              <div>
+                <button type="button" disabled={billingBusy} onClick={onCancelDismiss}>Keep Premium</button>
+                <button type="button" disabled={billingBusy} onClick={onCancelConfirm}>{billingBusy ? "Scheduling…" : "Confirm cancellation"}</button>
               </div>
-            )}
-            <p>Complete VeritasVPN access on up to five devices.</p>
-            <ul><li>✓ Paraguay WireGuard connection</li><li>✓ Chrome, Android, and Linux</li><li>✓ Anonymous account support</li><li>✓ Private Bitcoin payment</li></ul>
-            {!premium ? (
-              <>
-                <p className="billing-choice">Choose a payment method</p>
-                <div className="billing-actions"><button type="button" disabled={billingBusy || checkoutMethod !== null} onClick={onCheckout}>₿ Pay with Bitcoin</button></div>
-                <p className="billing-note">Checkout opens inside VeritasVPN. Premium activates automatically after confirmation.</p>
-              </>
-            ) : (
-              <>
-                <div className="billing-active">● Premium access is active</div>
-                {billingStatus?.cancel_at_period_end ? (
-                  <div className="billing-cancellation-scheduled" role="status">
-                    <strong>Cancellation scheduled</strong>
-                    <span>Your VPN remains active until {formatBillingDate(billingStatus.current_period_end)}. After that, Premium ends automatically.</span>
-                  </div>
-                ) : (
-                  <button type="button" className="billing-cancel" disabled={billingBusy} onClick={onCancelClick}>Cancel at period end</button>
-                )}
-                {showCancelConfirmation && (
-                  <div className="billing-cancel-confirm" role="alertdialog" aria-modal="true">
-                    <strong>Schedule cancellation?</strong>
-                    <p>Your VPN will stay active until {formatBillingDate(billingStatus?.current_period_end)}. After that date, Premium will end and you will not be charged again.</p>
-                    <div><button type="button" disabled={billingBusy} onClick={onCancelDismiss}>Keep Premium</button><button type="button" disabled={billingBusy} onClick={onCancelConfirm}>{billingBusy ? "Scheduling…" : "Confirm cancellation"}</button></div>
-                  </div>
-                )}
-              </>
-            )}
-            {billingError && <div className="billing-error">{billingError}</div>}
-          </>
-        )}
-      </div>
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }
@@ -913,42 +945,56 @@ function App() {
             <ConnectionMap connected={connected} connecting={connecting} deviceLabel={deviceLabel} />
             <div className="map-summary">
               <div><span>CONNECTION</span><strong>{connected ? "Encrypted route active" : connecting ? "Establishing route…" : "No secure route"}</strong></div>
-              <b className={connected ? "on" : ""}>{connected ? "SECURED" : connecting ? "CONNECTING" : "OFFLINE"}</b>
+              <b className={connected ? "on" : connecting ? "connecting" : ""}>{connected ? "SECURED" : connecting ? "CONNECTING" : "OFFLINE"}</b>
             </div>
           </section>
         ) : (
           <>
             <PrivacyScene encrypted={connected} />
             <section className="blueprint-status">
-              <div className={`blueprint-badge ${connecting ? "connecting" : ""} ${connected ? "connected" : ""}`}>
-                <i />{connected ? "CONNECTION SECURED" : connecting ? "ESTABLISHING SECURE CONNECTION" : "VPN DISCONNECTED"}
-              </div>
-              <h2>{connected ? "You're protected" : connecting ? "Establishing secure connection" : "Your online activity is visible"}</h2>
-              <p>
-                {connected
-                  ? "Your internet traffic is encrypted and routed through VeritasVPN."
-                  : connecting
-                    ? "Creating secure keys and validating encrypted internet access."
-                    : "Hide your IP address and encrypt your connection."}
-              </p>
               {!connected ? (
-                <button
-                  className="blueprint-primary"
-                  disabled={connecting || !subscriptionChecked}
-                  onClick={subscriptionActive ? handleConnect : openPlans}
-                >
-                  <span>{connecting ? <i className="button-spinner" /> : subscriptionActive ? "◔" : "●"}</span>
-                  {connecting ? "Connecting…" : !subscriptionChecked ? "Checking plan…" : subscriptionActive ? "Connect now" : "Get Premium"}
-                  <b>{connecting || !subscriptionChecked ? "" : "→"}</b>
-                </button>
+                <>
+                  <div className={`blueprint-badge ${connecting ? "connecting" : ""}`}>
+                    <i />
+                    {connecting ? "ESTABLISHING SECURE CONNECTION" : "VPN DISCONNECTED"}
+                  </div>
+                  <h2>{"Your online activity\nis visible"}</h2>
+                  <p>
+                    {connecting
+                      ? "Creating secure keys and validating encrypted internet access."
+                      : "Hide your IP address and encrypt your connection."}
+                  </p>
+                  <button
+                    className="blueprint-primary"
+                    disabled={connecting || !subscriptionChecked}
+                    onClick={subscriptionActive ? handleConnect : openPlans}
+                  >
+                    {(connecting || !subscriptionChecked) ? (
+                      <i className="button-spinner" />
+                    ) : (
+                      <span className={`cta-lock ${subscriptionActive ? "open" : ""}`} aria-hidden="true" />
+                    )}
+                    {connecting
+                      ? "Connecting…"
+                      : !subscriptionChecked
+                        ? "Checking plan…"
+                        : subscriptionActive
+                          ? "Connect now"
+                          : "Get Premium"}
+                    {!connecting && subscriptionChecked && <b>→</b>}
+                  </button>
+                </>
               ) : (
-                <button className="blueprint-disconnect solid" type="button" onClick={handleDisconnect}>Disconnect</button>
-              )}
-              {connected && (
-                <div className="protected-meta">
-                  <i />
-                  {egressIp ? `Connected · ${egressIp}` : "Protected · WireGuard tunnel active"}
-                </div>
+                <>
+                  <div className="blueprint-secured">CONNECTION SECURED</div>
+                  <h2 className="connected-title">You're protected</h2>
+                  <p>Your internet traffic is encrypted and routed through VeritasVPN.</p>
+                  <button className="blueprint-disconnect" type="button" onClick={handleDisconnect}>Disconnect</button>
+                  <div className="protected-meta">
+                    <i />
+                    {egressIp ? `Connected · ${egressIp}` : "Protected · WireGuard tunnel active"}
+                  </div>
+                </>
               )}
               {statusMsg && !(connecting && /^connecting/i.test(statusMsg)) && (
                 <div className={`status-msg ${connected ? "ok" : connecting ? "info" : "warn"}`}>{statusMsg}</div>
