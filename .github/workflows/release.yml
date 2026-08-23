@@ -165,33 +165,38 @@ jobs:
 
   release:
     needs: [build-macos, build-linux, build-windows, build-android]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: always() && startsWith(github.ref, 'refs/tags/v') && (needs.build-linux.result == 'success' || needs.build-macos.result == 'success' || needs.build-windows.result == 'success' || needs.build-android.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
+        continue-on-error: true
 
-      - name: Rename assets to fixed names
+      - name: Rename available assets
         run: |
-          DMG=$(ls veritasvpn-macos/*.dmg | head -1)
-          cp "$DMG" veritasvpn-macos.dmg
-
-          DEB=$(ls veritasvpn-linux-deb/*.deb | head -1)
-          cp "$DEB" veritasvpn-linux.deb
-          AI=$(ls veritasvpn-linux-appimage/*.AppImage | head -1)
-          cp "$AI" veritasvpn-linux.AppImage
-
-          EXE=$(ls veritasvpn-windows-exe/*.exe | head -1)
-          cp "$EXE" VeritasVPN-Windows.exe
-          MSI=$(ls veritasvpn-windows-msi/*.msi | head -1)
-          cp "$MSI" VeritasVPN-Windows.msi
-
-          APK=$(ls veritasvpn-android/*.apk | head -1)
-          cp "$APK" veritasvpn-android.apk
-
-      - name: Generate release checksums
-        run: sha256sum veritasvpn-* VeritasVPN-* > SHA256SUMS 2>/dev/null || sha256sum * > SHA256SUMS
+          set -e
+          if ls veritasvpn-macos/*.dmg 1>/dev/null 2>&1; then
+            cp "$(ls veritasvpn-macos/*.dmg | head -1)" veritasvpn-macos.dmg
+          fi
+          if ls veritasvpn-linux-deb/*.deb 1>/dev/null 2>&1; then
+            cp "$(ls veritasvpn-linux-deb/*.deb | head -1)" veritasvpn-linux.deb
+          fi
+          if ls veritasvpn-linux-appimage/*.AppImage 1>/dev/null 2>&1; then
+            cp "$(ls veritasvpn-linux-appimage/*.AppImage | head -1)" veritasvpn-linux.AppImage
+          fi
+          if ls veritasvpn-windows-exe/*.exe 1>/dev/null 2>&1; then
+            cp "$(ls veritasvpn-windows-exe/*.exe | head -1)" VeritasVPN-Windows.exe
+          fi
+          if ls veritasvpn-windows-msi/*.msi 1>/dev/null 2>&1; then
+            cp "$(ls veritasvpn-windows-msi/*.msi | head -1)" VeritasVPN-Windows.msi
+          fi
+          if ls veritasvpn-android/*.apk 1>/dev/null 2>&1; then
+            cp "$(ls veritasvpn-android/*.apk | head -1)" veritasvpn-android.apk
+          fi
+          ls -lh veritasvpn-* VeritasVPN-* 2>/dev/null || true
+          sha256sum veritasvpn-* VeritasVPN-* 2>/dev/null > SHA256SUMS || true
+          test -s SHA256SUMS
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -204,3 +209,4 @@ jobs:
             VeritasVPN-Windows.msi
             veritasvpn-android.apk
             SHA256SUMS
+          fail_on_unmatched_files: false
