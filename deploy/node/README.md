@@ -35,15 +35,15 @@ SOCKS (`veritas-proxy` :1080) remains for the Chrome extension only. Desktop/CLI
 
 ## Per-device bandwidth cap
 
-The veritas-bandwidth service and its 15-second timer apply an independent 100 Mbps ceiling to every configured WireGuard peer. Download traffic is shaped with an HTB class and fq_codel leaf on wg0; upload traffic is policed by the peer's /32 source address. The reconciler only rebuilds queues when the peer set changes, so active tunnels are not interrupted on ordinary timer runs.
+The veritas-bandwidth service and its 15-second timer apply an independent 100 Mbps ceiling to every configured WireGuard peer. Download traffic is shaped with HTB + fq_codel on wg0; upload traffic is mirrored to an IFB device (ifb-veritas) and shaped there with HTB + fq_codel. Ingress police was removed because it dropped TCP ACKs and capped upload near 50 Mbps.
 
-The cap is controlled by VERITAS_DEVICE_RATE in the service environment and defaults to 100mbit. The runtime installer is:
+The reconciler only rebuilds queues when the peer set or shaping version changes, so active tunnels are not interrupted on ordinary timer runs. The cap is controlled by VERITAS_DEVICE_RATE in the service environment and defaults to 100mbit.
 
-sudo install -m 0755 deploy/node/veritas-bandwidth.sh /usr/local/sbin/veritas-bandwidth.sh
-sudo install -m 0644 deploy/systemd/veritas-bandwidth.service /etc/systemd/system/veritas-bandwidth.service
-sudo install -m 0644 deploy/systemd/veritas-bandwidth.timer /etc/systemd/system/veritas-bandwidth.timer
-sudo systemctl daemon-reload
-sudo systemctl enable --now veritas-bandwidth.timer
+Install script, bandwidth units, and uplink qdisc unit atomically from the repo:
+
+```bash
+sudo bash deploy/node/install-host-shaping.sh
+```
 
 
 ## Host firewall

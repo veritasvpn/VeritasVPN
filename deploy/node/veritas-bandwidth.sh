@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Apply an independent 100 Mbps ceiling to every IPv4 /32 WireGuard peer.
-# The script is idempotent and only rebuilds qdiscs when the peer set changes.
+# Per-peer 100 Mbps cap on WireGuard.
+# Download: HTB on wg0 (server -> client).
+# Upload: IFB + HTB (no ingress police drop; that was starving TCP ACKs ~50 Mbps).
 set -euo pipefail
 
 WG_IFACE="${WG_IFACE:-wg0}"
+IFB_IFACE="${VERITAS_IFB_IFACE:-ifb-veritas}"
 DEVICE_RATE="${VERITAS_DEVICE_RATE:-100mbit}"
 STATE_FILE="${VERITAS_BANDWIDTH_STATE:-/run/veritas-bandwidth.peers}"
 TC="${TC_BIN:-/sbin/tc}"
 WG="${WG_BIN:-/usr/bin/wg}"
 IP="${IP_BIN:-/sbin/ip}"
+SHAPE_VERSION="v4-100mbit-ifb"
 
 if [[ ! -x "$TC" || ! -x "$WG" || ! -x "$IP" ]]; then
   echo "required networking tools are unavailable" >&2
@@ -18,6 +21,8 @@ fi
 if ! "$IP" link show dev "$WG_IFACE" >/dev/null 2>&1; then
   exit 0
 fi
+
+modprobe ifb 2>/dev/null || true
 
 mapfile -t peers < <(
   "$WG" show "$WG_IFACE" allowed-ips 2>/dev/null |
@@ -30,42 +35,49 @@ mapfile -t peers < <(
     }' | sort -u
 )
 
-desired=""
+desired="$SHAPE_VERSION"
 if (("${#peers[@]}")); then
-  desired="$(printf '%s\n' "${peers[@]}")"
+  desired=$(printf '%s\n%s\n' "$SHAPE_VERSION" "$(printf '%s\n' "${peers[@]}")")
 fi
 current="$(cat "$STATE_FILE" 2>/dev/null || true)"
 
-# Avoid resetting live queues every timer tick. A reset is only needed when
-# peers change or if another service removed the shaping qdiscs.
 if [[ "$desired" == "$current" ]] &&
    "$TC" qdisc show dev "$WG_IFACE" | grep -q 'qdisc htb 1:' &&
-   "$TC" qdisc show dev "$WG_IFACE" | grep -q 'qdisc ingress ffff:'; then
+   "$IP" link show dev "$IFB_IFACE" >/dev/null 2>&1 &&
+   "$TC" qdisc show dev "$IFB_IFACE" 2>/dev/null | grep -q 'qdisc htb 1:'; then
+  echo "unchanged ${#peers[@]} peer cap(s) at $DEVICE_RATE ($SHAPE_VERSION)"
   exit 0
 fi
 
-# Egress (server -> VPN device): HTB class/filter per peer, with fq_codel
-# leaves for fair queueing inside each 100 Mbps class.
-"$TC" qdisc del dev "$WG_IFACE" root 2>/dev/null || true
-"$TC" qdisc add dev "$WG_IFACE" root handle 1: htb default 999 r2q 100
-"$TC" class replace dev "$WG_IFACE" parent 1: classid 1:999 htb rate 1gbit ceil 1gbit quantum 1514
+"$IP" link add "$IFB_IFACE" type ifb 2>/dev/null || true
+"$IP" link set "$IFB_IFACE" up
 
-# Ingress (VPN device -> server): police each peer's source /32 at 100 Mbps.
+"$TC" qdisc del dev "$WG_IFACE" root 2>/dev/null || true
 "$TC" qdisc del dev "$WG_IFACE" ingress 2>/dev/null || true
+"$TC" qdisc del dev "$IFB_IFACE" root 2>/dev/null || true
+
+"$TC" qdisc add dev "$WG_IFACE" root handle 1: htb default 999 r2q 100
+"$TC" class add dev "$WG_IFACE" parent 1: classid 1:999 htb rate 1gbit ceil 1gbit burst 512kb cburst 512kb quantum 1514
+
+"$TC" qdisc add dev "$IFB_IFACE" root handle 1: htb default 999 r2q 100
+"$TC" class add dev "$IFB_IFACE" parent 1: classid 1:999 htb rate 1gbit ceil 1gbit burst 512kb cburst 512kb quantum 1514
+
 "$TC" qdisc add dev "$WG_IFACE" handle ffff: ingress
+"$TC" filter add dev "$WG_IFACE" parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev "$IFB_IFACE"
 
 priority=10
 for peer in "${peers[@]}"; do
-  # Peers are sorted above; sequential IDs avoid collisions across subnets.
   minor="$((priority + 1000))"
+  "$TC" class add dev "$WG_IFACE" parent 1: classid "1:${minor}" htb rate "$DEVICE_RATE" ceil "$DEVICE_RATE" burst 1mb cburst 1mb quantum 1514
+  "$TC" qdisc add dev "$WG_IFACE" parent "1:${minor}" handle "${minor}:" fq_codel
+  "$TC" filter add dev "$WG_IFACE" protocol ip parent 1: prio "$priority" u32 match ip dst "$peer" flowid "1:${minor}"
 
-  "$TC" class replace dev "$WG_IFACE" parent 1: classid "1:${minor}" htb rate "$DEVICE_RATE" ceil "$DEVICE_RATE"
-  "$TC" qdisc replace dev "$WG_IFACE" parent "1:${minor}" handle "${minor}:" fq_codel
-  "$TC" filter replace dev "$WG_IFACE" protocol ip parent 1: prio "$priority" u32 match ip dst "$peer" flowid "1:${minor}"
-  "$TC" filter replace dev "$WG_IFACE" protocol ip parent ffff: prio "$priority" u32 match ip src "$peer" police rate "$DEVICE_RATE" burst 100k drop
+  "$TC" class add dev "$IFB_IFACE" parent 1: classid "1:${minor}" htb rate "$DEVICE_RATE" ceil "$DEVICE_RATE" burst 1mb cburst 1mb quantum 1514
+  "$TC" qdisc add dev "$IFB_IFACE" parent "1:${minor}" handle "${minor}:" fq_codel
+  "$TC" filter add dev "$IFB_IFACE" protocol ip parent 1: prio "$priority" u32 match ip src "$peer" flowid "1:${minor}"
   priority="$((priority + 1))"
 done
 
 install -d -m 0755 "$(dirname "$STATE_FILE")"
 printf '%s\n' "$desired" > "$STATE_FILE"
-echo "applied ${#peers[@]} WireGuard peer bandwidth cap(s) at $DEVICE_RATE"
+echo "applied ${#peers[@]} WireGuard peer bandwidth cap(s) at $DEVICE_RATE ($SHAPE_VERSION)"
