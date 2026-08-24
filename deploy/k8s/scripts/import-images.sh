@@ -62,7 +62,7 @@ PUBLIC_IMAGES=(
   btcpayserver/bitcoin:28.1
   btcpayserver/btcpayserver:2.3.9
   nicolasdorier/nbxplorer:2.6.9
-  cloudflare/cloudflared:2026.7.3
+  cloudflare/cloudflared:2026.8.2
 )
 
 echo "Importing public images into k3s from local docker cache..."

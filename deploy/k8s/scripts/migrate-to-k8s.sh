@@ -194,7 +194,7 @@ kubectl -n veritas scale sts/nats --replicas=1 2>/dev/null || true
 # ---------- 12. Cloudflared + cutover ----------
 step "Cut over cloudflared + stop compose"
 # Prefer newer cloudflared image matching compose
-sed -i 's|cloudflare/cloudflared:2025.6.1|cloudflare/cloudflared:2026.7.3|' \
+sed -i 's|cloudflare/cloudflared:2026.8.2|cloudflare/cloudflared:2026.8.2|' \
   "$REPO_ROOT/deploy/k8s/ingress-nginx/cloudflared.yaml" || true
 # Ensure secret is used (strip empty inline token secret from manifest if present by applying deploy only)
 kubectl apply -f "$REPO_ROOT/deploy/k8s/ingress-nginx/cloudflared.yaml" || true
