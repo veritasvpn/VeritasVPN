@@ -75,3 +75,9 @@ echo ""
 echo "  If using UFW, run:"
 echo "    sudo ufw allow $WG_PORT/udp comment 'WireGuard VPN'"
 echo "    sudo ufw route allow in on wg0 out on $EGRESS_IFACE"
+
+# Host tc shaping (peer caps + uplink AQM) from repo — keeps live host in sync with git.
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+if [[ -x "$ROOT/deploy/node/install-host-shaping.sh" ]]; then
+  bash "$ROOT/deploy/node/install-host-shaping.sh"
+fi
