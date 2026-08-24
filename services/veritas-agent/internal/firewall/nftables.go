@@ -13,6 +13,8 @@ import (
 
 const cmdTimeout = 10 * time.Second
 
+const defaultBandwidthMbps = 100 // matches PEER_BANDWIDTH_LIMIT_MBPS default
+
 type Manager struct {
 	tableName string
 }
@@ -219,18 +221,18 @@ func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP 
 }
 
 // Compatibility wrappers for callers that used the older split setup API.
-func (m *Manager) SetupNAT(iface string) error { return m.Reconcile(iface, 51820, 50) }
+func (m *Manager) SetupNAT(iface string) error { return m.Reconcile(iface, 51820, defaultBandwidthMbps) }
 
-func (m *Manager) SetupKillSwitch(iface string, port int) error { return m.Reconcile(iface, port, 50) }
+func (m *Manager) SetupKillSwitch(iface string, port int) error { return m.Reconcile(iface, port, defaultBandwidthMbps) }
 
-func (m *Manager) SetupMSSClamp(iface string) error { return m.Reconcile(iface, 51820, 50) }
+func (m *Manager) SetupMSSClamp(iface string) error { return m.Reconcile(iface, 51820, defaultBandwidthMbps) }
 
 func (m *Manager) SetupBandwidth(iface string, mbps int) error {
 	return m.Reconcile(iface, 51820, mbps)
 }
 
 func (m *Manager) EnableKillSwitch() error {
-	return m.Reconcile("wg0", 51820, 50)
+	return m.Reconcile("wg0", 51820, defaultBandwidthMbps)
 }
 
 func (m *Manager) DisableKillSwitch() error {
