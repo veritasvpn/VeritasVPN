@@ -82,6 +82,16 @@ spec:
                 configMapKeyRef:
                   name: veritas-config
                   key: FREE_ALLOWED_REGIONS
+            - name: LAN_ENDPOINT_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: LAN_ENDPOINT_IP
+            - name: LAN_ENDPOINT_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: LAN_ENDPOINT_PORT
           readinessProbe:
             httpGet:
               path: /healthz

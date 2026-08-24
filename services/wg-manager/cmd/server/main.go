@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"os/signal"
 	"syscall"
 	"time"
@@ -78,6 +80,16 @@ func main() {
 
 	svc := service.New(pgRepo, redisRepo, sched, comm, nc, cfg.AgentAuthToken, tierCache, log)
 	svc.SetFreeAllowedRegions(entitlement.ParseFreeRegions(os.Getenv("FREE_ALLOWED_REGIONS")))
+	if lanIP := strings.TrimSpace(os.Getenv("LAN_ENDPOINT_IP")); lanIP != "" {
+		lanPort := int32(51820)
+		if v := strings.TrimSpace(os.Getenv("LAN_ENDPOINT_PORT")); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 65535 {
+				lanPort = int32(n)
+			}
+		}
+		svc.SetLANEndpoint(lanIP, lanPort)
+		log.Info("LAN WireGuard endpoint enabled", "ip", lanIP, "port", lanPort)
+	}
 	httpHandler := handler.NewHTTPHandler(svc, sseHub, cfg.JWTSecret, cfg.AgentAuthToken, log)
 
 	httpAddr := cfg.HTTPServerAddr()

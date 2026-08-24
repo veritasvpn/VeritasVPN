@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -40,6 +41,8 @@ type Service struct {
 	natsConn     *nats.Conn
 	authToken    string
 	freeRegions  []string
+	lanIP        string
+	lanPort      int32
 	tierCache    *entitlement.TierCache
 	log          *logging.Logger
 }
@@ -70,6 +73,47 @@ func New(
 // (from FREE_ALLOWED_REGIONS). Empty means any online region.
 func (s *Service) SetFreeAllowedRegions(regions []string) {
 	s.freeRegions = regions
+}
+
+// SetLANEndpoint configures an alternate WireGuard endpoint advertised to
+// clients that are already on the VPN node's LAN (or whose public IP matches
+// the node). This avoids slow router hairpin NAT when the public endpoint is
+// used from the same network.
+func (s *Service) SetLANEndpoint(ip string, port int32) {
+	s.lanIP = strings.TrimSpace(ip)
+	s.lanPort = port
+}
+
+// ClientEndpoint returns the WireGuard endpoint a client should dial.
+func (s *Service) ClientEndpoint(srv *model.Server, clientIP string) string {
+	if srv == nil {
+		return ""
+	}
+	if s.useLANEndpoint(clientIP, srv.PublicIP) {
+		return fmt.Sprintf("%s:%d", s.lanIP, s.lanPort)
+	}
+	return fmt.Sprintf("%s:%d", srv.PublicIP, srv.WGPort)
+}
+
+func (s *Service) useLANEndpoint(clientIP, publicIP string) bool {
+	if s.lanIP == "" || s.lanPort <= 0 || clientIP == "" {
+		return false
+	}
+	clientIP = strings.TrimSpace(clientIP)
+	if clientIP == publicIP {
+		return true
+	}
+	cip := net.ParseIP(clientIP)
+	lip := net.ParseIP(s.lanIP)
+	if cip == nil || lip == nil {
+		return false
+	}
+	c4, l4 := cip.To4(), lip.To4()
+	if c4 == nil || l4 == nil {
+		return false
+	}
+	// Same /24 as the VPN node's LAN address.
+	return c4[0] == l4[0] && c4[1] == l4[1] && c4[2] == l4[2]
 }
 
 func (s *Service) resolveTier(accountID, jwtTier string) string {
@@ -194,7 +238,7 @@ func (s *Service) HandleHeartbeat(ctx context.Context, serverID string, peerCoun
 	return nil
 }
 
-func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, preferredRegion string) (*PeerConfig, error) {
+func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, preferredRegion, clientIP string) (*PeerConfig, error) {
 	tier = s.resolveTier(accountID, tier)
 
 	existing, err := s.postgres.ListPeersByAccount(ctx, accountID)
@@ -271,7 +315,7 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 		return nil, fmt.Errorf("create peer: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s:%d", srv.PublicIP, srv.WGPort)
+	endpoint := s.ClientEndpoint(srv, clientIP)
 	serverID := srv.ID
 
 	// Apply the update before returning the client configuration. Returning
@@ -307,6 +351,8 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 		"account_id", accountID,
 		"server_id", srv.ID,
 		"assigned_ip", assignedIP,
+		"client_ip", clientIP,
+		"server_endpoint", endpoint,
 	)
 
 	s.publishEvent("peer.created", map[string]interface{}{

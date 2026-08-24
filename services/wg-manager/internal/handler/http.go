@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -311,7 +312,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "public_key is required"})
 			return
 		}
-		cfg, err := h.svc.CreatePeer(r.Context(), accountID, tier, req.PublicKey, req.Region)
+		cfg, err := h.svc.CreatePeer(r.Context(), accountID, tier, req.PublicKey, req.Region, clientIPFromRequest(r))
 		if err != nil {
 			var planErr *entitlement.PlanError
 			if errors.As(err, &planErr) {
@@ -378,7 +379,9 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 		}
 		resp := map[string]interface{}{"peer": peer}
 		if srv != nil {
+			endpoint := h.svc.ClientEndpoint(srv, clientIPFromRequest(r))
 			resp["server"] = srv
+			resp["server_endpoint"] = endpoint
 		}
 		writeJSON(w, http.StatusOK, resp)
 	default:
@@ -442,6 +445,28 @@ func extractBearer(r *http.Request) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+}
+
+
+func clientIPFromRequest(r *http.Request) string {
+	for _, h := range []string{"CF-Connecting-IP", "True-Client-IP", "X-Real-IP"} {
+		if v := strings.TrimSpace(r.Header.Get(h)); v != "" {
+			return stripHostPort(v)
+		}
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		return stripHostPort(strings.TrimSpace(parts[0]))
+	}
+	return stripHostPort(r.RemoteAddr)
+}
+
+func stripHostPort(v string) string {
+	host, _, err := net.SplitHostPort(v)
+	if err != nil {
+		return v
+	}
+	return host
 }
 
 func writeJSON(w http.ResponseWriter, status int, body interface{}) {

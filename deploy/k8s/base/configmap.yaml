@@ -21,6 +21,8 @@ data:
   NATS_HOST: "nats"
   NATS_PORT: "4222"
 
+  LAN_ENDPOINT_IP: "192.168.0.6"
+  LAN_ENDPOINT_PORT: "51820"
   PUBLIC_IP: "change-me-or-set-to-your-vps-ip"
   SERVER_HOSTNAME: "linuxdesktop"
   SERVER_REGION: "sa"
