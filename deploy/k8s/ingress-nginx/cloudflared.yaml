@@ -17,7 +17,9 @@ spec:
     spec:
       containers:
         - name: cloudflared
-          image: localhost:31500/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
+          # Tag pin (not digest): k3s containerd often lacks digest metadata after
+          # `ctr images import`, which causes ErrImagePull on @sha256 refs.
+          image: localhost:31500/cloudflared:2026.8.2
           imagePullPolicy: IfNotPresent
           args:
             - tunnel

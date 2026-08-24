@@ -151,3 +151,14 @@ docker push localhost:31500/auth-svc:latest
 ## Migrating from Docker Compose
 
 See `deploy/README.md` for the migration guide and `deploy/recovery/recovery-runbook.md` for disaster recovery.
+
+### Postgres PVC ownership (existing clusters)
+
+If Postgres fails to start after tightening `runAsUser`/`fsGroup` to `999`, the data directory on an **existing** PVC may still be owned by root. One-time fix on the node (replace the pod name):
+
+```bash
+kubectl exec -n veritas postgres-0 -- chown -R 999:999 /var/lib/postgresql/data
+```
+
+The StatefulSet pod `securityContext` sets `fsGroupChangePolicy: OnRootMismatch` so future rollouts adjust group ownership when needed without blocking pod startup on large volumes.
+

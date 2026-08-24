@@ -33,6 +33,7 @@ spec:
     spec:
       securityContext:
         fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       containers:
