@@ -87,6 +87,30 @@ groups:
         annotations:
           summary: "WireGuard has unmanaged kernel peers"
           description: "A kernel peer is not represented by the manager stream and will be removed after the reconciliation grace period."
+      - alert: WireGuardPeerStreamDisconnected
+        expr: veritas_agent_peer_stream_connected == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "VeritasVPN agent peer update stream is disconnected"
+          description: "The agent is not receiving peer provisioning events from wg-manager."
+
+      - alert: WireGuardPeerStreamFrequentDisconnects
+        expr: increase(veritas_agent_peer_stream_disconnects_total[15m]) > 3
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "VeritasVPN agent peer stream is reconnecting frequently"
+          description: "Repeated SSE disconnects may delay peer add/remove on the VPN node."
+
+      - alert: WireGuardManagerPostgresUnavailable
+        expr: veritas_wg_manager_postgres_up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "wg-manager cannot reach PostgreSQL"
+          description: "Peer provisioning and VPN configuration depend on postgres availability."
+
       - alert: WireGuardPeerExpiryFailures
         expr: increase(veritas_agent_peer_expiry_failures_total[10m]) > 0
         for: 5m

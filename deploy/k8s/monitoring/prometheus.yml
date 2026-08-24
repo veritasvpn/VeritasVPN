@@ -21,6 +21,10 @@ scrape_configs:
     static_configs:
       - targets: ["veritas-agent.veritas.svc.cluster.local:9090"]
 
+  - job_name: wg-manager
+    static_configs:
+      - targets: ["wg-manager.veritas.svc.cluster.local:8080"]
+
   - job_name: bitcoin-readiness
     static_configs:
       - targets: ["bitcoin-readiness.btcpay.svc.cluster.local:8080"]

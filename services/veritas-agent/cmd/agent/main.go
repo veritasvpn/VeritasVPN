@@ -625,6 +625,7 @@ func (a *Agent) streamLoop(ctx context.Context) {
 
 		a.logger.Info("Connecting to peer update stream")
 		updates, errs := a.managerClient.StreamPeerUpdates(ctx, a.serverID, a.cfg.AuthToken)
+		a.metrics.PeerStreamConnected.Set(1)
 
 		for {
 			select {
@@ -648,6 +649,8 @@ func (a *Agent) streamLoop(ctx context.Context) {
 		}
 
 	reconnect:
+		a.metrics.PeerStreamConnected.Set(0)
+		a.metrics.PeerStreamDisconnects.Inc()
 		select {
 		case <-ctx.Done():
 			return

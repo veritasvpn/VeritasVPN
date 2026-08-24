@@ -19,6 +19,7 @@ import (
 	"github.com/veritasvpn/services/wg-manager/internal/entitlement"
 	"github.com/veritasvpn/services/wg-manager/internal/handler"
 	"github.com/veritasvpn/services/wg-manager/internal/hub"
+	"github.com/veritasvpn/services/wg-manager/internal/metrics"
 	"github.com/veritasvpn/services/wg-manager/internal/migrate"
 	"github.com/veritasvpn/services/wg-manager/internal/repository"
 	"github.com/veritasvpn/services/wg-manager/internal/scheduler"
@@ -90,7 +91,8 @@ func main() {
 		svc.SetLANEndpoint(lanIP, lanPort)
 		log.Info("LAN WireGuard endpoint enabled", "ip", lanIP, "port", lanPort)
 	}
-	httpHandler := handler.NewHTTPHandler(svc, sseHub, cfg.JWTSecret, cfg.AgentAuthToken, log)
+	svcMetrics := metrics.New()
+	httpHandler := handler.NewHTTPHandler(svc, sseHub, pool, svcMetrics, cfg.JWTSecret, cfg.AgentAuthToken, log)
 
 	httpAddr := cfg.HTTPServerAddr()
 	httpSrv := &http.Server{

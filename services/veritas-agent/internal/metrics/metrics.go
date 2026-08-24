@@ -26,6 +26,8 @@ type Metrics struct {
 	DNSBlocklistDomains         prometheus.Gauge
 	DNSBlocklistLastRefresh     prometheus.Gauge
 	DNSBlocklistRefreshFailures prometheus.Counter
+	PeerStreamConnected     prometheus.Gauge
+	PeerStreamDisconnects   prometheus.Counter
 
 	registry *prometheus.Registry
 	port     string
@@ -109,6 +111,14 @@ func NewWithBind(port, bind string) *Metrics {
 			Name: "veritas_agent_dns_blocklist_last_successful_refresh_timestamp_seconds",
 			Help: "Unix timestamp of the most recent successful DNS blocklist refresh.",
 		}),
+		PeerStreamConnected: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "veritas_agent_peer_stream_connected",
+			Help: "1 while the agent peer update SSE stream is connected.",
+		}),
+		PeerStreamDisconnects: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "veritas_agent_peer_stream_disconnects_total",
+			Help: "Peer update stream closures and errors requiring reconnect.",
+		}),
 		DNSBlocklistRefreshFailures: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "veritas_agent_dns_blocklist_refresh_failures_total",
 			Help: "Failed DNS blocklist refresh attempts.",
@@ -135,6 +145,8 @@ func NewWithBind(port, bind string) *Metrics {
 	reg.MustRegister(m.DNSBlocklistDomains)
 	reg.MustRegister(m.DNSBlocklistLastRefresh)
 	reg.MustRegister(m.DNSBlocklistRefreshFailures)
+	reg.MustRegister(m.PeerStreamConnected)
+	reg.MustRegister(m.PeerStreamDisconnects)
 
 	return m
 }

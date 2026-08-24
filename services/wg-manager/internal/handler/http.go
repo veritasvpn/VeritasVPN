@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -10,24 +11,30 @@ import (
 	"errors"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/veritasvpn/lib/logging"
 	"github.com/veritasvpn/services/wg-manager/internal/entitlement"
 	"github.com/veritasvpn/services/wg-manager/internal/hub"
+	"github.com/veritasvpn/services/wg-manager/internal/metrics"
 	"github.com/veritasvpn/services/wg-manager/internal/service"
 )
 
 type HTTPHandler struct {
 	svc       *service.Service
 	hub       *hub.Hub
+	pool      *pgxpool.Pool
+	metrics   *metrics.Metrics
 	jwtSecret []byte
 	authToken string
 	log       *logging.Logger
 }
 
-func NewHTTPHandler(svc *service.Service, h *hub.Hub, jwtSecret, authToken string, log *logging.Logger) *HTTPHandler {
+func NewHTTPHandler(svc *service.Service, h *hub.Hub, pool *pgxpool.Pool, m *metrics.Metrics, jwtSecret, authToken string, log *logging.Logger) *HTTPHandler {
 	return &HTTPHandler{
 		svc:       svc,
 		hub:       h,
+		pool:      pool,
+		metrics:   m,
 		jwtSecret: []byte(jwtSecret),
 		authToken: authToken,
 		log:       log,
@@ -37,6 +44,7 @@ func NewHTTPHandler(svc *service.Service, h *hub.Hub, jwtSecret, authToken strin
 func (h *HTTPHandler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.handleHealth)
+	mux.Handle("/metrics", h.metrics.Handler())
 	mux.HandleFunc("/api/v1/agents/register", h.handleAgentRegister)
 	mux.HandleFunc("/api/v1/agents/heartbeat", h.handleAgentHeartbeat)
 	mux.HandleFunc("/api/v1/agents/peers/stream", h.handlePeerStream)
@@ -52,6 +60,21 @@ func (h *HTTPHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+	if h.pool != nil {
+		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		err := h.pool.Ping(pingCtx)
+		cancel()
+		if err != nil {
+			if h.metrics != nil {
+				h.metrics.PostgresUp.Set(0)
+			}
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "postgres unavailable"})
+			return
+		}
+	}
+	if h.metrics != nil {
+			h.metrics.PostgresUp.Set(1)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
