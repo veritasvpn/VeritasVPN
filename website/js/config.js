@@ -1,5 +1,6 @@
 export const AUTH_API = 'https://api.veritasvpn.cloud';
 export const BILLING_API = 'https://api.veritasvpn.cloud';
+export const TURNSTILE_SITE_KEY = '0x4AAAAAAEcMj2cCveWsarot';
 
 const ALPHA_COOKIE = 'veritas_alpha';
 

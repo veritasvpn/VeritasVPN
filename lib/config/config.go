@@ -36,8 +36,9 @@ type Config struct {
 
 	AgentAuthToken string
 
-	ResendAPIKey  string
-	PublicBaseURL string
+	ResendAPIKey        string
+	TurnstileSecretKey  string
+	PublicBaseURL       string
 
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
@@ -72,8 +73,9 @@ func Load() *Config {
 
 		AgentAuthToken: envRequired("AGENT_AUTH_TOKEN"),
 
-		ResendAPIKey:  os.Getenv("RESEND_API_KEY"),
-		PublicBaseURL: envOrDefault("PUBLIC_BASE_URL", "https://veritasvpn.cloud"),
+		ResendAPIKey:       os.Getenv("RESEND_API_KEY"),
+		TurnstileSecretKey: os.Getenv("TURNSTILE_SECRET_KEY"),
+		PublicBaseURL:      envOrDefault("PUBLIC_BASE_URL", "https://veritasvpn.cloud"),
 
 		AccessTokenTTL:  durationEnvOrDefault("ACCESS_TOKEN_TTL", 1*time.Hour),
 		RefreshTokenTTL: durationEnvOrDefault("REFRESH_TOKEN_TTL", 30*24*time.Hour),

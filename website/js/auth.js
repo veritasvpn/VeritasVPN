@@ -1,4 +1,4 @@
-import { AUTH_API } from './config.js';
+import { AUTH_API, TURNSTILE_SITE_KEY } from './config.js';
 
 const STORAGE_KEYS = {
   user: 'veritas_user',
@@ -179,7 +179,8 @@ export function requireAuthOrOpenModal(preferredMode = 'signin') {
 
 function mapAuthError(message) {
   const msg = (message || '').toLowerCase();
-  if (msg.includes('email_not_verified')) return 'Verify your email before signing in. Check your inbox or request a new link.';
+  if (msg.includes('verification failed')) return 'Verification failed. Complete the check and try again.';
+  if (msg.includes('verification required')) return 'Complete the verification check before continuing.';
   if (msg.includes('password must be at least')) return 'Password must be at least 10 characters.';
   if (msg.includes('already exists')) return 'An account already exists with this email. Sign in instead.';
   if (msg.includes('invalid email address')) return 'Invalid email address.';
@@ -188,8 +189,9 @@ function mapAuthError(message) {
   return message || 'Something went wrong. Please try again.';
 }
 
-async function registerAnonymous() {
-  return api('/api/v1/auth/register-anonymous', { method: 'POST', body: '{}' });
+async function registerAnonymous(turnstileToken) {
+  const body = turnstileToken ? { turnstile_token: turnstileToken } : {};
+  return api('/api/v1/auth/register-anonymous', { method: 'POST', body: JSON.stringify(body) });
 }
 
 async function signInWithAccount(accountId) {
@@ -235,6 +237,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   const userMenu = document.getElementById('navUserMenu');
   const signOutBtn = document.getElementById('authSignOut');
   const dashboardLinks = document.querySelectorAll('[data-open-dashboard]');
+  const turnstileEl = document.getElementById('authTurnstile');
   const params = new URLSearchParams(window.location.search);
   const requestedDashboardRoute = {
     subscription: '#/subscription',
@@ -246,6 +249,68 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   let mode = 'signin';
   let busy = false;
   let pendingDashboardRedirect = false;
+  let turnstileWidgetId = null;
+  let turnstileToken = '';
+  let turnstileScriptPromise = null;
+
+  function loadTurnstileScript() {
+    if (window.turnstile) return Promise.resolve();
+    if (turnstileScriptPromise) return turnstileScriptPromise;
+    turnstileScriptPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load verification widget'));
+      document.head.appendChild(script);
+    });
+    return turnstileScriptPromise;
+  }
+
+  function clearTurnstileWidget() {
+    if (turnstileWidgetId != null && window.turnstile) {
+      try { window.turnstile.remove(turnstileWidgetId); } catch (_) {}
+      turnstileWidgetId = null;
+    }
+    turnstileToken = '';
+    if (turnstileEl) {
+      turnstileEl.replaceChildren();
+      turnstileEl.hidden = true;
+    }
+  }
+
+  async function showTurnstileWidget() {
+    if (!turnstileEl || !TURNSTILE_SITE_KEY) return;
+    clearTurnstileWidget();
+    turnstileEl.hidden = false;
+    try {
+      await loadTurnstileScript();
+      turnstileWidgetId = window.turnstile.render(turnstileEl, {
+        sitekey: TURNSTILE_SITE_KEY,
+        theme: 'dark',
+        callback: (token) => { turnstileToken = token; },
+        'expired-callback': () => { turnstileToken = ''; },
+        'error-callback': () => { turnstileToken = ''; },
+      });
+    } catch {
+      setError('Could not load verification. Refresh the page and try again.');
+    }
+  }
+
+  function resetTurnstileWidget() {
+    if (turnstileWidgetId != null && window.turnstile) {
+      try { window.turnstile.reset(turnstileWidgetId); } catch (_) {}
+    }
+    turnstileToken = '';
+  }
+
+  function syncTurnstileForMode() {
+    if (mode === 'signup' || mode === 'anon-signup') {
+      showTurnstileWidget();
+    } else {
+      clearTurnstileWidget();
+    }
+  }
 
   const RESET_COOLDOWN_KEY = 'veritas_password_reset_cooldown_until';
   const RESET_COOLDOWN_MS = 30 * 1000;
@@ -412,6 +477,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
       }
     }
     setError('');
+    syncTurnstileForMode();
   }
 
   function openModal(preferredMode = 'signin') {
@@ -577,9 +643,13 @@ function renderUser(user) {
     setError('');
 
     if (mode === 'anon-signup') {
+      if (!turnstileToken) {
+        setError('Complete the verification check before continuing.');
+        return;
+      }
       setBusy(true);
       try {
-        const data = await registerAnonymous();
+        const data = await registerAnonymous(turnstileToken);
         const user = { account_id: data.account_id, is_anonymous: true };
         setSession(user, data.access_token, data.refresh_token);
         currentUser = user;
@@ -600,6 +670,7 @@ function renderUser(user) {
         }, 800);
       } catch (err) {
         setError(mapAuthError(err.message));
+        resetTurnstileWidget();
       } finally {
         setBusy(false);
       }
@@ -635,13 +706,21 @@ function renderUser(user) {
       setError('Email and password are required.');
       return;
     }
+    if (mode === 'signup' && !turnstileToken) {
+      setError('Complete the verification check before continuing.');
+      return;
+    }
     setBusy(true);
     try {
       pendingDashboardRedirect = redirectAfterAuth && shouldRedirectToDashboardAfterAuth();
       const endpoint = mode === 'signin' ? '/api/v1/auth/signin' : '/api/v1/auth/register';
+      const payload = { email, password };
+      if (mode === 'signup' && turnstileToken) {
+        payload.turnstile_token = turnstileToken;
+      }
       const data = await api(endpoint, {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(payload),
       });
       if (data.verification_required) {
         pendingDashboardRedirect = false;
@@ -655,6 +734,7 @@ function renderUser(user) {
     } catch (err) {
       pendingDashboardRedirect = false;
       setError(mapAuthError(err.message));
+      if (mode === 'signup') resetTurnstileWidget();
     } finally {
       setBusy(false);
     }

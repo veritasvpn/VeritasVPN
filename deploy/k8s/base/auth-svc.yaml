@@ -83,6 +83,12 @@ spec:
                   name: veritas-secrets
                   key: RESEND_API_KEY
                   optional: true
+            - name: TURNSTILE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: TURNSTILE_SECRET_KEY
+                  optional: true
             - name: PUBLIC_BASE_URL
               valueFrom:
                 configMapKeyRef:

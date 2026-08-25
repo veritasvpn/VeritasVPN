@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -16,6 +17,7 @@ import (
 	"github.com/veritasvpn/services/auth-svc/internal/email"
 	"github.com/veritasvpn/services/auth-svc/internal/model"
 	"github.com/veritasvpn/services/auth-svc/internal/repository"
+	"github.com/veritasvpn/services/auth-svc/internal/turnstile"
 	"go.uber.org/zap"
 )
 
@@ -483,4 +485,12 @@ func (s *AuthService) SignInWithAccountID(ctx context.Context, accountID string)
 	)
 
 	return accessToken, refreshToken, acc.ID, expiresAt, nil
+}
+
+func (s *AuthService) TurnstileEnabled() bool {
+	return strings.TrimSpace(s.cfg.TurnstileSecretKey) != ""
+}
+
+func (s *AuthService) VerifyTurnstile(ctx context.Context, token, remoteIP string) error {
+	return turnstile.Verify(ctx, s.cfg.TurnstileSecretKey, token, remoteIP)
 }

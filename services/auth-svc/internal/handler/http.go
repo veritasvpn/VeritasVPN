@@ -36,6 +36,22 @@ func clientIP(r *http.Request) string {
 	return strings.Split(r.RemoteAddr, ":")[0]
 }
 
+func (h *HTTPHandler) verifyTurnstileIfRequired(w http.ResponseWriter, r *http.Request, token string) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" || !h.service.TurnstileEnabled() {
+		return true
+	}
+	if _, ok := h.corsMap[origin]; !ok {
+		return true
+	}
+	if err := h.service.VerifyTurnstile(r.Context(), token, clientIP(r)); err != nil {
+		h.log.Warn("turnstile verification failed", zap.String("origin", origin), zap.Error(err))
+		writeHTTPError(w, http.StatusBadRequest, "verification failed; please try again")
+		return false
+	}
+	return true
+}
+
 func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", h.handleHealth)
 	mux.HandleFunc("/api/v1/auth/register", h.withCORS(h.handleRegister))
@@ -84,11 +100,16 @@ func (h *HTTPHandler) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email          string `json:"email"`
+		Password       string `json:"password"`
+		TurnstileToken string `json:"turnstile_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeHTTPError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
 		return
 	}
 
@@ -358,12 +379,22 @@ func (h *HTTPHandler) handleCompleteReset(w http.ResponseWriter, r *http.Request
 }
 
 func (h *HTTPHandler) handleRegisterAnonymous(w http.ResponseWriter, r *http.Request) {
-	if h.service.RateLimited(r.Context(), "anonymous-register:"+clientIP(r), 20, time.Hour) {
-		writeHTTPError(w, http.StatusTooManyRequests, "too many registration attempts; try again later")
-		return
-	}
 	if r.Method != http.MethodPost {
 		writeHTTPError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req struct {
+		TurnstileToken string `json:"turnstile_token"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
+		return
+	}
+
+	if h.service.RateLimited(r.Context(), "anonymous-register:"+clientIP(r), 20, time.Hour) {
+		writeHTTPError(w, http.StatusTooManyRequests, "too many registration attempts; try again later")
 		return
 	}
 

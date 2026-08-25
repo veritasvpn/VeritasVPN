@@ -1,4 +1,4 @@
-import { initAuthUI } from './auth-release-12.js?v=15';
+import { initAuthUI } from './auth-release-12.js?v=16';
 import { initBillingUI } from './billing.js?v=5';
 import { mountNetworkMap } from './network-map.js?v=hero5';
 

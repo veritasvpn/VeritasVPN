@@ -1282,6 +1282,12 @@ body.auth-modal-open { overflow: hidden; }
   color: #7ae7ff;
 }
 .auth-form { display: flex; flex-direction: column; gap: 14px; }
+.auth-turnstile {
+  display: flex;
+  justify-content: center;
+  min-height: 65px;
+}
+.auth-turnstile[hidden] { display: none; }
 .auth-note {
   margin: 2px 0 0;
   font-size: 12px;
