@@ -137,23 +137,24 @@ spec:
           ports:
             - containerPort: 9090
               name: metrics
+          # Probes use /metrics until the pinned agent image includes /healthz.
           startupProbe:
             httpGet:
-              path: /healthz
+              path: /metrics
               port: metrics
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 12
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /metrics
               port: metrics
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /metrics
               port: metrics
             periodSeconds: 30
             timeoutSeconds: 5
