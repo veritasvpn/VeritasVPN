@@ -112,13 +112,12 @@ else
 fi
 
 # Prefer node_exporter textfile metrics written by backup-k3s.sh (covers R2 offsite).
-backup_ts="$(curl -fsS --max-time 5 http://127.0.0.1:9100/metrics 2>/dev/null | awk '/^veritas_backup_offsite_last_success_timestamp / {print $2; exit}')"
-backup_ts_int="${backup_ts%.*}"
-if [[ -z "$backup_ts_int" || "$backup_ts_int" -eq 0 ]] 2>/dev/null; then
-  backup_ts="$(curl -fsS --max-time 5 http://127.0.0.1:9100/metrics 2>/dev/null | awk '/^veritas_backup_last_success_timestamp / {print $2; exit}')"
-  backup_ts_int="${backup_ts%.*}"
+# Prometheus textfile values may be scientific notation (1.78e+09); force integer seconds.
+backup_ts_int="$(curl -fsS --max-time 5 http://127.0.0.1:9100/metrics 2>/dev/null | awk '/^veritas_backup_offsite_last_success_timestamp / {printf "%d", $2; exit}')"
+if [[ -z "$backup_ts_int" || "$backup_ts_int" -eq 0 ]]; then
+  backup_ts_int="$(curl -fsS --max-time 5 http://127.0.0.1:9100/metrics 2>/dev/null | awk '/^veritas_backup_last_success_timestamp / {printf "%d", $2; exit}')"
 fi
-if [[ -n "$backup_ts_int" ]] && [[ "$backup_ts_int" =~ ^[0-9]+$ ]] && (( backup_ts_int > 0 )); then
+if [[ -n "$backup_ts_int" ]] && [[ "$backup_ts_int" =~ ^[0-9]+$ ]] && (( backup_ts_int > 1000000000 )); then
   now="$(date +%s)"
   age=$(( (now - backup_ts_int) / 3600 ))
   if (( age < 0 )); then age=0; fi
