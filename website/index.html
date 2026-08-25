@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="VeritasVPN — The truth about online privacy. WireGuard VPN from Paraguay. Anonymous accounts. Private Bitcoin subscriptions. Source-available under BSL.">
+    <meta name="description" content="VeritasVPN — WireGuard from Paraguay with private DNS threat protection. Blocks known malware and phishing domains. Anonymous accounts. Private Bitcoin subscriptions. Source-available under BSL.">
     <title>VeritasVPN — The truth about online privacy.</title>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="css/style-typography1.css">
@@ -19,6 +19,7 @@
             <ul class="nav-links">
                 <li><a href="#network">Network</a></li>
                 <li><a href="#product">Product</a></li>
+                <li><a href="#dns">DNS</a></li>
                 <li><a href="#pricing">Pricing</a></li>
                 <li><a href="downloads.html">Download</a></li>
                 <li><a href="#faq">FAQ</a></li>
@@ -58,7 +59,8 @@
             <p class="hero-brand-name">Veritas<span>VPN</span></p>
             <h1 class="hero-title">The truth about online privacy</h1>
             <p class="hero-subtitle">
-                WireGuard from Paraguay. Anonymous accounts. Private Bitcoin subscriptions.
+                WireGuard from Paraguay with private DNS threat protection.
+                Anonymous accounts. Private Bitcoin subscriptions.
                 One live node today — we only advertise what is running.
             </p>
             <div class="hero-actions">
@@ -85,7 +87,7 @@
                 <div class="network-map-wrap" id="panelMap"></div>
                 <div class="network-legend">
                     <div><span>Live</span> — Paraguay (Asunción metro)</div>
-                    <div><span>Protocol</span> — WireGuard UDP 51820</div>
+                    <div><span>Protocol</span> — WireGuard + private DNS gateway</div>
                     <div><span>Roadmap</span> — more regions when nodes ship</div>
                 </div>
             </div>
@@ -97,17 +99,60 @@
             <div class="product-shell reveal">
                 <div class="section-header product-header">
                     <div><span class="section-kicker">What you get</span><h2>Real protection.<br>Zero inflated claims.</h2></div>
-                    <p>One working Paraguay node, modern encryption, private payments, and source you can inspect. We show what exists today—not a fictional network map.</p>
+                    <p>One working Paraguay node, modern encryption, private DNS threat protection, private payments, and source you can inspect. We show what exists today—not a fictional network map.</p>
                 </div>
                 <div class="reality-grid">
-                    <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3zM9 12l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="reality-label">Protocol</span><h3>WireGuard + protected DNS</h3><p>Linux and Android establish real encrypted WireGuard tunnels and use our private DNS gateway, which blocks known malware and phishing domains without retaining DNS contents. Chrome protects browser traffic through our authenticated proxy; its DNS coverage is browser-specific.</p></div></article>
+                    <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3zM9 12l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="reality-label">Protocol</span><h3>WireGuard tunnels</h3><p>Linux and Android establish real encrypted WireGuard peers on the live Paraguay node. Chrome protects browser traffic through our authenticated proxy. Full-device DNS threat protection applies to WireGuard clients—see <a href="#dns">DNS security</a>.</p></div></article>
                     <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 13a4 4 0 100-8 4 4 0 000 8zM5 21a7 7 0 0114 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><span class="reality-label">Identity</span><h3>Anonymous by design</h3><p>Create an Account ID without an email, or choose verified email access. Your anonymous ID cannot be recovered if you lose it.</p></div></article>
                     <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M8 7h8M6 12h12M9 17h6M12 3v18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><span class="reality-label">Plan</span><h3>One honest price</h3><p>$3 per month gives you the complete service on up to five devices. No feature maze and no artificially limited free tier.</p></div></article>
                     <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 12s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5zM4 4l16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><span class="reality-label">Privacy</span><h3>No browsing history</h3><p>We do not retain destinations, DNS contents, or browsing activity. Operational account, billing, and peer metadata is documented in our <a href="privacy.html">Privacy Policy</a>.</p></div></article>
                     <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M14 5l-4 14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="reality-label">Source</span><h3>Code you can inspect</h3><p>Clients, agent, and infrastructure are published under Business Source License 1.1. Read the implementation and follow every change.</p></div></article>
                     <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M5 19L19 5M8 5h11v11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="reality-label">Roadmap</span><h3>Expanding transparently</h3><p>New locations and features appear only after they ship. Follow our <a href="/canary.txt">warrant canary</a> and public repository for current status.</p></div></article>
                 </div>
-                <div class="product-foot"><span><i></i> Live infrastructure</span><span>Paraguay egress</span><span>Up to 5 devices</span><span>Bitcoin</span></div>
+                <div class="product-foot"><span><i></i> Live infrastructure</span><span>Paraguay egress</span><span>Protected DNS</span><span>Up to 5 devices</span><span>Bitcoin</span></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section how-it-works dns-protection" id="dns">
+        <div class="container">
+            <div class="how-it-works-shell reveal">
+                <div class="section-header how-it-works-header">
+                    <div>
+                        <span class="section-kicker">DNS security</span>
+                        <h2>Threat protection in the tunnel</h2>
+                    </div>
+                    <p>Android and Linux peers resolve through our private DNS gateway. Queries leave the server only over encrypted DNS. Known malware and phishing domains are blocked. We do not retain query names.</p>
+                </div>
+                <div class="steps">
+                    <article class="step">
+                        <div class="step-topline"><span class="step-number">01</span><span class="step-status">Encrypted upstream</span></div>
+                        <div class="step-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                        </div>
+                        <h3>Private DNS gateway</h3>
+                        <p>WireGuard clients use our in-tunnel resolver. Lookups are forwarded over DNS-over-HTTPS to trusted public resolvers—not sent as plain DNS on the open internet from your device.</p>
+                    </article>
+                    <article class="step">
+                        <div class="step-topline"><span class="step-number">02</span><span class="step-status">Threat feeds</span></div>
+                        <div class="step-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M18 15l2 2 3-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </div>
+                        <h3>Malware &amp; phishing blocks</h3>
+                        <p>Automatically refreshed security feeds (including URLhaus and Phishing Army) mark dangerous hostnames. Matched names resolve to NXDOMAIN so the connection never starts.</p>
+                    </article>
+                    <article class="step">
+                        <div class="step-topline"><span class="step-number">03</span><span class="step-status">No query logs</span></div>
+                        <div class="step-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none"><path d="M4 12s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5zM4 4l16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                        </div>
+                        <h3>Aggregate metrics only</h3>
+                        <p>We keep counts such as total requests, blocks, and blocklist freshness—never domain names, account IDs, or client IPs. Details are in the <a href="privacy.html">Privacy Policy</a>.</p>
+                    </article>
+                </div>
+                <div class="how-it-works-foot">
+                    <span>Android &amp; Linux</span><i aria-hidden="true"></i><strong>Protected DNS</strong><i aria-hidden="true"></i><span>Chrome DNS is browser-specific</span>
+                </div>
             </div>
         </div>
     </section>
@@ -147,8 +192,8 @@
                             <svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         </div>
                         <h3>Connect securely</h3>
-                        <p>Tap Connect to create an encrypted route to the live VeritasVPN server in Paraguay.</p>
-                        <span class="step-proof"><i aria-hidden="true"></i> WireGuard encrypted</span>
+                        <p>Tap Connect to create an encrypted route to the live VeritasVPN server in Paraguay. On Android and Linux, DNS goes through our protected gateway automatically.</p>
+                        <span class="step-proof"><i aria-hidden="true"></i> WireGuard + protected DNS</span>
                     </article>
                 </div>
                 <div class="how-it-works-foot">
@@ -172,7 +217,7 @@
                     <div class="pricing-price"><span class="currency">$</span><span class="price-value">3</span><span class="period">USD / month</span></div><div class="pricing-plan-options"><button type="button" class="pricing-plan-option is-selected" data-plan-id="premium_monthly"><strong>Monthly · $3</strong><span>30 days of Premium access</span></button><button type="button" class="pricing-plan-option" data-plan-id="premium_annual"><strong>Annual · $30</strong><span>365 days · save $6</span></button></div>
                     <p class="pricing-description">Everything you need to route your connection privately.</p>
                     <ul class="pricing-features">
-                        <li><span>✓</span>Encrypted Paraguay connection</li><li><span>✓</span>Up to five active devices</li><li><span>✓</span>Chrome, Android, and Linux access</li><li><span>✓</span>Anonymous Account ID option</li>
+                        <li><span>✓</span>Encrypted Paraguay connection</li><li><span>✓</span>Private DNS threat protection (Android &amp; Linux)</li><li><span>✓</span>Up to five active devices</li><li><span>✓</span>Chrome, Android, and Linux access</li><li><span>✓</span>Anonymous Account ID option</li>
                     </ul>
                     <div class="pricing-payment-label">Choose a private payment method</div>
                     <div class="pricing-payment-actions"><button type="button" class="btn btn-primary btn-block" data-billing-checkout data-payment-method="btcpay" data-plan-id="premium_monthly"><span class="crypto-mark">₿</span>Pay with Bitcoin</button></div>
@@ -201,8 +246,8 @@
                 <div class="section-header downloads-header"><div><span class="section-kicker">Available clients</span><h2>Protection wherever you connect.</h2></div><div><p>Choose the client that fits your device. Every available app connects to the same VeritasVPN service in Paraguay.</p><a href="downloads.html" class="text-link">Compare all clients →</a></div></div>
                 <div class="download-featured">
                     <a class="download-featured-card" href="install/chrome.html"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-chrome-veritas.svg" alt=""></span><h3>Chrome</h3><p>Protect browser traffic with one-click authenticated proxy access.</p><span class="download-card-action">Get the extension <b>→</b></span></a>
-                    <a class="download-featured-card" href="install/android.html"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-android-veritas.svg" alt=""></span><h3>Android</h3><p>Secure your phone with a native full-device WireGuard tunnel.</p><span class="download-card-action">Get Android <b>→</b></span></a>
-                    <a class="download-featured-card" href="install/linux.html"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-linux-veritas.svg" alt=""></span><h3>Linux</h3><p>Connect your desktop through a native WireGuard-powered client.</p><span class="download-card-action">Get Linux <b>→</b></span></a>
+                    <a class="download-featured-card" href="install/android.html"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-android-veritas.svg" alt=""></span><h3>Android</h3><p>Full-device WireGuard with private DNS threat protection on the Paraguay node.</p><span class="download-card-action">Get Android <b>→</b></span></a>
+                    <a class="download-featured-card" href="install/linux.html"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-linux-veritas.svg" alt=""></span><h3>Linux</h3><p>Native WireGuard client with the same in-tunnel malware and phishing DNS blocks.</p><span class="download-card-action">Get Linux <b>→</b></span></a>
                 </div>
                 <div class="downloads-platform-note"><span><i></i>3 clients available today</span><span>Windows and macOS are coming soon.</span></div>
             </div>
@@ -215,11 +260,12 @@
                 <aside class="faq-intro"><span class="section-kicker">FAQ</span><h2>Questions,<br>answered clearly.</h2><p>Everything important about our infrastructure, privacy claims, platforms, and roadmap—without fine-print evasions.</p><div class="faq-help"><span>Still have a question?</span><a href="https://github.com/veritasvpn/VeritasVPN/issues" target="_blank" rel="noopener">Ask it publicly →</a></div></aside>
                 <div class="faq-list">
                     <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>01</b>Where are your servers?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>One live WireGuard egress in Paraguay today. We add locations to the network map only after they are online and tested.</p></div></div>
-                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>02</b>How is VeritasVPN different?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>WireGuard connections, anonymous Account IDs, private Bitcoin payments, and public source under BSL 1.1. We do not advertise infrastructure or audits that do not exist.</p></div></div>
-                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>03</b>What does “no logs” mean?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>We do not store browsing history, DNS contents, or destination traffic. We retain the limited account, billing, and WireGuard peer metadata needed to operate the service. See the <a href="privacy.html">Privacy Policy</a>.</p></div></div>
-                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>04</b>Is VeritasVPN open source?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>The source is public under Business Source License 1.1. It is source-available rather than OSI open source, with competing commercial use restricted until the Change Date.</p></div></div>
-                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>05</b>Which platforms work today?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>Chrome, Android, and Linux are available now. Windows and macOS remain marked Coming soon until their production clients are ready.</p></div></div>
-                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>06</b>Do you have a kill switch?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>A kill switch is a safety feature that immediately blocks all internet traffic if the VPN tunnel drops, helping prevent your real IP address, DNS requests, or unencrypted traffic from leaking over your normal connection. VeritasVPN now includes platform-specific kill-switch protection: Linux blocks non-VPN traffic at the firewall and routing layers; Android requires enabling the system Always-on VPN and Block connections without VPN settings; Chrome blocks browser traffic if its proxy tunnel fails. Coverage is platform-specific, so verify the protection is enabled in your client.</p></div></div>
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>02</b>How is VeritasVPN different?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>WireGuard connections with private DNS threat protection, anonymous Account IDs, private Bitcoin payments, and public source under BSL 1.1. We do not advertise infrastructure or audits that do not exist.</p></div></div>
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>03</b>What does “no logs” mean?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>We do not store browsing history, DNS contents, or destination traffic. We retain the limited account, billing, and WireGuard peer metadata needed to operate the service. DNS protection keeps only aggregate counts—not query names. See the <a href="privacy.html">Privacy Policy</a>.</p></div></div>
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>04</b>How does DNS security work?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>On Android and Linux, peers use our in-tunnel DNS gateway. Queries are forwarded over encrypted DNS (DNS-over-HTTPS). Hostnames on refreshed malware and phishing feeds are blocked with NXDOMAIN. Ordinary DNS and DNS-over-TLS bypasses are blocked at the gateway; apps that speak DNS-over-HTTPS directly over HTTPS can still reach other resolvers. Chrome’s proxy path does not use the same full-device DNS gateway. This is threat protection—not an ad or tracker blocker. While connected, you can safely probe blocking with <code>https://dns-protection-test.veritasvpn.invalid</code>.</p></div></div>
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>05</b>Is VeritasVPN open source?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>The source is public under Business Source License 1.1. It is source-available rather than OSI open source, with competing commercial use restricted until the Change Date.</p></div></div>
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>06</b>Which platforms work today?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>Chrome, Android, and Linux are available now. Windows and macOS remain marked Coming soon until their production clients are ready.</p></div></div>
+                    <div class="faq-item"><button class="faq-question" aria-expanded="false"><span><b>07</b>Do you have a kill switch?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer"><p>A kill switch is a safety feature that immediately blocks all internet traffic if the VPN tunnel drops, helping prevent your real IP address, DNS requests, or unencrypted traffic from leaking over your normal connection. VeritasVPN now includes platform-specific kill-switch protection: Linux blocks non-VPN traffic at the firewall and routing layers; Android requires enabling the system Always-on VPN and Block connections without VPN settings; Chrome blocks browser traffic if its proxy tunnel fails. Coverage is platform-specific, so verify the protection is enabled in your client.</p></div></div>
                 </div>
             </div>
         </div>
@@ -228,7 +274,7 @@
     <section class="cta-section">
         <div class="container">
             <h2 class="reveal">Ready when you are</h2>
-            <p class="reveal">Early-stage WireGuard VPN from Paraguay. Honest docs. Source on GitHub.</p>
+            <p class="reveal">Early-stage WireGuard VPN from Paraguay with private DNS threat protection. Honest docs. Source on GitHub.</p>
             <div class="cta-actions reveal">
                 <button type="button" class="btn btn-primary btn-lg" data-auth-gate="dashboard">Get started</button>
                 <a href="https://github.com/veritasvpn/VeritasVPN" class="btn btn-outline btn-lg" target="_blank" rel="noopener">View on GitHub</a>
@@ -244,7 +290,7 @@
                         <img src="assets/logo-mark.png" alt="" class="logo-mark" width="40" height="40">
                         <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
                     </a>
-                    <p>The truth about online privacy. WireGuard from Paraguay. Source-available under BSL.</p>
+                    <p>The truth about online privacy. WireGuard from Paraguay with private DNS threat protection. Source-available under BSL.</p>
                     <div class="footer-social">
                         <a href="https://github.com/veritasvpn/VeritasVPN" target="_blank" rel="noopener" aria-label="GitHub">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
@@ -255,6 +301,7 @@
                     <h4>Product</h4>
                     <ul>
                         <li><a href="#network">Network</a></li>
+                        <li><a href="#dns">DNS security</a></li>
                         <li><a href="#pricing">Pricing</a></li>
                         <li><a href="downloads.html">Download</a></li>
                         <li><a href="install/">Install guides</a></li>

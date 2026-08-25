@@ -128,6 +128,7 @@ function renderHome() {
         <ul class="upgrade-features">
           <li>Access to the current network</li>
           <li>Up to 5 WireGuard devices</li>
+          <li>Private DNS threat protection (Android &amp; Linux)</li>
           <li>Pay with Bitcoin (no card)</li>
           <li>Priority support while we expand</li>
         </ul>
@@ -248,6 +249,7 @@ function renderSecurity() {
       <div class="account-card">
         <ul class="upgrade-features">
           <li>WireGuard-only protocol</li>
+          <li>Private DNS threat protection for Android &amp; Linux</li>
           <li>No traffic logs — see Privacy Policy for operational data</li>
           <li>Paid with Bitcoin (no card required)</li>
           <li>Diskless / RAM-oriented servers (roadmap)</li>

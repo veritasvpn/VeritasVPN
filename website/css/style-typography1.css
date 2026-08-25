@@ -1105,6 +1105,11 @@ button { font-family: inherit; }
 }
 .faq-answer p { color: var(--paper-muted); font-size: 0.95rem; }
 .faq-answer a { color: var(--leaf); }
+.faq-answer code {
+  font-size: 0.85em;
+  color: var(--cyan);
+  word-break: break-all;
+}
 
 /* —— CTA —— */
 .cta-section {
