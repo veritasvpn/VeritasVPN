@@ -73,12 +73,14 @@ type AgentManagerClient interface {
 
 type httpAgentClient struct {
 	baseURL    string
+	authToken  string
 	httpClient *http.Client
 }
 
-func NewAgentClient(endpoint string) *httpAgentClient {
+func NewAgentClient(endpoint, authToken string) *httpAgentClient {
 	return &httpAgentClient{
-		baseURL: strings.TrimRight(endpoint, "/"),
+		baseURL:   strings.TrimRight(endpoint, "/"),
+		authToken: authToken,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -133,6 +135,9 @@ func (c *httpAgentClient) SendHeartbeat(ctx context.Context, req *HeartbeatReque
 		return fmt.Errorf("create heartbeat request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.authToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -409,7 +414,7 @@ func (a *Agent) Run() error {
 		return fmt.Errorf("firewall setup: %w", err)
 	}
 
-	a.managerClient = NewAgentClient(a.cfg.ManagerEndpoint)
+	a.managerClient = NewAgentClient(a.cfg.ManagerEndpoint, a.cfg.AuthToken)
 
 	resp, err := a.registerWithManager(ctx)
 	if err != nil {

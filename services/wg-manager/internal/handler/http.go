@@ -147,6 +147,12 @@ func (h *HTTPHandler) handleAgentHeartbeat(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	token := extractBearer(r)
+	if token == "" || token != h.authToken {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
 	var req heartbeatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})

@@ -165,6 +165,13 @@ func (h *HTTPHandler) handleSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	normalizedEmail := strings.ToLower(strings.TrimSpace(req.Email))
+	if h.service.RateLimited(r.Context(), "email-signin-ip:"+clientIP(r), 10, time.Minute) ||
+		h.service.RateLimited(r.Context(), "email-signin-address:"+normalizedEmail, 10, time.Minute) {
+		writeHTTPError(w, http.StatusTooManyRequests, "too many sign-in attempts; try again later")
+		return
+	}
+
 	accessToken, refreshToken, accountID, expiresAt, err := h.service.SignInWithEmail(r.Context(), req.Email, req.Password)
 	if err != nil {
 		h.log.Warn("sign in failed", zap.String("email", req.Email), zap.Error(err))
@@ -408,6 +415,11 @@ func (h *HTTPHandler) handleDownloadAccount(w http.ResponseWriter, r *http.Reque
 func (h *HTTPHandler) handleSignInAccount(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeHTTPError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if h.service.RateLimited(r.Context(), "signin-account-ip:"+clientIP(r), 10, time.Minute) {
+		writeHTTPError(w, http.StatusTooManyRequests, "too many sign-in attempts; try again later")
 		return
 	}
 
