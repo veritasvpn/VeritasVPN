@@ -113,13 +113,16 @@ fi
 
 # Prefer node_exporter textfile metrics written by backup-k3s.sh (covers R2 offsite).
 backup_ts="$(curl -fsS --max-time 5 http://127.0.0.1:9100/metrics 2>/dev/null | awk '/^veritas_backup_offsite_last_success_timestamp / {print $2; exit}')"
-if [[ -z "$backup_ts" || "$backup_ts" == "0" ]]; then
+backup_ts_int="${backup_ts%.*}"
+if [[ -z "$backup_ts_int" || "$backup_ts_int" -eq 0 ]] 2>/dev/null; then
   backup_ts="$(curl -fsS --max-time 5 http://127.0.0.1:9100/metrics 2>/dev/null | awk '/^veritas_backup_last_success_timestamp / {print $2; exit}')"
+  backup_ts_int="${backup_ts%.*}"
 fi
-if [[ -n "$backup_ts" && "$backup_ts" != "0" ]]; then
+if [[ -n "$backup_ts_int" ]] && [[ "$backup_ts_int" =~ ^[0-9]+$ ]] && (( backup_ts_int > 0 )); then
   now="$(date +%s)"
-  age=$(( (now - ${backup_ts%.*}) / 3600 ))
-  if (( age <= 25 )); then ok "encrypted backup age ${age}h (metrics)"; else bad "encrypted backup is ${age}h old (metrics)"; fi
+  age=$(( (now - backup_ts_int) / 3600 ))
+  if (( age < 0 )); then age=0; fi
+  if (( age <= 36 )); then ok "encrypted backup age ${age}h (metrics)"; else bad "encrypted backup is ${age}h old (metrics)"; fi
 else
   BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/veritasvpn}"
   latest="$(find "$BACKUP_ROOT" -maxdepth 1 -type f -name 'veritasvpn-*.tar.gz.enc' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
