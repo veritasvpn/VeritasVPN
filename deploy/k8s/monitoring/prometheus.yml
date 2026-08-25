@@ -25,10 +25,6 @@ scrape_configs:
     static_configs:
       - targets: ["wg-manager.veritas.svc.cluster.local:8080"]
 
-  - job_name: bitcoin-readiness
-    static_configs:
-      - targets: ["bitcoin-readiness.btcpay.svc.cluster.local:8080"]
-
   - job_name: bitcoin-readiness-mainnet
     static_configs:
       - targets: ["bitcoin-readiness-mainnet.btcpay-mainnet.svc.cluster.local:8080"]
@@ -58,7 +54,7 @@ scrape_configs:
           - https://veritasvpn.cloud/
           - https://api.veritasvpn.cloud/healthz
           - https://api.veritasvpn.cloud/api/v1/billing/readyz
-          - https://btcpay.veritasvpn.cloud/
+          - https://btcpay-mainnet.veritasvpn.cloud/
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
