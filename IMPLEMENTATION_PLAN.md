@@ -649,7 +649,7 @@ Use `windows-rs` crate to interact with Windows Filtering Platform API. Create f
 PrivateKey = <client_private_key>        # Generated locally, NEVER sent to server
 Address = 10.1.0.42/32                   # Assigned by wg-manager
 DNS = 10.1.0.1                           # DNS server on the WG server
-MTU = 1420                               # Optimal for most connections
+MTU = 1280                               # Product default: reliability on cellular/hostile paths (see docs/MTU_STRATEGY.md)
 
 [Peer]
 PublicKey = <server_public_key>          # Fetched from server list API
@@ -667,7 +667,7 @@ PersistentKeepalive = 25                 # Keep NAT mappings alive
 PrivateKey = <server_private_key>       # Generated during server provisioning
 Address = 10.1.0.1/24                   # Server's internal VPN IP
 ListenPort = 51820                      # Standard WG port
-MTU = 1420
+MTU = 1420                              # Server wg0 default; clients use 1280 (docs/MTU_STRATEGY.md)
 PostUp = nft add rule ip nat POSTROUTING oifname eth0 masquerade
 PostUp = nft add rule ip filter FORWARD iifname wg0 jump veritas-forward
 PostDown = nft delete rule ip nat POSTROUTING oifname eth0 masquerade

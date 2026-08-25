@@ -541,6 +541,7 @@ class MainActivity : ComponentActivity() {
             appendLine("PrivateKey = ${keyPair.privateKey.toBase64()}")
             appendLine("Address = ${peer.assignedIp}")
             appendLine("DNS = $dns")
+            // Product default MTU 1280 (reliability on mobile/hostile paths); see docs/MTU_STRATEGY.md
             appendLine("MTU = 1280")
             appendLine()
             appendLine("[Peer]")

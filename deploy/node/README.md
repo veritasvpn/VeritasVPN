@@ -46,6 +46,17 @@ sudo bash deploy/node/install-host-shaping.sh
 ```
 
 
+
+## WireGuard MTU strategy
+
+Product defaults (intentional, not a bug):
+
+- **Server `wg0`**: MTU **1420** (Ethernet/WG overhead on the node).
+- **Issued clients** (desktop / Android): MTU **1280** — safe default for cellular and hostile paths; prefer reliability over peak efficiency.
+- **MSS clamp ~1380** on the server remains as-is.
+
+With a ~100 Mbps per-device cap, client/server MTU asymmetry is acceptable. Do not blindly raise client MTU without path testing. See [`docs/MTU_STRATEGY.md`](../../docs/MTU_STRATEGY.md).
+
 ## Host firewall
 
 ```bash

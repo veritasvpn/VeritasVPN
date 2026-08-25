@@ -52,6 +52,7 @@ func wgTurnOn(env *C.JNIEnv, cls C.jclass, jifname C.jstring, jtunFd C.jint, jse
 	settings := C.GoString((*C.char)(unsafe.Pointer(C.GetStringUTFChars(env, jsettings, nil))))
 	tunFd := int(jtunFd)
 
+	// Product default MTU 1280 (reliability on mobile/hostile paths); see docs/MTU_STRATEGY.md
 	t := &androidTun{fd: tunFd, name: ifname, mtu: 1280,
 		events: make(chan tun.TUNEvent, 10), errors: make(chan error, 10)}
 	dev := device.NewDevice(tun.Device(t), device.NewLogger(device.LogLevelError, ""))
