@@ -124,8 +124,10 @@ spec:
               value: "/var/lib/veritasvpn/dns/blocklist.txt"
             - name: PEER_NO_HANDSHAKE_GRACE
               value: "3m"
+            # Reconnect stickiness: expire stale peers after sleep/Wi-Fi blips (~30–60m),
+            # not ~5m, to cut add/remove/stale churn vs the bandwidth reconciler.
             - name: PEER_STALE_AFTER
-              value: "5m"
+              value: "30m"
             # hostNetwork + in-cluster scrape require a non-loopback bind.
             # WAN/LAN exposure is blocked by deploy/node/veritas-firewall.sh.
             - name: METRICS_BIND

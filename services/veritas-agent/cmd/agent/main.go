@@ -318,7 +318,9 @@ func LoadAgentConfig() *AgentConfig {
 		DNSBlocklistStateFile: envOrDefault("DNS_BLOCKLIST_STATE_FILE", "/var/lib/veritasvpn/dns/blocklist.txt"),
 		BandwidthLimitMbps:    bandwidth,
 		PeerNoHandshakeGrace:  durationOrDefault("PEER_NO_HANDSHAKE_GRACE", 3*time.Minute),
-		PeerStaleAfter:        durationOrDefault("PEER_STALE_AFTER", 5*time.Minute),
+		// PEER_STALE_AFTER: keep peers through sleep/Wi-Fi blips so reconnects stay sticky
+		// and the bandwidth reconciler does not churn add/remove/stale on short gaps.
+		PeerStaleAfter:        durationOrDefault("PEER_STALE_AFTER", 30*time.Minute),
 	}
 }
 
