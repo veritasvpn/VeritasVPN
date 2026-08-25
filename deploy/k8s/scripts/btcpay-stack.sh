@@ -65,7 +65,8 @@ status() {
 scale_down() {
   echo "Scaling down $STACK stack in $NS (PVCs retained)..."
   kubectl_ns scale "sts/$POSTGRES" --replicas=0
-  kubectl_ns scale deploy/"${DEPLOYS[@]}" sts/"${STATEFULSETS[@]}" --replicas=0
+  for d in "${DEPLOYS[@]}"; do kubectl_ns scale "deploy/$d" --replicas=0; done
+  for s in "${STATEFULSETS[@]}"; do kubectl_ns scale "sts/$s" --replicas=0; done
   echo "Done. Reactivate with: $0 $STACK up"
 }
 
@@ -78,7 +79,8 @@ scale_up() {
   echo "Scaling up $STACK stack in $NS..."
   kubectl_ns scale "sts/$POSTGRES" --replicas=1
   wait_postgres
-  kubectl_ns scale sts/"${STATEFULSETS[@]}" deploy/"${DEPLOYS[@]}" --replicas=1
+  for s in "${STATEFULSETS[@]}"; do kubectl_ns scale "sts/$s" --replicas=1; done
+  for d in "${DEPLOYS[@]}"; do kubectl_ns scale "deploy/$d" --replicas=1; done
   echo "Waiting for bitcoind..."
   kubectl_ns wait --for=condition=ready "pod/${STATEFULSETS[0]}-0" --timeout=600s || true
   echo "Done. bitcoind will catch up incrementally if the stack was previously stopped."
