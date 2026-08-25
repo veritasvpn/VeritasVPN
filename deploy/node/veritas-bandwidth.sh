@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Per-peer 100 Mbps cap on WireGuard.
+# Per-peer 150 Mbps cap on WireGuard.
 # Download: HTB on wg0 (server -> client).
 # Upload: IFB + HTB (no ingress police drop; that was starving TCP ACKs ~50 Mbps).
 set -euo pipefail
 
 WG_IFACE="${WG_IFACE:-wg0}"
 IFB_IFACE="${VERITAS_IFB_IFACE:-ifb-veritas}"
-DEVICE_RATE="${VERITAS_DEVICE_RATE:-100mbit}"
+DEVICE_RATE="${VERITAS_DEVICE_RATE:-150mbit}"
 STATE_FILE="${VERITAS_BANDWIDTH_STATE:-/run/veritas-bandwidth.peers}"
 TC="${TC_BIN:-/sbin/tc}"
 WG="${WG_BIN:-/usr/bin/wg}"
 IP="${IP_BIN:-/sbin/ip}"
-SHAPE_VERSION="v4-100mbit-ifb"
+SHAPE_VERSION="v4-150mbit-ifb"
 
 if [[ ! -x "$TC" || ! -x "$WG" || ! -x "$IP" ]]; then
   echo "required networking tools are unavailable" >&2

@@ -13,7 +13,7 @@ import (
 
 const cmdTimeout = 10 * time.Second
 
-const defaultBandwidthMbps = 100 // matches PEER_BANDWIDTH_LIMIT_MBPS default
+const defaultBandwidthMbps = 150 // matches PEER_BANDWIDTH_LIMIT_MBPS default
 
 type Manager struct {
 	tableName string

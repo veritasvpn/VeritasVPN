@@ -35,9 +35,9 @@ SOCKS (`veritas-proxy` :1080) remains for the Chrome extension only. Desktop/CLI
 
 ## Per-device bandwidth cap
 
-The veritas-bandwidth service and its 15-second timer apply an independent 100 Mbps ceiling to every configured WireGuard peer. Download traffic is shaped with HTB + fq_codel on wg0; upload traffic is mirrored to an IFB device (ifb-veritas) and shaped there with HTB + fq_codel. Ingress police was removed because it dropped TCP ACKs and capped upload near 50 Mbps.
+The veritas-bandwidth service and its 15-second timer apply an independent 150 Mbps ceiling to every configured WireGuard peer. Download traffic is shaped with HTB + fq_codel on wg0; upload traffic is mirrored to an IFB device (ifb-veritas) and shaped there with HTB + fq_codel. Ingress police was removed because it dropped TCP ACKs and capped upload near 50 Mbps.
 
-The reconciler only rebuilds queues when the peer set or shaping version changes, so active tunnels are not interrupted on ordinary timer runs. The cap is controlled by VERITAS_DEVICE_RATE in the service environment and defaults to 100mbit.
+The reconciler only rebuilds queues when the peer set or shaping version changes, so active tunnels are not interrupted on ordinary timer runs. The cap is controlled by VERITAS_DEVICE_RATE in the service environment and defaults to 150mbit.
 
 Install script, bandwidth units, and uplink qdisc unit atomically from the repo:
 

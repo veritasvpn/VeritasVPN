@@ -296,7 +296,7 @@ func LoadAgentConfig() *AgentConfig {
 	hostname, _ := os.Hostname()
 	port, _ := strconv.Atoi(envOrDefault("WG_PORT", "51820"))
 	publicPort, _ := strconv.Atoi(envOrDefault("WG_PUBLIC_PORT", strconv.Itoa(port)))
-	bandwidth, _ := strconv.Atoi(envOrDefault("PEER_BANDWIDTH_LIMIT_MBPS", "100"))
+	bandwidth, _ := strconv.Atoi(envOrDefault("PEER_BANDWIDTH_LIMIT_MBPS", "150"))
 
 	return &AgentConfig{
 		AuthToken:             os.Getenv("AGENT_AUTH_TOKEN"),
