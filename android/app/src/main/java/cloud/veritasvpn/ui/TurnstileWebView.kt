@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
 
-private const val TURNSTILE_PAGE = "https://veritasvpn.cloud/turnstile-mobile.html"
+private const val TURNSTILE_PAGE = "https://veritasvpn.cloud/turnstile-mobile"
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
