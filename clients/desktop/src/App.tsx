@@ -119,6 +119,18 @@ interface PeerInfo {
   dns_blocked_count?: number;
 }
 
+interface PortForwardInfo {
+  id: string;
+  peer_id: string;
+  protocol: string;
+  external_port: number;
+  internal_port?: number;
+  status?: string;
+  assigned_ip?: string;
+  egress_endpoint?: string;
+  created_at?: number;
+}
+
 function readLocalFlag(key: string, defaultValue: "0" | "1"): boolean {
   try {
     const raw = localStorage.getItem(key);
@@ -472,6 +484,159 @@ function DevicesScreen({
   );
 }
 
+function PortForwardsScreen({
+  forwards,
+  peers,
+  loading,
+  creating,
+  deletingId,
+  error,
+  currentPeerId,
+  onBack,
+  onRefresh,
+  onCreate,
+  onDelete,
+}: {
+  forwards: PortForwardInfo[];
+  peers: PeerInfo[];
+  loading: boolean;
+  creating: boolean;
+  deletingId: string | null;
+  error: string;
+  currentPeerId: string;
+  onBack: () => void;
+  onRefresh: () => void;
+  onCreate: (input: { peerId: string; protocol: string; externalPort: number; internalPort?: number }) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [peerId, setPeerId] = useState(currentPeerId || "");
+  const [protocol, setProtocol] = useState<"tcp" | "udp">("tcp");
+  const [externalPort, setExternalPort] = useState("");
+  const [internalPort, setInternalPort] = useState("");
+
+  useEffect(() => {
+    if (currentPeerId) setPeerId(currentPeerId);
+  }, [currentPeerId]);
+
+  useEffect(() => {
+    if (!peerId && peers.length === 1) setPeerId(peers[0].id);
+  }, [peers, peerId]);
+
+  const atLimit = forwards.length >= 2;
+  const busy = loading || creating || !!deletingId;
+
+  return (
+    <section className="devices-screen port-forwards-screen">
+      <div className="plans-head">
+        <button type="button" className="plans-back" onClick={onBack} aria-label="Back">←</button>
+        <div>
+          <h2>Port forwarding</h2>
+          <p>Premium inbound DNAT on your VPN node (max 2)</p>
+        </div>
+        <button type="button" className="devices-refresh" disabled={busy} onClick={onRefresh}>
+          {loading ? "…" : "Refresh"}
+        </button>
+      </div>
+      <p className="pf-help">
+        Premium only. Traffic hits the node public IP (not Cloudflare). Open matching ports on your router toward your Dell.
+        Recommended external ports: <strong>40000–49999</strong>.
+      </p>
+      {error && <div className="billing-error">{error}</div>}
+      {loading && forwards.length === 0 ? (
+        <div className="billing-loading">Loading port forwards…</div>
+      ) : forwards.length === 0 ? (
+        <p className="devices-empty">No port forwards yet.</p>
+      ) : (
+        <ul className="devices-list">
+          {forwards.map((pf) => {
+            const endpoint = `${pf.egress_endpoint || "—"}:${pf.external_port}`;
+            return (
+              <li key={pf.id} className="device-card">
+                <div>
+                  <strong>{endpoint}</strong>
+                  <span className="device-meta">
+                    → {shortPeerId(pf.peer_id)} · {(pf.protocol || "").toUpperCase()} · internal {pf.internal_port ?? "—"} · {pf.status || "—"}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="device-revoke"
+                  disabled={busy}
+                  onClick={() => onDelete(pf.id)}
+                >
+                  {deletingId === pf.id ? "Deleting…" : "Delete"}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <form
+        className="pf-create"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const ext = Number(externalPort);
+          if (!peerId || !ext) return;
+          const internal = internalPort.trim() ? Number(internalPort) : undefined;
+          onCreate({ peerId, protocol, externalPort: ext, internalPort: internal });
+          setExternalPort("");
+          setInternalPort("");
+        }}
+      >
+        <h3>Create forward</h3>
+        <label>
+          Device
+          <select value={peerId} onChange={(e) => setPeerId(e.target.value)} disabled={busy || peers.length === 0} required>
+            <option value="">{peers.length ? "Select a device…" : "No devices — connect first"}</option>
+            {peers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {shortPeerId(p.id)}{p.id === currentPeerId ? " (this device)" : ""} · {p.assigned_ip || "—"}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="pf-create-row">
+          <label>
+            Protocol
+            <select value={protocol} onChange={(e) => setProtocol(e.target.value as "tcp" | "udp")} disabled={busy}>
+              <option value="tcp">TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+          </label>
+          <label>
+            External port
+            <input
+              type="number"
+              min={1}
+              max={65535}
+              placeholder="40000–49999"
+              value={externalPort}
+              onChange={(e) => setExternalPort(e.target.value)}
+              disabled={busy}
+              required
+            />
+          </label>
+        </div>
+        <label>
+          Internal port (optional)
+          <input
+            type="number"
+            min={1}
+            max={65535}
+            placeholder="Same as external"
+            value={internalPort}
+            onChange={(e) => setInternalPort(e.target.value)}
+            disabled={busy}
+          />
+        </label>
+        <button type="submit" className="pf-create-btn" disabled={busy || atLimit || !peers.length || !peerId}>
+          {creating ? "Creating…" : atLimit ? "Limit reached (2)" : "Create"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
 function App() {
   const [user, setUser] = useState<User | null>(getStoredUser);
   const [mode, setMode] = useState<AuthMode>("signin");
@@ -513,6 +678,7 @@ function App() {
   const [showNetworkMap, setShowNetworkMap] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showDevices, setShowDevices] = useState(false);
+  const [showPortForwards, setShowPortForwards] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState(() => readLocalFlag(LS_AUTO_RECONNECT, "1"));
   const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
   const [wgStats, setWgStats] = useState<WgTransferStats | null>(null);
@@ -522,6 +688,11 @@ function App() {
   const [devicesLoading, setDevicesLoading] = useState(false);
   const [devicesError, setDevicesError] = useState("");
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [portForwards, setPortForwards] = useState<PortForwardInfo[]>([]);
+  const [portForwardsLoading, setPortForwardsLoading] = useState(false);
+  const [portForwardsError, setPortForwardsError] = useState("");
+  const [portForwardCreating, setPortForwardCreating] = useState(false);
+  const [deletingForwardId, setDeletingForwardId] = useState<string | null>(null);
   const [deviceLabel, setDeviceLabel] = useState("Current location");
   const connectPeerRef = useRef("");
   const userDisconnectedRef = useRef(false);
@@ -761,6 +932,7 @@ function App() {
     setShowSettings(false);
     setShowPlans(true);
     setShowDevices(false);
+    setShowPortForwards(false);
     setShowCancelConfirmation(false);
     setBillingError("");
     refreshBillingStatus().catch((err) => setBillingError(err instanceof Error ? err.message : "Could not load your subscription."));
@@ -1155,13 +1327,107 @@ function App() {
     };
   }, [connected, peerId]);
 
+  const loadPortForwards = useCallback(async () => {
+    setPortForwardsLoading(true);
+    setPortForwardsError("");
+    try {
+      await refreshSession();
+      const token = getStoredToken();
+      if (!token) throw new Error("Your session expired. Sign in again.");
+      const [peersRes, pfRes] = await Promise.all([
+        fetch(`${AUTH_API}/api/v1/wg/peers`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${AUTH_API}/api/v1/wg/port-forwards`, { headers: { Authorization: `Bearer ${token}` } }),
+      ]);
+      const peersData = (await peersRes.json()) as { peers?: PeerInfo[]; error?: string };
+      const pfData = (await pfRes.json()) as { port_forwards?: PortForwardInfo[]; error?: string };
+      if (!peersRes.ok) throw new Error(peersData.error || "Could not load devices.");
+      if (!pfRes.ok) throw new Error(pfData.error || "Could not load port forwards.");
+      setPeers(Array.isArray(peersData.peers) ? peersData.peers : []);
+      setPortForwards(Array.isArray(pfData.port_forwards) ? pfData.port_forwards : []);
+    } catch (err) {
+      setPortForwardsError(err instanceof Error ? err.message : "Could not load port forwards.");
+    } finally {
+      setPortForwardsLoading(false);
+    }
+  }, []);
+
   const openDevices = useCallback(() => {
     setShowSettings(false);
     setShowDevices(true);
+    setShowPortForwards(false);
     setShowPlans(false);
     setShowNetworkMap(false);
     void loadDevices();
   }, [loadDevices]);
+
+  const openPortForwards = useCallback(() => {
+    setShowSettings(false);
+    setShowPortForwards(true);
+    setShowDevices(false);
+    setShowPlans(false);
+    setShowNetworkMap(false);
+    void loadPortForwards();
+  }, [loadPortForwards]);
+
+  const createPortForward = useCallback(async (input: {
+    peerId: string;
+    protocol: string;
+    externalPort: number;
+    internalPort?: number;
+  }) => {
+    if (portForwardCreating) return;
+    setPortForwardCreating(true);
+    setPortForwardsError("");
+    try {
+      await refreshSession();
+      const token = getStoredToken();
+      if (!token) throw new Error("Your session expired. Sign in again.");
+      const body: Record<string, unknown> = {
+        peer_id: input.peerId,
+        protocol: input.protocol,
+        external_port: input.externalPort,
+      };
+      if (input.internalPort != null && !Number.isNaN(input.internalPort)) {
+        body.internal_port = input.internalPort;
+      }
+      const response = await fetch(`${AUTH_API}/api/v1/wg/port-forwards`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = (await response.json().catch(() => ({}))) as PortForwardInfo & { error?: string };
+      if (!response.ok) throw new Error(data.error || "Could not create port forward.");
+      setPortForwards((list) => [data, ...list.filter((pf) => pf.id !== data.id)]);
+    } catch (err) {
+      setPortForwardsError(err instanceof Error ? err.message : "Could not create port forward.");
+    } finally {
+      setPortForwardCreating(false);
+    }
+  }, [portForwardCreating]);
+
+  const deletePortForward = useCallback(async (id: string) => {
+    if (!id || deletingForwardId) return;
+    setDeletingForwardId(id);
+    setPortForwardsError("");
+    try {
+      await refreshSession();
+      const token = getStoredToken();
+      if (!token) throw new Error("Your session expired. Sign in again.");
+      const response = await fetch(`${AUTH_API}/api/v1/wg/port-forwards/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || "Could not delete port forward.");
+      }
+      setPortForwards((list) => list.filter((pf) => pf.id !== id));
+    } catch (err) {
+      setPortForwardsError(err instanceof Error ? err.message : "Could not delete port forward.");
+    } finally {
+      setDeletingForwardId(null);
+    }
+  }, [deletingForwardId]);
 
   const revokePeer = useCallback(async (peer: PeerInfo) => {
     if (!peer.id || revokingId) return;
@@ -1212,6 +1478,7 @@ function App() {
     setSubscriptionChecked(false);
     setShowPlans(false);
     setShowDevices(false);
+    setShowPortForwards(false);
     setCheckoutUrl(null);
     userDisconnectedRef.current = true;
     clearReconnectTimer();
@@ -1380,7 +1647,7 @@ function App() {
     <div className="app app-dashboard">
       <header className="app-header blueprint-header">
         <img className="brand-logo" src={veritasMark} alt="VeritasVPN" />
-        {!showPlans && !showDevices && (
+        {!showPlans && !showDevices && !showPortForwards && (
           <div className="blueprint-settings-wrap">
             <button className="blueprint-cog" onClick={() => setShowSettings((open) => !open)} aria-label="Open settings" aria-expanded={showSettings}>⚙</button>
             {showSettings && (
@@ -1388,6 +1655,7 @@ function App() {
                 <button type="button" onClick={openPlans}>{subscriptionActive ? "Premium" : "Plans"}</button>
                 <button type="button" onClick={() => { setShowSettings(false); setShowNetworkMap(true); }}>Network map</button>
                 <button type="button" onClick={openDevices}>Devices</button>
+                <button type="button" onClick={openPortForwards}>Port forwarding</button>
                 <hr />
                 <button type="button" className="menu-toggle" onClick={toggleAutoReconnect}>
                   <span>Auto-reconnect</span>
@@ -1434,6 +1702,20 @@ function App() {
             onBack={() => setShowDevices(false)}
             onRefresh={() => void loadDevices()}
             onRevoke={(peer) => void revokePeer(peer)}
+          />
+        ) : showPortForwards ? (
+          <PortForwardsScreen
+            forwards={portForwards}
+            peers={peers}
+            loading={portForwardsLoading}
+            creating={portForwardCreating}
+            deletingId={deletingForwardId}
+            error={portForwardsError}
+            currentPeerId={peerId}
+            onBack={() => setShowPortForwards(false)}
+            onRefresh={() => void loadPortForwards()}
+            onCreate={(input) => void createPortForward(input)}
+            onDelete={(id) => void deletePortForward(id)}
           />
         ) : showNetworkMap ? (
           <section className="network-map-view">

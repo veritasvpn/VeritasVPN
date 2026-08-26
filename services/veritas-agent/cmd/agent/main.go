@@ -62,6 +62,11 @@ type PeerUpdate struct {
 	PublicKey    string   `json:"public_key"`
 	PresharedKey string   `json:"preshared_key"`
 	AllowedIPs   []string `json:"allowed_ips"`
+	ForwardID    string   `json:"forward_id"`
+	Protocol     string   `json:"protocol"`
+	ExternalPort int      `json:"external_port"`
+	InternalPort int      `json:"internal_port"`
+	AssignedIP   string   `json:"assigned_ip"`
 }
 
 type AgentManagerClient interface {
@@ -509,6 +514,12 @@ func (a *Agent) setupFirewall() error {
 		a.logger.Warn("ip_forward enable failed (non-fatal)", zap.Error(err))
 	}
 
+	// Port-forward table must exist before Reconcile so DNAT state can survive
+	// veritas table rebuilds.
+	if err := a.fwManager.EnsurePortForwardTable(a.cfg.WGInterface); err != nil {
+		return fmt.Errorf("ensure port-forward nftables table: %w", err)
+	}
+
 	// nftables owns NAT + fail-closed forward isolation. Host tc owns bandwidth.
 	// A failure stops startup so the agent never advertises a VPN without isolation.
 	if err := a.fwManager.Reconcile(a.cfg.WGInterface, a.cfg.WGPort, a.cfg.BandwidthLimitMbps); err != nil {
@@ -695,6 +706,31 @@ func (a *Agent) handlePeerUpdate(update *PeerUpdate) {
 			return
 		}
 		a.logger.Info("Peer removed", zap.String("peer_id", update.PeerID))
+	case "PORT_FORWARD_ADD":
+		if err := a.fwManager.AddPortForward(firewall.PortForward{
+			ID:           update.ForwardID,
+			Protocol:     update.Protocol,
+			ExternalPort: update.ExternalPort,
+			InternalPort: update.InternalPort,
+			AssignedIP:   firewall.StripCIDR(update.AssignedIP),
+		}); err != nil {
+			a.logger.Error("Failed to add port forward",
+				zap.String("forward_id", update.ForwardID), zap.Error(err))
+			return
+		}
+		a.logger.Info("Port forward added",
+			zap.String("forward_id", update.ForwardID),
+			zap.String("protocol", update.Protocol),
+			zap.Int("external_port", update.ExternalPort),
+			zap.Int("internal_port", update.InternalPort),
+			zap.String("assigned_ip", firewall.StripCIDR(update.AssignedIP)))
+	case "PORT_FORWARD_REMOVE":
+		if err := a.fwManager.RemovePortForward(update.ForwardID); err != nil {
+			a.logger.Error("Failed to remove port forward",
+				zap.String("forward_id", update.ForwardID), zap.Error(err))
+			return
+		}
+		a.logger.Info("Port forward removed", zap.String("forward_id", update.ForwardID))
 	default:
 		a.logger.Warn("Unknown peer update action",
 			zap.String("action", update.Action))

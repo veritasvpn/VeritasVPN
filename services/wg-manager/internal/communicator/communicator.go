@@ -14,6 +14,7 @@ import (
 
 type AgentClient interface {
 	PushPeerUpdate(ctx context.Context, serverID string, action string, peerID string, publicKey string, presharedKey string, allowedIPs []string) error
+	Publish(serverID string, update hub.PeerUpdate) bool
 }
 
 type Communicator struct {
@@ -38,6 +39,52 @@ func (c *Communicator) PushPeerAdded(ctx context.Context, serverID string, peer 
 
 func (c *Communicator) PushPeerRemoved(ctx context.Context, serverID string, peer *model.Peer) error {
 	return c.pushWithBackoff(ctx, serverID, "REMOVE", peer.ID, peer.Pubkey, "", nil)
+}
+
+// PublishUpdate fans an SSE payload once (no retries). Returns whether any
+// agent subscriber received it.
+func (c *Communicator) PublishUpdate(serverID string, update hub.PeerUpdate) bool {
+	ok := c.client.Publish(serverID, update)
+	if ok {
+		c.log.Info("update published to agent",
+			"server_id", serverID,
+			"action", update.Action,
+			"peer_id", update.PeerID,
+			"forward_id", update.ForwardID,
+		)
+	} else {
+		c.log.Warn("no agent connected for update",
+			"server_id", serverID,
+			"action", update.Action,
+			"peer_id", update.PeerID,
+			"forward_id", update.ForwardID,
+		)
+	}
+	return ok
+}
+
+func (c *Communicator) PushPortForwardAdd(serverID string, pf *model.PortForward) bool {
+	return c.PublishUpdate(serverID, hub.PeerUpdate{
+		Action:       "PORT_FORWARD_ADD",
+		PeerID:       pf.PeerID,
+		ForwardID:    pf.ID,
+		Protocol:     pf.Protocol,
+		ExternalPort: pf.ExternalPort,
+		InternalPort: pf.InternalPort,
+		AssignedIP:   pf.AssignedIP,
+	})
+}
+
+func (c *Communicator) PushPortForwardRemove(serverID string, pf *model.PortForward) bool {
+	return c.PublishUpdate(serverID, hub.PeerUpdate{
+		Action:       "PORT_FORWARD_REMOVE",
+		PeerID:       pf.PeerID,
+		ForwardID:    pf.ID,
+		Protocol:     pf.Protocol,
+		ExternalPort: pf.ExternalPort,
+		InternalPort: pf.InternalPort,
+		AssignedIP:   pf.AssignedIP,
+	})
 }
 
 func (c *Communicator) pushWithBackoff(ctx context.Context, serverID, action, peerID, pubkey, psk string, allowedIPs []string) error {
@@ -95,9 +142,13 @@ func NewSSEAgentClient(h *hub.Hub, log *logging.Logger) AgentClient {
 	return &SSEAgentClient{hub: h, log: log}
 }
 
+func (s *SSEAgentClient) Publish(serverID string, update hub.PeerUpdate) bool {
+	return s.hub.Publish(serverID, update)
+}
+
 func (s *SSEAgentClient) PushPeerUpdate(ctx context.Context, serverID string, action string, peerID string, publicKey string, presharedKey string, allowedIPs []string) error {
 	_ = ctx
-	ok := s.hub.Publish(serverID, hub.PeerUpdate{
+	ok := s.Publish(serverID, hub.PeerUpdate{
 		Action:       strings.ToUpper(action),
 		PeerID:       peerID,
 		PublicKey:    publicKey,

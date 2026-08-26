@@ -76,8 +76,60 @@ async function revokePeer(peerId) {
   }
 }
 
+async function fetchPortForwards() {
+  const token = await getIdToken();
+  if (!token) throw new Error("Your session has expired. Please sign in again.");
+  const response = await fetch("https://api.veritasvpn.cloud/api/v1/wg/port-forwards", {
+    headers: { Authorization: "Bearer " + token },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Could not load port forwards");
+  return Array.isArray(data.port_forwards) ? data.port_forwards : [];
+}
+
+async function createPortForward({ peerId, protocol, externalPort, internalPort }) {
+  const token = await getIdToken();
+  if (!token) throw new Error("Your session has expired. Please sign in again.");
+  const body = {
+    peer_id: peerId,
+    protocol,
+    external_port: Number(externalPort),
+  };
+  if (internalPort !== '' && internalPort != null) {
+    body.internal_port = Number(internalPort);
+  }
+  const response = await fetch("https://api.veritasvpn.cloud/api/v1/wg/port-forwards", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Could not create port forward");
+  return data;
+}
+
+async function deletePortForward(id) {
+  const token = await getIdToken();
+  if (!token) throw new Error("Your session has expired. Please sign in again.");
+  const response = await fetch("https://api.veritasvpn.cloud/api/v1/wg/port-forwards/" + encodeURIComponent(id), {
+    method: "DELETE",
+    headers: { Authorization: "Bearer " + token },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || "Could not delete port forward");
+  }
+}
+
+function shortId(id) {
+  if (!id) return '—';
+  return id.length <= 10 ? id : id.slice(0, 8) + '…';
+}
+
 let peersCache = [];
 let peersLoaded = false;
+let portForwardsCache = [];
+let portForwardsLoaded = false;
 
 function route() {
   const hash = window.location.hash.replace(/^#/, '') || '/';
@@ -348,6 +400,85 @@ function renderDevices() {
   `;
 }
 
+function renderPortForwards() {
+  const isPremium = !!billingStatus?.is_premium;
+  const peerOptions = peersCache.map((p) => {
+    const id = p.id || p.peer_id || '';
+    return `<option value="${id}">${shortId(id)} · ${p.assigned_ip || '—'}</option>`;
+  }).join('');
+  const rows = portForwardsCache.map((pf) => {
+    const id = pf.id || '';
+    const endpoint = (pf.egress_endpoint || '—') + ':' + (pf.external_port ?? '—');
+    const peer = shortId(pf.peer_id);
+    const proto = (pf.protocol || '').toUpperCase();
+    const internal = pf.internal_port != null ? pf.internal_port : '—';
+    const status = pf.status || '—';
+    return `
+      <div class="account-card" style="margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;">
+          <div>
+            <strong class="pf-endpoint">${endpoint}</strong>
+            <p class="plan-card-meta" style="margin:6px 0 0;">→ peer ${peer} · ${proto} · internal ${internal} · ${status}</p>
+          </div>
+          <button type="button" class="btn btn-outline btn-sm" data-action="delete-port-forward" data-pf-id="${id}">Delete</button>
+        </div>
+      </div>`;
+  }).join('');
+  const atLimit = portForwardsCache.length >= 2;
+  return `
+    ${renderFlash()}
+    <section class="account-section">
+      <div class="account-section-header">
+        <div>
+          <h1>Port forwards</h1>
+          <p>Premium inbound DNAT on your VPN node (max 2).</p>
+        </div>
+        <button type="button" class="btn btn-outline btn-sm" data-action="refresh-port-forwards">Refresh</button>
+      </div>
+      <div class="account-card" style="margin-bottom:16px;">
+        <p class="pf-help">Premium only. Traffic arrives on the node public IP (not Cloudflare HTTP). Open matching ports on your router toward your Dell. Recommended external ports: <strong>40000–49999</strong>.</p>
+      </div>
+      ${!isPremium ? '<div class="account-card"><p>Port forwarding requires VeritasVPN Premium. <a href="#/subscription">Upgrade →</a></p></div>' : ''}
+      ${!portForwardsLoaded ? '<p class="account-loading">Loading port forwards…</p>' : ''}
+      ${portForwardsLoaded && !portForwardsCache.length && isPremium ? '<div class="account-card"><p>No port forwards yet.</p></div>' : ''}
+      ${rows}
+      ${isPremium ? `
+      <div class="account-card" style="margin-top:16px;">
+        <strong>Create forward</strong>
+        <form class="pf-form" data-action-form="create-port-forward">
+          <div class="pf-form-row">
+            <label for="pf-peer">Device (peer)</label>
+            <select id="pf-peer" name="peer_id" required ${!peersCache.length ? 'disabled' : ''}>
+              <option value="">${peersCache.length ? 'Select a device…' : 'No devices — connect first'}</option>
+              ${peerOptions}
+            </select>
+          </div>
+          <div class="pf-form-grid">
+            <div class="pf-form-row">
+              <label for="pf-protocol">Protocol</label>
+              <select id="pf-protocol" name="protocol" required>
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+              </select>
+            </div>
+            <div class="pf-form-row">
+              <label for="pf-external">External port</label>
+              <input id="pf-external" name="external_port" type="number" min="1" max="65535" placeholder="40000–49999" required>
+            </div>
+          </div>
+          <div class="pf-form-row">
+            <label for="pf-internal">Internal port <span style="font-weight:400;">(optional — defaults to external)</span></label>
+            <input id="pf-internal" name="internal_port" type="number" min="1" max="65535" placeholder="Same as external">
+          </div>
+          <button type="submit" class="btn btn-primary" ${atLimit || !peersCache.length ? 'disabled' : ''}>
+            ${atLimit ? 'Limit reached (2)' : 'Create'}
+          </button>
+        </form>
+      </div>` : ''}
+    </section>
+  `;
+}
+
 function renderSecurity() {
   return `
     ${renderFlash()}
@@ -401,6 +532,30 @@ function render() {
           peersLoaded = true;
           showFlash(err.message || 'Could not load devices', 'error');
           if (route() === '/devices') render();
+        });
+      }
+      break;
+    case '/port-forwards':
+      html = renderPortForwards();
+      if (!peersLoaded) {
+        fetchPeers().then((peers) => {
+          peersCache = peers;
+          peersLoaded = true;
+          if (route() === '/port-forwards') render();
+        }).catch(() => {
+          peersLoaded = true;
+          if (route() === '/port-forwards') render();
+        });
+      }
+      if (!portForwardsLoaded) {
+        fetchPortForwards().then((list) => {
+          portForwardsCache = list;
+          portForwardsLoaded = true;
+          if (route() === '/port-forwards') render();
+        }).catch((err) => {
+          portForwardsLoaded = true;
+          showFlash(err.message || 'Could not load port forwards', 'error');
+          if (route() === '/port-forwards') render();
         });
       }
       break;
@@ -466,6 +621,14 @@ async function onAction(action, btn) {
       render();
       return;
     }
+    if (action === 'refresh-port-forwards') {
+      portForwardsLoaded = false;
+      portForwardsCache = [];
+      peersLoaded = false;
+      peersCache = [];
+      render();
+      return;
+    }
     if (action === 'revoke-peer') {
       const peerId = btn.dataset.peerId;
       if (!peerId || !confirm('Revoke this device? It will disconnect if currently using the VPN.')) return;
@@ -473,6 +636,16 @@ async function onAction(action, btn) {
       await revokePeer(peerId);
       peersCache = peersCache.filter((p) => (p.id || p.peer_id) !== peerId);
       showFlash('Device revoked.', 'ok');
+      render();
+      return;
+    }
+    if (action === 'delete-port-forward') {
+      const pfId = btn.dataset.pfId;
+      if (!pfId || !confirm('Delete this port forward?')) return;
+      btn.disabled = true;
+      await deletePortForward(pfId);
+      portForwardsCache = portForwardsCache.filter((pf) => pf.id !== pfId);
+      showFlash('Port forward deleted.', 'ok');
       render();
       return;
     }
@@ -491,6 +664,40 @@ content.addEventListener('click', async (e) => {
   if (!btn) return;
   e.preventDefault();
   await onAction(btn.dataset.action, btn);
+});
+
+content.addEventListener('submit', async (e) => {
+  const form = e.target.closest('[data-action-form="create-port-forward"]');
+  if (!form) return;
+  e.preventDefault();
+  const submitBtn = form.querySelector('[type="submit"]');
+  try {
+    const peerId = form.peer_id?.value;
+    const protocol = form.protocol?.value;
+    const externalPort = form.external_port?.value;
+    const internalPort = form.internal_port?.value;
+    if (!peerId || !protocol || !externalPort) {
+      showFlash('Peer, protocol, and external port are required.', 'error');
+      render();
+      return;
+    }
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Creating…';
+    }
+    const created = await createPortForward({
+      peerId,
+      protocol,
+      externalPort,
+      internalPort: internalPort || '',
+    });
+    portForwardsCache = [created, ...portForwardsCache.filter((pf) => pf.id !== created.id)];
+    showFlash('Port forward created.', 'ok');
+    render();
+  } catch (err) {
+    showFlash(err.message || 'Could not create port forward', 'error');
+    render();
+  }
 });
 
 upgradeBtn?.addEventListener('click', () => {
@@ -515,7 +722,7 @@ window.addEventListener('hashchange', () => render());
 onAuthStateChanged(async (user) => {
   if (!user) {
     const requestedRoute = route().replace(/^\//, '');
-    const next = ['subscription', 'downloads', 'account', 'security'].includes(requestedRoute) ? requestedRoute : 'account';
+    const next = ['subscription', 'downloads', 'account', 'security', 'devices', 'port-forwards'].includes(requestedRoute) ? requestedRoute : 'account';
     window.location.replace(`/?signin=1&next=${encodeURIComponent(next)}`);
     return;
   }

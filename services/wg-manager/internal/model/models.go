@@ -41,3 +41,19 @@ type ServerMetric struct {
 	TXBytes   int64     `db:"tx_bytes"`
 	PeerCount int32     `db:"peer_count"`
 }
+
+// PortForward is an inbound DNAT mapping from a node public port to a peer.
+type PortForward struct {
+	ID           string    `db:"id"`
+	AccountID    string    `db:"account_id"`
+	PeerID       string    `db:"peer_id"`
+	Protocol     string    `db:"protocol"`
+	ExternalPort int       `db:"external_port"`
+	InternalPort int       `db:"internal_port"`
+	Status       string    `db:"status"`
+	CreatedAt    time.Time `db:"created_at"`
+	// Joined / derived fields (not always populated).
+	ServerID       string `db:"server_id"`
+	AssignedIP     string `db:"assigned_ip"`
+	EgressEndpoint string `db:"egress_endpoint"`
+}

@@ -48,3 +48,30 @@ func TestCheckSelectedRegion(t *testing.T) {
 		t.Fatal("empty allow-list should allow any")
 	}
 }
+
+func TestCheckCreatePortForward(t *testing.T) {
+	if err := CheckCreatePortForward(TierFree, 0); err == nil {
+		t.Fatal("expected subscription required")
+	}
+	if err := CheckCreatePortForward(TierPremium, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckCreatePortForward(TierPremium, 2); err == nil {
+		t.Fatal("expected port-forward limit")
+	}
+}
+
+func TestValidateExternalPort(t *testing.T) {
+	if err := ValidateExternalPort(40000); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateExternalPort(51820); err == nil {
+		t.Fatal("expected reserved")
+	}
+	if err := ValidateExternalPort(20050); err == nil {
+		t.Fatal("expected reserved range")
+	}
+	if err := ValidateExternalPort(80); err == nil {
+		t.Fatal("expected reserved")
+	}
+}

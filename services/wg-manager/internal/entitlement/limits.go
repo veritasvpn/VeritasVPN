@@ -13,7 +13,26 @@ const (
 	FreeMaxDevices = 1
 	// PremiumMaxDevices is the max concurrent WireGuard peers for Premium.
 	PremiumMaxDevices = 5
+
+	// PremiumMaxPortForwards is the max concurrent active/pending port forwards.
+	PremiumMaxPortForwards = 2
+	// RecommendedExternalPortMin/Max are suggested to clients in API errors.
+	RecommendedExternalPortMin = 40000
+	RecommendedExternalPortMax = 49999
 )
+
+// reservedExternalPorts are denied for inbound port forwards (node services).
+var reservedExternalPorts = map[int]struct{}{
+	22: {}, 80: {}, 443: {}, 3000: {}, 3100: {}, 2019: {}, 4222: {},
+	5432: {}, 6379: {}, 6443: {}, 8080: {}, 8443: {}, 9090: {}, 51820: {},
+}
+
+func init() {
+	// 20000-20100 reserved for future node services.
+	for p := 20000; p <= 20100; p++ {
+		reservedExternalPorts[p] = struct{}{}
+	}
+}
 
 // PlanError is returned when CreatePeer violates plan limits.
 type PlanError struct {
@@ -123,4 +142,79 @@ func regionAllowed(region string, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+// CheckCreatePortForward enforces Premium-only port forwarding and the per-account cap.
+func CheckCreatePortForward(tier string, currentCount int) error {
+	if NormalizeTier(tier) != TierPremium {
+		return &PlanError{
+			Code:    "subscription_required",
+			Message: "port forwarding requires a Premium subscription",
+		}
+	}
+	if currentCount >= PremiumMaxPortForwards {
+		return &PlanError{
+			Code: "plan_port_forward_limit",
+			Message: fmt.Sprintf(
+				"plan port-forward limit reached (%d). Remove an existing forward or upgrade",
+				PremiumMaxPortForwards,
+			),
+		}
+	}
+	return nil
+}
+
+// IsReservedExternalPort reports whether an external port is denied for forwarding.
+func IsReservedExternalPort(port int) bool {
+	_, ok := reservedExternalPorts[port]
+	return ok
+}
+
+// ValidateExternalPort checks range and reserved ports. On failure the message
+// recommends the 40000-49999 range.
+func ValidateExternalPort(port int) error {
+	if port < 1024 || port > 65535 {
+		return &PlanError{
+			Code: "invalid_external_port",
+			Message: fmt.Sprintf(
+				"external_port must be between 1024 and 65535 (recommended %d-%d)",
+				RecommendedExternalPortMin, RecommendedExternalPortMax,
+			),
+		}
+	}
+	if IsReservedExternalPort(port) {
+		return &PlanError{
+			Code: "reserved_external_port",
+			Message: fmt.Sprintf(
+				"external_port %d is reserved for node services; use %d-%d",
+				port, RecommendedExternalPortMin, RecommendedExternalPortMax,
+			),
+		}
+	}
+	return nil
+}
+
+// ValidateInternalPort checks the destination port range.
+func ValidateInternalPort(port int) error {
+	if port < 1 || port > 65535 {
+		return &PlanError{
+			Code:    "invalid_internal_port",
+			Message: "internal_port must be between 1 and 65535",
+		}
+	}
+	return nil
+}
+
+// NormalizeProtocol lowercases and validates tcp/udp.
+func NormalizeProtocol(protocol string) (string, error) {
+	p := strings.ToLower(strings.TrimSpace(protocol))
+	switch p {
+	case "tcp", "udp":
+		return p, nil
+	default:
+		return "", &PlanError{
+			Code:    "invalid_protocol",
+			Message: "protocol must be tcp or udp",
+		}
+	}
 }

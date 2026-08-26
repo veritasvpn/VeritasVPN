@@ -170,3 +170,22 @@ data class PeerInfo(
     @SerializedName("expires_at") val expiresAt: Long? = null,
     @SerializedName("dns_blocked_count") val dnsBlockedCount: Long = 0
 )
+
+data class PortForwardInfo(
+    val id: String = "",
+    @SerializedName("peer_id") val peerId: String = "",
+    @SerializedName("server_id") val serverId: String? = null,
+    val protocol: String = "",
+    @SerializedName("external_port") val externalPort: Int = 0,
+    @SerializedName("internal_port") val internalPort: Int = 0,
+    val status: String = "",
+    @SerializedName("assigned_ip") val assignedIp: String = "",
+    @SerializedName("egress_endpoint") val egressEndpoint: String = "",
+    @SerializedName("created_at") val createdAt: Long = 0,
+    val error: String? = null
+)
+
+data class PortForwardListResponse(
+    @SerializedName("port_forwards") val portForwards: List<PortForwardInfo> = emptyList(),
+    val error: String? = null
+)

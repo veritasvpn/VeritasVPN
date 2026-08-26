@@ -436,3 +436,47 @@
 }
 
 .account-plan-options,.account-plan-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.account-plan-options .btn,.account-plan-actions .btn{flex:1;min-width:145px}.account-plan-options small{opacity:.8}.plan-card-meta{line-height:1.5}
+
+.pf-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 4px;
+}
+.pf-form-row {
+  display: grid;
+  gap: 6px;
+}
+.pf-form-row label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary, #9aa4b2);
+}
+.pf-form-row input,
+.pf-form-row select {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  font: inherit;
+}
+.pf-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 640px) {
+  .pf-form-grid { grid-template-columns: 1fr; }
+}
+.pf-help {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary, #9aa4b2);
+}
+.pf-endpoint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+}

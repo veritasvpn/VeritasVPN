@@ -46,6 +46,7 @@ fun DashboardScreen(
     onSignOutEverywhere: () -> Unit,
     onPlans: () -> Unit,
     onDevices: () -> Unit,
+    onPortForwards: () -> Unit,
     onTunnelSettings: () -> Unit,
     onKillSwitchSettings: () -> Unit,
     isPremium: Boolean,
@@ -145,6 +146,10 @@ fun DashboardScreen(
                     DropdownMenuItem(
                         text = { Text("Devices", color = Paper, fontWeight = FontWeight.SemiBold) },
                         onClick = { showSettingsMenu = false; onDevices() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Port forwarding", color = Paper, fontWeight = FontWeight.SemiBold) },
+                        onClick = { showSettingsMenu = false; onPortForwards() }
                     )
                     DropdownMenuItem(
                         text = { Text("Network map", color = Paper, fontWeight = FontWeight.SemiBold) },

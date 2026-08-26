@@ -427,6 +427,21 @@ func (s *Service) DeletePeer(ctx context.Context, peerID, accountID string) erro
 		return fmt.Errorf("get peer for deletion: %w", err)
 	}
 
+	// Soft-delete does not fire FK CASCADE; remove forwards explicitly and notify the agent.
+	forwards, err := s.postgres.ListPortForwardsByPeer(ctx, peerID)
+	if err != nil {
+		s.log.Warn("list port forwards before peer delete failed", "peer_id", peerID, "error", err)
+	} else {
+		for i := range forwards {
+			pf := forwards[i]
+			s.communicator.PushPortForwardRemove(peer.ServerID, &pf)
+			if delErr := s.postgres.DeletePortForward(ctx, pf.ID, accountID); delErr != nil {
+				s.log.Warn("delete port forward on peer delete failed",
+					"forward_id", pf.ID, "peer_id", peerID, "error", delErr)
+			}
+		}
+	}
+
 	if err := s.postgres.DeletePeer(ctx, peerID, accountID); err != nil {
 		return fmt.Errorf("delete peer: %w", err)
 	}
@@ -523,6 +538,137 @@ func (s *Service) ListServers(ctx context.Context) ([]model.Server, error) {
 		return nil, fmt.Errorf("list servers: %w", err)
 	}
 	return servers, nil
+}
+
+func (s *Service) CreatePortForward(ctx context.Context, accountID, tier, peerID, protocol string, externalPort, internalPort int) (*model.PortForward, error) {
+	tier = s.resolveTier(accountID, tier)
+
+	proto, err := entitlement.NormalizeProtocol(protocol)
+	if err != nil {
+		return nil, err
+	}
+	if err := entitlement.ValidateExternalPort(externalPort); err != nil {
+		return nil, err
+	}
+	if internalPort == 0 {
+		internalPort = externalPort
+	}
+	if err := entitlement.ValidateInternalPort(internalPort); err != nil {
+		return nil, err
+	}
+
+	count, err := s.postgres.CountPortForwardsByAccount(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("count port forwards: %w", err)
+	}
+	if err := entitlement.CheckCreatePortForward(tier, count); err != nil {
+		return nil, err
+	}
+
+	peer, err := s.postgres.GetPeer(ctx, peerID, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("peer not found: %w", err)
+	}
+	if peer.Status != "pending" && peer.Status != "active" {
+		return nil, fmt.Errorf("peer must be pending or active")
+	}
+
+	taken, err := s.postgres.IsPortTaken(ctx, proto, externalPort)
+	if err != nil {
+		return nil, err
+	}
+	if taken {
+		return nil, &entitlement.PlanError{
+			Code: "external_port_taken",
+			Message: fmt.Sprintf(
+				"external_port %d/%s is already in use; try another port in %d-%d",
+				externalPort, proto,
+				entitlement.RecommendedExternalPortMin, entitlement.RecommendedExternalPortMax,
+			),
+		}
+	}
+
+	assignedIP := peer.AssignedIP
+	if i := strings.IndexByte(assignedIP, '/'); i >= 0 {
+		assignedIP = assignedIP[:i]
+	}
+
+	pf := &model.PortForward{
+		AccountID:    accountID,
+		PeerID:       peerID,
+		Protocol:     proto,
+		ExternalPort: externalPort,
+		InternalPort: internalPort,
+		Status:       "pending",
+		ServerID:     peer.ServerID,
+		AssignedIP:   assignedIP,
+	}
+	if err := s.postgres.CreatePortForward(ctx, pf); err != nil {
+		return nil, fmt.Errorf("create port forward: %w", err)
+	}
+
+	if srv, srvErr := s.postgres.GetServer(ctx, peer.ServerID); srvErr == nil && srv != nil {
+		pf.EgressEndpoint = srv.PublicIP
+	}
+
+	if s.communicator.PushPortForwardAdd(peer.ServerID, pf) {
+		if err := s.postgres.UpdatePortForwardStatus(ctx, pf.ID, "active"); err != nil {
+			s.log.Warn("mark port forward active failed", "forward_id", pf.ID, "error", err)
+		} else {
+			pf.Status = "active"
+		}
+	}
+
+	s.log.Info("port forward created",
+		"forward_id", pf.ID,
+		"account_id", accountID,
+		"peer_id", peerID,
+		"protocol", proto,
+		"external_port", externalPort,
+		"internal_port", internalPort,
+		"status", pf.Status,
+	)
+	s.publishEvent("port_forward.created", map[string]interface{}{
+		"forward_id":    pf.ID,
+		"account_id":    accountID,
+		"peer_id":       peerID,
+		"server_id":     peer.ServerID,
+		"protocol":      proto,
+		"external_port": externalPort,
+		"internal_port": internalPort,
+		"status":        pf.Status,
+	})
+	return pf, nil
+}
+
+func (s *Service) ListPortForwards(ctx context.Context, accountID string) ([]model.PortForward, error) {
+	return s.postgres.ListPortForwardsByAccount(ctx, accountID)
+}
+
+func (s *Service) ListPortForwardsForServer(ctx context.Context, serverID string) ([]model.PortForward, error) {
+	return s.postgres.ListPortForwardsByServer(ctx, serverID)
+}
+
+func (s *Service) DeletePortForward(ctx context.Context, id, accountID string) error {
+	pf, err := s.postgres.GetPortForward(ctx, id, accountID)
+	if err != nil {
+		return fmt.Errorf("get port forward: %w", err)
+	}
+
+	if err := s.postgres.DeletePortForward(ctx, id, accountID); err != nil {
+		return err
+	}
+
+	s.communicator.PushPortForwardRemove(pf.ServerID, pf)
+
+	s.log.Info("port forward deleted", "forward_id", id, "account_id", accountID)
+	s.publishEvent("port_forward.deleted", map[string]interface{}{
+		"forward_id": id,
+		"account_id": accountID,
+		"peer_id":    pf.PeerID,
+		"server_id":  pf.ServerID,
+	})
+	return nil
 }
 
 func (s *Service) allocateSubnet(ctx context.Context) (string, error) {

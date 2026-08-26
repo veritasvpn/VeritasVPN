@@ -256,3 +256,188 @@ func (p *Postgres) DeletePeer(ctx context.Context, peerID, accountID string) err
 		peerID, accountID)
 	return err
 }
+
+func stripCIDR(ip string) string {
+	for i := 0; i < len(ip); i++ {
+		if ip[i] == '/' {
+			return ip[:i]
+		}
+	}
+	return ip
+}
+
+func (p *Postgres) CreatePortForward(ctx context.Context, pf *model.PortForward) error {
+	query := `INSERT INTO port_forwards (account_id, peer_id, protocol, external_port, internal_port, status)
+	          VALUES ($1, $2, $3, $4, $5, $6)
+	          RETURNING id, created_at`
+	return p.pool.QueryRow(ctx, query,
+		pf.AccountID, pf.PeerID, pf.Protocol, pf.ExternalPort, pf.InternalPort, pf.Status,
+	).Scan(&pf.ID, &pf.CreatedAt)
+}
+
+func (p *Postgres) GetPortForward(ctx context.Context, id, accountID string) (*model.PortForward, error) {
+	query := `SELECT pf.id, pf.account_id, pf.peer_id, pf.protocol, pf.external_port,
+	                 pf.internal_port, pf.status, pf.created_at,
+	                 peers.server_id, peers.assigned_ip, servers.public_ip
+	          FROM port_forwards pf
+	          JOIN peers ON peers.id = pf.peer_id
+	          JOIN servers ON servers.id = peers.server_id
+	          WHERE pf.id = $1 AND pf.account_id = $2 AND pf.status != 'removed'`
+	pf := &model.PortForward{}
+	var assigned, egress string
+	err := p.pool.QueryRow(ctx, query, id, accountID).Scan(
+		&pf.ID, &pf.AccountID, &pf.PeerID, &pf.Protocol, &pf.ExternalPort,
+		&pf.InternalPort, &pf.Status, &pf.CreatedAt,
+		&pf.ServerID, &assigned, &egress,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get port forward: %w", err)
+	}
+	pf.AssignedIP = stripCIDR(assigned)
+	pf.EgressEndpoint = egress
+	return pf, nil
+}
+
+func (p *Postgres) ListPortForwardsByAccount(ctx context.Context, accountID string) ([]model.PortForward, error) {
+	query := `SELECT pf.id, pf.account_id, pf.peer_id, pf.protocol, pf.external_port,
+	                 pf.internal_port, pf.status, pf.created_at,
+	                 peers.server_id, peers.assigned_ip, servers.public_ip
+	          FROM port_forwards pf
+	          JOIN peers ON peers.id = pf.peer_id
+	          JOIN servers ON servers.id = peers.server_id
+	          WHERE pf.account_id = $1 AND pf.status != 'removed'
+	          ORDER BY pf.created_at DESC`
+	rows, err := p.pool.Query(ctx, query, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("list port forwards: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.PortForward
+	for rows.Next() {
+		var pf model.PortForward
+		var assigned, egress string
+		if err := rows.Scan(
+			&pf.ID, &pf.AccountID, &pf.PeerID, &pf.Protocol, &pf.ExternalPort,
+			&pf.InternalPort, &pf.Status, &pf.CreatedAt,
+			&pf.ServerID, &assigned, &egress,
+		); err != nil {
+			return nil, fmt.Errorf("scan port forward: %w", err)
+		}
+		pf.AssignedIP = stripCIDR(assigned)
+		pf.EgressEndpoint = egress
+		out = append(out, pf)
+	}
+	return out, rows.Err()
+}
+
+// ListPortForwardsByServer returns pending/active forwards for a VPN node
+// (used for SSE catch-up). AssignedIP is stripped of a /32 suffix for nft.
+func (p *Postgres) ListPortForwardsByServer(ctx context.Context, serverID string) ([]model.PortForward, error) {
+	query := `SELECT pf.id, pf.account_id, pf.peer_id, pf.protocol, pf.external_port,
+	                 pf.internal_port, pf.status, pf.created_at,
+	                 peers.server_id, peers.assigned_ip
+	          FROM port_forwards pf
+	          JOIN peers ON peers.id = pf.peer_id
+	          WHERE peers.server_id = $1
+	            AND pf.status IN ('pending', 'active')
+	            AND peers.status IN ('pending', 'active')
+	          ORDER BY pf.created_at ASC`
+	rows, err := p.pool.Query(ctx, query, serverID)
+	if err != nil {
+		return nil, fmt.Errorf("list server port forwards: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.PortForward
+	for rows.Next() {
+		var pf model.PortForward
+		var assigned string
+		if err := rows.Scan(
+			&pf.ID, &pf.AccountID, &pf.PeerID, &pf.Protocol, &pf.ExternalPort,
+			&pf.InternalPort, &pf.Status, &pf.CreatedAt,
+			&pf.ServerID, &assigned,
+		); err != nil {
+			return nil, fmt.Errorf("scan server port forward: %w", err)
+		}
+		pf.AssignedIP = stripCIDR(assigned)
+		out = append(out, pf)
+	}
+	return out, rows.Err()
+}
+
+func (p *Postgres) ListPortForwardsByPeer(ctx context.Context, peerID string) ([]model.PortForward, error) {
+	query := `SELECT pf.id, pf.account_id, pf.peer_id, pf.protocol, pf.external_port,
+	                 pf.internal_port, pf.status, pf.created_at,
+	                 peers.server_id, peers.assigned_ip
+	          FROM port_forwards pf
+	          JOIN peers ON peers.id = pf.peer_id
+	          WHERE pf.peer_id = $1 AND pf.status IN ('pending', 'active')`
+	rows, err := p.pool.Query(ctx, query, peerID)
+	if err != nil {
+		return nil, fmt.Errorf("list peer port forwards: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.PortForward
+	for rows.Next() {
+		var pf model.PortForward
+		var assigned string
+		if err := rows.Scan(
+			&pf.ID, &pf.AccountID, &pf.PeerID, &pf.Protocol, &pf.ExternalPort,
+			&pf.InternalPort, &pf.Status, &pf.CreatedAt,
+			&pf.ServerID, &assigned,
+		); err != nil {
+			return nil, fmt.Errorf("scan peer port forward: %w", err)
+		}
+		pf.AssignedIP = stripCIDR(assigned)
+		out = append(out, pf)
+	}
+	return out, rows.Err()
+}
+
+// DeletePortForward hard-deletes a forward owned by the account.
+func (p *Postgres) DeletePortForward(ctx context.Context, id, accountID string) error {
+	result, err := p.pool.Exec(ctx,
+		`DELETE FROM port_forwards WHERE id = $1 AND account_id = $2`,
+		id, accountID)
+	if err != nil {
+		return fmt.Errorf("delete port forward: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("port forward not found")
+	}
+	return nil
+}
+
+func (p *Postgres) UpdatePortForwardStatus(ctx context.Context, id, status string) error {
+	_, err := p.pool.Exec(ctx,
+		`UPDATE port_forwards SET status = $2 WHERE id = $1`,
+		id, status)
+	return err
+}
+
+func (p *Postgres) CountPortForwardsByAccount(ctx context.Context, accountID string) (int, error) {
+	var n int
+	err := p.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM port_forwards
+		WHERE account_id = $1 AND status IN ('pending', 'active')`, accountID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count port forwards: %w", err)
+	}
+	return n, nil
+}
+
+func (p *Postgres) IsPortTaken(ctx context.Context, protocol string, externalPort int) (bool, error) {
+	var taken bool
+	err := p.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM port_forwards
+			WHERE protocol = $1 AND external_port = $2
+			  AND status IN ('pending', 'active')
+		)`, protocol, externalPort).Scan(&taken)
+	if err != nil {
+		return false, fmt.Errorf("check port taken: %w", err)
+	}
+	return taken, nil
+}

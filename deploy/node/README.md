@@ -20,7 +20,9 @@ docker compose up -d --build wg-manager veritas-agent nginx
 
 4. Forward **UDP 51820** on the router to this host for clients off-LAN.
 
-5. Moving to a VPS later: run the same bootstrap, set `PUBLIC_IP` / `EGRESS_IFACE`, point DNS/tunnel at the VPS. The agent/manager contract stays the same.
+5. For **Premium port forwarding** (product feature): also forward **TCP/UDP 40000–49999** (or the specific ports users map) from the WAN to this host. Those DNAT into WireGuard peer IPs via nftables (`veritas_pf`). Do not proxy these through Cloudflare HTTP.
+
+6. Moving to a VPS later: run the same bootstrap, set `PUBLIC_IP` / `EGRESS_IFACE`, point DNS/tunnel at the VPS. The agent/manager contract stays the same.
 
 SOCKS (`veritas-proxy` :1080) remains for the Chrome extension only. Desktop/CLI use WireGuard.
 

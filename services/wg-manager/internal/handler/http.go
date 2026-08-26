@@ -52,8 +52,26 @@ func (h *HTTPHandler) Routes() http.Handler {
 	mux.HandleFunc("/api/v1/agents/peers/expired", h.handlePeerExpired)
 	mux.HandleFunc("/api/v1/wg/peers", h.handlePeers)
 	mux.HandleFunc("/api/v1/wg/peers/", h.handlePeerByID)
+	mux.HandleFunc("/api/v1/wg/port-forwards", h.handlePortForwards)
+	mux.HandleFunc("/api/v1/wg/port-forwards/", h.handlePortForwardByID)
 	mux.HandleFunc("/api/v1/wg/servers", h.handleListServers)
 	return mux
+}
+
+// RegisterRoutes mounts the same handlers on an existing mux (auth/billing style).
+func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/healthz", h.handleHealth)
+	mux.Handle("/metrics", h.metrics.Handler())
+	mux.HandleFunc("/api/v1/agents/register", h.handleAgentRegister)
+	mux.HandleFunc("/api/v1/agents/heartbeat", h.handleAgentHeartbeat)
+	mux.HandleFunc("/api/v1/agents/peers/stream", h.handlePeerStream)
+	mux.HandleFunc("/api/v1/agents/peers/applied", h.handlePeerApplied)
+	mux.HandleFunc("/api/v1/agents/peers/expired", h.handlePeerExpired)
+	mux.HandleFunc("/api/v1/wg/peers", h.handlePeers)
+	mux.HandleFunc("/api/v1/wg/peers/", h.handlePeerByID)
+	mux.HandleFunc("/api/v1/wg/port-forwards", h.handlePortForwards)
+	mux.HandleFunc("/api/v1/wg/port-forwards/", h.handlePortForwardByID)
+	mux.HandleFunc("/api/v1/wg/servers", h.handleListServers)
 }
 
 func (h *HTTPHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +236,29 @@ func (h *HTTPHandler) handlePeerStream(w http.ResponseWriter, r *http.Request) {
 				PublicKey:    p.Pubkey,
 				PresharedKey: psk,
 				AllowedIPs:   p.AllowedIPs,
+			}
+			line, encErr := hub.EncodeSSE(update)
+			if encErr != nil {
+				continue
+			}
+			_, _ = w.Write(line)
+			flusher.Flush()
+		}
+	}
+
+	forwards, err := h.svc.ListPortForwardsForServer(r.Context(), serverID)
+	if err != nil {
+		h.log.Warn("failed listing port forwards for stream catch-up", "server_id", serverID, "error", err)
+	} else {
+		for _, pf := range forwards {
+			update := hub.PeerUpdate{
+				Action:       "PORT_FORWARD_ADD",
+				PeerID:       pf.PeerID,
+				ForwardID:    pf.ID,
+				Protocol:     pf.Protocol,
+				ExternalPort: pf.ExternalPort,
+				InternalPort: pf.InternalPort,
+				AssignedIP:   pf.AssignedIP,
 			}
 			line, encErr := hub.EncodeSSE(update)
 			if encErr != nil {
@@ -453,6 +494,121 @@ func (h *HTTPHandler) handleListServers(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"servers": servers})
+}
+
+type createPortForwardRequest struct {
+	PeerID       string `json:"peer_id"`
+	Protocol     string `json:"protocol"`
+	ExternalPort int    `json:"external_port"`
+	InternalPort int    `json:"internal_port"`
+}
+
+func (h *HTTPHandler) handlePortForwards(w http.ResponseWriter, r *http.Request) {
+	accountID, tier, err := h.accountFromRequest(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		forwards, err := h.svc.ListPortForwards(r.Context(), accountID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		out := make([]map[string]interface{}, 0, len(forwards))
+		for _, pf := range forwards {
+			out = append(out, map[string]interface{}{
+				"id":              pf.ID,
+				"peer_id":         pf.PeerID,
+				"server_id":       pf.ServerID,
+				"protocol":        pf.Protocol,
+				"external_port":   pf.ExternalPort,
+				"internal_port":   pf.InternalPort,
+				"status":          pf.Status,
+				"assigned_ip":     pf.AssignedIP,
+				"egress_endpoint": pf.EgressEndpoint,
+				"created_at":      pf.CreatedAt.Unix(),
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"port_forwards": out})
+	case http.MethodPost:
+		var req createPortForwardRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		if req.PeerID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer_id is required"})
+			return
+		}
+		if req.Protocol == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "protocol is required"})
+			return
+		}
+		if req.ExternalPort == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "external_port is required"})
+			return
+		}
+		pf, err := h.svc.CreatePortForward(r.Context(), accountID, tier, req.PeerID, req.Protocol, req.ExternalPort, req.InternalPort)
+		if err != nil {
+			var planErr *entitlement.PlanError
+			if errors.As(err, &planErr) {
+				status := http.StatusForbidden
+				switch planErr.Code {
+				case "invalid_external_port", "invalid_internal_port", "invalid_protocol",
+					"external_port_taken", "reserved_external_port":
+					status = http.StatusBadRequest
+				}
+				writeJSON(w, status, map[string]string{"error": planErr.Message, "code": planErr.Code})
+				return
+			}
+			h.log.Error("create port forward failed", "account_id", accountID, "error", err)
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"id":              pf.ID,
+			"peer_id":         pf.PeerID,
+			"server_id":       pf.ServerID,
+			"protocol":        pf.Protocol,
+			"external_port":   pf.ExternalPort,
+			"internal_port":   pf.InternalPort,
+			"status":          pf.Status,
+			"assigned_ip":     pf.AssignedIP,
+			"egress_endpoint": pf.EgressEndpoint,
+			"created_at":      pf.CreatedAt.Unix(),
+		})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *HTTPHandler) handlePortForwardByID(w http.ResponseWriter, r *http.Request) {
+	accountID, _, err := h.accountFromRequest(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/wg/port-forwards/")
+	id = strings.Trim(id, "/")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		if err := h.svc.DeletePortForward(r.Context(), id, accountID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 type claims struct {

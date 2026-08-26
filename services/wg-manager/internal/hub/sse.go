@@ -8,12 +8,18 @@ import (
 )
 
 // PeerUpdate is the SSE payload consumed by veritas-agent.
+// Action may be ADD, REMOVE, PORT_FORWARD_ADD, or PORT_FORWARD_REMOVE.
 type PeerUpdate struct {
 	Action       string   `json:"action"`
 	PeerID       string   `json:"peer_id"`
-	PublicKey    string   `json:"public_key"`
-	PresharedKey string   `json:"preshared_key"`
-	AllowedIPs   []string `json:"allowed_ips"`
+	PublicKey    string   `json:"public_key,omitempty"`
+	PresharedKey string   `json:"preshared_key,omitempty"`
+	AllowedIPs   []string `json:"allowed_ips,omitempty"`
+	ForwardID    string   `json:"forward_id,omitempty"`
+	Protocol     string   `json:"protocol,omitempty"`
+	ExternalPort int      `json:"external_port,omitempty"`
+	InternalPort int      `json:"internal_port,omitempty"`
+	AssignedIP   string   `json:"assigned_ip,omitempty"`
 }
 
 type subscriber struct {
