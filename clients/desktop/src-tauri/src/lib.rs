@@ -18,6 +18,11 @@ pub struct WgTunnelConfig {
     pub peer_id: String,
     #[serde(default)]
     pub preshared_key: String,
+    /// Remote TLS/WebSocket host:port for stealth mode (empty = direct UDP).
+    #[serde(default)]
+    pub stealth_endpoint: String,
+    #[serde(default)]
+    pub stealth_path_prefix: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +68,10 @@ fn pid_path() -> Result<PathBuf, String> {
     Ok(state_dir()?.join("wireguard-go.pid"))
 }
 
+fn stealth_pid_path() -> Result<PathBuf, String> {
+    Ok(state_dir()?.join("wstunnel.pid"))
+}
+
 fn resolve_wireguard_go(app: &AppHandle) -> Result<PathBuf, String> {
     let candidates = ["bin/wireguard-go", "resources/bin/wireguard-go"];
     for rel in candidates {
@@ -90,6 +99,32 @@ fn resolve_wireguard_go(app: &AppHandle) -> Result<PathBuf, String> {
         return Ok(dev);
     }
     Err("Bundled WireGuard engine missing from the app".into())
+}
+
+fn resolve_wstunnel(app: &AppHandle) -> Result<PathBuf, String> {
+    let candidates = ["bin/wstunnel", "resources/bin/wstunnel"];
+    for rel in candidates {
+        if let Ok(p) = app
+            .path()
+            .resolve(rel, tauri::path::BaseDirectory::Resource)
+        {
+            if p.exists() {
+                return Ok(p);
+            }
+        }
+    }
+    if let Ok(dir) = app.path().resource_dir() {
+        for rel in [dir.join("bin/wstunnel"), dir.join("resources/bin/wstunnel")] {
+            if rel.exists() {
+                return Ok(rel);
+            }
+        }
+    }
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/bin/wstunnel");
+    if dev.exists() {
+        return Ok(dev);
+    }
+    Err("Bundled stealth engine (wstunnel) missing from the app".into())
 }
 
 #[tauri::command]
@@ -247,12 +282,15 @@ fn disconnect_wireguard(app: AppHandle) -> ConnectResult {
 
 #[cfg(target_os = "macos")]
 fn bring_up_wireguard(app: &AppHandle, config: &WgTunnelConfig) -> Result<String, String> {
+    if !config.stealth_endpoint.trim().is_empty() {
+        return Err("Stealth mode is available on Linux desktop in this build".into());
+    }
     bring_up_wireguard_impl(app, config, build_bringup_script_macos)
 }
 
 #[cfg(target_os = "linux")]
 fn bring_up_wireguard(app: &AppHandle, config: &WgTunnelConfig) -> Result<String, String> {
-    bring_up_wireguard_impl(app, config, build_bringup_script_linux)
+    bring_up_wireguard_linux_full(app, config)
 }
 
 fn bring_up_wireguard_impl(
@@ -662,6 +700,112 @@ echo "ok iface=$IFACE endpoint_ip=$ENDPOINT_IP gw=$GW"
 }
 
 #[cfg(target_os = "linux")]
+fn bring_up_wireguard_linux_full(app: &AppHandle, config: &WgTunnelConfig) -> Result<String, String> {
+    let wg_go = resolve_wireguard_go(app)?;
+    let stealth_remote = config.stealth_endpoint.trim().to_string();
+    let stealth_prefix = config.stealth_path_prefix.trim().to_string();
+    let wstunnel = if stealth_remote.is_empty() {
+        PathBuf::new()
+    } else {
+        if stealth_prefix.is_empty() {
+            return Err("Stealth mode enabled but server did not provide a path prefix".into());
+        }
+        resolve_wstunnel(app)?
+    };
+
+    let dir = state_dir()?;
+    let address = config
+        .address
+        .trim()
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    if address.is_empty() {
+        return Err("missing assigned address".into());
+    }
+
+    let priv_hex = b64_key_to_hex(&config.private_key)?;
+    let pub_hex = b64_key_to_hex(&config.server_public_key)?;
+    let endpoint = if stealth_remote.is_empty() {
+        config.endpoint.trim().to_string()
+    } else {
+        "127.0.0.1:41820".into()
+    };
+
+    let allowed = if config.allowed_ips.is_empty() {
+        vec!["0.0.0.0".into()]
+    } else {
+        config.allowed_ips.clone()
+    };
+
+    let mut uapi = format!(
+        "set=1\nprivate_key={priv_hex}\nreplace_peers=true\npublic_key={pub_hex}\nendpoint={endpoint}\npersistent_keepalive_interval=25\n"
+    );
+    if !config.preshared_key.trim().is_empty() {
+        let psk_hex = b64_key_to_hex(&config.preshared_key)?;
+        uapi.push_str(&format!("preshared_key={psk_hex}\n"));
+    }
+    for ip in &allowed {
+        uapi.push_str(&format!("allowed_ip={}\n", ip.trim()));
+    }
+    uapi.push('\n');
+
+    let uapi_path = dir.join("uapi.txt");
+    let script_path = dir.join("bringup.sh");
+    let iface_file = iface_path()?;
+    let pid_file = pid_path()?;
+    let stealth_pid = stealth_pid_path()?;
+
+    fs::write(&uapi_path, &uapi).map_err(|e| format!("write uapi: {e}"))?;
+    fs::write(
+        conf_path()?,
+        format!(
+            "# VeritasVPN managed tunnel\n# endpoint {}\n# stealth {}\n# address {}\n",
+            endpoint, stealth_remote, config.address
+        ),
+    )
+    .ok();
+    fs::write(peer_id_path()?, config.peer_id.as_bytes()).ok();
+
+    let script = build_bringup_script_linux(
+        &wg_go,
+        &uapi_path,
+        &iface_file,
+        &pid_file,
+        &address,
+        if config.dns.trim().is_empty() {
+            "1.1.1.1"
+        } else {
+            config.dns.trim()
+        },
+        &endpoint,
+        &stealth_remote,
+        &wstunnel,
+        &stealth_prefix,
+        &stealth_pid,
+    );
+
+    fs::write(&script_path, script).map_err(|e| format!("write script: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .map_err(|e| format!("stat script: {e}"))?
+            .permissions();
+        perms.set_mode(0o700);
+        fs::set_permissions(&script_path, perms).ok();
+    }
+
+    run_elevated(&script_path)?;
+    if stealth_remote.is_empty() {
+        Ok(format!("WireGuard connected via {endpoint}"))
+    } else {
+        Ok(format!("WireGuard connected via stealth {stealth_remote}"))
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn build_bringup_script_linux(
     wg_go: &Path,
     uapi_path: &Path,
@@ -670,6 +814,10 @@ fn build_bringup_script_linux(
     address: &str,
     dns: &str,
     endpoint: &str,
+    stealth_remote: &str,
+    wstunnel: &Path,
+    stealth_prefix: &str,
+    stealth_pid: &Path,
 ) -> String {
     format!(
         r#"#!/bin/bash
@@ -678,6 +826,10 @@ WG_GO='{wg_go}'
 UAPI='{uapi}'
 IFACE_FILE='{iface_file}'
 PID_FILE='{pid_file}'
+STEALTH_PID_FILE='{stealth_pid}'
+WSTUNNEL='{wstunnel}'
+STEALTH_REMOTE='{stealth_remote}'
+STEALTH_PREFIX='{stealth_prefix}'
 META_FILE='{iface_file}.meta'
 DNS_BACKUP="${{META_FILE}}.dns"
 ADDR='{address}'
@@ -708,8 +860,12 @@ install_killswitch() {{
     nft "add chain inet $KILLSWITCH_TABLE output {{ type filter hook output priority -5; policy accept; }}" || return 1
     nft add rule inet "$KILLSWITCH_TABLE" output oifname "lo" accept || return 1
     nft add rule inet "$KILLSWITCH_TABLE" output oifname "$IFACE_NAME" accept || return 1
-    if [[ -n "$ENDPOINT_IP" && -n "$ENDPOINT_PORT" ]]; then
-      nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ENDPOINT_IP" udp dport "$ENDPOINT_PORT" accept || return 1
+    if [[ -n "$ROUTE_IP" && -n "$ROUTE_PORT" ]]; then
+      if [[ -n "$STEALTH_REMOTE" ]]; then
+        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ROUTE_IP" tcp dport "$ROUTE_PORT" accept || return 1
+      else
+        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ROUTE_IP" udp dport "$ROUTE_PORT" accept || return 1
+      fi
     fi
     nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" drop || return 1
     return 0
@@ -720,8 +876,12 @@ install_killswitch() {{
     iptables -C OUTPUT -j "$KILLSWITCH_CHAIN" 2>/dev/null || iptables -I OUTPUT 1 -j "$KILLSWITCH_CHAIN" || return 1
     iptables -A "$KILLSWITCH_CHAIN" -o lo -j ACCEPT || return 1
     iptables -A "$KILLSWITCH_CHAIN" -o "$IFACE_NAME" -j ACCEPT || return 1
-    if [[ -n "$ENDPOINT_IP" && -n "$ENDPOINT_PORT" ]]; then
-      iptables -A "$KILLSWITCH_CHAIN" -d "$ENDPOINT_IP" -p udp --dport "$ENDPOINT_PORT" -j ACCEPT || return 1
+    if [[ -n "$ROUTE_IP" && -n "$ROUTE_PORT" ]]; then
+      if [[ -n "$STEALTH_REMOTE" ]]; then
+        iptables -A "$KILLSWITCH_CHAIN" -d "$ROUTE_IP" -p tcp --dport "$ROUTE_PORT" -j ACCEPT || return 1
+      else
+        iptables -A "$KILLSWITCH_CHAIN" -d "$ROUTE_IP" -p udp --dport "$ROUTE_PORT" -j ACCEPT || return 1
+      fi
     fi
     iptables -A "$KILLSWITCH_CHAIN" -j DROP || return 1
     return 0
@@ -738,6 +898,11 @@ if [[ -f "$PID_FILE" ]]; then
   kill "$(cat "$PID_FILE")" 2>/dev/null || true
   rm -f "$PID_FILE"
 fi
+if [[ -f "$STEALTH_PID_FILE" ]]; then
+  kill "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+  rm -f "$STEALTH_PID_FILE"
+fi
+pkill -f '/wstunnel client' 2>/dev/null || true
 if [[ -f "$IFACE_FILE" ]]; then
   OLD="$(cat "$IFACE_FILE")"
   ip route del 0.0.0.0/1 dev "$OLD" 2>/dev/null || true
@@ -755,16 +920,45 @@ rm -f /var/run/wireguard/*.sock 2>/dev/null || true
 # Find the default gateway before adding tunnel routes
 GW="$(ip route show default | awk '/default via/ {{print $3; exit}}')"
 GW_IF="$(ip route show default | awk '/dev/ {{print $5; exit}}')"
-ENDPOINT_HOST="${{ENDPOINT%%:*}}"
-ENDPOINT_IP=""
-if [[ -n "$ENDPOINT_HOST" ]]; then
-  if [[ "$ENDPOINT_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    ENDPOINT_IP="$ENDPOINT_HOST"
+
+# Host/port used for the outside-tunnel exception (UDP direct or TCP stealth).
+if [[ -n "$STEALTH_REMOTE" ]]; then
+  ROUTE_HOST="${{STEALTH_REMOTE%%:*}}"
+  ROUTE_PORT="${{STEALTH_REMOTE##*:}}"
+else
+  ROUTE_HOST="${{ENDPOINT%%:*}}"
+  ROUTE_PORT="${{ENDPOINT##*:}}"
+fi
+ROUTE_IP=""
+if [[ -n "$ROUTE_HOST" ]]; then
+  if [[ "$ROUTE_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    ROUTE_IP="$ROUTE_HOST"
   else
-    ENDPOINT_IP="$(dig +short "$ENDPOINT_HOST" 2>/dev/null | head -1 || true)"
-    if [[ -z "$ENDPOINT_IP" ]]; then
-      ENDPOINT_IP="$(getent hosts "$ENDPOINT_HOST" 2>/dev/null | awk '{{print $1; exit}}' || true)"
+    ROUTE_IP="$(dig +short "$ROUTE_HOST" 2>/dev/null | head -1 || true)"
+    if [[ -z "$ROUTE_IP" ]]; then
+      ROUTE_IP="$(getent hosts "$ROUTE_HOST" 2>/dev/null | awk '{{print $1; exit}}' || true)"
     fi
+  fi
+fi
+ENDPOINT_IP="$ROUTE_IP"
+
+# Optional stealth sidecar: local UDP → TLS/WebSocket → server WG
+if [[ -n "$STEALTH_REMOTE" ]]; then
+  if [[ ! -x "$WSTUNNEL" ]]; then
+    echo "stealth engine missing: $WSTUNNEL" >&2
+    exit 1
+  fi
+  "$WSTUNNEL" client \
+    --http-upgrade-path-prefix "$STEALTH_PREFIX" \
+    -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
+    "wss://${{STEALTH_REMOTE}}" \
+    >/tmp/veritas-wstunnel.log 2>&1 &
+  echo $! > "$STEALTH_PID_FILE"
+  sleep 0.4
+  if ! kill -0 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null; then
+    echo "failed to start stealth transport" >&2
+    cat /tmp/veritas-wstunnel.log >&2 || true
+    exit 1
   fi
 fi
 
@@ -785,6 +979,7 @@ done
 if [[ -z "$IFACE" ]]; then
   echo "failed to start WireGuard engine" >&2
   cat /tmp/veritas-wg-go.log >&2 || true
+  [[ -f "$STEALTH_PID_FILE" ]] && kill "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
   exit 1
 fi
 echo "$IFACE_NAME" > "$IFACE_FILE"
@@ -817,15 +1012,16 @@ if ! ping -c 3 -W 1 10.0.0.1 >/tmp/veritas-wg-handshake.log 2>&1; then
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   kill "$(cat "$PID_FILE")" 2>/dev/null || true
-  rm -f "$PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
+  [[ -f "$STEALTH_PID_FILE" ]] && kill "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+  rm -f "$PID_FILE" "$STEALTH_PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
   echo "WireGuard handshake with the VPN server failed; normal internet was left unchanged" >&2
   exit 1
 fi
 
-# Host route so VPN endpoint stays reachable outside the tunnel
-if [[ -n "$ENDPOINT_IP" && -n "$GW" ]]; then
-  ip route del "$ENDPOINT_IP" 2>/dev/null || true
-  ip route add "$ENDPOINT_IP" via "$GW" 2>/dev/null || true
+# Host route so VPN transport stays reachable outside the tunnel
+if [[ -n "$ROUTE_IP" && -n "$GW" && "$ROUTE_IP" != "127.0.0.1" ]]; then
+  ip route del "$ROUTE_IP" 2>/dev/null || true
+  ip route add "$ROUTE_IP" via "$GW" 2>/dev/null || true
 fi
 
 # Split default via the tunnel
@@ -841,10 +1037,11 @@ if ! ip route replace blackhole default metric 1 2>/tmp/veritas-wg-killswitch-er
   ip route del 0.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
   ip route del 128.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
-  [[ -n "$ENDPOINT_IP" ]] && ip route del "$ENDPOINT_IP" 2>/dev/null || true
+  [[ -n "$ROUTE_IP" && "$ROUTE_IP" != "127.0.0.1" ]] && ip route del "$ROUTE_IP" 2>/dev/null || true
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
-  rm -f "$PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
+  [[ -f "$STEALTH_PID_FILE" ]] && kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+  rm -f "$PID_FILE" "$STEALTH_PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
   echo "Could not install the VPN kill switch; normal internet was left unchanged" >&2
   cat /tmp/veritas-wg-killswitch-error.log >&2 || true
   exit 1
@@ -867,8 +1064,8 @@ elif command -v resolvectl >/dev/null 2>&1; then
 fi
 
 # Persist state for teardown
-printf 'endpoint_ip=%s\ngateway=%s\niface=%s\ngw_if=%s\n' \
-  "$ENDPOINT_IP" "$GW" "$IFACE_NAME" "$GW_IF" > "$META_FILE"
+printf 'endpoint_ip=%s\ngateway=%s\niface=%s\ngw_if=%s\nstealth_remote=%s\n' \
+  "$ROUTE_IP" "$GW" "$IFACE_NAME" "$GW_IF" "$STEALTH_REMOTE" > "$META_FILE"
 
 # Verify internet connectivity through the tunnel
 if ! curl -4 -fsS --connect-timeout 5 --max-time 12 https://api.ipify.org \
@@ -879,14 +1076,15 @@ if ! curl -4 -fsS --connect-timeout 5 --max-time 12 https://api.ipify.org \
   ip route del blackhole default metric 1 2>/dev/null || true
   ip -6 route del blackhole default metric 1 2>/dev/null || true
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
-  [[ -n "$ENDPOINT_IP" ]] && ip route del "$ENDPOINT_IP" 2>/dev/null || true
+  [[ -n "$ROUTE_IP" && "$ROUTE_IP" != "127.0.0.1" ]] && ip route del "$ROUTE_IP" 2>/dev/null || true
   if [[ -f "$DNS_BACKUP" ]]; then
     cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
   fi
   rm -f "$DNS_BACKUP"
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
-  rm -f "$PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
+  [[ -f "$STEALTH_PID_FILE" ]] && kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+  rm -f "$PID_FILE" "$STEALTH_PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
   echo "VPN internet egress validation failed; normal internet was restored" >&2
   exit 1
 fi
@@ -898,12 +1096,16 @@ if [ ! -f "$SUDOERS_FILE" ]; then
   chmod 0440 "$SUDOERS_FILE" 2>/dev/null || true
 fi
 
-echo "ok iface=$IFACE_NAME endpoint_ip=$ENDPOINT_IP gw=$GW"
+echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}} gw=$GW"
 "#,
         wg_go = wg_go.display(),
         uapi = uapi_path.display(),
         iface_file = iface_file.display(),
         pid_file = pid_file.display(),
+        stealth_pid = stealth_pid.display(),
+        wstunnel = wstunnel.display(),
+        stealth_remote = stealth_remote,
+        stealth_prefix = stealth_prefix,
         address = address,
         dns = dns,
         endpoint = endpoint,
@@ -1066,6 +1268,7 @@ fn bring_down_wireguard_linux(app: &AppHandle) -> Result<String, String> {
 set -uo pipefail
 IFACE_FILE='{iface_file}'
 PID_FILE='{pid_file}'
+STEALTH_PID_FILE='{stealth_pid}'
 META_FILE='{meta_file}'
 DNS_BACKUP="${{META_FILE}}.dns"
 
@@ -1112,7 +1315,7 @@ ip route del 0.0.0.0/1 2>/dev/null || true
 ip route del 128.0.0.0/1 2>/dev/null || true
 
 # Remove endpoint host route
-if [[ -n "$ENDPOINT_IP" ]]; then
+if [[ -n "$ENDPOINT_IP" && "$ENDPOINT_IP" != "127.0.0.1" ]]; then
   ip route del "$ENDPOINT_IP" 2>/dev/null || true
 fi
 
@@ -1123,6 +1326,14 @@ if [[ -f "$PID_FILE" ]]; then
 fi
 pkill -f 'wireguard-go veritas0' 2>/dev/null || true
 rm -f /var/run/wireguard/*.sock 2>/dev/null || true
+
+# Stop stealth sidecar
+if [[ -f "$STEALTH_PID_FILE" ]]; then
+  kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+  rm -f "$STEALTH_PID_FILE"
+fi
+pkill -f '/wstunnel client' 2>/dev/null || true
+
 rm -f "$IFACE_FILE" "$META_FILE"
 
 # Restore DNS
@@ -1143,6 +1354,9 @@ echo ok
 "#,
         iface_file = iface_file.display(),
         pid_file = pid_file.display(),
+        stealth_pid = stealth_pid_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "~/.veritasvpn/wstunnel.pid".into()),
         meta_file = meta_file.display(),
     );
     fs::write(&script_path, script).map_err(|e| format!("write teardown: {e}"))?;

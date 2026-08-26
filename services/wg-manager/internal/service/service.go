@@ -25,6 +25,9 @@ type PeerConfig struct {
 	ServerHostname         string
 	ServerPublicKey        string
 	ServerEndpoint         string
+	StealthEndpoint        string
+	StealthAvailable       bool
+	StealthPathPrefix      string
 	AssignedIP             string
 	DNSServer              string
 	PresharedKey           string
@@ -34,17 +37,21 @@ type PeerConfig struct {
 }
 
 type Service struct {
-	postgres     *repository.Postgres
-	redis        *repository.Redis
-	scheduler    *scheduler.Scheduler
-	communicator *communicator.Communicator
-	natsConn     *nats.Conn
-	authToken    string
-	freeRegions  []string
-	lanIP        string
-	lanPort      int32
-	tierCache    *entitlement.TierCache
-	log          *logging.Logger
+	postgres           *repository.Postgres
+	redis              *repository.Redis
+	scheduler          *scheduler.Scheduler
+	communicator       *communicator.Communicator
+	natsConn           *nats.Conn
+	authToken          string
+	freeRegions        []string
+	lanIP              string
+	lanPort            int32
+	stealthHost        string
+	stealthPort        int32
+	stealthPathPrefix  string
+	stealthAvailable   bool
+	tierCache          *entitlement.TierCache
+	log                *logging.Logger
 }
 
 func New(
@@ -84,6 +91,15 @@ func (s *Service) SetLANEndpoint(ip string, port int32) {
 	s.lanPort = port
 }
 
+// SetStealthEndpoint configures the optional TLS/WebSocket wrapper endpoint
+// (wstunnel). Clients that enable stealth mode dial this instead of raw UDP.
+func (s *Service) SetStealthEndpoint(host string, port int32, pathPrefix string) {
+	s.stealthHost = strings.TrimSpace(host)
+	s.stealthPort = port
+	s.stealthPathPrefix = strings.TrimSpace(pathPrefix)
+	s.stealthAvailable = s.stealthHost != "" && s.stealthPort > 0 && s.stealthPathPrefix != ""
+}
+
 // ClientEndpoint returns the WireGuard endpoint a client should dial.
 func (s *Service) ClientEndpoint(srv *model.Server, clientIP string) string {
 	if srv == nil {
@@ -93,6 +109,28 @@ func (s *Service) ClientEndpoint(srv *model.Server, clientIP string) string {
 		return fmt.Sprintf("%s:%d", s.lanIP, s.lanPort)
 	}
 	return fmt.Sprintf("%s:%d", srv.PublicIP, srv.WGPort)
+}
+
+// ClientStealthEndpoint returns host:port for the TLS stealth transport, or "".
+func (s *Service) ClientStealthEndpoint(srv *model.Server, clientIP string) string {
+	if !s.stealthAvailable || srv == nil {
+		return ""
+	}
+	host := s.stealthHost
+	if s.useLANEndpoint(clientIP, srv.PublicIP) && s.lanIP != "" {
+		host = s.lanIP
+	}
+	return fmt.Sprintf("%s:%d", host, s.stealthPort)
+}
+
+// StealthAvailable reports whether stealth transport is configured.
+func (s *Service) StealthAvailable() bool {
+	return s.stealthAvailable
+}
+
+// StealthPathPrefix returns the shared HTTP upgrade path prefix for wstunnel.
+func (s *Service) StealthPathPrefix() string {
+	return s.stealthPathPrefix
 }
 
 func (s *Service) useLANEndpoint(clientIP, publicIP string) bool {
@@ -385,6 +423,9 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 		ServerHostname:         srv.Hostname,
 		ServerPublicKey:        srv.PublicKey,
 		ServerEndpoint:         endpoint,
+		StealthEndpoint:        s.ClientStealthEndpoint(srv, clientIP),
+		StealthAvailable:       s.StealthAvailable(),
+		StealthPathPrefix:      s.StealthPathPrefix(),
 		AssignedIP:             assignedIP,
 		DNSServer:              srv.DNSServer,
 		PresharedKey:           psk,

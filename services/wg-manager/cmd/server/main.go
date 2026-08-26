@@ -91,6 +91,24 @@ func main() {
 		svc.SetLANEndpoint(lanIP, lanPort)
 		log.Info("LAN WireGuard endpoint enabled", "ip", lanIP, "port", lanPort)
 	}
+	stealthHost := strings.TrimSpace(os.Getenv("STEALTH_ENDPOINT_HOST"))
+	if stealthHost == "" {
+		// Fall back to PUBLIC_IP from configmap when host is not set explicitly.
+		stealthHost = strings.TrimSpace(os.Getenv("PUBLIC_IP"))
+	}
+	stealthPort := int32(443)
+	if v := strings.TrimSpace(os.Getenv("STEALTH_ENDPOINT_PORT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 65535 {
+			stealthPort = int32(n)
+		}
+	}
+	stealthPrefix := strings.TrimSpace(os.Getenv("STEALTH_PATH_PREFIX"))
+	stealthEnabled := strings.EqualFold(strings.TrimSpace(os.Getenv("STEALTH_ENABLED")), "true") ||
+		strings.TrimSpace(os.Getenv("STEALTH_ENABLED")) == "1"
+	if stealthEnabled && stealthHost != "" && stealthPrefix != "" {
+		svc.SetStealthEndpoint(stealthHost, stealthPort, stealthPrefix)
+		log.Info("stealth WireGuard endpoint enabled", "host", stealthHost, "port", stealthPort)
+	}
 	svcMetrics := metrics.New()
 	httpHandler := handler.NewHTTPHandler(svc, sseHub, pool, svcMetrics, cfg.JWTSecret, cfg.AgentAuthToken, log)
 

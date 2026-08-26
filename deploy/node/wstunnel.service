@@ -1,0 +1,16 @@
+[Unit]
+Description=VeritasVPN stealth WireGuard transport (wstunnel)
+Documentation=https://github.com/erebe/wstunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/veritasvpn/wstunnel.env
+ExecStart=/usr/local/bin/wstunnel server --restrict-http-upgrade-path-prefix ${STEALTH_PATH_PREFIX} --restrict-to 127.0.0.1:51820 wss://0.0.0.0:${STEALTH_LISTEN_PORT}
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

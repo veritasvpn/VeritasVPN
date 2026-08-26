@@ -401,6 +401,9 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			"server_hostname":      cfg.ServerHostname,
 			"server_public_key":    cfg.ServerPublicKey,
 			"server_endpoint":      cfg.ServerEndpoint,
+			"stealth_endpoint":     cfg.StealthEndpoint,
+			"stealth_available":    cfg.StealthAvailable,
+			"stealth_path_prefix":  cfg.StealthPathPrefix,
 			"assigned_ip":          cfg.AssignedIP,
 			"address":              cfg.AssignedIP,
 			"dns_server":           cfg.DNSServer,
@@ -472,6 +475,9 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 			endpoint := h.svc.ClientEndpoint(srv, clientIPFromRequest(r))
 			resp["server"] = srv
 			resp["server_endpoint"] = endpoint
+			resp["stealth_endpoint"] = h.svc.ClientStealthEndpoint(srv, clientIPFromRequest(r))
+			resp["stealth_available"] = h.svc.StealthAvailable()
+			resp["stealth_path_prefix"] = h.svc.StealthPathPrefix()
 		}
 		writeJSON(w, http.StatusOK, resp)
 	default:
@@ -493,7 +499,27 @@ func (h *HTTPHandler) handleListServers(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"servers": servers})
+	clientIP := clientIPFromRequest(r)
+	out := make([]map[string]interface{}, 0, len(servers))
+	for i := range servers {
+		srv := &servers[i]
+		out = append(out, map[string]interface{}{
+			"id":                  srv.ID,
+			"hostname":            srv.Hostname,
+			"public_ip":           srv.PublicIP,
+			"wg_port":             srv.WGPort,
+			"public_key":          srv.PublicKey,
+			"status":              srv.Status,
+			"region":              srv.Region,
+			"city":                srv.City,
+			"country":             srv.Country,
+			"server_endpoint":     h.svc.ClientEndpoint(srv, clientIP),
+			"stealth_endpoint":    h.svc.ClientStealthEndpoint(srv, clientIP),
+			"stealth_available":   h.svc.StealthAvailable(),
+			"stealth_path_prefix": h.svc.StealthPathPrefix(),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"servers": out})
 }
 
 type createPortForwardRequest struct {

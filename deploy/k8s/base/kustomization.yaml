@@ -20,5 +20,6 @@ resources:
   - nginx.yaml
   - ingress.yaml
   - veritas-agent.yaml
+  - wstunnel.yaml
   - veritas-proxy.yaml
   - pdb.yaml

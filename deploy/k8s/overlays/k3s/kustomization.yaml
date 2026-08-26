@@ -60,6 +60,18 @@ patches:
         path: /data/PUBLIC_IP
         value: "170.51.31.139"
       - op: replace
+        path: /data/STEALTH_ENABLED
+        value: "true"
+      - op: replace
+        path: /data/STEALTH_ENDPOINT_HOST
+        value: "170.51.31.139"
+      - op: replace
+        path: /data/STEALTH_ENDPOINT_PORT
+        value: "443"
+      - op: replace
+        path: /data/STEALTH_PATH_PREFIX
+        value: "6492a80dae0298e85be91802ee1c9847"
+      - op: replace
         path: /data/SERVER_COUNTRY
         value: "PY"
       - op: replace

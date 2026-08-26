@@ -64,3 +64,29 @@ func TestClientEndpoint(t *testing.T) {
 		t.Fatalf("client on public IP: got %q", got)
 	}
 }
+
+func TestClientStealthEndpoint(t *testing.T) {
+	svc := &Service{
+		lanIP:             "192.168.0.6",
+		lanPort:           51820,
+		stealthHost:       "203.0.113.1",
+		stealthPort:       443,
+		stealthPathPrefix: "abc123",
+		stealthAvailable:  true,
+	}
+	srv := &model.Server{PublicIP: "203.0.113.1", WGPort: 443}
+
+	if got := svc.ClientStealthEndpoint(nil, "198.51.100.9"); got != "" {
+		t.Fatalf("nil server: got %q", got)
+	}
+	if got := svc.ClientStealthEndpoint(srv, "198.51.100.9"); got != "203.0.113.1:443" {
+		t.Fatalf("remote stealth: got %q", got)
+	}
+	if got := svc.ClientStealthEndpoint(srv, "192.168.0.50"); got != "192.168.0.6:443" {
+		t.Fatalf("LAN stealth: got %q", got)
+	}
+	svc.stealthAvailable = false
+	if got := svc.ClientStealthEndpoint(srv, "198.51.100.9"); got != "" {
+		t.Fatalf("disabled stealth: got %q", got)
+	}
+}

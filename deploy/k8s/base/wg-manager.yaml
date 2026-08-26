@@ -92,6 +92,31 @@ spec:
                 configMapKeyRef:
                   name: veritas-config
                   key: LAN_ENDPOINT_PORT
+            - name: PUBLIC_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: PUBLIC_IP
+            - name: STEALTH_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: STEALTH_ENABLED
+            - name: STEALTH_ENDPOINT_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: STEALTH_ENDPOINT_HOST
+            - name: STEALTH_ENDPOINT_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: STEALTH_ENDPOINT_PORT
+            - name: STEALTH_PATH_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: STEALTH_PATH_PREFIX
           readinessProbe:
             httpGet:
               path: /healthz

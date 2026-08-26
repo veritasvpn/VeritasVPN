@@ -18,11 +18,20 @@ sudo bash deploy/node/bootstrap-wg.sh
 docker compose up -d --build wg-manager veritas-agent nginx
 ```
 
-4. Forward **UDP 51820** on the router to this host for clients off-LAN.
+4. Forward **UDP 443** (or **UDP 51820**) on the router to this host for clients off-LAN. Production advertises public UDP **443** while the daemon listens on **51820**.
 
 5. For **Premium port forwarding** (product feature): also forward **TCP/UDP 40000–49999** (or the specific ports users map) from the WAN to this host. Those DNAT into WireGuard peer IPs via nftables (`veritas_pf`). Do not proxy these through Cloudflare HTTP.
 
-6. Moving to a VPS later: run the same bootstrap, set `PUBLIC_IP` / `EGRESS_IFACE`, point DNS/tunnel at the VPS. The agent/manager contract stays the same.
+6. For **Stealth mode** (WireGuard over TLS/WebSocket): install the host wstunnel service, allow **TCP 443** on the host firewall, and forward **WAN TCP 443** to this host. Keep UDP WireGuard separate (UDP 443 → 51820). Stealth must hit the node **directly** — not via Cloudflare’s HTTP proxy.
+
+```bash
+sudo STEALTH_PATH_PREFIX='…' bash deploy/node/install-wstunnel.sh
+sudo STEALTH_PORT=443 bash deploy/node/veritas-firewall.sh
+```
+
+Then set `STEALTH_ENABLED=true`, `STEALTH_ENDPOINT_HOST`, `STEALTH_ENDPOINT_PORT=443`, and the same `STEALTH_PATH_PREFIX` on wg-manager.
+
+7. Moving to a VPS later: run the same bootstrap, set `PUBLIC_IP` / `EGRESS_IFACE`, point DNS/tunnel at the VPS. The agent/manager contract stays the same.
 
 SOCKS (`veritas-proxy` :1080) remains for the Chrome extension only. Desktop/CLI use WireGuard.
 

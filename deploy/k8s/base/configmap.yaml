@@ -23,6 +23,11 @@ data:
 
   LAN_ENDPOINT_IP: "192.168.0.6"
   LAN_ENDPOINT_PORT: "51820"
+  # Stealth = WireGuard over TLS/WebSocket (wstunnel). Direct UDP remains default.
+  STEALTH_ENABLED: "false"
+  STEALTH_ENDPOINT_HOST: ""
+  STEALTH_ENDPOINT_PORT: "443"
+  STEALTH_PATH_PREFIX: ""
   PUBLIC_IP: "change-me-or-set-to-your-vps-ip"
   SERVER_HOSTNAME: "linuxdesktop"
   SERVER_REGION: "sa"

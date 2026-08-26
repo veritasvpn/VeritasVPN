@@ -49,6 +49,9 @@ interface PeerResponse {
   peer_id: string;
   server_public_key: string;
   server_endpoint: string;
+  stealth_endpoint?: string;
+  stealth_available?: boolean;
+  stealth_path_prefix?: string;
   assigned_ip: string;
   dns_server: string;
   preshared_key?: string;
@@ -64,6 +67,7 @@ const HANDSHAKE_STALE_SEC = 120;
 const RECONNECT_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000];
 const LS_AUTO_RECONNECT = "veritas_auto_reconnect";
 const LS_EXCLUDE_LAN = "veritas_exclude_lan";
+const LS_STEALTH = "veritas_stealth_mode";
 const EGRESS_ENDPOINTS = [
   "https://api.ipify.org",
   "https://ifconfig.me/ip",
@@ -681,6 +685,7 @@ function App() {
   const [showPortForwards, setShowPortForwards] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState(() => readLocalFlag(LS_AUTO_RECONNECT, "1"));
   const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
+  const [stealthMode, setStealthMode] = useState(() => readLocalFlag(LS_STEALTH, "0"));
   const [wgStats, setWgStats] = useState<WgTransferStats | null>(null);
   const [dnsBlockedCount, setDnsBlockedCount] = useState<number | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
@@ -707,6 +712,7 @@ function App() {
   const connectedRef = useRef(connected);
   const connectingRef = useRef(connecting);
   const excludeLanRef = useRef(excludeLan);
+  const stealthModeRef = useRef(stealthMode);
 
   useEffect(() => { peerIdRef.current = peerId; }, [peerId]);
   useEffect(() => { autoReconnectRef.current = autoReconnect; }, [autoReconnect]);
@@ -714,6 +720,7 @@ function App() {
   useEffect(() => { connectedRef.current = connected; }, [connected]);
   useEffect(() => { connectingRef.current = connecting; }, [connecting]);
   useEffect(() => { excludeLanRef.current = excludeLan; }, [excludeLan]);
+  useEffect(() => { stealthModeRef.current = stealthMode; }, [stealthMode]);
 
   useEffect(() => {
     if (resetCooldown <= 0) return;
@@ -1095,6 +1102,10 @@ function App() {
 
       const allowedRaw = peer.client_allowed_ips || peer.allowed_ips || ["0.0.0.0/0"];
       const allowed = applyExcludeLan(allowedRaw, excludeLanRef.current);
+      const useStealth = stealthModeRef.current && !!peer.stealth_available && !!peer.stealth_endpoint;
+      if (stealthModeRef.current && !useStealth) {
+        throw new Error("Stealth mode is not available on the server yet. Turn it off or try again later.");
+      }
       const result = await invoke<ConnectResult>("connect_wireguard", {
         config: {
           private_key: keys.private_key,
@@ -1105,6 +1116,8 @@ function App() {
           allowed_ips: allowed,
           peer_id: peer.peer_id,
           preshared_key: peer.preshared_key || "",
+          stealth_endpoint: useStealth ? peer.stealth_endpoint || "" : "",
+          stealth_path_prefix: useStealth ? peer.stealth_path_prefix || "" : "",
         },
       });
 
@@ -1472,6 +1485,14 @@ function App() {
     });
   }, []);
 
+  const toggleStealthMode = useCallback(() => {
+    setStealthMode((prev) => {
+      const next = !prev;
+      writeLocalFlag(LS_STEALTH, next);
+      return next;
+    });
+  }, []);
+
   const handleSignOut = useCallback(() => {
     if (user) clearCachedBillingStatus(user.account_id);
     setSubscriptionActive(false);
@@ -1664,6 +1685,10 @@ function App() {
                 <button type="button" className="menu-toggle" onClick={toggleExcludeLan}>
                   <span>Exclude LAN<span className="menu-note">Reconnect to apply</span></span>
                   <b className={excludeLan ? "on" : ""}>{excludeLan ? "On" : "Off"}</b>
+                </button>
+                <button type="button" className="menu-toggle" onClick={toggleStealthMode}>
+                  <span>Stealth mode<span className="menu-note">TLS wrap · reconnect</span></span>
+                  <b className={stealthMode ? "on" : ""}>{stealthMode ? "On" : "Off"}</b>
                 </button>
                 <hr />
                 <button type="button" className="danger" onClick={() => void handleSignOutEverywhere()}>Sign out everywhere</button>

@@ -4,6 +4,7 @@
 set -euo pipefail
 
 WG_PORT="${WG_PORT:-51820}"
+STEALTH_PORT="${STEALTH_PORT:-443}"
 WG_INTERFACE="${WG_INTERFACE:-wg0}"
 VPN_DNS_ADDRESS="${VPN_DNS_ADDRESS:-10.0.0.1}"
 TAILSCALE_PORT="${TAILSCALE_PORT:-41641}"
@@ -12,6 +13,7 @@ LAN_SUBNET="${LAN_SUBNET:-}"
 K3S_FLANNEL_PORT="${K3S_FLANNEL_PORT:-8472}"
 ALLOW_LAN_SSH="${ALLOW_LAN_SSH:-1}"
 ALLOW_LAN_K3S_API="${ALLOW_LAN_K3S_API:-1}"
+ALLOW_STEALTH="${ALLOW_STEALTH:-1}"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run as root: sudo $0" >&2
@@ -47,6 +49,11 @@ if [[ "$ALLOW_LAN_K3S_API" == "1" ]]; then
   LAN_K3S_RULE="iifname \"$EGRESS_IFACE\" ip saddr $LAN_SUBNET tcp dport 6443 accept"
 fi
 
+STEALTH_RULE=""
+if [[ "$ALLOW_STEALTH" == "1" && -n "$STEALTH_PORT" ]]; then
+  STEALTH_RULE="iifname \"$EGRESS_IFACE\" tcp dport $STEALTH_PORT accept"
+fi
+
 cat >"$RULESET" <<EOF
 table inet veritas_filter {
   chain input {
@@ -70,6 +77,7 @@ table inet veritas_filter {
     # Public VPN + Tailscale data plane.
     iifname "$EGRESS_IFACE" udp dport $WG_PORT accept
     iifname "$EGRESS_IFACE" udp dport $TAILSCALE_PORT accept
+    $STEALTH_RULE
 
     # DHCP client + limited ICMP diagnostics on the LAN uplink.
     iifname "$EGRESS_IFACE" udp sport 67 udp dport 68 accept

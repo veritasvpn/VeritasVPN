@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: veritas-wstunnel
+  namespace: veritas
+  labels:
+    app: veritas-wstunnel
+spec:
+  selector:
+    matchLabels:
+      app: veritas-wstunnel
+  template:
+    metadata:
+      labels:
+        app: veritas-wstunnel
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        veritas-vpn-node: "true"
+      tolerations:
+        - operator: Exists
+      initContainers:
+        - name: open-stealth-port
+          image: alpine:3.19
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              apk add --no-cache nftables iproute2 >/dev/null
+              EGRESS="$(ip -4 route show default | awk '{print $5; exit}')"
+              PORT="${STEALTH_LISTEN_PORT:-443}"
+              if [ -z "$EGRESS" ]; then
+                echo "no egress iface"; exit 1
+              fi
+              if nft list chain inet veritas_filter input 2>/dev/null | grep -q "tcp dport ${PORT} accept"; then
+                echo "stealth TCP ${PORT} already allowed on ${EGRESS}"
+                exit 0
+              fi
+              HANDLE="$(nft -a list chain inet veritas_filter input | awk -v iface="$EGRESS" '$0 ~ "iifname \""iface"\" counter" {print $NF; exit}')"
+              if [ -n "${HANDLE:-}" ]; then
+                nft insert rule inet veritas_filter input handle "$HANDLE" iifname "$EGRESS" tcp dport "$PORT" accept
+              else
+                nft insert rule inet veritas_filter input iifname "$EGRESS" tcp dport "$PORT" accept
+              fi
+              echo "stealth TCP $PORT allowed on $EGRESS"
+          env:
+            - name: STEALTH_LISTEN_PORT
+              value: "443"
+      containers:
+        - name: wstunnel
+          image: alpine:3.19
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            capabilities:
+              add: ["NET_BIND_SERVICE"]
+            allowPrivilegeEscalation: false
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              install -m 0755 /binaries/wstunnel /tmp/wstunnel
+              exec /tmp/wstunnel server \
+                --restrict-http-upgrade-path-prefix "$STEALTH_PATH_PREFIX" \
+                --restrict-to 127.0.0.1:51820 \
+                "wss://0.0.0.0:${STEALTH_LISTEN_PORT}"
+          env:
+            - name: STEALTH_PATH_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: STEALTH_PATH_PREFIX
+            - name: STEALTH_LISTEN_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: STEALTH_ENDPOINT_PORT
+          volumeMounts:
+            - name: wstunnel-bin
+              mountPath: /binaries
+              readOnly: true
+          ports:
+            - name: stealth
+              containerPort: 443
+              hostPort: 443
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: wstunnel-bin
+          hostPath:
+            path: /home/jpg/VeritasVPN/clients/desktop/src-tauri/resources/bin
+            type: Directory
