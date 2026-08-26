@@ -129,6 +129,14 @@ class AuthRepository(context: Context) {
         prefs.edit().clear().apply()
     }
 
+    fun logoutAllSessions() {
+        val token = getAccessToken() ?: throw Error("Not signed in.")
+        ApiClient.post("/api/v1/auth/logout-all", emptyMap(), token).use { res ->
+            if (!res.isSuccessful) throw Error(extractError(res))
+        }
+        signOut()
+    }
+
     private fun extractError(res: okhttp3.Response): String {
         val err = ApiClient.parse<cloud.veritasvpn.api.AuthError>(res)
         val msg = err?.error ?: "Request failed (${res.code})"

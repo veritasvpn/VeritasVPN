@@ -153,3 +153,20 @@ data class PeerResponse(
     @SerializedName("allowed_ips") val allowedIps: List<String>?,
     val error: String? = null
 )
+
+data class PeerListResponse(
+    val peers: List<PeerInfo> = emptyList(),
+    val error: String? = null
+)
+
+data class PeerInfo(
+    val id: String = "",
+    @SerializedName("account_id") val accountId: String? = null,
+    @SerializedName("server_id") val serverId: String? = null,
+    val pubkey: String? = null,
+    @SerializedName("assigned_ip") val assignedIp: String = "",
+    val status: String = "",
+    @SerializedName("created_at") val createdAt: Long = 0,
+    @SerializedName("expires_at") val expiresAt: Long? = null,
+    @SerializedName("dns_blocked_count") val dnsBlockedCount: Long = 0
+)

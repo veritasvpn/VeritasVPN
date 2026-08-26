@@ -64,3 +64,36 @@ func (r *Redis) ReleaseIP(ctx context.Context, serverID, ip string) error {
 	fmt.Sscanf(octets[len(octets)-1], "%d", &octetInt)
 	return r.client.SetBit(ctx, bitmapKey, int64(octetInt-2), 0).Err()
 }
+
+func dnsBlockedKey(assignedIP string) string {
+	ip := strings.TrimSpace(assignedIP)
+	if i := strings.IndexByte(ip, '/'); i >= 0 {
+		ip = ip[:i]
+	}
+	return fmt.Sprintf("wg:dns_blocked:%s", ip)
+}
+
+// SetDNSBlockedCounts stores absolute per-client blocked counts from an agent heartbeat.
+func (r *Redis) SetDNSBlockedCounts(ctx context.Context, counts map[string]uint64) error {
+	if len(counts) == 0 {
+		return nil
+	}
+	pipe := r.client.Pipeline()
+	for ip, n := range counts {
+		if ip == "" {
+			continue
+		}
+		pipe.Set(ctx, dnsBlockedKey(ip), n, 0)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// GetDNSBlockedCount returns the absolute blocked count for an assigned tunnel IP.
+func (r *Redis) GetDNSBlockedCount(ctx context.Context, assignedIP string) (uint64, error) {
+	val, err := r.client.Get(ctx, dnsBlockedKey(assignedIP)).Uint64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return val, err
+}

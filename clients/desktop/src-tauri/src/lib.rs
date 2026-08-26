@@ -141,6 +141,92 @@ fn connect_wireguard(app: AppHandle, config: WgTunnelConfig) -> ConnectResult {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct WgTransferStats {
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub last_handshake_sec: i64,
+    pub interface_up: bool,
+}
+
+#[tauri::command]
+fn wireguard_stats() -> WgTransferStats {
+    #[cfg(target_os = "linux")]
+    {
+        return wireguard_stats_linux();
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        WgTransferStats {
+            rx_bytes: 0,
+            tx_bytes: 0,
+            last_handshake_sec: 0,
+            interface_up: false,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wireguard_stats_linux() -> WgTransferStats {
+    let iface = iface_path()
+        .ok()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .unwrap_or_else(|| "wg0".into())
+        .trim()
+        .to_string();
+    if iface.is_empty() {
+        return WgTransferStats {
+            rx_bytes: 0,
+            tx_bytes: 0,
+            last_handshake_sec: 0,
+            interface_up: false,
+        };
+    }
+    let output = Command::new("wg")
+        .args(["show", &iface, "dump"])
+        .output();
+    let Ok(out) = output else {
+        return WgTransferStats {
+            rx_bytes: 0,
+            tx_bytes: 0,
+            last_handshake_sec: 0,
+            interface_up: false,
+        };
+    };
+    if !out.status.success() {
+        return WgTransferStats {
+            rx_bytes: 0,
+            tx_bytes: 0,
+            last_handshake_sec: 0,
+            interface_up: false,
+        };
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    // dump: iface line then peer lines with last_handshake rx_bytes tx_bytes
+    let mut rx = 0u64;
+    let mut tx = 0u64;
+    let mut handshake = 0i64;
+    let mut up = false;
+    for (i, line) in text.lines().enumerate() {
+        let cols: Vec<&str> = line.split('\t').collect();
+        if i == 0 {
+            up = !cols.is_empty();
+            continue;
+        }
+        if cols.len() >= 7 {
+            handshake = cols[4].parse().unwrap_or(0);
+            rx = cols[5].parse().unwrap_or(0);
+            tx = cols[6].parse().unwrap_or(0);
+        }
+    }
+    WgTransferStats {
+        rx_bytes: rx,
+        tx_bytes: tx,
+        last_handshake_sec: handshake,
+        interface_up: up && text.lines().count() > 1,
+    }
+}
+
 #[tauri::command]
 fn disconnect_wireguard(app: AppHandle) -> ConnectResult {
     match bring_down_wireguard(&app) {
@@ -1265,7 +1351,8 @@ pub fn run() {
             wireguard_available,
             generate_wg_keys,
             connect_wireguard,
-            disconnect_wireguard
+            disconnect_wireguard,
+            wireguard_stats
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

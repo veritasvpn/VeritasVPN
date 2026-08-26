@@ -24,19 +24,26 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.BillingStatus
+import cloud.veritasvpn.api.PeerInfo
+import cloud.veritasvpn.api.PeerListResponse
 import cloud.veritasvpn.api.PeerResponse
 import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.billing.BillingRepository
 import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.DashboardScreen
+import cloud.veritasvpn.ui.DevicesScreen
 import cloud.veritasvpn.ui.PlansScreen
 import cloud.veritasvpn.ui.PaymentCheckoutScreen
+import cloud.veritasvpn.ui.TunnelSettingsScreen
 import cloud.veritasvpn.ui.theme.VeritasVPNTheme
 import cloud.veritasvpn.vpn.VeritasVpnService
+import cloud.veritasvpn.vpn.VpnSettings
 import com.wireguard.crypto.KeyPair
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -83,24 +90,39 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         authRepo = AuthRepository(this)
+        currentPeerId = VpnSettings.currentPeerId(this)
 
         setContent {
             VeritasVPNTheme {
                 var user by remember { mutableStateOf(authRepo.getStoredUser()) }
+                val context = LocalContext.current
+                val scope = rememberCoroutineScope()
+                val billingRepo = remember { BillingRepository() }
                 var connected by remember { mutableStateOf(false) }
                 var connecting by remember { mutableStateOf(false) }
                 var statusMsg by remember { mutableStateOf<String?>(null) }
                 var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
+                var showDevices by remember { mutableStateOf(false) }
+                var showTunnelSettings by remember { mutableStateOf(false) }
+                var devices by remember { mutableStateOf<List<PeerInfo>>(emptyList()) }
+                var devicesLoading by remember { mutableStateOf(false) }
+                var devicesError by remember { mutableStateOf<String?>(null) }
+                var revokingPeerId by remember { mutableStateOf<String?>(null) }
+                var rxBytes by remember { mutableStateOf(0L) }
+                var txBytes by remember { mutableStateOf(0L) }
+                var handshakeMs by remember { mutableStateOf(0L) }
+                var dnsBlockedCount by remember { mutableStateOf<Long?>(null) }
+                var excludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
+                var bypassAppsText by remember {
+                    mutableStateOf(VpnSettings.bypassApps(context).joinToString("\n"))
+                }
                 var billingStatus by remember { mutableStateOf<BillingStatus?>(null) }
                 var billingRefreshing by remember { mutableStateOf(false) }
                 var cancellationInProgress by remember { mutableStateOf(false) }
                 var billingError by remember { mutableStateOf<String?>(null) }
                 var checkoutMethod by remember { mutableStateOf<String?>(null) }
                 var checkoutUrl by remember { mutableStateOf<String?>(null) }
-                val context = LocalContext.current
-                val scope = rememberCoroutineScope()
-                val billingRepo = remember { BillingRepository() }
 
                 fun requireBillingToken(): String {
                     authRepo.getAccessToken()?.takeIf { it.isNotBlank() }?.let { return it }
@@ -140,6 +162,56 @@ class MainActivity : ComponentActivity() {
                             billingRefreshing = false
                         }
                     }
+                }
+
+                fun loadDevices() {
+                    devicesLoading = true
+                    devicesError = null
+                    scope.launch {
+                        try {
+                            val list = withContext(Dispatchers.IO) {
+                                authRepo.refreshSession()
+                                val token = authRepo.getAccessToken()
+                                    ?: throw IllegalStateException("Not signed in")
+                                ApiClient.get("/api/v1/wg/peers", token).use { res ->
+                                    if (!res.isSuccessful) {
+                                        throw IllegalStateException("Could not load devices (${res.code})")
+                                    }
+                                    ApiClient.parse<PeerListResponse>(res)?.peers.orEmpty()
+                                }
+                            }
+                            devices = list
+                        } catch (e: Exception) {
+                            devicesError = e.message ?: "Could not load devices."
+                        } finally {
+                            devicesLoading = false
+                        }
+                    }
+                }
+
+                fun disconnectVpnService() {
+                    context.startService(
+                        Intent(context, VeritasVpnService::class.java).apply {
+                            action = VeritasVpnService.ACTION_DISCONNECT
+                        }
+                    )
+                    connected = false
+                    connecting = false
+                    rxBytes = 0
+                    txBytes = 0
+                    handshakeMs = 0
+                    dnsBlockedCount = null
+                }
+
+                fun performLocalSignOut() {
+                    disconnectVpnService()
+                    peerIdForDisconnect()
+                    authRepo.signOut()
+                    billingStatus = null
+                    showPlans = false
+                    showDevices = false
+                    showTunnelSettings = false
+                    user = null
                 }
 
                 fun startCheckout(paymentMethod: String, planId: String) {
@@ -319,38 +391,83 @@ class MainActivity : ComponentActivity() {
                 DisposableEffect(context) {
                     val receiver = object : BroadcastReceiver() {
                         override fun onReceive(context: Context?, intent: Intent?) {
-                            if (intent?.action != VeritasVpnService.ACTION_STATE) return
-                            connected = intent.getBooleanExtra(VeritasVpnService.EXTRA_CONNECTED, false)
-                            connecting = false
-                            statusMsg = if (connected) {
-                                null
-                            } else {
-                                val error = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
-                                if (error != null) {
-                                    val failedPeerId = peerIdForDisconnect()
-                                    if (failedPeerId != null) {
-                                        peerCleanupJob = scope.launch(Dispatchers.IO) {
-                                            runCatching {
-                                                val token = authRepo.getAccessToken()
-                                                    ?: return@runCatching
-                                                ApiClient.delete(
-                                                    "/api/v1/wg/peers/$failedPeerId", token
-                                                ).close()
+                            when (intent?.action) {
+                                VeritasVpnService.ACTION_STATE -> {
+                                    connected = intent.getBooleanExtra(VeritasVpnService.EXTRA_CONNECTED, false)
+                                    connecting = false
+                                    if (!connected) {
+                                        rxBytes = 0
+                                        txBytes = 0
+                                        handshakeMs = 0
+                                        dnsBlockedCount = null
+                                    }
+                                    statusMsg = if (connected) {
+                                        null
+                                    } else {
+                                        val error = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
+                                        if (error != null) {
+                                            val failedPeerId = peerIdForDisconnect()
+                                            if (failedPeerId != null) {
+                                                peerCleanupJob = scope.launch(Dispatchers.IO) {
+                                                    runCatching {
+                                                        val token = authRepo.getAccessToken()
+                                                            ?: return@runCatching
+                                                        ApiClient.delete(
+                                                            "/api/v1/wg/peers/$failedPeerId", token
+                                                        ).close()
+                                                    }
+                                                }
                                             }
                                         }
+                                        error
                                     }
                                 }
-                                error
+                                VeritasVpnService.ACTION_STATS -> {
+                                    rxBytes = intent.getLongExtra(VeritasVpnService.EXTRA_RX_BYTES, 0L)
+                                    txBytes = intent.getLongExtra(VeritasVpnService.EXTRA_TX_BYTES, 0L)
+                                    handshakeMs = intent.getLongExtra(VeritasVpnService.EXTRA_HANDSHAKE_MS, 0L)
+                                }
                             }
                         }
                     }
                     ContextCompat.registerReceiver(
                         context,
                         receiver,
-                        IntentFilter(VeritasVpnService.ACTION_STATE),
+                        IntentFilter().apply {
+                            addAction(VeritasVpnService.ACTION_STATE)
+                            addAction(VeritasVpnService.ACTION_STATS)
+                        },
                         ContextCompat.RECEIVER_NOT_EXPORTED
                     )
                     onDispose { context.unregisterReceiver(receiver) }
+                }
+
+                LaunchedEffect(connected, user?.accountId) {
+                    if (!connected || user == null) {
+                        dnsBlockedCount = null
+                        return@LaunchedEffect
+                    }
+                    while (isActive && connected) {
+                        val peerId = currentPeerId ?: VpnSettings.currentPeerId(context)
+                        if (peerId != null) {
+                            runCatching {
+                                withContext(Dispatchers.IO) {
+                                    authRepo.refreshSession()
+                                    val token = authRepo.getAccessToken() ?: return@withContext null
+                                    ApiClient.get("/api/v1/wg/peers", token).use { res ->
+                                        if (!res.isSuccessful) return@use null
+                                        ApiClient.parse<PeerListResponse>(res)
+                                            ?.peers
+                                            ?.firstOrNull { it.id == peerId }
+                                            ?.dnsBlockedCount
+                                    }
+                                }
+                            }.onSuccess { count ->
+                                if (count != null) dnsBlockedCount = count
+                            }
+                        }
+                        delay(5_000)
+                    }
                 }
 
                 fun requestConnect() {
@@ -380,6 +497,62 @@ class MainActivity : ComponentActivity() {
                         onClose = { checkoutUrl = null; refreshBilling() },
                         onRefreshPlan = { refreshBilling() }
                     )
+                } else if (showTunnelSettings) {
+                    TunnelSettingsScreen(
+                        excludeLan = excludeLan,
+                        bypassAppsText = bypassAppsText,
+                        onExcludeLanChange = {
+                            excludeLan = it
+                            VpnSettings.setExcludeLan(context, it)
+                        },
+                        onBypassAppsChange = {
+                            bypassAppsText = it
+                            VpnSettings.setBypassApps(
+                                context,
+                                it.lineSequence().map { line -> line.trim() }.filter { line -> line.isNotEmpty() }.toList()
+                            )
+                        },
+                        onBack = { showTunnelSettings = false }
+                    )
+                } else if (showDevices) {
+                    LaunchedEffect(Unit) { loadDevices() }
+                    DevicesScreen(
+                        peers = devices,
+                        loading = devicesLoading,
+                        error = devicesError,
+                        currentPeerId = currentPeerId ?: VpnSettings.currentPeerId(context),
+                        revokingId = revokingPeerId,
+                        onBack = { showDevices = false },
+                        onRefresh = { loadDevices() },
+                        onRevoke = { peer ->
+                            if (revokingPeerId != null) return@DevicesScreen
+                            revokingPeerId = peer.id
+                            scope.launch {
+                                try {
+                                    val isCurrent = peer.id == (currentPeerId ?: VpnSettings.currentPeerId(context))
+                                    if (isCurrent) {
+                                        disconnectVpnService()
+                                        peerIdForDisconnect()
+                                    }
+                                    withContext(Dispatchers.IO) {
+                                        authRepo.refreshSession()
+                                        val token = authRepo.getAccessToken()
+                                            ?: throw IllegalStateException("Not signed in")
+                                        ApiClient.delete("/api/v1/wg/peers/${peer.id}", token).use { res ->
+                                            if (!res.isSuccessful) {
+                                                throw IllegalStateException("Revoke failed (${res.code})")
+                                            }
+                                        }
+                                    }
+                                    devices = devices.filterNot { it.id == peer.id }
+                                } catch (e: Exception) {
+                                    devicesError = e.message ?: "Could not revoke device."
+                                } finally {
+                                    revokingPeerId = null
+                                }
+                            }
+                        }
+                    )
                 } else if (showPlans) {
                     PlansScreen(
                         billingStatus = billingStatus,
@@ -400,11 +573,7 @@ class MainActivity : ComponentActivity() {
                         onDisconnect = {
                             statusMsg = null
                             val disconnectedPeerId = peerIdForDisconnect()
-                            val intent = Intent(context, VeritasVpnService::class.java).apply {
-                                action = VeritasVpnService.ACTION_DISCONNECT
-                            }
-                            context.startService(intent)
-                            connected = false
+                            disconnectVpnService()
                             peerCleanupJob = scope.launch(Dispatchers.IO) {
                                 try {
                                     val token = authRepo.getAccessToken()
@@ -416,21 +585,35 @@ class MainActivity : ComponentActivity() {
                                 } catch (_: Exception) {}
                             }
                         },
-                        onSignOut = {
-                            val intent = Intent(context, VeritasVpnService::class.java).apply {
-                                action = VeritasVpnService.ACTION_DISCONNECT
+                        onSignOut = { performLocalSignOut() },
+                        onSignOutEverywhere = {
+                            scope.launch {
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        authRepo.logoutAllSessions()
+                                    }
+                                } catch (_: Exception) {
+                                    // Still clear local auth even if the API call fails.
+                                    authRepo.signOut()
+                                }
+                                disconnectVpnService()
+                                peerIdForDisconnect()
+                                billingStatus = null
+                                showPlans = false
+                                showDevices = false
+                                showTunnelSettings = false
+                                user = null
                             }
-                            context.startService(intent)
-                            connected = false
-                            authRepo.signOut()
-                            billingStatus = null
-                            showPlans = false
-                            user = null
                         },
                         onPlans = {
                             showPlans = true
                             if (billingStatus == null) refreshBilling()
                         },
+                        onDevices = {
+                            showDevices = true
+                            loadDevices()
+                        },
+                        onTunnelSettings = { showTunnelSettings = true },
                         onKillSwitchSettings = {
                             context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
                         },
@@ -438,7 +621,11 @@ class MainActivity : ComponentActivity() {
                         billingReady = billingStatus != null,
                         statusMsg = statusMsg,
                         deviceLatitude = deviceLocation?.first,
-                        deviceLongitude = deviceLocation?.second
+                        deviceLongitude = deviceLocation?.second,
+                        rxBytes = rxBytes,
+                        txBytes = txBytes,
+                        handshakeMs = handshakeMs,
+                        dnsBlockedCount = dnsBlockedCount
                     )
                 }
             }
@@ -478,8 +665,9 @@ class MainActivity : ComponentActivity() {
     private var currentPeerId: String? = null
 
     private fun peerIdForDisconnect(): String? {
-        val id = currentPeerId
+        val id = currentPeerId ?: VpnSettings.currentPeerId(this)
         currentPeerId = null
+        VpnSettings.setCurrentPeerId(this, null)
         return id
     }
 
@@ -517,12 +705,13 @@ class MainActivity : ComponentActivity() {
                     generated to createdPeer
                 }
 
-                val config = buildWireGuardConfig(peer, keyPair)
+                val config = buildWireGuardConfig(context, peer, keyPair)
                 val intent = Intent(context, VeritasVpnService::class.java).apply {
                     action = VeritasVpnService.ACTION_CONNECT
                     putExtra(VeritasVpnService.EXTRA_CONFIG, config)
                 }
                 currentPeerId = peer.peerId
+                VpnSettings.setCurrentPeerId(context, peer.peerId)
                 context.startForegroundService(intent)
             } catch (e: Exception) {
                 setConnecting(false)
@@ -532,10 +721,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun buildWireGuardConfig(peer: PeerResponse, keyPair: KeyPair): String {
+    private fun buildWireGuardConfig(context: Context, peer: PeerResponse, keyPair: KeyPair): String {
         val dns = peer.dnsServer ?: "1.1.1.1"
-        val allowed = (peer.clientAllowedIps ?: peer.allowedIps ?: listOf("0.0.0.0/0"))
-            .joinToString(",")
+        val serverAllowed = peer.clientAllowedIps ?: peer.allowedIps ?: listOf("0.0.0.0/0")
+        val allowed = VpnSettings.resolveAllowedIps(context, serverAllowed).joinToString(",")
+        val bypassApps = VpnSettings.bypassApps(context)
         return buildString {
             appendLine("[Interface]")
             appendLine("PrivateKey = ${keyPair.privateKey.toBase64()}")
@@ -543,6 +733,10 @@ class MainActivity : ComponentActivity() {
             appendLine("DNS = $dns")
             // Product default MTU 1280 (reliability on mobile/hostile paths); see docs/MTU_STRATEGY.md
             appendLine("MTU = 1280")
+            if (bypassApps.isNotEmpty()) {
+                // GoBackend maps ExcludedApplications → VpnService.Builder.addDisallowedApplication
+                appendLine("ExcludedApplications = ${bypassApps.joinToString(", ")}")
+            }
             appendLine()
             appendLine("[Peer]")
             appendLine("PublicKey = ${peer.serverPublicKey}")

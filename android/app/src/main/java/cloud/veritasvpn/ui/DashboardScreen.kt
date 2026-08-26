@@ -43,15 +43,23 @@ fun DashboardScreen(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onSignOut: () -> Unit,
+    onSignOutEverywhere: () -> Unit,
     onPlans: () -> Unit,
+    onDevices: () -> Unit,
+    onTunnelSettings: () -> Unit,
     onKillSwitchSettings: () -> Unit,
     isPremium: Boolean,
     billingReady: Boolean,
     statusMsg: String?,
     deviceLatitude: Double?,
-    deviceLongitude: Double?
+    deviceLongitude: Double?,
+    rxBytes: Long = 0,
+    txBytes: Long = 0,
+    handshakeMs: Long = 0,
+    dnsBlockedCount: Long? = null
 ) {
     var showSignOutConfirmation by remember { mutableStateOf(false) }
+    var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var showNetworkMap by remember { mutableStateOf(false) }
 
@@ -67,6 +75,30 @@ fun DashboardScreen(
                 ) { Text("Sign out", color = Ink, fontWeight = FontWeight.Bold) }
             },
             dismissButton = { TextButton(onClick = { showSignOutConfirmation = false }) { Text("Cancel", color = CyanHover) } },
+            containerColor = CardElevated
+        )
+    }
+    if (showSignOutEverywhereConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showSignOutEverywhereConfirmation = false },
+            title = { Text("Sign out everywhere?", color = Paper, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "This revokes all sessions on every device, disconnects VPN on this device, and signs you out locally.",
+                    color = PaperMuted
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showSignOutEverywhereConfirmation = false; onSignOutEverywhere() },
+                    colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
+                ) { Text("Sign out everywhere", color = Color.White, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSignOutEverywhereConfirmation = false }) {
+                    Text("Cancel", color = CyanHover)
+                }
+            },
             containerColor = CardElevated
         )
     }
@@ -111,8 +143,16 @@ fun DashboardScreen(
                         onClick = { showSettingsMenu = false; onPlans() }
                     )
                     DropdownMenuItem(
+                        text = { Text("Devices", color = Paper, fontWeight = FontWeight.SemiBold) },
+                        onClick = { showSettingsMenu = false; onDevices() }
+                    )
+                    DropdownMenuItem(
                         text = { Text("Network map", color = Paper, fontWeight = FontWeight.SemiBold) },
                         onClick = { showSettingsMenu = false; showNetworkMap = true }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Split tunnel", color = Paper, fontWeight = FontWeight.SemiBold) },
+                        onClick = { showSettingsMenu = false; onTunnelSettings() }
                     )
                     DropdownMenuItem(
                         text = { Text("Android kill switch settings", color = Paper, fontWeight = FontWeight.SemiBold) },
@@ -124,6 +164,13 @@ fun DashboardScreen(
                         onClick = {
                             showSettingsMenu = false
                             if (connected || connecting) showSignOutConfirmation = true else onSignOut()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Sign out everywhere", color = PaperMuted, fontWeight = FontWeight.Medium) },
+                        onClick = {
+                            showSettingsMenu = false
+                            showSignOutEverywhereConfirmation = true
                         }
                     )
                 }
@@ -226,6 +273,14 @@ fun DashboardScreen(
                         fontSize = 12.sp
                     )
                 }
+
+                Spacer(Modifier.height(14.dp))
+                LiveTransferStats(
+                    rxBytes = rxBytes,
+                    txBytes = txBytes,
+                    handshakeMs = handshakeMs,
+                    dnsBlockedCount = dnsBlockedCount
+                )
             }
 
             // Status message
@@ -240,6 +295,77 @@ fun DashboardScreen(
             }
         }
         }
+    }
+}
+
+@Composable
+private fun LiveTransferStats(
+    rxBytes: Long,
+    txBytes: Long,
+    handshakeMs: Long,
+    dnsBlockedCount: Long?
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(CardElevated)
+            .border(1.dp, LineStrong, RoundedCornerShape(16.dp))
+            .padding(14.dp)
+    ) {
+        Text("LIVE STATS", color = PaperDim, fontSize = 10.sp, letterSpacing = 1.2.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            StatCell(label = "Download", value = formatBytes(rxBytes))
+            StatCell(label = "Upload", value = formatBytes(txBytes))
+            StatCell(label = "Handshake", value = formatHandshakeAge(handshakeMs))
+        }
+        if (dnsBlockedCount != null) {
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(color = Line)
+            Spacer(Modifier.height(10.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("DNS blocked", color = PaperMuted, fontSize = 13.sp)
+                Text(
+                    dnsBlockedCount.toString(),
+                    color = Paper,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatCell(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(2.dp))
+        Text(label, color = PaperDim, fontSize = 11.sp)
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    val kb = bytes / 1024.0
+    if (kb < 1024) return String.format("%.1f KB", kb)
+    val mb = kb / 1024.0
+    if (mb < 1024) return String.format("%.1f MB", mb)
+    return String.format("%.2f GB", mb / 1024.0)
+}
+
+private fun formatHandshakeAge(handshakeMs: Long): String {
+    if (handshakeMs <= 0L) return "—"
+    val ageSec = ((System.currentTimeMillis() - handshakeMs) / 1000L).coerceAtLeast(0)
+    return when {
+        ageSec < 60 -> "${ageSec}s ago"
+        ageSec < 3600 -> "${ageSec / 60}m ago"
+        else -> "${ageSec / 3600}h ago"
     }
 }
 

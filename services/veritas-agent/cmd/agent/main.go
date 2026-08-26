@@ -48,11 +48,12 @@ type RegisterServerResponse struct {
 }
 
 type HeartbeatRequest struct {
-	ServerID   string  `json:"server_id"`
-	PeerCount  int32   `json:"peer_count"`
-	LoadFactor float64 `json:"load_factor"`
-	RXBytes    int64   `json:"rx_bytes"`
-	TXBytes    int64   `json:"tx_bytes"`
+	ServerID       string            `json:"server_id"`
+	PeerCount      int32             `json:"peer_count"`
+	LoadFactor     float64           `json:"load_factor"`
+	RXBytes        int64             `json:"rx_bytes"`
+	TXBytes        int64             `json:"tx_bytes"`
+	DNSBlockedByIP map[string]uint64 `json:"dns_blocked_by_ip,omitempty"`
 }
 
 type PeerUpdate struct {
@@ -325,7 +326,7 @@ func LoadAgentConfig() *AgentConfig {
 		PeerNoHandshakeGrace:  durationOrDefault("PEER_NO_HANDSHAKE_GRACE", 3*time.Minute),
 		// PEER_STALE_AFTER: keep peers through sleep/Wi-Fi blips so reconnects stay sticky
 		// and the bandwidth reconciler does not churn add/remove/stale on short gaps.
-		PeerStaleAfter:        durationOrDefault("PEER_STALE_AFTER", 30*time.Minute),
+		PeerStaleAfter: durationOrDefault("PEER_STALE_AFTER", 30*time.Minute),
 	}
 }
 
@@ -591,11 +592,17 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		loadFactor := getLoadFactor()
 
 		req := &HeartbeatRequest{
-			ServerID:   a.serverID,
-			PeerCount:  count,
-			LoadFactor: loadFactor,
-			RXBytes:    rx,
-			TXBytes:    tx,
+			ServerID:       a.serverID,
+			PeerCount:      count,
+			LoadFactor:     loadFactor,
+			RXBytes:        rx,
+			TXBytes:        tx,
+			DNSBlockedByIP: func() map[string]uint64 {
+				if a.dnsForwarder == nil {
+					return nil
+				}
+				return a.dnsForwarder.BlockedCounts()
+			}(),
 		}
 
 		if err := a.managerClient.SendHeartbeat(ctx, req); err != nil {

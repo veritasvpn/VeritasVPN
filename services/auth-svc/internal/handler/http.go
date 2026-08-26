@@ -67,6 +67,7 @@ func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/auth/register-anonymous", h.withCORS(h.handleRegisterAnonymous))
 	mux.HandleFunc("/api/v1/auth/signin-account", h.withCORS(h.handleSignInAccount))
 	mux.HandleFunc("/api/v1/auth/download-account", h.withCORS(h.handleDownloadAccount))
+	mux.HandleFunc("/api/v1/auth/logout-all", h.withCORS(h.handleLogoutAll))
 }
 
 func (h *HTTPHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -441,6 +442,38 @@ func (h *HTTPHandler) handleDownloadAccount(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(content))
+}
+
+func (h *HTTPHandler) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeHTTPError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if h.service.RateLimited(r.Context(), "logout-all:"+clientIP(r), 5, time.Minute) {
+		writeHTTPError(w, http.StatusTooManyRequests, "too many logout attempts; try again later")
+		return
+	}
+
+	token := extractBearer(r)
+	if token == "" {
+		writeHTTPError(w, http.StatusUnauthorized, "missing authorization token")
+		return
+	}
+
+	claims, err := h.service.ValidateToken(r.Context(), token)
+	if err != nil {
+		writeHTTPError(w, http.StatusUnauthorized, "invalid token")
+		return
+	}
+
+	if err := h.service.LogoutAllSessions(r.Context(), claims.AccountID, token); err != nil {
+		h.log.Error("logout-all failed", zap.String("account_hash", logging.HashIdentifier(claims.AccountID)), zap.Error(err))
+		writeHTTPError(w, http.StatusInternalServerError, "failed to logout all sessions")
+		return
+	}
+
+	writeHTTPJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
 }
 
 func (h *HTTPHandler) handleSignInAccount(w http.ResponseWriter, r *http.Request) {

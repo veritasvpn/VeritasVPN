@@ -54,6 +54,9 @@ type Forwarder struct {
 	buckets   map[string]*clientBucket
 	blocklist *Blocklist
 	observer  Observer
+
+	blockedMu       sync.Mutex
+	blockedByClient map[string]uint64 // tunnel client IP → blocked query count (no domains)
 }
 
 type Config struct {
@@ -85,14 +88,27 @@ func New(cfg Config, observer Observer, log *logging.Logger) *Forwarder {
 		upstreams = []string{"https://cloudflare-dns.com/dns-query", "https://dns.google/dns-query"}
 	}
 	return &Forwarder{
-		listenAddr: cfg.ListenAddr,
-		upstreams:  upstreams,
-		log:        log,
-		cache:      make(map[string]cacheEntry),
-		buckets:    make(map[string]*clientBucket),
-		blocklist:  NewBlocklist(cfg.BlocklistURLs, cfg.BlocklistStateFile, cfg.BlocklistRefresh, observer, log),
-		observer:   observer,
+		listenAddr:      cfg.ListenAddr,
+		upstreams:       upstreams,
+		log:             log,
+		cache:           make(map[string]cacheEntry),
+		buckets:         make(map[string]*clientBucket),
+		blocklist:       NewBlocklist(cfg.BlocklistURLs, cfg.BlocklistStateFile, cfg.BlocklistRefresh, observer, log),
+		observer:        observer,
+		blockedByClient: make(map[string]uint64),
 	}
+}
+
+// BlockedCounts returns a copy of per-client blocked query counts (tunnel IP → count).
+// Counts only — no domain names are retained.
+func (f *Forwarder) BlockedCounts() map[string]uint64 {
+	f.blockedMu.Lock()
+	defer f.blockedMu.Unlock()
+	out := make(map[string]uint64, len(f.blockedByClient))
+	for ip, n := range f.blockedByClient {
+		out[ip] = n
+	}
+	return out
 }
 
 func (f *Forwarder) Start(ctx context.Context) error {
@@ -285,6 +301,11 @@ func (f *Forwarder) handleQuery(query []byte, write func([]byte) error, clientIP
 	}
 	if name, questionEnd, ok := queryName(query); ok && f.blocklist.Blocked(name) {
 		f.observer.DNSQuery(true)
+		if clientIP != "" {
+			f.blockedMu.Lock()
+			f.blockedByClient[clientIP]++
+			f.blockedMu.Unlock()
+		}
 		if err := write(blockedResponse(query, questionEnd)); err != nil {
 			f.log.Error("write blocked DNS response", zap.Error(err))
 			return err

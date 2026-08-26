@@ -200,6 +200,29 @@ func (s *AuthService) DeleteAccount(ctx context.Context, accountID string) error
 	return nil
 }
 
+// LogoutAllSessions revokes every refresh token for the account and blacklists
+// the caller's current access token so it cannot be reused until it expires.
+func (s *AuthService) LogoutAllSessions(ctx context.Context, accountID, accessToken string) error {
+	if err := s.db.DeleteAllRefreshTokens(ctx, accountID); err != nil {
+		return fmt.Errorf("delete refresh tokens: %w", err)
+	}
+
+	ttl := s.cfg.AccessTokenTTL
+	if claims, err := s.jwt.ValidateAccessToken(accessToken); err == nil && claims.ExpiresAt != nil {
+		if remaining := time.Until(claims.ExpiresAt.Time); remaining > 0 {
+			ttl = remaining
+		}
+	}
+	if ttl > 0 {
+		if err := s.redis.BlacklistToken(ctx, hashInput(accessToken), ttl); err != nil {
+			return fmt.Errorf("blacklist access token: %w", err)
+		}
+	}
+
+	s.log.Info("all sessions logged out", zap.String("account_hash", logging.HashIdentifier(accountID)))
+	return nil
+}
+
 func (s *AuthService) RegisterWithEmail(ctx context.Context, email, password string) (string, string, string, int64, error) {
 	if email == "" || password == "" {
 		return "", "", "", 0, fmt.Errorf("email and password are required")

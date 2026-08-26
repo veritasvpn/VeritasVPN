@@ -36,6 +36,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var transitionJob: Job? = null
     private var disconnectJob: Job? = null
     private var validationJob: Job? = null
+    private var statsJob: Job? = null
     private var validationGeneration = 0L
 
     override fun onCreate() {
@@ -85,11 +86,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                         )
                         broadcastState(true, null)
+                        startStatsPolling()
                         startBackgroundEgressValidation()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "Connect failed", e)
+                        stopStatsPolling()
                         runCatching {
                             backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
                         }
@@ -110,6 +113,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     // may be blocked in OkHttp and must not delay route removal.
                     validationGeneration++
                     validationJob?.cancel()
+                    stopStatsPolling()
                     runCatching {
                         backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
                     }
@@ -140,9 +144,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                             )
                             broadcastState(true, null)
+                            startStatsPolling()
                             startBackgroundEgressValidation()
                         } catch (e: Exception) {
                             Log.e(TAG, "Automatic VPN restore failed", e)
+                            stopStatsPolling()
                             runCatching {
                                 backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
                             }
@@ -164,6 +170,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         transitionJob?.cancel()
         validationGeneration++
         validationJob?.cancel()
+        stopStatsPolling()
         runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().remove(KEY_CONFIG).apply()
         broadcastState(
@@ -176,6 +183,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     override fun onDestroy() {
+        stopStatsPolling()
         runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
         scope.cancel()
         super.onDestroy()
@@ -194,10 +202,43 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 )
             }
             else -> {
+                stopStatsPolling()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 broadcastState(false, null)
             }
         }
+    }
+
+    private fun startStatsPolling() {
+        statsJob?.cancel()
+        statsJob = scope.launch {
+            while (true) {
+                broadcastStats()
+                delay(1_500)
+            }
+        }
+    }
+
+    private fun stopStatsPolling() {
+        statsJob?.cancel()
+        statsJob = null
+    }
+
+    private fun broadcastStats() {
+        val stats = runCatching { backend.getStatistics(this) }.getOrNull() ?: return
+        var handshakeMs = 0L
+        for (key in stats.peers()) {
+            val peer = stats.peer(key) ?: continue
+            if (peer.latestHandshakeEpochMillis > handshakeMs) {
+                handshakeMs = peer.latestHandshakeEpochMillis
+            }
+        }
+        sendBroadcast(
+            Intent(ACTION_STATS).setPackage(packageName)
+                .putExtra(EXTRA_RX_BYTES, stats.totalRx())
+                .putExtra(EXTRA_TX_BYTES, stats.totalTx())
+                .putExtra(EXTRA_HANDSHAKE_MS, handshakeMs)
+        )
     }
 
     private fun friendlyError(e: Exception): String {
@@ -316,10 +357,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val ACTION_CONNECT = "cloud.veritasvpn.CONNECT"
         const val ACTION_DISCONNECT = "cloud.veritasvpn.DISCONNECT"
         const val ACTION_STATE = "cloud.veritasvpn.STATE"
+        const val ACTION_STATS = "cloud.veritasvpn.STATS"
         const val EXTRA_CONFIG = "config"
         const val EXTRA_CONNECTED = "connected"
         const val EXTRA_ERROR = "error"
         const val EXTRA_EGRESS_IP = "egress_ip"
+        const val EXTRA_RX_BYTES = "rx_bytes"
+        const val EXTRA_TX_BYTES = "tx_bytes"
+        const val EXTRA_HANDSHAKE_MS = "handshake_ms"
         const val PREFS_NAME = "veritas_vpn_state"
         const val KEY_CONFIG = "last_approved_config"
         private const val TAG = "VeritasVpnService"

@@ -99,7 +99,7 @@ func (h *AgentHandler) Heartbeat(ctx context.Context, req *HeartbeatRequest) (*H
 		return nil, status.Error(codes.InvalidArgument, "server_id is required")
 	}
 
-	if err := h.svc.HandleHeartbeat(ctx, req.ServerId, req.PeerCount, req.LoadFactor, req.RxBytes, req.TxBytes); err != nil {
+	if err := h.svc.HandleHeartbeat(ctx, req.ServerId, req.PeerCount, req.LoadFactor, req.RxBytes, req.TxBytes, nil); err != nil {
 		h.log.Error("heartbeat failed", "server_id", req.ServerId, "error", err)
 		return nil, status.Errorf(codes.Internal, "heartbeat: %v", err)
 	}

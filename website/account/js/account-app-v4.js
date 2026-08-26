@@ -37,6 +37,48 @@ async function deleteCurrentAccount() {
   await signOutHandler();
 }
 
+async function logoutAllSessions() {
+  const token = await getIdToken();
+  if (!token) throw new Error("Your session has expired. Please sign in again.");
+  const response = await fetch("https://api.veritasvpn.cloud/api/v1/auth/logout-all", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || "Could not sign out other sessions");
+  }
+  await signOutHandler();
+}
+
+async function fetchPeers() {
+  const token = await getIdToken();
+  if (!token) throw new Error("Your session has expired. Please sign in again.");
+  const response = await fetch("https://api.veritasvpn.cloud/api/v1/wg/peers", {
+    headers: { Authorization: "Bearer " + token },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Could not load devices");
+  return Array.isArray(data.peers) ? data.peers : [];
+}
+
+async function revokePeer(peerId) {
+  const token = await getIdToken();
+  if (!token) throw new Error("Your session has expired. Please sign in again.");
+  const response = await fetch("https://api.veritasvpn.cloud/api/v1/wg/peers/" + encodeURIComponent(peerId), {
+    method: "DELETE",
+    headers: { Authorization: "Bearer " + token },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || "Could not revoke device");
+  }
+}
+
+let peersCache = [];
+let peersLoaded = false;
+
 function route() {
   const hash = window.location.hash.replace(/^#/, '') || '/';
   return hash.startsWith('/') ? hash : `/${hash}`;
@@ -245,6 +287,7 @@ function renderAccount(user) {
         }</code>
         <div class="account-actions">
           ${!isAnonymous ? '<button type="button" class="btn btn-outline" data-action="reset-password">Send password reset email</button>' : ''}
+          <button type="button" class="btn btn-outline" data-action="logout-all">Sign out everywhere</button>
           <button type="button" class="btn btn-primary" data-action="signout">Sign out</button>
         </div>
       </div>
@@ -264,6 +307,43 @@ function renderAccount(user) {
         </div>
         <button type="button" class="btn account-delete-button" data-action="delete-account">Delete my account</button>
       </div>
+    </section>
+  `;
+}
+
+function renderDevices() {
+  const rows = peersCache.map((p) => {
+    const id = p.id || p.peer_id || '';
+    const short = id ? id.slice(0, 8) + '…' : '—';
+    const ip = p.assigned_ip || '—';
+    const status = p.status || '—';
+    const blocked = Number(p.dns_blocked_count || 0);
+    const created = p.created_at ? formatDate(typeof p.created_at === 'string' ? p.created_at : new Date(p.created_at * 1000).toISOString()) : '';
+    return `
+      <div class="account-card" style="margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;">
+          <div>
+            <strong>Device ${short}</strong>
+            <p class="plan-card-meta" style="margin:6px 0 0;">IP ${ip} · ${status}${created ? ' · ' + created : ''}</p>
+            <p class="plan-card-meta" style="margin:4px 0 0;">DNS threats blocked: ${blocked}</p>
+          </div>
+          <button type="button" class="btn btn-outline btn-sm" data-action="revoke-peer" data-peer-id="${id}">Revoke</button>
+        </div>
+      </div>`;
+  }).join('');
+  return `
+    ${renderFlash()}
+    <section class="account-section">
+      <div class="account-section-header">
+        <div>
+          <h1>Devices</h1>
+          <p>WireGuard peers on your Premium plan (up to 5). Revoke a device to free a slot.</p>
+        </div>
+        <button type="button" class="btn btn-outline btn-sm" data-action="refresh-peers">Refresh</button>
+      </div>
+      ${!peersLoaded ? '<p class="account-loading">Loading devices…</p>' : ''}
+      ${peersLoaded && !peersCache.length ? '<div class="account-card"><p>No active devices. Connect from the Linux or Android app to create one.</p></div>' : ''}
+      ${rows}
     </section>
   `;
 }
@@ -309,6 +389,20 @@ function render() {
       break;
     case '/downloads':
       html = renderDownloads();
+      break;
+    case '/devices':
+      html = renderDevices();
+      if (!peersLoaded) {
+        fetchPeers().then((peers) => {
+          peersCache = peers;
+          peersLoaded = true;
+          if (route() === '/devices') render();
+        }).catch((err) => {
+          peersLoaded = true;
+          showFlash(err.message || 'Could not load devices', 'error');
+          if (route() === '/devices') render();
+        });
+      }
       break;
     case '/account':
       html = renderAccount(user);
@@ -357,6 +451,29 @@ async function onAction(action, btn) {
       btn.textContent = 'Deleting account…';
       await deleteCurrentAccount();
       window.location.replace('/?account_deleted=1');
+      return;
+    }
+    if (action === 'logout-all') {
+      if (!confirm('Sign out of VeritasVPN on all devices and browsers?')) return;
+      btn.disabled = true;
+      await logoutAllSessions();
+      window.location.href = '/';
+      return;
+    }
+    if (action === 'refresh-peers') {
+      peersLoaded = false;
+      peersCache = [];
+      render();
+      return;
+    }
+    if (action === 'revoke-peer') {
+      const peerId = btn.dataset.peerId;
+      if (!peerId || !confirm('Revoke this device? It will disconnect if currently using the VPN.')) return;
+      btn.disabled = true;
+      await revokePeer(peerId);
+      peersCache = peersCache.filter((p) => (p.id || p.peer_id) !== peerId);
+      showFlash('Device revoked.', 'ok');
+      render();
       return;
     }
     if (action === 'signout') {

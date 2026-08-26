@@ -74,7 +74,7 @@ func (h *HTTPHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if h.metrics != nil {
-			h.metrics.PostgresUp.Set(1)
+		h.metrics.PostgresUp.Set(1)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -134,11 +134,12 @@ func (h *HTTPHandler) handleAgentRegister(w http.ResponseWriter, r *http.Request
 }
 
 type heartbeatRequest struct {
-	ServerID   string  `json:"server_id"`
-	PeerCount  int32   `json:"peer_count"`
-	LoadFactor float64 `json:"load_factor"`
-	RXBytes    int64   `json:"rx_bytes"`
-	TXBytes    int64   `json:"tx_bytes"`
+	ServerID       string            `json:"server_id"`
+	PeerCount      int32             `json:"peer_count"`
+	LoadFactor     float64           `json:"load_factor"`
+	RXBytes        int64             `json:"rx_bytes"`
+	TXBytes        int64             `json:"tx_bytes"`
+	DNSBlockedByIP map[string]uint64 `json:"dns_blocked_by_ip"`
 }
 
 func (h *HTTPHandler) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +164,7 @@ func (h *HTTPHandler) handleAgentHeartbeat(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := h.svc.HandleHeartbeat(r.Context(), req.ServerID, req.PeerCount, req.LoadFactor, req.RXBytes, req.TXBytes); err != nil {
+	if err := h.svc.HandleHeartbeat(r.Context(), req.ServerID, req.PeerCount, req.LoadFactor, req.RXBytes, req.TXBytes, req.DNSBlockedByIP); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -354,18 +355,18 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"peer_id":               cfg.PeerID,
-			"server_id":             cfg.ServerID,
-			"server_hostname":       cfg.ServerHostname,
-			"server_public_key":     cfg.ServerPublicKey,
-			"server_endpoint":       cfg.ServerEndpoint,
-			"assigned_ip":           cfg.AssignedIP,
-			"address":               cfg.AssignedIP,
-			"dns_server":            cfg.DNSServer,
-			"preshared_key":         cfg.PresharedKey,
-			"allowed_ips":           cfg.ClientAllowedIPs,
-			"client_allowed_ips":    cfg.ClientAllowedIPs,
-			"persistent_keepalive":  cfg.PersistentKeepaliveSec,
+			"peer_id":              cfg.PeerID,
+			"server_id":            cfg.ServerID,
+			"server_hostname":      cfg.ServerHostname,
+			"server_public_key":    cfg.ServerPublicKey,
+			"server_endpoint":      cfg.ServerEndpoint,
+			"assigned_ip":          cfg.AssignedIP,
+			"address":              cfg.AssignedIP,
+			"dns_server":           cfg.DNSServer,
+			"preshared_key":        cfg.PresharedKey,
+			"allowed_ips":          cfg.ClientAllowedIPs,
+			"client_allowed_ips":   cfg.ClientAllowedIPs,
+			"persistent_keepalive": cfg.PersistentKeepaliveSec,
 		})
 	case http.MethodGet:
 		peers, err := h.svc.ListPeers(r.Context(), accountID)
@@ -373,7 +374,26 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"peers": peers})
+		out := make([]map[string]interface{}, 0, len(peers))
+		for _, p := range peers {
+			var expiresAt interface{}
+			if p.ExpiresAt != nil {
+				expiresAt = p.ExpiresAt.Unix()
+			}
+			out = append(out, map[string]interface{}{
+				"id":                p.ID,
+				"account_id":        p.AccountID,
+				"server_id":         p.ServerID,
+				"pubkey":            p.Pubkey,
+				"allowed_ips":       p.AllowedIPs,
+				"assigned_ip":       p.AssignedIP,
+				"status":            p.Status,
+				"created_at":        p.CreatedAt.Unix(),
+				"expires_at":        expiresAt,
+				"dns_blocked_count": h.svc.DNSBlockedCount(r.Context(), p.AssignedIP),
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"peers": out})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -475,7 +495,6 @@ func extractBearer(r *http.Request) string {
 	}
 	return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 }
-
 
 func clientIPFromRequest(r *http.Request) string {
 	for _, h := range []string{"CF-Connecting-IP", "True-Client-IP", "X-Real-IP"} {

@@ -58,11 +58,111 @@ interface PeerResponse {
 }
 
 const CONNECT_TIMEOUT_MS = 25_000;
+const STATS_POLL_MS = 1_500;
+const PEERS_POLL_MS = 5_000;
+const HANDSHAKE_STALE_SEC = 120;
+const RECONNECT_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000];
+const LS_AUTO_RECONNECT = "veritas_auto_reconnect";
+const LS_EXCLUDE_LAN = "veritas_exclude_lan";
 const EGRESS_ENDPOINTS = [
   "https://api.ipify.org",
   "https://ifconfig.me/ip",
   "https://icanhazip.com",
 ];
+
+/** Practical AllowedIPs covering the public internet while excluding RFC1918. */
+const EXCLUDE_LAN_ALLOWED_IPS = [
+  "0.0.0.0/5",
+  "8.0.0.0/7",
+  "11.0.0.0/8",
+  "12.0.0.0/6",
+  "16.0.0.0/4",
+  "32.0.0.0/3",
+  "64.0.0.0/2",
+  "128.0.0.0/3",
+  "160.0.0.0/5",
+  "168.0.0.0/6",
+  "172.0.0.0/12",
+  "172.32.0.0/11",
+  "172.64.0.0/10",
+  "172.128.0.0/9",
+  "173.0.0.0/8",
+  "174.0.0.0/7",
+  "176.0.0.0/4",
+  "192.0.0.0/9",
+  "192.128.0.0/11",
+  "192.160.0.0/13",
+  "192.169.0.0/16",
+  "192.170.0.0/15",
+  "192.172.0.0/14",
+  "192.176.0.0/12",
+  "192.192.0.0/10",
+  "193.0.0.0/8",
+  "194.0.0.0/7",
+  "196.0.0.0/6",
+  "200.0.0.0/5",
+  "208.0.0.0/4",
+];
+
+interface WgTransferStats {
+  rx_bytes: number;
+  tx_bytes: number;
+  last_handshake_sec: number;
+  interface_up: boolean;
+}
+
+interface PeerInfo {
+  id: string;
+  assigned_ip?: string;
+  status?: string;
+  created_at?: number;
+  dns_blocked_count?: number;
+}
+
+function readLocalFlag(key: string, defaultValue: "0" | "1"): boolean {
+  try {
+    const raw = localStorage.getItem(key);
+    return (raw ?? defaultValue) === "1";
+  } catch {
+    return defaultValue === "1";
+  }
+}
+
+function writeLocalFlag(key: string, enabled: boolean) {
+  try {
+    localStorage.setItem(key, enabled ? "1" : "0");
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+function applyExcludeLan(allowed: string[], excludeLan: boolean): string[] {
+  if (!excludeLan || !allowed.includes("0.0.0.0/0")) return allowed;
+  return [...allowed.filter((ip) => ip !== "0.0.0.0/0"), ...EXCLUDE_LAN_ALLOWED_IPS];
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+  if (bytes < 1024) return `${Math.floor(bytes)} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
+}
+
+function formatHandshakeAge(lastHandshakeSec: number): string {
+  if (!lastHandshakeSec || lastHandshakeSec <= 0) return "never";
+  const ageSec = Math.max(0, Math.floor(Date.now() / 1000 - lastHandshakeSec));
+  if (ageSec < 60) return `${ageSec}s ago`;
+  if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`;
+  return `${Math.floor(ageSec / 3600)}h ago`;
+}
+
+function shortPeerId(id: string): string {
+  if (!id) return "—";
+  return id.length <= 12 ? id : `${id.slice(0, 8)}…`;
+}
 
 function formatBillingDate(value?: string) {
   if (!value) return "the end of your current billing period";
@@ -305,6 +405,73 @@ function PaymentCheckoutScreen({
   );
 }
 
+function DevicesScreen({
+  peers,
+  loading,
+  error,
+  currentPeerId,
+  revokingId,
+  onBack,
+  onRefresh,
+  onRevoke,
+}: {
+  peers: PeerInfo[];
+  loading: boolean;
+  error: string;
+  currentPeerId: string;
+  revokingId: string | null;
+  onBack: () => void;
+  onRefresh: () => void;
+  onRevoke: (peer: PeerInfo) => void;
+}) {
+  return (
+    <section className="devices-screen">
+      <div className="plans-head">
+        <button type="button" className="plans-back" onClick={onBack} aria-label="Back">←</button>
+        <div>
+          <h2>Devices</h2>
+          <p>Active WireGuard peers on your account</p>
+        </div>
+        <button type="button" className="devices-refresh" disabled={loading || !!revokingId} onClick={onRefresh}>
+          {loading ? "…" : "Refresh"}
+        </button>
+      </div>
+      {error && <div className="billing-error">{error}</div>}
+      {loading && peers.length === 0 ? (
+        <div className="billing-loading">Loading devices…</div>
+      ) : peers.length === 0 ? (
+        <p className="devices-empty">No devices registered.</p>
+      ) : (
+        <ul className="devices-list">
+          {peers.map((peer) => {
+            const isCurrent = peer.id === currentPeerId;
+            return (
+              <li key={peer.id} className={`device-card ${isCurrent ? "current" : ""}`}>
+                <div>
+                  <strong>{shortPeerId(peer.id)}</strong>
+                  {isCurrent && <span className="device-current-pill">THIS DEVICE</span>}
+                  <span className="device-meta">{peer.assigned_ip || "—"} · {peer.status || "unknown"}</span>
+                  {typeof peer.dns_blocked_count === "number" && (
+                    <span className="device-meta">DNS blocked: {peer.dns_blocked_count}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="device-revoke"
+                  disabled={!!revokingId}
+                  onClick={() => onRevoke(peer)}
+                >
+                  {revokingId === peer.id ? "Revoking…" : "Revoke"}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function App() {
   const [user, setUser] = useState<User | null>(getStoredUser);
   const [mode, setMode] = useState<AuthMode>("signin");
@@ -345,8 +512,37 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showNetworkMap, setShowNetworkMap] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
+  const [showDevices, setShowDevices] = useState(false);
+  const [autoReconnect, setAutoReconnect] = useState(() => readLocalFlag(LS_AUTO_RECONNECT, "1"));
+  const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
+  const [wgStats, setWgStats] = useState<WgTransferStats | null>(null);
+  const [dnsBlockedCount, setDnsBlockedCount] = useState<number | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [peers, setPeers] = useState<PeerInfo[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [devicesError, setDevicesError] = useState("");
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [deviceLabel, setDeviceLabel] = useState("Current location");
   const connectPeerRef = useRef("");
+  const userDisconnectedRef = useRef(false);
+  const hadGoodHandshakeRef = useRef(false);
+  const hadInterfaceUpRef = useRef(false);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectingRef = useRef(false);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const peerIdRef = useRef("");
+  const autoReconnectRef = useRef(autoReconnect);
+  const subscriptionActiveRef = useRef(subscriptionActive);
+  const connectedRef = useRef(connected);
+  const connectingRef = useRef(connecting);
+  const excludeLanRef = useRef(excludeLan);
+
+  useEffect(() => { peerIdRef.current = peerId; }, [peerId]);
+  useEffect(() => { autoReconnectRef.current = autoReconnect; }, [autoReconnect]);
+  useEffect(() => { subscriptionActiveRef.current = subscriptionActive; }, [subscriptionActive]);
+  useEffect(() => { connectedRef.current = connected; }, [connected]);
+  useEffect(() => { connectingRef.current = connecting; }, [connecting]);
+  useEffect(() => { excludeLanRef.current = excludeLan; }, [excludeLan]);
 
   useEffect(() => {
     if (resetCooldown <= 0) return;
@@ -414,6 +610,7 @@ function App() {
 
   useEffect(() => {
     if (!statusMsg) return;
+    if (/^reconnecting/i.test(statusMsg)) return;
     const t = window.setTimeout(() => setStatusMsg(""), 8000);
     return () => window.clearTimeout(t);
   }, [statusMsg]);
@@ -563,6 +760,7 @@ function App() {
   const openPlans = useCallback(() => {
     setShowSettings(false);
     setShowPlans(true);
+    setShowDevices(false);
     setShowCancelConfirmation(false);
     setBillingError("");
     refreshBillingStatus().catch((err) => setBillingError(err instanceof Error ? err.message : "Could not load your subscription."));
@@ -634,9 +832,51 @@ function App() {
     }
   }, []);
 
-  const handleConnect = useCallback(async () => {
-    if (connecting || connected) return;
-    setStatusMsg("");
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
+
+  const loadDevices = useCallback(async () => {
+    setDevicesLoading(true);
+    setDevicesError("");
+    try {
+      await refreshSession();
+      const token = getStoredToken();
+      if (!token) throw new Error("Your session expired. Sign in again.");
+      const response = await fetch(`${AUTH_API}/api/v1/wg/peers`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = (await response.json()) as { peers?: PeerInfo[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "Could not load devices.");
+      setPeers(Array.isArray(data.peers) ? data.peers : []);
+    } catch (err) {
+      setDevicesError(err instanceof Error ? err.message : "Could not load devices.");
+    } finally {
+      setDevicesLoading(false);
+    }
+  }, []);
+
+  const deletePeer = useCallback(async (id: string) => {
+    if (!id) return;
+    const token = getStoredToken();
+    if (!token) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 5000);
+    await fetch(`${AUTH_API}/api/v1/wg/peers/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    }).catch(() => undefined).finally(() => window.clearTimeout(timeout));
+  }, []);
+
+  const connectVpn = useCallback(async (opts?: { isReconnect?: boolean }): Promise<boolean> => {
+    if (connectingRef.current) return false;
+    if (connectedRef.current && !opts?.isReconnect) return false;
+
+    setStatusMsg(opts?.isReconnect ? "Reconnecting…" : "");
     setEgressIp("");
     setConnecting(true);
     connectPeerRef.current = "";
@@ -644,7 +884,7 @@ function App() {
     let token = "";
     let createdPeerId = "";
     try {
-      setStatusMsg("Creating secure keys…");
+      if (!opts?.isReconnect) setStatusMsg("Creating secure keys…");
       await refreshSession();
       token = getStoredToken() || "";
       if (!token) throw new Error("Not signed in");
@@ -681,7 +921,8 @@ function App() {
       createdPeerId = peer.peer_id;
       connectPeerRef.current = peer.peer_id;
 
-      const allowed = peer.client_allowed_ips || peer.allowed_ips || ["0.0.0.0/0"];
+      const allowedRaw = peer.client_allowed_ips || peer.allowed_ips || ["0.0.0.0/0"];
+      const allowed = applyExcludeLan(allowedRaw, excludeLanRef.current);
       const result = await invoke<ConnectResult>("connect_wireguard", {
         config: {
           private_key: keys.private_key,
@@ -698,11 +939,18 @@ function App() {
       if (!result.success) throw new Error(result.message || "WireGuard connection failed");
 
       connectPeerRef.current = "";
+      userDisconnectedRef.current = false;
+      hadGoodHandshakeRef.current = false;
+      hadInterfaceUpRef.current = false;
+      reconnectAttemptRef.current = 0;
       setConnected(true);
       setTunnelMode("wireguard");
       setPeerId(peer.peer_id);
       setStatusMsg("");
+      setWgStats(null);
+      setDnsBlockedCount(null);
       void fetchEgressIp();
+      return true;
     } catch (err) {
       connectPeerRef.current = "";
       if (createdPeerId && token) {
@@ -712,12 +960,25 @@ function App() {
         }).catch(() => undefined);
       }
       setStatusMsg(err instanceof Error ? err.message : "Connection failed");
+      return false;
     } finally {
       setConnecting(false);
     }
-  }, [connecting, connected, user, fetchEgressIp]);
+  }, [user, fetchEgressIp]);
+
+  const handleConnect = useCallback(async () => {
+    userDisconnectedRef.current = false;
+    clearReconnectTimer();
+    reconnectingRef.current = false;
+    setReconnecting(false);
+    await connectVpn();
+  }, [clearReconnectTimer, connectVpn]);
 
   const handleDisconnect = useCallback(async () => {
+    userDisconnectedRef.current = true;
+    clearReconnectTimer();
+    reconnectingRef.current = false;
+    setReconnecting(false);
     setStatusMsg("Disconnecting…");
     connectPeerRef.current = "";
     const clearUi = () => {
@@ -725,25 +986,21 @@ function App() {
       setTunnelMode("");
       setPeerId("");
       setEgressIp("");
+      setWgStats(null);
+      setDnsBlockedCount(null);
+      hadGoodHandshakeRef.current = false;
+      hadInterfaceUpRef.current = false;
     };
     try {
       if (tunnelMode === "wireguard" || peerId) {
-        const token = getStoredToken();
         const result = await invoke<ConnectResult>("disconnect_wireguard");
+        const oldPeer = peerId;
         clearUi();
         if (!result.success) {
           setStatusMsg(result.message || "Disconnect incomplete — approve the admin prompt, or run: sudo bash ~/.veritasvpn/teardown.sh");
           return;
         }
-        if (token && peerId) {
-          const controller = new AbortController();
-          const timeout = window.setTimeout(() => controller.abort(), 5000);
-          await fetch(`${AUTH_API}/api/v1/wg/peers/${peerId}`, {
-            method: "DELETE",
-            headers: { Authorization: `Bearer ${token}` },
-            signal: controller.signal,
-          }).catch(() => undefined).finally(() => window.clearTimeout(timeout));
-        }
+        if (oldPeer) await deletePeer(oldPeer);
       }
       clearUi();
       setStatusMsg("");
@@ -751,20 +1008,237 @@ function App() {
       clearUi();
       setStatusMsg(err instanceof Error ? err.message : "Disconnect failed");
     }
-  }, [tunnelMode, peerId]);
+  }, [tunnelMode, peerId, clearReconnectTimer, deletePeer]);
+
+  const attemptReconnect = useCallback(async () => {
+    if (reconnectingRef.current) return;
+    if (!autoReconnectRef.current || userDisconnectedRef.current || !subscriptionActiveRef.current) return;
+    if (connectingRef.current) return;
+
+    reconnectingRef.current = true;
+    setReconnecting(true);
+    setStatusMsg("Reconnecting…");
+
+    const attempt = reconnectAttemptRef.current;
+    const delay = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
+
+    clearReconnectTimer();
+    reconnectTimerRef.current = window.setTimeout(async () => {
+      reconnectTimerRef.current = null;
+      if (userDisconnectedRef.current || !autoReconnectRef.current || !subscriptionActiveRef.current) {
+        reconnectingRef.current = false;
+        setReconnecting(false);
+        return;
+      }
+
+      const oldPeer = peerIdRef.current;
+      try {
+        await invoke<ConnectResult>("disconnect_wireguard").catch(() => undefined);
+      } catch {
+        // continue teardown
+      }
+      setConnected(false);
+      setTunnelMode("");
+      setPeerId("");
+      setEgressIp("");
+      setWgStats(null);
+      hadGoodHandshakeRef.current = false;
+      hadInterfaceUpRef.current = false;
+      if (oldPeer) await deletePeer(oldPeer);
+
+      const ok = await connectVpn({ isReconnect: true });
+      if (ok) {
+        reconnectAttemptRef.current = 0;
+        reconnectingRef.current = false;
+        setReconnecting(false);
+        setStatusMsg("");
+      } else {
+        reconnectAttemptRef.current = Math.min(attempt + 1, RECONNECT_BACKOFF_MS.length - 1);
+        reconnectingRef.current = false;
+        if (!userDisconnectedRef.current && autoReconnectRef.current && subscriptionActiveRef.current) {
+          setStatusMsg("Reconnecting…");
+          void attemptReconnect();
+        } else {
+          setReconnecting(false);
+        }
+      }
+    }, delay);
+  }, [clearReconnectTimer, connectVpn, deletePeer]);
+
+  // Live WireGuard stats + auto-reconnect while connected
+  useEffect(() => {
+    if (!connected) {
+      if (!reconnecting) {
+        setWgStats(null);
+        setDnsBlockedCount(null);
+      }
+      return;
+    }
+
+    let cancelled = false;
+    const pollStats = async () => {
+      try {
+        const stats = await invoke<WgTransferStats>("wireguard_stats");
+        if (cancelled) return;
+        setWgStats(stats);
+
+        const nowSec = Math.floor(Date.now() / 1000);
+        const handshakeAge =
+          stats.last_handshake_sec > 0 ? Math.max(0, nowSec - stats.last_handshake_sec) : Number.POSITIVE_INFINITY;
+
+        if (stats.interface_up) {
+          hadInterfaceUpRef.current = true;
+        }
+
+        if (stats.interface_up && stats.last_handshake_sec > 0 && handshakeAge <= HANDSHAKE_STALE_SEC) {
+          hadGoodHandshakeRef.current = true;
+        }
+
+        const staleHandshake =
+          hadGoodHandshakeRef.current &&
+          (stats.last_handshake_sec <= 0 || handshakeAge > HANDSHAKE_STALE_SEC);
+        const down = hadInterfaceUpRef.current && !stats.interface_up;
+
+        if (
+          (down || staleHandshake) &&
+          autoReconnectRef.current &&
+          !userDisconnectedRef.current &&
+          subscriptionActiveRef.current &&
+          !reconnectingRef.current &&
+          !connectingRef.current
+        ) {
+          void attemptReconnect();
+        }
+      } catch {
+        // ignore transient stats errors
+      }
+    };
+
+    void pollStats();
+    const timer = window.setInterval(pollStats, STATS_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [connected, reconnecting, attemptReconnect]);
+
+  // Poll peers for DNS blocked count of current peer
+  useEffect(() => {
+    if (!connected || !peerId) {
+      setDnsBlockedCount(null);
+      return;
+    }
+    let cancelled = false;
+    const pollPeers = async () => {
+      try {
+        const token = getStoredToken();
+        if (!token) return;
+        const response = await fetch(`${AUTH_API}/api/v1/wg/peers`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok || cancelled) return;
+        const data = (await response.json()) as { peers?: PeerInfo[] };
+        if (cancelled || !Array.isArray(data.peers)) return;
+        const match = data.peers.find((p) => p.id === peerIdRef.current);
+        if (match && typeof match.dns_blocked_count === "number") {
+          setDnsBlockedCount(match.dns_blocked_count);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    void pollPeers();
+    const timer = window.setInterval(pollPeers, PEERS_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [connected, peerId]);
+
+  const openDevices = useCallback(() => {
+    setShowSettings(false);
+    setShowDevices(true);
+    setShowPlans(false);
+    setShowNetworkMap(false);
+    void loadDevices();
+  }, [loadDevices]);
+
+  const revokePeer = useCallback(async (peer: PeerInfo) => {
+    if (!peer.id || revokingId) return;
+    setRevokingId(peer.id);
+    setDevicesError("");
+    try {
+      if (peer.id === peerIdRef.current && (connectedRef.current || connectingRef.current)) {
+        await handleDisconnect();
+      }
+      await refreshSession();
+      const token = getStoredToken();
+      if (!token) throw new Error("Your session expired. Sign in again.");
+      const response = await fetch(`${AUTH_API}/api/v1/wg/peers/${peer.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || "Could not revoke device.");
+      }
+      setPeers((list) => list.filter((p) => p.id !== peer.id));
+    } catch (err) {
+      setDevicesError(err instanceof Error ? err.message : "Could not revoke device.");
+    } finally {
+      setRevokingId(null);
+    }
+  }, [revokingId, handleDisconnect]);
+
+  const toggleAutoReconnect = useCallback(() => {
+    setAutoReconnect((prev) => {
+      const next = !prev;
+      writeLocalFlag(LS_AUTO_RECONNECT, next);
+      return next;
+    });
+  }, []);
+
+  const toggleExcludeLan = useCallback(() => {
+    setExcludeLan((prev) => {
+      const next = !prev;
+      writeLocalFlag(LS_EXCLUDE_LAN, next);
+      return next;
+    });
+  }, []);
 
   const handleSignOut = useCallback(() => {
     if (user) clearCachedBillingStatus(user.account_id);
     setSubscriptionActive(false);
     setSubscriptionChecked(false);
     setShowPlans(false);
+    setShowDevices(false);
     setCheckoutUrl(null);
+    userDisconnectedRef.current = true;
+    clearReconnectTimer();
     if (connected || connecting) void handleDisconnect();
     doSignOut();
     setUser(null);
     setNewAccountId("");
     setShowSignOutConfirm(false);
-  }, [connected, connecting, handleDisconnect, user]);
+  }, [connected, connecting, handleDisconnect, user, clearReconnectTimer]);
+
+  const handleSignOutEverywhere = useCallback(async () => {
+    setShowSettings(false);
+    try {
+      await refreshSession();
+      const token = getStoredToken();
+      if (token) {
+        await fetch(`${AUTH_API}/api/v1/auth/logout-all`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: "{}",
+        }).catch(() => undefined);
+      }
+    } catch {
+      // still sign out locally
+    }
+    handleSignOut();
+  }, [handleSignOut]);
 
   const requestSignOut = useCallback(() => {
     setShowSettings(false);
@@ -906,14 +1380,25 @@ function App() {
     <div className="app app-dashboard">
       <header className="app-header blueprint-header">
         <img className="brand-logo" src={veritasMark} alt="VeritasVPN" />
-        {!showPlans && (
+        {!showPlans && !showDevices && (
           <div className="blueprint-settings-wrap">
             <button className="blueprint-cog" onClick={() => setShowSettings((open) => !open)} aria-label="Open settings" aria-expanded={showSettings}>⚙</button>
             {showSettings && (
               <div className="blueprint-menu">
                 <button type="button" onClick={openPlans}>{subscriptionActive ? "Premium" : "Plans"}</button>
                 <button type="button" onClick={() => { setShowSettings(false); setShowNetworkMap(true); }}>Network map</button>
+                <button type="button" onClick={openDevices}>Devices</button>
                 <hr />
+                <button type="button" className="menu-toggle" onClick={toggleAutoReconnect}>
+                  <span>Auto-reconnect</span>
+                  <b className={autoReconnect ? "on" : ""}>{autoReconnect ? "On" : "Off"}</b>
+                </button>
+                <button type="button" className="menu-toggle" onClick={toggleExcludeLan}>
+                  <span>Exclude LAN<span className="menu-note">Reconnect to apply</span></span>
+                  <b className={excludeLan ? "on" : ""}>{excludeLan ? "On" : "Off"}</b>
+                </button>
+                <hr />
+                <button type="button" className="danger" onClick={() => void handleSignOutEverywhere()}>Sign out everywhere</button>
                 <button type="button" className="danger" onClick={requestSignOut}>Sign out</button>
               </div>
             )}
@@ -939,20 +1424,31 @@ function App() {
             onCancelConfirm={() => cancelSubscription()}
             onCancelDismiss={() => setShowCancelConfirmation(false)}
           />
+        ) : showDevices ? (
+          <DevicesScreen
+            peers={peers}
+            loading={devicesLoading}
+            error={devicesError}
+            currentPeerId={peerId}
+            revokingId={revokingId}
+            onBack={() => setShowDevices(false)}
+            onRefresh={() => void loadDevices()}
+            onRevoke={(peer) => void revokePeer(peer)}
+          />
         ) : showNetworkMap ? (
           <section className="network-map-view">
             <div className="map-view-head"><div><span>NETWORK MAP</span><h2>Your secure route</h2></div><button type="button" onClick={() => setShowNetworkMap(false)}>Back</button></div>
-            <ConnectionMap connected={connected} connecting={connecting} deviceLabel={deviceLabel} />
+            <ConnectionMap connected={connected} connecting={connecting || reconnecting} deviceLabel={deviceLabel} />
             <div className="map-summary">
-              <div><span>CONNECTION</span><strong>{connected ? "Encrypted route active" : connecting ? "Establishing route…" : "No secure route"}</strong></div>
-              <b className={connected ? "on" : connecting ? "connecting" : ""}>{connected ? "SECURED" : connecting ? "CONNECTING" : "OFFLINE"}</b>
+              <div><span>CONNECTION</span><strong>{connected ? "Encrypted route active" : connecting || reconnecting ? "Establishing route…" : "No secure route"}</strong></div>
+              <b className={connected ? "on" : connecting || reconnecting ? "connecting" : ""}>{connected ? "SECURED" : connecting || reconnecting ? "CONNECTING" : "OFFLINE"}</b>
             </div>
           </section>
         ) : (
           <>
             <PrivacyScene encrypted={connected} />
             <section className="blueprint-status">
-              {!connected ? (
+              {!connected && !reconnecting ? (
                 <>
                   <div className={`blueprint-badge ${connecting ? "connecting" : ""}`}>
                     <i />
@@ -986,18 +1482,46 @@ function App() {
                 </>
               ) : (
                 <>
-                  <div className="blueprint-secured">CONNECTION SECURED</div>
-                  <h2 className="connected-title">You're protected</h2>
-                  <p>Your internet traffic is encrypted and routed through VeritasVPN.</p>
-                  <button className="blueprint-disconnect" type="button" onClick={handleDisconnect}>Disconnect</button>
-                  <div className="protected-meta">
-                    <i />
-                    {egressIp ? `Connected · ${egressIp}` : "Protected · WireGuard tunnel active"}
+                  <div className="blueprint-secured">
+                    {reconnecting && !connected ? "RECONNECTING…" : "CONNECTION SECURED"}
                   </div>
+                  <h2 className="connected-title">{reconnecting && !connected ? "Reconnecting…" : "You're protected"}</h2>
+                  <p>
+                    {reconnecting && !connected
+                      ? "Restoring your encrypted WireGuard tunnel."
+                      : "Your internet traffic is encrypted and routed through VeritasVPN."}
+                  </p>
+                  {(connected || reconnecting) && (
+                    <button className="blueprint-disconnect" type="button" onClick={handleDisconnect} disabled={connecting && !reconnecting}>
+                      Disconnect
+                    </button>
+                  )}
+                  {connected && wgStats && (
+                    <div className="live-stats" aria-label="Live tunnel statistics">
+                      <span className="live-stats-label">LIVE STATS</span>
+                      <div className="live-stats-row">
+                        <div><strong>{formatBytes(wgStats.rx_bytes)}</strong><span>Download</span></div>
+                        <div><strong>{formatBytes(wgStats.tx_bytes)}</strong><span>Upload</span></div>
+                        <div><strong>{formatHandshakeAge(wgStats.last_handshake_sec)}</strong><span>Handshake</span></div>
+                      </div>
+                      {dnsBlockedCount !== null && (
+                        <div className="live-stats-dns">
+                          <span>DNS threats blocked</span>
+                          <strong>{dnsBlockedCount}</strong>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {connected && (
+                    <div className="protected-meta">
+                      <i />
+                      {egressIp ? `Connected · ${egressIp}` : "Protected · WireGuard tunnel active"}
+                    </div>
+                  )}
                 </>
               )}
               {statusMsg && !(connecting && /^connecting/i.test(statusMsg)) && (
-                <div className={`status-msg ${connected ? "ok" : connecting ? "info" : "warn"}`}>{statusMsg}</div>
+                <div className={`status-msg ${connected ? "ok" : connecting || reconnecting ? "info" : "warn"}`}>{statusMsg}</div>
               )}
             </section>
           </>

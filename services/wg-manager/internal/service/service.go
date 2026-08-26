@@ -20,14 +20,14 @@ import (
 )
 
 type PeerConfig struct {
-	PeerID           string
-	ServerID         string
-	ServerHostname   string
-	ServerPublicKey  string
-	ServerEndpoint   string
-	AssignedIP       string
-	DNSServer        string
-	PresharedKey     string
+	PeerID                 string
+	ServerID               string
+	ServerHostname         string
+	ServerPublicKey        string
+	ServerEndpoint         string
+	AssignedIP             string
+	DNSServer              string
+	PresharedKey           string
 	AllowedIPs             []string // server-side peer AllowedIPs (client /32)
 	ClientAllowedIPs       []string // client tunnel AllowedIPs (full tunnel)
 	PersistentKeepaliveSec int
@@ -212,13 +212,19 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 	return srv, nil
 }
 
-func (s *Service) HandleHeartbeat(ctx context.Context, serverID string, peerCount int32, loadFactor float64, rxBytes, txBytes int64) error {
+func (s *Service) HandleHeartbeat(ctx context.Context, serverID string, peerCount int32, loadFactor float64, rxBytes, txBytes int64, dnsBlockedByIP map[string]uint64) error {
 	if err := s.postgres.UpdateServerLoad(ctx, serverID, peerCount, loadFactor); err != nil {
 		return fmt.Errorf("update server load: %w", err)
 	}
 
 	if err := s.postgres.UpdateServerStatus(ctx, serverID, "online"); err != nil {
 		s.log.Warn("failed to set server status to online", "server_id", serverID, "error", err)
+	}
+
+	if len(dnsBlockedByIP) > 0 {
+		if err := s.redis.SetDNSBlockedCounts(ctx, dnsBlockedByIP); err != nil {
+			s.log.Warn("failed to store dns blocked counts", "server_id", serverID, "error", err)
+		}
 	}
 
 	s.log.Debug("heartbeat processed",
@@ -236,6 +242,16 @@ func (s *Service) HandleHeartbeat(ctx context.Context, serverID string, peerCoun
 	})
 
 	return nil
+}
+
+// DNSBlockedCount returns the absolute blocked-query count for a peer's assigned
+// tunnel IP (0 if missing). AssignedIP may include a CIDR suffix.
+func (s *Service) DNSBlockedCount(ctx context.Context, assignedIP string) uint64 {
+	n, err := s.redis.GetDNSBlockedCount(ctx, assignedIP)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, preferredRegion, clientIP string) (*PeerConfig, error) {
@@ -364,14 +380,14 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 	})
 
 	return &PeerConfig{
-		PeerID:           peer.ID,
-		ServerID:         srv.ID,
-		ServerHostname:   srv.Hostname,
-		ServerPublicKey:  srv.PublicKey,
-		ServerEndpoint:   endpoint,
-		AssignedIP:       assignedIP,
-		DNSServer:        srv.DNSServer,
-		PresharedKey:     psk,
+		PeerID:                 peer.ID,
+		ServerID:               srv.ID,
+		ServerHostname:         srv.Hostname,
+		ServerPublicKey:        srv.PublicKey,
+		ServerEndpoint:         endpoint,
+		AssignedIP:             assignedIP,
+		DNSServer:              srv.DNSServer,
+		PresharedKey:           psk,
 		AllowedIPs:             []string{assignedIP},
 		ClientAllowedIPs:       []string{"0.0.0.0/0"},
 		PersistentKeepaliveSec: 25,
