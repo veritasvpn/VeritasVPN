@@ -1049,10 +1049,22 @@ fi
 # If IPv6 is enabled, keep a fail-closed default as an additional safeguard.
 ip -6 route replace blackhole default metric 1 2>/tmp/veritas-wg-killswitch-v6-error.log || true
 
-# Firewall enforcement is preferred; blackhole routes remain as fallback.
+# Firewall kill switch is mandatory (no off option; parity with Android lockdown).
+# Blackhole routes alone are not enough — abort if nftables/iptables rules cannot be installed.
 if ! install_killswitch; then
   cleanup_killswitch
-  echo "Firewall kill-switch rules unavailable; fail-closed route protection remains active" >&2
+  ip route del 0.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
+  ip route del 128.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
+  ip route del blackhole default metric 1 2>/dev/null || true
+  ip -6 route del blackhole default metric 1 2>/dev/null || true
+  ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
+  [[ -n "$ROUTE_IP" && "$ROUTE_IP" != "127.0.0.1" ]] && ip route del "$ROUTE_IP" 2>/dev/null || true
+  ip link set "$IFACE_NAME" down 2>/dev/null || true
+  kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
+  [[ -f "$STEALTH_PID_FILE" ]] && kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+  rm -f "$PID_FILE" "$STEALTH_PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
+  echo "Could not install the firewall kill switch; install nftables or iptables and try again. Normal internet was left unchanged" >&2
+  exit 1
 fi
 
 # DNS: backup resolv.conf and set new DNS

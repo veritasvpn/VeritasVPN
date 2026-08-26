@@ -48,7 +48,10 @@ fun DashboardScreen(
     onDevices: () -> Unit,
     onPortForwards: () -> Unit,
     onTunnelSettings: () -> Unit,
-    onKillSwitchSettings: () -> Unit,
+    onOpenKillSwitchSettings: () -> Unit,
+    killSwitchEnabled: Boolean,
+    showKillSwitchRequired: Boolean,
+    onDismissKillSwitchRequired: () -> Unit,
     isPremium: Boolean,
     billingReady: Boolean,
     statusMsg: String?,
@@ -61,17 +64,13 @@ fun DashboardScreen(
 ) {
     var showSignOutConfirmation by remember { mutableStateOf(false) }
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
-    var showKillSwitchGuidance by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var showNetworkMap by remember { mutableStateOf(false) }
 
-    if (showKillSwitchGuidance) {
-        KillSwitchGuidanceDialog(
-            onDismiss = { showKillSwitchGuidance = false },
-            onOpenSystemVpnSettings = {
-                showKillSwitchGuidance = false
-                onKillSwitchSettings()
-            }
+    if (showKillSwitchRequired) {
+        KillSwitchRequiredDialog(
+            onOpenSystemVpnSettings = onOpenKillSwitchSettings,
+            onCancel = onDismissKillSwitchRequired
         )
     }
     if (showSignOutConfirmation) {
@@ -170,10 +169,6 @@ fun DashboardScreen(
                         onClick = { showSettingsMenu = false; onTunnelSettings() }
                     )
                     DropdownMenuItem(
-                        text = { Text("Android kill switch settings", color = Paper, fontWeight = FontWeight.SemiBold) },
-                        onClick = { showSettingsMenu = false; showKillSwitchGuidance = true }
-                    )
-                    DropdownMenuItem(
                         text = {
                             Column {
                                 Text("Stealth mode", color = PaperMuted, fontWeight = FontWeight.SemiBold)
@@ -261,6 +256,14 @@ fun DashboardScreen(
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 24.dp)
                 )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = if (killSwitchEnabled) "Kill switch on" else "Kill switch required",
+                    color = if (killSwitchEnabled) CyanHover else ErrorRed,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.6.sp
+                )
             }
 
             Spacer(Modifier.height(24.dp))
@@ -334,35 +337,35 @@ fun DashboardScreen(
 }
 
 @Composable
-fun KillSwitchGuidanceDialog(
-    onDismiss: () -> Unit,
-    onOpenSystemVpnSettings: () -> Unit
+fun KillSwitchRequiredDialog(
+    onOpenSystemVpnSettings: () -> Unit,
+    onCancel: () -> Unit
 ) {
     AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Android kill switch", color = Paper, fontWeight = FontWeight.Bold) },
+        onDismissRequest = onCancel,
+        title = { Text("Kill switch required", color = Paper, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    "Android’s system VPN settings are the kill switch for this app. Enable both options for VeritasVPN:",
+                    "VeritasVPN keeps the Android kill switch always on. Before connecting, enable both system options for VeritasVPN:",
                     color = PaperMuted,
                     fontSize = 14.sp,
                     lineHeight = 20.sp
                 )
                 Text(
-                    "1. Always-on VPN — keeps the tunnel preferred and restores it after restarts.",
+                    "1. Always-on VPN",
                     color = Paper,
                     fontSize = 14.sp,
-                    lineHeight = 20.sp
+                    fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    "2. Block connections without VPN — blocks internet if the tunnel drops so traffic cannot leak outside the VPN.",
+                    "2. Block connections without VPN",
                     color = Paper,
                     fontSize = 14.sp,
-                    lineHeight = 20.sp
+                    fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    "Without “Block connections without VPN”, Android may restore normal networking after a service failure.",
+                    "There is no in-app off switch. Return here after enabling both; connect continues automatically when they are on.",
                     color = PaperDim,
                     fontSize = 13.sp,
                     lineHeight = 18.sp
@@ -378,7 +381,7 @@ fun KillSwitchGuidanceDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Not now", color = CyanHover) }
+            TextButton(onClick = onCancel) { Text("Cancel", color = CyanHover) }
         },
         containerColor = CardElevated
     )

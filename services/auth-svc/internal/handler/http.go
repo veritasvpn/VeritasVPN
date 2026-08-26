@@ -37,15 +37,32 @@ func clientIP(r *http.Request) string {
 }
 
 func (h *HTTPHandler) verifyTurnstileIfRequired(w http.ResponseWriter, r *http.Request, token string) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" || !h.service.TurnstileEnabled() {
+	if !h.service.TurnstileEnabled() {
 		return true
 	}
-	if _, ok := h.corsMap[origin]; !ok {
+
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	client := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Veritas-Client")))
+	require := false
+	if origin != "" {
+		if _, ok := h.corsMap[origin]; ok {
+			require = true
+		}
+	}
+	switch client {
+	case "android", "desktop", "web":
+		require = true
+	}
+	if !require {
 		return true
 	}
+
 	if err := h.service.VerifyTurnstile(r.Context(), token, clientIP(r)); err != nil {
-		h.log.Warn("turnstile verification failed", zap.String("origin", origin), zap.Error(err))
+		h.log.Warn("turnstile verification failed",
+			zap.String("origin", origin),
+			zap.String("client", client),
+			zap.Error(err),
+		)
 		writeHTTPError(w, http.StatusBadRequest, "verification failed; please try again")
 		return false
 	}
@@ -82,7 +99,7 @@ func (h *HTTPHandler) withCORS(next http.HandlerFunc) http.HandlerFunc {
 			if _, ok := h.corsMap[origin]; ok {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Veritas-Client")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			}
 		}

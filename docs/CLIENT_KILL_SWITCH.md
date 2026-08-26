@@ -7,10 +7,10 @@ The Linux desktop WireGuard client uses fail-closed routing plus a dedicated nft
 - After the WireGuard handshake succeeds and the two tunnel /1 routes are installed, the client adds a dedicated blackhole default metric 1 route.
 - The tunnel /1 routes are more specific, so connected traffic still uses WireGuard.
 - If the tunnel interface or its routes disappear unexpectedly, traffic cannot fall back to the normal gateway; it is discarded by the blackhole route.
-- An intentional Disconnect removes only the Veritas kill-switch route before restoring the normal network.
+- nftables (preferred) or iptables firewall rules are then installed and are **mandatory**. If they cannot be installed, bring-up aborts and restores the previous network. There is no in-app off toggle.
+- An intentional Disconnect removes only the Veritas kill-switch route and firewall table before restoring the normal network.
 - A new connection removes a stale Veritas kill-switch route left by an interrupted session before rebuilding the tunnel.
 - If the kill-switch route cannot be installed, bring-up aborts and leaves the previous network route unchanged.
-- If firewall tooling is unavailable, the blackhole route remains as a safety fallback and the session is never silently treated as fully firewall-enforced.
 
 ## Scope
 
@@ -26,7 +26,7 @@ Only remove this route when the VPN is intentionally disconnected; removing it w
 
 ## Android
 
-The Android client uses a full-tunnel VpnService, persists the approved tunnel configuration for system restarts, and cleans up when Android revokes VPN permission. For a system-level kill switch, enable Always-on VPN and Block connections without VPN in Android VPN settings; the app now opens those settings from its account menu. Without the Android system block setting, Android may restore normal networking after a service failure.
+The Android client uses a full-tunnel VpnService, persists the approved tunnel configuration for system restarts, and cleans up when Android revokes VPN permission. Apps cannot flip Android’s Always-on VPN or “Block connections without VPN” switches; the OS requires the user to enable them once. VeritasVPN treats both as mandatory: connect is blocked until lockdown is on for this app, there is no in-app off toggle, and the app deep-links to system VPN settings when setup is needed. Without the Android system block setting, Android may restore normal networking after a service failure.
 
 ## Chrome extension
 

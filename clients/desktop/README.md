@@ -27,6 +27,6 @@ macOS: run `./scripts/bundle-wg-macos.sh` before build. Stealth is disabled in t
 - Settings → **Stealth mode** (Linux). Requires server `stealth_available` + bundled `src-tauri/resources/bin/wstunnel`.
 - Toggle Exclude LAN / Stealth while connected → banner **Reconnect to apply**.
 - Connected badge shows **Direct UDP** or **Stealth TLS**.
-- Kill switch stays on for the whole Linux session while connected.
+- Kill switch is always on for the whole Linux session while connected (firewall + fail-closed routes; no off option). Connect aborts if the firewall ruleset cannot be installed.
 
 See `src-tauri/resources/README.md` for binary paths.

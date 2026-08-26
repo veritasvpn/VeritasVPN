@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>VeritasVPN verification</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      min-height: 100%;
+      background: #06101c;
+      color: #e8eef7;
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .wrap {
+      width: 100%;
+      max-width: 340px;
+      padding: 16px;
+      box-sizing: border-box;
+      text-align: center;
+    }
+    p {
+      margin: 0 0 14px;
+      font-size: 14px;
+      line-height: 1.4;
+      color: #9db0c7;
+    }
+    #widget { display: flex; justify-content: center; min-height: 70px; }
+  </style>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+</head>
+<body>
+  <div class="wrap">
+    <p>Complete the check to continue creating your account.</p>
+    <div id="widget"></div>
+  </div>
+  <script>
+    const SITE_KEY = '0x4AAAAAAEcMj2cCveWsarot';
+    function post(payload) {
+      try {
+        if (window.VeritasTurnstile && window.VeritasTurnstile.postMessage) {
+          window.VeritasTurnstile.postMessage(JSON.stringify(payload));
+        }
+      } catch (_) {}
+    }
+    function renderWhenReady() {
+      if (!window.turnstile) {
+        setTimeout(renderWhenReady, 50);
+        return;
+      }
+      window.turnstile.render('#widget', {
+        sitekey: SITE_KEY,
+        theme: 'dark',
+        callback: (token) => post({ type: 'token', token }),
+        'expired-callback': () => post({ type: 'expired' }),
+        'error-callback': () => post({ type: 'error', message: 'verification failed' }),
+      });
+    }
+    renderWhenReady();
+  </script>
+</body>
+</html>

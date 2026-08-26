@@ -22,6 +22,7 @@ object ApiClient {
         .addInterceptor { chain ->
             val req = chain.request().newBuilder()
                 .header("Content-Type", "application/json")
+                .header("X-Veritas-Client", "android")
                 .build()
             chain.proceed(req)
         }

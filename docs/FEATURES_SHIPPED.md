@@ -12,8 +12,8 @@ Last updated: 2026-08-26
 - 5 devices; Premium gate via BTCPay (Bitcoin)
 
 ## Client safety
-- Linux: firewall + route kill switch while connected
-- Android: Always-on VPN / block-without-VPN (system settings + in-app guidance)
+- Linux: firewall + route kill switch mandatory while connected (no in-app off toggle)
+- Android: kill switch mandatory (Always-on VPN + Block connections without VPN; no in-app off toggle)
 - Desktop auto-reconnect; Android auto-reconnect after established session
 - Split tunnel: exclude LAN (desktop/Android); Android per-app bypass
 

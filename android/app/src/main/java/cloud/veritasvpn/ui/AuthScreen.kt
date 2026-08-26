@@ -67,8 +67,15 @@ fun AuthScreen(
     var resetSent by remember { mutableStateOf(false) }
     var resetCooldown by remember { mutableIntStateOf(0) }
     var accountIdCopied by remember { mutableStateOf(false) }
+    var turnstileToken by remember { mutableStateOf("") }
+    var turnstileResetKey by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
+    val needsTurnstile = mode == AuthMode.SIGN_UP
 
+    LaunchedEffect(mode, method) {
+        turnstileToken = ""
+        if (needsTurnstile) turnstileResetKey += 1
+    }
     LaunchedEffect(resetCooldown) {
         if (resetCooldown > 0) {
             delay(1000)
@@ -421,6 +428,23 @@ fun AuthScreen(
             )
         }
 
+        if (needsTurnstile) {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Verification required",
+                color = PaperDim,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.4.sp
+            )
+            Spacer(Modifier.height(8.dp))
+            TurnstileWebView(
+                resetKey = turnstileResetKey,
+                onToken = { turnstileToken = it },
+                onError = { error = it }
+            )
+        }
+
         Spacer(Modifier.height(16.dp))
 
         Button(
@@ -445,6 +469,8 @@ fun AuthScreen(
                         "Passwords do not match."
                     method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN && accountId.isBlank() ->
                         "Enter your Account ID."
+                    needsTurnstile && turnstileToken.isBlank() ->
+                        "Complete the verification check first."
                     else -> null
                 }
                 if (validationError != null) {
@@ -458,10 +484,10 @@ fun AuthScreen(
                                     method == AuthMethod.EMAIL && mode == AuthMode.SIGN_IN ->
                                         authRepo.signIn(email, password)
                                     method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP ->
-                                        authRepo.signUp(email, password)
+                                        authRepo.signUp(email, password, turnstileToken)
                                     method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN ->
                                         authRepo.signInWithAccountId(accountId)
-                                    else -> authRepo.registerAnonymous()
+                                    else -> authRepo.registerAnonymous(turnstileToken)
                                 }
                             }
                             if (method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_UP) {
@@ -477,13 +503,16 @@ fun AuthScreen(
                         } catch (e: Exception) {
                             error = e.message?.takeIf { it.isNotBlank() }
                                 ?: "Sign in failed. Check your connection and try again."
+                            if (needsTurnstile) {
+                                turnstileToken = ""
+                                turnstileResetKey += 1
+                            }
                         } finally {
                             loading = false
                         }
                     }
                 }
-            },
-            modifier = Modifier.fillMaxWidth().height(50.dp),
+            },            modifier = Modifier.fillMaxWidth().height(50.dp),
             shape = RoundedCornerShape(25.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Royal),
             enabled = !loading

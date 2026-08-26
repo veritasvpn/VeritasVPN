@@ -50,10 +50,16 @@ class AuthRepository(context: Context) {
         return user
     }
 
-    fun signUp(email: String, password: String): User {
+    fun signUp(email: String, password: String, turnstileToken: String): User {
         val normalized = email.trim().lowercase()
-        val data = ApiClient.post("/api/v1/auth/register",
-            mapOf("email" to normalized, "password" to password)).use { res ->
+        val data = ApiClient.post(
+            "/api/v1/auth/register",
+            mapOf(
+                "email" to normalized,
+                "password" to password,
+                "turnstile_token" to turnstileToken
+            )
+        ).use { res ->
             if (!res.isSuccessful) {
                 val message = extractError(res)
                 if (message == "An account with this email already exists.") {
@@ -93,8 +99,11 @@ class AuthRepository(context: Context) {
         return user
     }
 
-    fun registerAnonymous(): User {
-        val data = ApiClient.post("/api/v1/auth/register-anonymous", emptyMap()).use { res ->
+    fun registerAnonymous(turnstileToken: String): User {
+        val data = ApiClient.post(
+            "/api/v1/auth/register-anonymous",
+            mapOf("turnstile_token" to turnstileToken)
+        ).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))
             ApiClient.parse<AuthResponse>(res)
                 ?: throw Error("The server returned an invalid registration response.")

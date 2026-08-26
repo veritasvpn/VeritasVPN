@@ -424,6 +424,14 @@ input::placeholder { color: var(--paper-dim); }
   font-weight: 500;
   line-height: 1.4;
 }
+.menu-static-note .menu-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--paper-dim);
+  opacity: 0.85;
+  font-size: 10px;
+  font-weight: 500;
+}
 .blueprint-menu hr {
   height: 1px;
   margin: 4px;
@@ -740,6 +748,14 @@ input::placeholder { color: var(--paper-dim); }
   border: 1px solid rgba(7, 86, 217, 0.45);
   background: rgba(7, 86, 217, 0.18);
   color: #9ec5ff;
+}
+
+.killswitch-status {
+  margin-top: 10px;
+  color: var(--cyan-hover);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
 }
 
 .reconnect-banner {

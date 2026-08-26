@@ -190,11 +190,17 @@ function formatConnectError(err: unknown, wantedStealth: boolean): string {
       return "Stealth is not available on the VPN node yet. Turn Stealth off or try again later.";
     }
   }
+  if (/firewall kill switch|kill switch/.test(lower)) {
+    if (/nftables|iptables/.test(lower)) {
+      return "Kill switch required: install nftables or iptables, then connect again. There is no off option.";
+    }
+    return "Kill switch could not be enabled. Connect was cancelled so traffic stays unprotected only while you fix it.";
+  }
   return raw || "Connection failed";
 }
 
 function isStickyStatusMessage(msg: string): boolean {
-  return /stealth/i.test(msg);
+  return /stealth|kill switch/i.test(msg);
 }
 
 function applyExcludeLan(allowed: string[], excludeLan: boolean): string[] {
@@ -1796,7 +1802,17 @@ function App() {
                     {!linuxDesktop ? "—" : stealthMode ? "On" : "Off"}
                   </b>
                 </button>
-                <p className="menu-static-note">Linux firewall kill switch is always on while connected</p>
+                {linuxDesktop ? (
+                  <p className="menu-static-note">
+                    Kill switch always on · no off option
+                    <span className="menu-note">Firewall + fail-closed routes while connected</span>
+                  </p>
+                ) : (
+                  <p className="menu-static-note">
+                    Kill switch is Linux-only in this build
+                    <span className="menu-note">macOS uses tunnel routing without the Linux firewall ruleset</span>
+                  </p>
+                )}
                 <hr />
                 <button type="button" className="danger" onClick={() => void handleSignOutEverywhere()}>Sign out everywhere</button>
                 <button type="button" className="danger" onClick={requestSignOut}>Sign out</button>
@@ -1913,6 +1929,11 @@ function App() {
                       ? "Restoring your encrypted WireGuard tunnel."
                       : "Your internet traffic is encrypted and routed through VeritasVPN."}
                   </p>
+                  {connected && linuxDesktop && (
+                    <div className="killswitch-status" role="status">
+                      Kill switch on
+                    </div>
+                  )}
                   {(connected || reconnecting) && (
                     <button className="blueprint-disconnect" type="button" onClick={handleDisconnect} disabled={connecting && !reconnecting}>
                       Disconnect
