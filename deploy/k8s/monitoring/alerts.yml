@@ -25,13 +25,6 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "BTCPay mainnet payment page is unavailable"
-      - alert: BTCPayCustomerHostnameUnavailable
-        expr: probe_success{instance="https://btcpay.veritasvpn.cloud/"} == 0
-        for: 5m
-        labels: { severity: critical }
-        annotations:
-          summary: "Customer BTCPay hostname btcpay.veritasvpn.cloud is unavailable"
-          description: "Usually a Cloudflare Tunnel misroute or scaled-to-zero legacy btcpay namespace. Prefer btcpay-mainnet until the tunnel is remapped."
       - alert: DellDiskFilling
         expr: 100 * (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) > 85
         for: 10m
