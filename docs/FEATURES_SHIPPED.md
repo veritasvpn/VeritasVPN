@@ -1,0 +1,29 @@
+# Features shipped (source of truth)
+
+Last updated: 2026-08-26
+
+## Core VPN
+- WireGuard on Linux desktop, Android, CLI; Chrome HTTP proxy extension
+- Advertised UDP endpoint often public **443** (router → host **51820**)
+- Optional **Stealth** (Linux desktop): WireGuard over TLS/WebSocket (`wstunnel`) on TCP **443**
+- Premium **port forwarding** (max 2): public IP:port → peer; recommended **40000–49999**
+- Private DNS gateway with DoH + malware/phishing blocklist; aggregate blocked counts only
+- Per-device bandwidth cap (~150 Mbps)
+- 5 devices; Premium gate via BTCPay (Bitcoin)
+
+## Client safety
+- Linux: firewall + route kill switch while connected
+- Android: Always-on VPN / block-without-VPN (system settings + in-app guidance)
+- Desktop auto-reconnect; Android auto-reconnect after established session
+- Split tunnel: exclude LAN (desktop/Android); Android per-app bypass
+
+## Account / site
+- Anonymous Account ID + email accounts
+- Account dashboard: subscription, devices, port forwards, downloads, security
+- FAQ documents kill switch, split tunnel, port forwarding, stealth
+
+## Not shipped
+- Multi-hop / multi-region (needs more nodes)
+- Dedicated IP add-on (needs extra public IPs)
+- Android Stealth transport (API fields only; use Linux desktop)
+- AmneziaWG / claim of undetectability

@@ -38,6 +38,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var validationJob: Job? = null
     private var statsJob: Job? = null
     private var validationGeneration = 0L
+    private var hadGoodHandshake = false
+    private var reconnectSignalSent = false
 
     override fun onCreate() {
         super.onCreate()
@@ -55,6 +57,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                     .putString(KEY_CONFIG, config)
                     .apply()
+                hadGoodHandshake = false
+                reconnectSignalSent = false
                 startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
                 validationJob?.cancel()
                 val pendingDisconnect = disconnectJob?.takeIf { it.isActive }
@@ -106,6 +110,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                     .remove(KEY_CONFIG)
                     .apply()
+                hadGoodHandshake = false
+                reconnectSignalSent = false
                 transitionJob?.cancel()
                 disconnectJob?.cancel()
                 disconnectJob = scope.launch {
@@ -130,6 +136,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 val savedConfig = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                     .getString(KEY_CONFIG, null)
                 if (savedConfig != null) {
+                    hadGoodHandshake = false
+                    reconnectSignalSent = false
                     startForeground(NOTIFICATION_ID, buildNotification("Restoring secure tunnel…"))
                     scope.launch {
                         try {
@@ -171,6 +179,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         validationGeneration++
         validationJob?.cancel()
         stopStatsPolling()
+        hadGoodHandshake = false
+        reconnectSignalSent = false
         runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().remove(KEY_CONFIG).apply()
         broadcastState(
@@ -204,7 +214,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             else -> {
                 stopStatsPolling()
                 stopForeground(STOP_FOREGROUND_REMOVE)
+                val intendedConnected = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .getString(KEY_CONFIG, null) != null
                 broadcastState(false, null)
+                if (intendedConnected) {
+                    signalReconnectNeeded()
+                }
             }
         }
     }
@@ -233,12 +248,26 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 handshakeMs = peer.latestHandshakeEpochMillis
             }
         }
+        val now = System.currentTimeMillis()
+        val handshakeAge = if (handshakeMs > 0L) (now - handshakeMs).coerceAtLeast(0L) else Long.MAX_VALUE
+        if (handshakeMs > 0L && handshakeAge <= HANDSHAKE_STALE_MS) {
+            hadGoodHandshake = true
+            reconnectSignalSent = false
+        } else if (hadGoodHandshake && handshakeAge > HANDSHAKE_STALE_MS) {
+            signalReconnectNeeded()
+        }
         sendBroadcast(
             Intent(ACTION_STATS).setPackage(packageName)
                 .putExtra(EXTRA_RX_BYTES, stats.totalRx())
                 .putExtra(EXTRA_TX_BYTES, stats.totalTx())
                 .putExtra(EXTRA_HANDSHAKE_MS, handshakeMs)
         )
+    }
+
+    private fun signalReconnectNeeded() {
+        if (reconnectSignalSent) return
+        reconnectSignalSent = true
+        sendBroadcast(Intent(ACTION_RECONNECT_NEEDED).setPackage(packageName))
     }
 
     private fun friendlyError(e: Exception): String {
@@ -358,6 +387,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val ACTION_DISCONNECT = "cloud.veritasvpn.DISCONNECT"
         const val ACTION_STATE = "cloud.veritasvpn.STATE"
         const val ACTION_STATS = "cloud.veritasvpn.STATS"
+        const val ACTION_RECONNECT_NEEDED = "cloud.veritasvpn.RECONNECT_NEEDED"
         const val EXTRA_CONFIG = "config"
         const val EXTRA_CONNECTED = "connected"
         const val EXTRA_ERROR = "error"
@@ -368,6 +398,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val PREFS_NAME = "veritas_vpn_state"
         const val KEY_CONFIG = "last_approved_config"
         private const val TAG = "VeritasVpnService"
+        private const val HANDSHAKE_STALE_MS = 120_000L
         private val EGRESS_ENDPOINTS = listOf(
             "https://api.ipify.org",
             "https://ifconfig.me/ip",

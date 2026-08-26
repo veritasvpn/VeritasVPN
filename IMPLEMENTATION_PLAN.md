@@ -1,8 +1,8 @@
 # VeritasVPN — Implementation Plan
 
 > **Tagline:** *Privacy is truth.*
-> **Approach:** WireGuard-only, open-source clients, radical transparency, solo-founder execution.
-> **Repo:** Private — architecture, infra, and operational secrets reside here.
+> **Approach:** WireGuard-only, source-available clients, radical transparency, solo-founder execution.
+> **Status (2026-08):** Production on k3s (Dell node). Shipped: WireGuard Linux/Android/Chrome, BTCPay Bitcoin Premium **$3/mo · $30/yr**, kill switch, DNS protection, devices, port forwarding, Linux Stealth. See `docs/FEATURES_SHIPPED.md`. This file retains historical design notes; prefer FEATURES_SHIPPED for “what exists today.”
 
 ---
 
@@ -40,14 +40,14 @@ and provisioning system are fully auditable.
 
 ### 1.3 Differentiation
 
-| Feature | VeritasVPN | Mullvad | ProtonVPN |
-|---------|-----------|---------|-----------|
-| Protocol | WireGuard **only** | WG + OpenVPN | WG + OpenVPN + IKEv2 |
-| Clients | Fully open-source | Open-source | Partially open-source |
-| Servers | Fully open-source (Ansible/Terraform) | Closed | Closed |
-| Anonymous accounts | Yes (no email) | Yes (account number) | Email required |
-| RAM-only servers | Yes (diskless boot) | Partial | Partial |
-| Crypto payments | Monero, BTC, ETH | BTC, BCH | BTC |
+| Feature | VeritasVPN (today) | Typical big VPN |
+|---------|-----------|-----------|
+| Protocol | WireGuard **only** (+ optional TLS stealth wrap) | WG + OpenVPN + others |
+| Clients | Source-available (BSL) Linux, Android, Chrome | Mixed |
+| Servers | Source-available agent/manager on k3s | Closed |
+| Anonymous accounts | Account ID **or** email | Often email-only |
+| RAM-only servers | **Not claimed** (honest ops on diskful node) | Often marketed |
+| Crypto payments | **Bitcoin via BTCPay** ($3/mo, $30/yr) | Varies |
 
 ### 1.4 Target Audience
 

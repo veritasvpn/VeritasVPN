@@ -25,6 +25,13 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "BTCPay mainnet payment page is unavailable"
+      - alert: BTCPayCustomerHostnameUnavailable
+        expr: probe_success{instance="https://btcpay.veritasvpn.cloud/"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Customer BTCPay hostname btcpay.veritasvpn.cloud is unavailable"
+          description: "Usually a Cloudflare Tunnel misroute or scaled-to-zero legacy btcpay namespace. Prefer btcpay-mainnet until the tunnel is remapped."
       - alert: DellDiskFilling
         expr: 100 * (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) > 85
         for: 10m
@@ -239,6 +246,13 @@ groups:
         annotations:
           summary: "Encrypted VeritasVPN backup is stale"
           description: "No backup has passed restore validation in the last 48 hours."
+      - alert: VeritasBackupArchiveTooSmall
+        expr: veritas_backup_archive_bytes > 0 and veritas_backup_archive_bytes < 500000
+        for: 12h
+        labels: { severity: warning }
+        annotations:
+          summary: "VeritasVPN backup archive is unexpectedly small"
+          description: "Archive under 500KB may mean BTCPay/mainnet dumps were skipped. Check deploy/backup/backup-k3s.sh."
       - alert: VeritasOffsiteBackupStale
         expr: time() - veritas_backup_offsite_last_success_timestamp > 172800
         for: 30m

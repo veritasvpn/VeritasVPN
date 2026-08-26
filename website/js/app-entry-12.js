@@ -49,7 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    document.querySelectorAll('.faq-question').forEach((button) => {
+    document.querySelectorAll('.faq-question').forEach((button, index, buttons) => {
         button.addEventListener('click', () => {
             const expanded = button.getAttribute('aria-expanded') === 'true';
             document.querySelectorAll('.faq-question').forEach((b) => {
@@ -58,6 +58,23 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!expanded) {
                 button.setAttribute('aria-expanded', 'true');
             }
+        });
+        button.addEventListener('keydown', (event) => {
+            if (event.key === ' ') {
+                event.preventDefault();
+                button.click();
+                return;
+            }
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') {
+                return;
+            }
+            event.preventDefault();
+            let next = index;
+            if (event.key === 'ArrowDown') next = (index + 1) % buttons.length;
+            if (event.key === 'ArrowUp') next = (index - 1 + buttons.length) % buttons.length;
+            if (event.key === 'Home') next = 0;
+            if (event.key === 'End') next = buttons.length - 1;
+            buttons[next].focus();
         });
     });
 

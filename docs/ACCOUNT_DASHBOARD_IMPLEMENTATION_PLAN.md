@@ -23,7 +23,7 @@ Visual language stays **Veritas** (dark `#05070a`, cyan→blue accents) — stru
 
 - Auth today: Firebase on `website/js/auth.js`; billing status via `website/js/billing.js` → `billing-svc`
 - Account ID = Firebase UID
-- Plans: `free` \| `premium` ($5/mo BTC) — see `docs/BITCOIN_PAYMENTS_IMPLEMENTATION_PLAN.md`
+- Plans: `free` \| `premium` ($3/mo or $30/yr BTC) — see `docs/BITCOIN_PAYMENTS_IMPLEMENTATION_PLAN.md` and `docs/FEATURES_SHIPPED.md`
 - Do not keep marketing CTAs on `data-auth-open` once session exists; route to `/account/` (or `/app/`)
 
 ---

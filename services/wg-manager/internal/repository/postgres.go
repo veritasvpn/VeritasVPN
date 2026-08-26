@@ -34,6 +34,40 @@ func (p *Postgres) GetServerByHostname(ctx context.Context, hostname string) (*m
 	return srv, nil
 }
 
+func (p *Postgres) GetServerByPublicKey(ctx context.Context, publicKey string) (*model.Server, error) {
+	query := `SELECT id, hostname, region, city, country, public_ip, wg_port,
+	           public_key, status, capacity, load_factor, wg_subnet, dns_server,
+	           created_at, updated_at FROM servers WHERE public_key = $1
+	           ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1`
+
+	srv := &model.Server{}
+	err := p.pool.QueryRow(ctx, query, publicKey).Scan(
+		&srv.ID, &srv.Hostname, &srv.Region, &srv.City, &srv.Country,
+		&srv.PublicIP, &srv.WGPort, &srv.PublicKey, &srv.Status,
+		&srv.Capacity, &srv.LoadFactor, &srv.WGSubnet, &srv.DNSServer,
+		&srv.CreatedAt, &srv.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get server by public key: %w", err)
+	}
+	return srv, nil
+}
+
+func (p *Postgres) MarkDuplicateServersOffline(ctx context.Context, keepID, publicIP, publicKey string) error {
+	_, err := p.pool.Exec(ctx, `
+		UPDATE servers
+		SET status = 'offline', updated_at = NOW()
+		WHERE id <> $1
+		  AND status = 'online'
+		  AND (public_ip = $2 OR public_key = $3)`,
+		keepID, publicIP, publicKey,
+	)
+	if err != nil {
+		return fmt.Errorf("mark duplicate servers offline: %w", err)
+	}
+	return nil
+}
+
 func (p *Postgres) RegisterServer(ctx context.Context, srv *model.Server) error {
 	query := `INSERT INTO servers (hostname, region, city, country, public_ip,
 	           wg_port, public_key, status, capacity, wg_subnet, dns_server)
@@ -51,6 +85,28 @@ func (p *Postgres) RegisterServer(ctx context.Context, srv *model.Server) error 
 		srv.PublicIP, srv.WGPort, srv.PublicKey, srv.Status,
 		srv.Capacity, srv.WGSubnet, srv.DNSServer,
 	).Scan(&srv.ID, &srv.WGSubnet, &srv.DNSServer)
+}
+
+func (p *Postgres) UpdateServerIdentity(ctx context.Context, srv *model.Server) error {
+	_, err := p.pool.Exec(ctx, `
+		UPDATE servers SET
+		  hostname = $2,
+		  region = $3,
+		  city = $4,
+		  country = $5,
+		  public_ip = $6,
+		  wg_port = $7,
+		  public_key = $8,
+		  status = $9,
+		  updated_at = NOW()
+		WHERE id = $1`,
+		srv.ID, srv.Hostname, srv.Region, srv.City, srv.Country,
+		srv.PublicIP, srv.WGPort, srv.PublicKey, srv.Status,
+	)
+	if err != nil {
+		return fmt.Errorf("update server identity: %w", err)
+	}
+	return nil
 }
 
 func (p *Postgres) GetServer(ctx context.Context, id string) (*model.Server, error) {

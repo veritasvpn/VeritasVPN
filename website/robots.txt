@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://veritasvpn.cloud/sitemap.xml

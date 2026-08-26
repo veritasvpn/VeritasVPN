@@ -20,8 +20,6 @@ data:
         default "";
         "https://veritasvpn.cloud"    "$http_origin";
         "https://www.veritasvpn.cloud" "$http_origin";
-            "http://localhost:8000"        "$http_origin";
-        "http://127.0.0.1:8000"        "$http_origin";
         "tauri://localhost"            "$http_origin";
         "http://tauri.localhost"       "$http_origin";
         "https://tauri.localhost"      "$http_origin";

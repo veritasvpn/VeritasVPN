@@ -179,7 +179,11 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 	}
 
 	existing, err := s.postgres.GetServerByHostname(ctx, hostname)
-	if err == nil && existing != nil {
+	if err != nil && !strings.Contains(err.Error(), "no rows") {
+		return nil, fmt.Errorf("lookup server: %w", err)
+	}
+
+	if existing != nil {
 		existing.PublicIP = publicIP
 		existing.WGPort = wgPort
 		existing.PublicKey = publicKey
@@ -193,8 +197,11 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 		if country != "" {
 			existing.Country = country
 		}
-		if err := s.postgres.RegisterServer(ctx, existing); err != nil {
+		if err := s.postgres.UpdateServerIdentity(ctx, existing); err != nil {
 			return nil, fmt.Errorf("update server: %w", err)
+		}
+		if err := s.postgres.MarkDuplicateServersOffline(ctx, existing.ID, publicIP, publicKey); err != nil {
+			s.log.Warn("failed to mark duplicate servers offline", "error", err)
 		}
 		s.log.Info("server re-registered",
 			"server_id", existing.ID,
@@ -202,9 +209,6 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 			"subnet", existing.WGSubnet,
 		)
 		return existing, nil
-	}
-	if err != nil && !strings.Contains(err.Error(), "no rows") {
-		return nil, fmt.Errorf("lookup server: %w", err)
 	}
 
 	subnet, err := s.allocateSubnet(ctx)
@@ -230,6 +234,9 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 
 	if err := s.postgres.RegisterServer(ctx, srv); err != nil {
 		return nil, fmt.Errorf("register server: %w", err)
+	}
+	if err := s.postgres.MarkDuplicateServersOffline(ctx, srv.ID, publicIP, publicKey); err != nil {
+		s.log.Warn("failed to mark duplicate servers offline", "error", err)
 	}
 
 	s.log.Info("server registered",

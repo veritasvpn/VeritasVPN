@@ -9,7 +9,7 @@ VeritasVPN will take **Bitcoin only** for paid subscriptions (on-chain first; Li
 | Plan | Price | Intent |
 |------|-------|--------|
 | Free | $0 | Sign up via Firebase; limited access |
-| Premium | $5 / month | Paid via Bitcoin; full access |
+| Premium | $3 / month or $30 / year | Paid via Bitcoin; full access |
 
 This document is the build plan to make Premium purchasable end-to-end. The marketing site already shows Free + Premium; payment checkout is not live yet.
 
@@ -29,7 +29,7 @@ Payment provider decision for v1: **self-hosted BTCPay Server**, Bitcoin (BTC) o
 ## Goals
 
 1. User can create a Free account (Firebase) with no payment.
-2. User can upgrade to Premium ($5 USD/month equivalent) by paying Bitcoin via BTCPay.
+2. User can upgrade to Premium ($3 USD/month or $30/year) by paying Bitcoin via BTCPay.
 3. On confirmed payment, `billing-svc` marks subscription `premium` with a period end (~30 days).
 4. Expired Premium falls back to Free (or revoked premium entitlements) without manual ops.
 

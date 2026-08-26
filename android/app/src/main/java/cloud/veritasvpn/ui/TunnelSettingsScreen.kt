@@ -23,6 +23,7 @@ import cloud.veritasvpn.ui.theme.*
 fun TunnelSettingsScreen(
     excludeLan: Boolean,
     bypassAppsText: String,
+    showReconnectBanner: Boolean,
     onExcludeLanChange: (Boolean) -> Unit,
     onBypassAppsChange: (String) -> Unit,
     onBack: () -> Unit
@@ -48,6 +49,25 @@ fun TunnelSettingsScreen(
             }
         }
 
+        if (showReconnectBanner) {
+            Spacer(Modifier.height(14.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, WarningOrange.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                    .background(WarningOrange.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Reconnect to apply",
+                    color = WarningOrange,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+            }
+        }
+
         Spacer(Modifier.height(18.dp))
 
         Text("ROUTING", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
@@ -62,7 +82,7 @@ fun TunnelSettingsScreen(
         Spacer(Modifier.height(10.dp))
         SettingToggleRow(
             title = "Exclude private LAN",
-            subtitle = "Replace 0.0.0.0/0 with public prefixes that omit RFC1918 (10/8, 172.16/12, 192.168/16) so local network traffic stays off the VPN. Reconnect to apply.",
+            subtitle = "Replace 0.0.0.0/0 with public prefixes that omit RFC1918 (10/8, 172.16/12, 192.168/16) so local network traffic stays off the VPN.",
             checked = excludeLan,
             onCheckedChange = { onExcludeLanChange(it) }
         )
@@ -71,9 +91,17 @@ fun TunnelSettingsScreen(
         Text("PER-APP BYPASS", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
         Spacer(Modifier.height(6.dp))
         Text(
-            "Package names listed below use VpnService.Builder.addDisallowedApplication (via WireGuard ExcludedApplications). One package per line. Reconnect to apply.",
+            "Apps listed below skip the VPN (WireGuard ExcludedApplications → VpnService addDisallowedApplication). One Android package name per line.",
             color = PaperMuted,
-            fontSize = 13.sp
+            fontSize = 13.sp,
+            lineHeight = 18.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Find package names: Settings → Apps → [app] → App info (or “Advanced”), or connect the device and run adb shell pm list packages | grep name.",
+            color = PaperDim,
+            fontSize = 12.sp,
+            lineHeight = 16.sp
         )
         Spacer(Modifier.height(10.dp))
         OutlinedTextField(
@@ -95,6 +123,16 @@ fun TunnelSettingsScreen(
                 unfocusedContainerColor = CardElevated
             ),
             shape = RoundedCornerShape(12.dp)
+        )
+
+        Spacer(Modifier.height(22.dp))
+        Text("STEALTH", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Stealth mode (WireGuard over TLS/WebSocket) is available on the Linux desktop app — not in this Android build yet.",
+            color = PaperMuted,
+            fontSize = 13.sp,
+            lineHeight = 18.sp
         )
     }
 }

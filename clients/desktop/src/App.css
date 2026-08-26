@@ -407,6 +407,23 @@ input::placeholder { color: var(--paper-dim); }
   font-weight: 700;
 }
 .blueprint-menu button.menu-toggle b.on { color: var(--cyan-hover); }
+.blueprint-menu button.menu-toggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.blueprint-menu button.menu-toggle:disabled:hover {
+  background: transparent;
+}
+.menu-static-note {
+  margin: 2px 4px 6px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(9, 199, 245, 0.06);
+  color: var(--paper-dim);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
 .blueprint-menu hr {
   height: 1px;
   margin: 4px;
@@ -702,6 +719,42 @@ input::placeholder { color: var(--paper-dim); }
   letter-spacing: 2px;
 }
 
+.transport-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border-radius: 50px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+}
+
+.transport-badge.direct {
+  border: 1px solid rgba(9, 199, 245, 0.28);
+  background: rgba(9, 199, 245, 0.1);
+  color: var(--cyan-hover);
+}
+
+.transport-badge.stealth {
+  border: 1px solid rgba(7, 86, 217, 0.45);
+  background: rgba(7, 86, 217, 0.18);
+  color: #9ec5ff;
+}
+
+.reconnect-banner {
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 183, 77, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 183, 77, 0.1);
+  color: var(--warning);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
 .blueprint-status h2 {
   margin: 14px 0 0;
   font-family: var(--display);
@@ -823,6 +876,35 @@ input::placeholder { color: var(--paper-dim); }
 .status-msg.ok { color: var(--success); }
 .status-msg.info { color: var(--cyan-hover); }
 .status-msg.warn { color: var(--warning); }
+
+.status-msg.sticky {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 360px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 183, 77, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 183, 77, 0.08);
+}
+
+.status-dismiss {
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--cyan-hover);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.status-dismiss:hover {
+  text-decoration: underline;
+}
 
 .live-stats {
   width: 100%;

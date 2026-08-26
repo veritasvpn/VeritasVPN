@@ -9,16 +9,16 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:45a6f1a962abacb0eb52c529e9a3355c78d49b7dd4300aef4945344334b5c073
+    digest: sha256:ad4a05eb67aafbad86d80e6d77893d8194055155f3d592f147d00c15331f67c9
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    digest: sha256:a3c97cdebbbbe4928a1dfe4b434bc90ec15eb482bd22b0a435d6e46408f9d536
+    digest: sha256:18142a2380d60d83a1f78e2815b075bf0be0ea91bfffefcbac54f0fd79792686
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
     digest: sha256:891bcca9d15113915b0641b7781cc07dfd954fbaeab715676662ba632efa0abf
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    digest: sha256:403a21a25c6bf5bbb0eb8bc61e70345af108ed97796d9cb3b05f6b5302669a1b
+    digest: sha256:c531dfa9dc0f88bb57aeb2afb68299f893e4b840905c9a3787fbdd415712be90
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
     digest: sha256:735d0c4463bf3f0e87133f5e62e17749bb47efe7d83d9daac9c7e9c8c9ce7579
@@ -69,9 +69,6 @@ patches:
         path: /data/STEALTH_ENDPOINT_PORT
         value: "443"
       - op: replace
-        path: /data/STEALTH_PATH_PREFIX
-        value: "6492a80dae0298e85be91802ee1c9847"
-      - op: replace
         path: /data/SERVER_COUNTRY
         value: "PY"
       - op: replace
@@ -80,6 +77,12 @@ patches:
       - op: replace
         path: /data/BITCOIN_READINESS_URL
         value: "http://bitcoin-readiness-mainnet.btcpay-mainnet.svc.cluster.local:8080/readyz"
+      - op: replace
+        path: /data/BTCPAY_SERVER_URL
+        value: "http://btcpayserver-mainnet.btcpay-mainnet.svc.cluster.local:49392"
+      - op: replace
+        path: /data/BTCPAY_PUBLIC_URL
+        value: "https://btcpay-mainnet.veritasvpn.cloud"
 
   # Auth env with Redis/NATS auth
   - target:

@@ -116,7 +116,7 @@ fun PortForwardsScreen(
 
         Spacer(Modifier.height(10.dp))
         Text(
-            "Premium only (max 2). Traffic hits the node public IP (not Cloudflare). Open matching ports on your router toward your Dell. Recommended external ports: 40000–49999.",
+            "Premium only (max 2). Traffic hits the VPN node public IP (not Cloudflare). Open matching ports on your router toward the VPN server. Recommended external ports: 40000–49999.",
             color = PaperMuted,
             fontSize = 13.sp,
             lineHeight = 18.sp

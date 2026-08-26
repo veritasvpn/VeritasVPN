@@ -69,6 +69,20 @@
                 <p class="downloads-note"><strong>Compatibility:</strong> Linux x86_64 (amd64) on Debian, Ubuntu, or any AppImage-compatible distribution.</p>
             </div>
         </section>
+
+        <section class="downloads install-section">
+            <div class="container install-steps">
+                <h2>Stealth mode</h2>
+                <p>On restrictive networks that block or throttle plain WireGuard UDP, enable <strong>Settings → Stealth mode</strong>, then reconnect. Stealth wraps the tunnel in a TLS WebSocket so traffic looks more like ordinary HTTPS. Direct UDP remains the default when Stealth is off. This helps on harsh networks; it is not a claim of undetectability.</p>
+            </div>
+        </section>
+
+        <section class="downloads install-section">
+            <div class="container install-steps">
+                <h2>Kill switch</h2>
+                <p>When the kill switch is on, Linux blocks non-VPN traffic at the firewall and routing layers if the tunnel drops, so your real IP and DNS do not leak over the clear connection. Confirm it is enabled in the app before relying on it.</p>
+            </div>
+        </section>
     </main>
 
     <footer class="footer">

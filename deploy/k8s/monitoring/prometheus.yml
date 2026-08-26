@@ -55,6 +55,7 @@ scrape_configs:
           - https://api.veritasvpn.cloud/healthz
           - https://api.veritasvpn.cloud/api/v1/billing/readyz
           - https://btcpay-mainnet.veritasvpn.cloud/
+          - https://btcpay.veritasvpn.cloud/
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

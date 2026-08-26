@@ -61,9 +61,19 @@ fun DashboardScreen(
 ) {
     var showSignOutConfirmation by remember { mutableStateOf(false) }
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
+    var showKillSwitchGuidance by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var showNetworkMap by remember { mutableStateOf(false) }
 
+    if (showKillSwitchGuidance) {
+        KillSwitchGuidanceDialog(
+            onDismiss = { showKillSwitchGuidance = false },
+            onOpenSystemVpnSettings = {
+                showKillSwitchGuidance = false
+                onKillSwitchSettings()
+            }
+        )
+    }
     if (showSignOutConfirmation) {
         AlertDialog(
             onDismissRequest = { showSignOutConfirmation = false },
@@ -161,7 +171,22 @@ fun DashboardScreen(
                     )
                     DropdownMenuItem(
                         text = { Text("Android kill switch settings", color = Paper, fontWeight = FontWeight.SemiBold) },
-                        onClick = { showSettingsMenu = false; onKillSwitchSettings() }
+                        onClick = { showSettingsMenu = false; showKillSwitchGuidance = true }
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("Stealth mode", color = PaperMuted, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "Available on the Linux desktop app — not in this Android build yet.",
+                                    color = PaperDim,
+                                    fontSize = 12.sp,
+                                    lineHeight = 15.sp
+                                )
+                            }
+                        },
+                        onClick = { showSettingsMenu = false },
+                        enabled = false
                     )
                     HorizontalDivider(color = Line)
                     DropdownMenuItem(
@@ -289,7 +314,12 @@ fun DashboardScreen(
             }
 
             // Status message
-            statusMsg?.takeUnless { connecting && it.startsWith("Connecting", ignoreCase = true) }?.let { msg ->
+            statusMsg?.takeUnless {
+                connecting && (
+                    it.startsWith("Connecting", ignoreCase = true) ||
+                        it.startsWith("Reconnecting", ignoreCase = true)
+                    )
+            }?.let { msg ->
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = msg,
@@ -301,6 +331,57 @@ fun DashboardScreen(
         }
         }
     }
+}
+
+@Composable
+fun KillSwitchGuidanceDialog(
+    onDismiss: () -> Unit,
+    onOpenSystemVpnSettings: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Android kill switch", color = Paper, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Android’s system VPN settings are the kill switch for this app. Enable both options for VeritasVPN:",
+                    color = PaperMuted,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+                Text(
+                    "1. Always-on VPN — keeps the tunnel preferred and restores it after restarts.",
+                    color = Paper,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+                Text(
+                    "2. Block connections without VPN — blocks internet if the tunnel drops so traffic cannot leak outside the VPN.",
+                    color = Paper,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+                Text(
+                    "Without “Block connections without VPN”, Android may restore normal networking after a service failure.",
+                    color = PaperDim,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onOpenSystemVpnSettings,
+                colors = ButtonDefaults.buttonColors(containerColor = CyanHover)
+            ) {
+                Text("Open VPN settings", color = Ink, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Not now", color = CyanHover) }
+        },
+        containerColor = CardElevated
+    )
 }
 
 @Composable

@@ -114,8 +114,8 @@ spec:
                   key: STEALTH_ENDPOINT_PORT
             - name: STEALTH_PATH_PREFIX
               valueFrom:
-                configMapKeyRef:
-                  name: veritas-config
+                secretKeyRef:
+                  name: veritas-secrets
                   key: STEALTH_PATH_PREFIX
           readinessProbe:
             httpGet:

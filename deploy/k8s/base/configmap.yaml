@@ -27,7 +27,7 @@ data:
   STEALTH_ENABLED: "false"
   STEALTH_ENDPOINT_HOST: ""
   STEALTH_ENDPOINT_PORT: "443"
-  STEALTH_PATH_PREFIX: ""
+  # Path prefix lives in Secret STEALTH_PATH_PREFIX (not ConfigMap).
   PUBLIC_IP: "change-me-or-set-to-your-vps-ip"
   SERVER_HOSTNAME: "linuxdesktop"
   SERVER_REGION: "sa"
@@ -44,8 +44,8 @@ data:
 
   ALLOW_MOCK_BTCPAY: "true"
   BITCOIN_READINESS_URL: ""
-  BTCPAY_SERVER_URL: "http://btcpayserver.btcpay.svc.cluster.local:49392"
-  BTCPAY_PUBLIC_URL: "https://btcpay.veritasvpn.cloud"
+  BTCPAY_SERVER_URL: "http://btcpayserver-mainnet.btcpay-mainnet.svc.cluster.local:49392"
+  BTCPAY_PUBLIC_URL: "https://btcpay-mainnet.veritasvpn.cloud"
 
   FREE_ALLOWED_REGIONS: ""
   PREMIUM_PRICE_USD_CENTS: "300"

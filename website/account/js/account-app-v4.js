@@ -240,6 +240,10 @@ function renderHome() {
           <li>Access to the current network</li>
           <li>Up to 5 WireGuard devices</li>
           <li>Private DNS threat protection (Android &amp; Linux)</li>
+          <li>Port forwarding</li>
+          <li>Stealth (Linux)</li>
+          <li>Kill switch</li>
+          <li>Split tunnel</li>
           <li>Pay with Bitcoin (no card)</li>
           <li>Priority support while we expand</li>
         </ul>
@@ -436,7 +440,7 @@ function renderPortForwards() {
         <button type="button" class="btn btn-outline btn-sm" data-action="refresh-port-forwards">Refresh</button>
       </div>
       <div class="account-card" style="margin-bottom:16px;">
-        <p class="pf-help">Premium only. Traffic arrives on the node public IP (not Cloudflare HTTP). Open matching ports on your router toward your Dell. Recommended external ports: <strong>40000–49999</strong>.</p>
+        <p class="pf-help">Premium only. Traffic arrives on the node public IP (not Cloudflare HTTP). Open matching ports on your router toward the VPN node. Recommended external ports: <strong>40000–49999</strong>.</p>
       </div>
       ${!isPremium ? '<div class="account-card"><p>Port forwarding requires VeritasVPN Premium. <a href="#/subscription">Upgrade →</a></p></div>' : ''}
       ${!portForwardsLoaded ? '<p class="account-loading">Loading port forwards…</p>' : ''}
@@ -493,9 +497,12 @@ function renderSecurity() {
         <ul class="upgrade-features">
           <li>WireGuard-only protocol</li>
           <li>Private DNS threat protection for Android &amp; Linux</li>
+          <li>Port forwarding</li>
+          <li>Stealth (Linux)</li>
+          <li>Kill switch</li>
+          <li>Split tunnel</li>
           <li>No traffic logs — see Privacy Policy for operational data</li>
           <li>Paid with Bitcoin (no card required)</li>
-          <li>Diskless / RAM-oriented servers (roadmap)</li>
           <li><a href="/canary.txt">Warrant canary</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></li>
         </ul>
         <div class="account-actions">

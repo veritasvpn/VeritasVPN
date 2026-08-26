@@ -152,6 +152,51 @@ function writeLocalFlag(key: string, enabled: boolean) {
   }
 }
 
+/** Stealth (wstunnel) is Linux-desktop only in this build. */
+function isLinuxDesktop(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent.toLowerCase();
+  return ua.includes("linux") && !ua.includes("android");
+}
+
+function formatConnectError(err: unknown, wantedStealth: boolean): string {
+  let raw = "Connection failed";
+  if (err instanceof Error) raw = err.message;
+  else if (typeof err === "string") raw = err;
+  else if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
+    raw = (err as { message: string }).message;
+  }
+  const lower = raw.toLowerCase();
+  if (
+    wantedStealth ||
+    /stealth|wstunnel/.test(lower)
+  ) {
+    if (/wstunnel|stealth engine/.test(lower) && /missing|not found|not bundled/.test(lower)) {
+      return "Stealth failed: wstunnel is not bundled in this build. Rebuild with the Linux stealth binary, or turn Stealth off.";
+    }
+    if (/stealth engine missing/.test(lower)) {
+      return "Stealth failed: wstunnel binary missing. Bundle it for Linux or turn Stealth off.";
+    }
+    if (/linux desktop|linux only|available on linux/.test(lower)) {
+      return "Stealth mode is Linux-only in this build. Turn it off to connect with Direct UDP.";
+    }
+    if (/failed to start stealth|stealth transport/.test(lower)) {
+      return "Stealth transport failed to start. Check TLS endpoint reachability, or turn Stealth off.";
+    }
+    if (/path prefix/.test(lower)) {
+      return "Stealth failed: server path prefix missing. Try again later or turn Stealth off.";
+    }
+    if (/not available on the (server|vpn node)/.test(lower)) {
+      return "Stealth is not available on the VPN node yet. Turn Stealth off or try again later.";
+    }
+  }
+  return raw || "Connection failed";
+}
+
+function isStickyStatusMessage(msg: string): boolean {
+  return /stealth/i.test(msg);
+}
+
 function applyExcludeLan(allowed: string[], excludeLan: boolean): string[] {
   if (!excludeLan || !allowed.includes("0.0.0.0/0")) return allowed;
   return [...allowed.filter((ip) => ip !== "0.0.0.0/0"), ...EXCLUDE_LAN_ALLOWED_IPS];
@@ -542,7 +587,7 @@ function PortForwardsScreen({
         </button>
       </div>
       <p className="pf-help">
-        Premium only. Traffic hits the node public IP (not Cloudflare). Open matching ports on your router toward your Dell.
+        Premium only. Traffic hits the node public IP (not Cloudflare). Open matching ports on your router toward your VPN node.
         Recommended external ports: <strong>40000–49999</strong>.
       </p>
       {error && <div className="billing-error">{error}</div>}
@@ -685,7 +730,14 @@ function App() {
   const [showPortForwards, setShowPortForwards] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState(() => readLocalFlag(LS_AUTO_RECONNECT, "1"));
   const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
-  const [stealthMode, setStealthMode] = useState(() => readLocalFlag(LS_STEALTH, "0"));
+  const [stealthMode, setStealthMode] = useState(() => {
+    const enabled = readLocalFlag(LS_STEALTH, "0");
+    return enabled && isLinuxDesktop();
+  });
+  const [linuxDesktop] = useState(() => isLinuxDesktop());
+  const [activeTransport, setActiveTransport] = useState<"direct" | "stealth" | "">("");
+  const [reconnectToApply, setReconnectToApply] = useState(false);
+  const [statusSticky, setStatusSticky] = useState(false);
   const [wgStats, setWgStats] = useState<WgTransferStats | null>(null);
   const [dnsBlockedCount, setDnsBlockedCount] = useState<number | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
@@ -787,11 +839,29 @@ function App() {
   }, [user]);
 
   useEffect(() => {
+    if (!linuxDesktop && stealthMode) {
+      setStealthMode(false);
+      writeLocalFlag(LS_STEALTH, false);
+    }
+  }, [linuxDesktop, stealthMode]);
+
+  useEffect(() => {
     if (!statusMsg) return;
+    if (statusSticky || isStickyStatusMessage(statusMsg)) return;
     if (/^reconnecting/i.test(statusMsg)) return;
     const t = window.setTimeout(() => setStatusMsg(""), 8000);
     return () => window.clearTimeout(t);
-  }, [statusMsg]);
+  }, [statusMsg, statusSticky]);
+
+  const dismissStatus = useCallback(() => {
+    setStatusMsg("");
+    setStatusSticky(false);
+  }, []);
+
+  const showStatus = useCallback((msg: string, sticky = false) => {
+    setStatusSticky(sticky || isStickyStatusMessage(msg));
+    setStatusMsg(msg);
+  }, []);
 
   useEffect(() => {
     if (!connecting) return;
@@ -1055,7 +1125,8 @@ function App() {
     if (connectingRef.current) return false;
     if (connectedRef.current && !opts?.isReconnect) return false;
 
-    setStatusMsg(opts?.isReconnect ? "Reconnecting…" : "");
+    const wantedStealth = stealthModeRef.current && linuxDesktop;
+    showStatus(opts?.isReconnect ? "Reconnecting…" : "", false);
     setEgressIp("");
     setConnecting(true);
     connectPeerRef.current = "";
@@ -1063,7 +1134,20 @@ function App() {
     let token = "";
     let createdPeerId = "";
     try {
-      if (!opts?.isReconnect) setStatusMsg("Creating secure keys…");
+      // Drop any previous peer before registering a new one (reconnect + stale sessions).
+      const priorPeer = peerIdRef.current;
+      if (priorPeer) {
+        await deletePeer(priorPeer);
+        if (peerIdRef.current === priorPeer) {
+          setPeerId("");
+        }
+      }
+
+      if (wantedStealth && !linuxDesktop) {
+        throw new Error("Stealth mode is Linux-only in this build. Turn it off to connect with Direct UDP.");
+      }
+
+      if (!opts?.isReconnect) showStatus("Creating secure keys…", false);
       await refreshSession();
       token = getStoredToken() || "";
       if (!token) throw new Error("Not signed in");
@@ -1102,9 +1186,9 @@ function App() {
 
       const allowedRaw = peer.client_allowed_ips || peer.allowed_ips || ["0.0.0.0/0"];
       const allowed = applyExcludeLan(allowedRaw, excludeLanRef.current);
-      const useStealth = stealthModeRef.current && !!peer.stealth_available && !!peer.stealth_endpoint;
-      if (stealthModeRef.current && !useStealth) {
-        throw new Error("Stealth mode is not available on the server yet. Turn it off or try again later.");
+      const useStealth = wantedStealth && !!peer.stealth_available && !!peer.stealth_endpoint;
+      if (wantedStealth && !useStealth) {
+        throw new Error("Stealth is not available on the VPN node yet. Turn Stealth off or try again later.");
       }
       const result = await invoke<ConnectResult>("connect_wireguard", {
         config: {
@@ -1131,6 +1215,9 @@ function App() {
       setConnected(true);
       setTunnelMode("wireguard");
       setPeerId(peer.peer_id);
+      setActiveTransport(useStealth ? "stealth" : "direct");
+      setReconnectToApply(false);
+      setStatusSticky(false);
       setStatusMsg("");
       setWgStats(null);
       setDnsBlockedCount(null);
@@ -1144,18 +1231,20 @@ function App() {
           headers: { Authorization: `Bearer ${token}` },
         }).catch(() => undefined);
       }
-      setStatusMsg(err instanceof Error ? err.message : "Connection failed");
+      const message = formatConnectError(err, wantedStealth);
+      showStatus(message, isStickyStatusMessage(message));
       return false;
     } finally {
       setConnecting(false);
     }
-  }, [user, fetchEgressIp]);
+  }, [user, fetchEgressIp, deletePeer, linuxDesktop, showStatus]);
 
   const handleConnect = useCallback(async () => {
     userDisconnectedRef.current = false;
     clearReconnectTimer();
     reconnectingRef.current = false;
     setReconnecting(false);
+    setStatusSticky(false);
     await connectVpn();
   }, [clearReconnectTimer, connectVpn]);
 
@@ -1173,6 +1262,8 @@ function App() {
       setEgressIp("");
       setWgStats(null);
       setDnsBlockedCount(null);
+      setActiveTransport("");
+      setReconnectToApply(false);
       hadGoodHandshakeRef.current = false;
       hadInterfaceUpRef.current = false;
     };
@@ -1227,6 +1318,7 @@ function App() {
       setPeerId("");
       setEgressIp("");
       setWgStats(null);
+      setActiveTransport("");
       hadGoodHandshakeRef.current = false;
       hadInterfaceUpRef.current = false;
       if (oldPeer) await deletePeer(oldPeer);
@@ -1483,15 +1575,18 @@ function App() {
       writeLocalFlag(LS_EXCLUDE_LAN, next);
       return next;
     });
+    setReconnectToApply(true);
   }, []);
 
   const toggleStealthMode = useCallback(() => {
+    if (!linuxDesktop) return;
     setStealthMode((prev) => {
       const next = !prev;
       writeLocalFlag(LS_STEALTH, next);
       return next;
     });
-  }, []);
+    setReconnectToApply(true);
+  }, [linuxDesktop]);
 
   const handleSignOut = useCallback(() => {
     if (user) clearCachedBillingStatus(user.account_id);
@@ -1686,10 +1781,22 @@ function App() {
                   <span>Exclude LAN<span className="menu-note">Reconnect to apply</span></span>
                   <b className={excludeLan ? "on" : ""}>{excludeLan ? "On" : "Off"}</b>
                 </button>
-                <button type="button" className="menu-toggle" onClick={toggleStealthMode}>
-                  <span>Stealth mode<span className="menu-note">TLS wrap · reconnect</span></span>
-                  <b className={stealthMode ? "on" : ""}>{stealthMode ? "On" : "Off"}</b>
+                <button
+                  type="button"
+                  className="menu-toggle"
+                  onClick={toggleStealthMode}
+                  disabled={!linuxDesktop}
+                  aria-disabled={!linuxDesktop}
+                >
+                  <span>
+                    Stealth mode
+                    <span className="menu-note">{linuxDesktop ? "TLS wrap · reconnect" : "Linux only"}</span>
+                  </span>
+                  <b className={linuxDesktop && stealthMode ? "on" : ""}>
+                    {!linuxDesktop ? "—" : stealthMode ? "On" : "Off"}
+                  </b>
                 </button>
+                <p className="menu-static-note">Linux firewall kill switch is always on while connected</p>
                 <hr />
                 <button type="button" className="danger" onClick={() => void handleSignOutEverywhere()}>Sign out everywhere</button>
                 <button type="button" className="danger" onClick={requestSignOut}>Sign out</button>
@@ -1792,6 +1899,14 @@ function App() {
                   <div className="blueprint-secured">
                     {reconnecting && !connected ? "RECONNECTING…" : "CONNECTION SECURED"}
                   </div>
+                  {connected && activeTransport && (
+                    <div
+                      className={`transport-badge ${activeTransport === "stealth" ? "stealth" : "direct"}`}
+                      aria-label="Transport mode"
+                    >
+                      {activeTransport === "stealth" ? "Stealth TLS" : "Direct UDP"}
+                    </div>
+                  )}
                   <h2 className="connected-title">{reconnecting && !connected ? "Reconnecting…" : "You're protected"}</h2>
                   <p>
                     {reconnecting && !connected
@@ -1802,6 +1917,11 @@ function App() {
                     <button className="blueprint-disconnect" type="button" onClick={handleDisconnect} disabled={connecting && !reconnecting}>
                       Disconnect
                     </button>
+                  )}
+                  {reconnectToApply && (connected || reconnecting) && (
+                    <div className="reconnect-banner" role="status">
+                      Reconnect to apply
+                    </div>
                   )}
                   {connected && wgStats && (
                     <div className="live-stats" aria-label="Live tunnel statistics">
@@ -1827,8 +1947,20 @@ function App() {
                   )}
                 </>
               )}
-              {statusMsg && !(connecting && /^connecting/i.test(statusMsg)) && (
-                <div className={`status-msg ${connected ? "ok" : connecting || reconnecting ? "info" : "warn"}`}>{statusMsg}</div>
+              {reconnectToApply && !connected && !reconnecting && !connecting && (
+                <div className="reconnect-banner" role="status">
+                  Reconnect to apply
+                </div>
+              )}
+              {statusMsg && !(connecting && /^connecting|creating secure/i.test(statusMsg)) && (
+                <div className={`status-msg ${connected ? "ok" : connecting || reconnecting ? "info" : "warn"} ${statusSticky || isStickyStatusMessage(statusMsg) ? "sticky" : ""}`}>
+                  <span>{statusMsg}</span>
+                  {(statusSticky || isStickyStatusMessage(statusMsg)) && (
+                    <button type="button" className="status-dismiss" onClick={dismissStatus} aria-label="Dismiss">
+                      Dismiss
+                    </button>
+                  )}
+                </div>
               )}
             </section>
           </>

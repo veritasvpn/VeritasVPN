@@ -662,10 +662,16 @@ func (a *Agent) streamLoop(ctx context.Context) {
 				a.handlePeerUpdate(update)
 			case err, ok := <-errs:
 				if !ok || err == io.EOF {
+					a.logger.Warn("Peer update stream ended, reconnecting...")
 					goto reconnect
 				}
 				if err != nil {
-					a.logger.Error("Peer update stream error", zap.Error(err))
+					msg := err.Error()
+					if strings.Contains(msg, "EOF") || strings.Contains(msg, "connection reset") {
+						a.logger.Warn("Peer update stream disconnected, reconnecting...", zap.Error(err))
+					} else {
+						a.logger.Error("Peer update stream error", zap.Error(err))
+					}
 					goto reconnect
 				}
 			case <-ctx.Done():
