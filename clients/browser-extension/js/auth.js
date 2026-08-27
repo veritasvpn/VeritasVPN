@@ -60,7 +60,10 @@ async function authAPI(endpoint, body) {
   const url = `${AUTH_API}${endpoint}`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Veritas-Client': 'desktop',
+    },
     body: JSON.stringify(body),
   });
   const data = await res.json();
@@ -124,10 +127,56 @@ export async function signIn(email, password) {
   return user;
 }
 
+function obtainTurnstileToken(timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    const popup = window.open(
+      'https://veritasvpn.cloud/turnstile-mobile',
+      'veritas-turnstile',
+      'width=380,height=280'
+    );
+    if (!popup) {
+      reject(new Error('Allow popups to complete verification.'));
+      return;
+    }
+    let settled = false;
+    const timer = setTimeout(() => finish(new Error('Verification timed out.')), timeoutMs);
+
+    function cleanup() {
+      clearTimeout(timer);
+      window.removeEventListener('message', onMessage);
+      try { popup.close(); } catch (_) {}
+    }
+
+    function finish(err, token) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (err) reject(err);
+      else resolve(token);
+    }
+
+    function onMessage(event) {
+      const data = event.data;
+      if (!data || data.source !== 'veritas-turnstile') return;
+      if (data.type === 'token' && data.token) {
+        finish(null, data.token);
+        return;
+      }
+      if (data.type === 'error' || data.type === 'expired') {
+        finish(new Error('Verification failed; please try again.'));
+      }
+    }
+
+    window.addEventListener('message', onMessage);
+  });
+}
+
 export async function signUp(email, password) {
+  const turnstileToken = await obtainTurnstileToken();
   const data = await authAPI('/api/v1/auth/register', {
     email,
     password,
+    turnstile_token: turnstileToken,
   });
   if (data.verification_required) return data;
   const user = { email: email, account_id: data.account_id };
@@ -159,7 +208,10 @@ export async function signInWithAccountId(accountId) {
 }
 
 export async function registerAnonymous() {
-  const data = await authAPI('/api/v1/auth/register-anonymous', {});
+  const turnstileToken = await obtainTurnstileToken();
+  const data = await authAPI('/api/v1/auth/register-anonymous', {
+    turnstile_token: turnstileToken,
+  });
   const user = { account_id: data.account_id, is_anonymous: true };
   await setStorage({
     [STORAGE_KEYS.user]: user,

@@ -242,7 +242,7 @@ function renderHome() {
           <li>Private DNS threat protection (Android &amp; Linux)</li>
           <li>Port forwarding</li>
           <li>Stealth (Linux)</li>
-          <li>Kill switch</li>
+          <li>Kill switch (Linux &amp; Android; Chrome browser-only)</li>
           <li>Split tunnel</li>
           <li>Pay with Bitcoin (no card)</li>
           <li>Priority support while we expand</li>
@@ -499,7 +499,7 @@ function renderSecurity() {
           <li>Private DNS threat protection for Android &amp; Linux</li>
           <li>Port forwarding</li>
           <li>Stealth (Linux)</li>
-          <li>Kill switch</li>
+          <li>Kill switch (Linux &amp; Android; Chrome browser-only)</li>
           <li>Split tunnel</li>
           <li>No traffic logs — see Privacy Policy for operational data</li>
           <li>Paid with Bitcoin (no card required)</li>

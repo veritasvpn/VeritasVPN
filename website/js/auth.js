@@ -54,6 +54,7 @@ async function api(path, options = {}) {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'X-Veritas-Client': 'web',
       ...(options.headers || {}),
     },
   });
@@ -392,7 +393,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
       if (anonSigninBtn) anonSigninBtn.hidden = true;
       if (anonNote) anonNote.classList.remove('is-hidden');
     } else if (mode === 'anon-signin') {
-      if (titleEl) titleEl.textContent = 'Sign in with Account ID';
+      if (titleEl) titleEl.textContent = 'Sign in with anonymous Account ID';
       if (submitBtn) {
         submitBtn.textContent = 'Sign in';
         submitBtn.className = 'btn btn-accent btn-block';

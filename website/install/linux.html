@@ -88,7 +88,7 @@
     <footer class="footer">
         <div class="container">
             <div class="footer-bottom" style="border-top:none;padding-top:0;">
-                <p>&copy; 2025 VeritasVPN. All rights reserved.</p>
+                <p>&copy; 2026 VeritasVPN. All rights reserved.</p>
                 <p class="footer-tagline"><a href="/">Home</a> · <a href="/#pricing">Pricing</a></p>
             </div>
         </div>
@@ -110,8 +110,9 @@
             <form id="authForm" class="auth-form" novalidate>
                 <div id="authFormFields">
                 <label class="auth-field"><span>Email</span><input type="email" id="authEmail" required></label>
-                <label class="auth-field"><span>Password</span><input type="password" id="authPassword" required minlength="6"></label>
+                <label class="auth-field"><span>Password</span><input type="password" id="authPassword" required minlength="10"></label>
                 </div>
+                <div id="authTurnstile" class="auth-turnstile" hidden></div>
                 <button type="button" class="auth-reset" id="authReset">Forgot password?</button>
                 <button type="submit" class="btn btn-primary btn-block" id="authSubmit">Sign in</button>
             </form>
@@ -121,6 +122,6 @@
             <button type="button" class="auth-switch" id="authSwitchHint">Don't have an account? Sign up</button>
         </div>
     </div>
-    <script type="module" src="../js/main-v3.js"></script>
+    <script type="module" src="../js/main-install.js?v=auth18"></script>
 </body>
 </html>

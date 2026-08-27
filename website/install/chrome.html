@@ -44,7 +44,7 @@
                 <h1>Add to Chrome</h1>
                 <p>Install the VeritasVPN extension and protect your browser traffic.</p>
                 <div class="hero-actions installer-hero-action">
-                    <a class="btn btn-primary btn-lg" href="/downloads/veritasvpn-chrome.zip?v=0.3.1" download>Download Chrome extension</a>
+                    <a class="btn btn-primary btn-lg" href="/downloads/veritasvpn-chrome.zip?v=0.3.4" download>Download Chrome extension</a>
                 </div>
             </div>
         </section>
@@ -89,8 +89,9 @@
             <form id="authForm" class="auth-form" novalidate>
                 <div id="authFormFields">
                 <label class="auth-field"><span>Email</span><input type="email" id="authEmail" required></label>
-                <label class="auth-field"><span>Password</span><input type="password" id="authPassword" required minlength="6"></label>
+                <label class="auth-field"><span>Password</span><input type="password" id="authPassword" required minlength="10"></label>
                 </div>
+                <div id="authTurnstile" class="auth-turnstile" hidden></div>
                 <button type="button" class="auth-reset" id="authReset">Forgot password?</button>
                 <button type="submit" class="btn btn-primary btn-block" id="authSubmit">Sign in</button>
                 <p class="auth-note is-hidden" id="authAnonNote">This account ID will be shown only once. A .txt file will download automatically.</p>
@@ -106,6 +107,6 @@
             <button type="button" class="auth-switch" id="authSwitchHint">Don't have an account? Sign up</button>
         </div>
     </div>
-    <script type="module" src="../js/main-v2.js?v=1"></script>
+    <script type="module" src="../js/main-install.js?v=auth18"></script>
 </body>
 </html>
