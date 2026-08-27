@@ -8,8 +8,8 @@ Downloadable artifacts served by the static website.
 |------|---------|
 | `veritasvpn-chrome.zip` | Unpacked Chrome extension package for “Load unpacked” installs |
 | `veritasvpn-android.apk` | Streamed by `functions/downloads/veritasvpn-android.apk.js` |
-| `veritasvpn-linux.deb` | Streamed by `functions/downloads/veritasvpn-linux.deb.js` from GitHub Releases |
-| `veritasvpn-linux.AppImage` | Streamed by `functions/downloads/veritasvpn-linux.AppImage.js` from GitHub Releases |
+| `veritasvpn-linux.deb` | v0.2.3 build; streamed by `functions/downloads/veritasvpn-linux.deb.js` from GitHub Releases (`v0.2.3`) |
+| `veritasvpn-linux.AppImage` | v0.2.3 build; streamed by `functions/downloads/veritasvpn-linux.AppImage.js` from GitHub Releases (`v0.2.3`) |
 | `veritasvpn-android.apk` | Signed Android release APK |
 
 ## Useful information (AI)
