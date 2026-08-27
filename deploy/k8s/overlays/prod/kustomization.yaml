@@ -1,3 +1,7 @@
+# DEPRECATED: do not apply this overlay for the live Dell host.
+# Canonical production overlay is ../k3s (digests, stealth, CORS, wstunnel pin).
+# This file is kept identical so legacy cutover scripts that still say "prod"
+# cannot drift onto stale digests. Prefer: kubectl apply -k deploy/k8s/overlays/k3s
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -6,31 +10,30 @@ namespace: veritas
 resources:
   - ../../base
 
-# Local k3s registry (NodePort 31500). Images are built/imported by
-# deploy/k8s/scripts/import-images.sh during cutover.
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:45a6f1a962abacb0eb52c529e9a3355c78d49b7dd4300aef4945344334b5c073
+    digest: sha256:762c6d1a208c3178c8eb58958a2265ea127ada483cf64451f4f048d09f032f87
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    digest: sha256:a3c97cdebbbbe4928a1dfe4b434bc90ec15eb482bd22b0a435d6e46408f9d536
+    digest: sha256:4676d8b2983c9f4b1b21074e9fff323dcf39c300c55c1996fded00944f6e3b70
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    # Verified locally in the Dell registry and by the running billing pod.
-    digest: sha256:891bcca9d15113915b0641b7781cc07dfd954fbaeab715676662ba632efa0abf
+    digest: sha256:c41915336808e511d2e73b1290767ce13a5436e712a14d7e211d55c2f8fcd9fe
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    digest: sha256:403a21a25c6bf5bbb0eb8bc61e70345af108ed97796d9cb3b05f6b5302669a1b
+    digest: sha256:4edfa4894255599d18862d3cd6e05947391d44a9b01aa6cb55cf771c3ae41a7a
+  - name: localhost:31500/wstunnel
+    newName: localhost:31500/wstunnel
+    digest: sha256:4169260f4a2dc84df3c97aeba46882d5f7ee1b6ef94427b6c7f86951fc3b89b1
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
     digest: sha256:735d0c4463bf3f0e87133f5e62e17749bb47efe7d83d9daac9c7e9c8c9ce7579
   - name: localhost:31500/telegram-notifier
     newName: localhost:31500/telegram-notifier
-    digest: sha256:df9540aaa1f516075c360efb19b0a1c12ba20b370fc10da765b5a534dbca8698
+    digest: sha256:dbb8587bfd81060e12b8f21f890954e046521da511603b9d0c25786ae08f8cf2
 
 patches:
-  # -- ConfigMap: production defaults for this host --
   - target:
       kind: ConfigMap
       name: veritas-config
@@ -46,34 +49,37 @@ patches:
         value: "json"
       - op: replace
         path: /data/CORS_ORIGINS
-        value: "https://veritasvpn.cloud,https://www.veritasvpn.cloud"
+        value: "https://veritasvpn.cloud,https://www.veritasvpn.cloud,tauri://localhost,https://tauri.localhost,http://tauri.localhost"
       - op: replace
         path: /data/ALLOW_MOCK_BTCPAY
         value: "false"
       - op: replace
-        path: /data/PREMIUM_PRICE_USD_CENTS
-        value: "300"
-      - op: replace
         path: /data/CHECKOUT_SUCCESS_URL
-        value: "https://veritasvpn.cloud/account/#/subscription"
+        value: "https://veritasvpn.cloud/billing/success.html"
       - op: replace
         path: /data/CHECKOUT_CANCEL_URL
-        value: "https://veritasvpn.cloud/account/#/subscription"
+        value: "https://veritasvpn.cloud/billing/cancel.html"
       - op: replace
         path: /data/SERVER_HOSTNAME
-        value: "delloptiplex-3060"
+        value: "veritas-node"
       - op: replace
-        path: /data/SERVER_REGION
-        value: "sa"
+        path: /data/PUBLIC_IP
+        value: "170.51.31.139"
+      - op: replace
+        path: /data/STEALTH_ENABLED
+        value: "true"
+      - op: replace
+        path: /data/STEALTH_ENDPOINT_HOST
+        value: "170.51.31.139"
+      - op: replace
+        path: /data/STEALTH_ENDPOINT_PORT
+        value: "443"
       - op: replace
         path: /data/SERVER_COUNTRY
         value: "PY"
       - op: replace
         path: /data/SERVER_CITY
         value: "asuncion"
-      - op: replace
-        path: /data/PUBLIC_IP
-        value: "170.51.31.139"
       - op: replace
         path: /data/BITCOIN_READINESS_URL
         value: "http://bitcoin-readiness-mainnet.btcpay-mainnet.svc.cluster.local:8080/readyz"
@@ -83,254 +89,6 @@ patches:
       - op: replace
         path: /data/BTCPAY_PUBLIC_URL
         value: "https://btcpay-mainnet.veritasvpn.cloud"
-      - op: replace
-        path: /data/MANAGER_ENDPOINT
-        value: "http://wg-manager.veritas.svc.cluster.local:8080"
 
-  # -- Redis: requirepass + auth probes (single replica; clustered redis needs sentinel/cluster) --
-  - target:
-      kind: Deployment
-      name: redis
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/args/-
-        value: "--requirepass"
-      - op: add
-        path: /spec/template/spec/containers/0/args/-
-        value: "$(REDIS_PASSWORD)"
-      - op: add
-        path: /spec/template/spec/containers/0/env
-        value:
-          - name: REDIS_PASSWORD
-            valueFrom:
-              secretKeyRef:
-                name: veritas-secrets
-                key: REDIS_PASSWORD
-      - op: replace
-        path: /spec/template/spec/containers/0/readinessProbe/exec/command
-        value: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
-      - op: replace
-        path: /spec/template/spec/containers/0/livenessProbe/exec/command
-        value: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
-      - op: add
-        path: /spec/template/spec/containers/0/securityContext
-        value:
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 999
-          capabilities:
-            drop: ["ALL"]
-
-  # -- Auth: Redis/NATS auth + securityContext --
-  - target:
-      kind: Deployment
-      name: auth-svc
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/env/3/value
-        value: "nats://nats:4222"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: REDIS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: REDIS_PASSWORD
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_USER
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_USER
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_PASSWORD
-      - op: add
-        path: /spec/template/spec/containers/0/securityContext
-        value:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 1000
-          capabilities:
-            drop: ["ALL"]
-      - op: replace
-        path: /spec/template/spec/containers/0/imagePullPolicy
-        value: IfNotPresent
-
-  # -- WG-Manager: Redis/NATS auth + securityContext --
-  - target:
-      kind: Deployment
-      name: wg-manager
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/env/3/value
-        value: "nats://nats:4222"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: REDIS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: REDIS_PASSWORD
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_USER
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_USER
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_PASSWORD
-      - op: add
-        path: /spec/template/spec/containers/0/securityContext
-        value:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 1000
-          capabilities:
-            drop: ["ALL"]
-      - op: replace
-        path: /spec/template/spec/containers/0/imagePullPolicy
-        value: IfNotPresent
-
-  # -- Billing: NATS auth + BTCPay secrets + securityContext --
-  - target:
-      kind: Deployment
-      name: billing-svc
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/env/2/value
-        value: "nats://nats:4222"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_USER
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_USER
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_PASSWORD
-      - op: add
-        path: /spec/template/spec/containers/0/securityContext
-        value:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 1000
-          capabilities:
-            drop: ["ALL"]
-      - op: replace
-        path: /spec/template/spec/containers/0/imagePullPolicy
-        value: IfNotPresent
-
-  # -- nginx: securityContext + tmp volumes --
-  - target:
-      kind: Deployment
-      name: nginx
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/securityContext
-        value:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 101
-          capabilities:
-            drop: ["ALL"]
-      - op: add
-        path: /spec/template/spec/containers/0/volumeMounts/-
-        value:
-          name: nginx-tmp
-          mountPath: /tmp
-      - op: add
-        path: /spec/template/spec/containers/0/volumeMounts/-
-        value:
-          name: nginx-cache
-          mountPath: /var/cache/nginx
-      - op: add
-        path: /spec/template/spec/containers/0/volumeMounts/-
-        value:
-          name: nginx-run
-          mountPath: /var/run
-      - op: add
-        path: /spec/template/spec/volumes/-
-        value:
-          name: nginx-tmp
-          emptyDir: {}
-      - op: add
-        path: /spec/template/spec/volumes/-
-        value:
-          name: nginx-cache
-          emptyDir: {}
-      - op: add
-        path: /spec/template/spec/volumes/-
-        value:
-          name: nginx-run
-          emptyDir: {}
-
-  # -- veritas-proxy: least-privilege security context --
-  - target:
-      kind: Deployment
-      name: veritas-proxy
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/securityContext
-        value:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 1000
-          capabilities:
-            drop: ["ALL"]
-      - op: replace
-        path: /spec/template/spec/containers/0/imagePullPolicy
-        value: IfNotPresent
-
-  # -- veritas-agent: pull policy --
-  - target:
-      kind: DaemonSet
-      name: veritas-agent
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/imagePullPolicy
-        value: IfNotPresent
-
-
-  # -- nats securityContext --
-  - target:
-      kind: StatefulSet
-      name: nats
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/securityContext
-        value:
-          allowPrivilegeEscalation: false
-          runAsNonRoot: true
-          runAsUser: 1000
-          capabilities:
-            drop: ["ALL"]
+  # Redis/NATS auth env vars live in base manifests (auth-svc, wg-manager, billing-svc).
+  # Do not JSON-patch env value/valueFrom here — that creates invalid dual fields on apply.

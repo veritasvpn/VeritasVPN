@@ -5,7 +5,10 @@ namespace: btcpay-mainnet
 
 resources:
   - namespace.yaml
-  - secrets.yaml
+  # secrets.yaml is intentionally NOT applied by kustomize — production
+  # btcpay-secrets is cluster-managed. Applying an incomplete secrets.yaml
+  # can wipe live BTCPay keys. Create/update with kubectl create secret /
+  # kubectl patch only (see deploy/k8s/SECRETS.md).
   - postgres-btcpay.yaml
   - bitcoind.yaml
   - bitcoin-readiness.yaml

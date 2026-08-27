@@ -5,7 +5,8 @@ namespace: btcpay
 
 resources:
   - namespace.yaml
-  - secrets.yaml
+  # secrets.yaml is intentionally NOT applied by kustomize — see
+  # deploy/k8s/SECRETS.md. Testnet stack is deprecated for production.
   - postgres-btcpay.yaml
   - bitcoind.yaml
   - bitcoin-readiness.yaml

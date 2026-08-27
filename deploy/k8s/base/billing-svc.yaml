@@ -105,19 +105,16 @@ spec:
                 secretKeyRef:
                   name: veritas-secrets
                   key: BTCPAY_API_KEY
-                  optional: true
             - name: BTCPAY_STORE_ID
               valueFrom:
                 secretKeyRef:
                   name: veritas-secrets
                   key: BTCPAY_STORE_ID
-                  optional: true
             - name: BTCPAY_WEBHOOK_SECRET
               valueFrom:
                 secretKeyRef:
                   name: veritas-secrets
                   key: BTCPAY_WEBHOOK_SECRET
-                  optional: true
             - name: BTCPAY_PUBLIC_URL
               valueFrom:
                 configMapKeyRef:

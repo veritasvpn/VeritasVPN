@@ -19,7 +19,7 @@ check() {
 }
 
 check "git working tree is clean" test -z "$(git status --porcelain)"
-check "production kustomization renders" kubectl kustomize deploy/k8s/overlays/prod >/dev/null
+check "production kustomization renders" kubectl kustomize deploy/k8s/overlays/k3s >/dev/null
 check "monitoring kustomization renders" kubectl kustomize deploy/k8s/monitoring >/dev/null
 check "backup metrics directory is readable" test -r /var/lib/veritasvpn/metrics
 check "backup metrics are scrapeable" test "$(curl -fsS --max-time 5 http://127.0.0.1:9100/metrics | grep -c '^veritas_backup_last_success_timestamp ' || true)" -ge 1

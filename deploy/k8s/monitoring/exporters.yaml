@@ -230,7 +230,13 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           env:
-            - { name: REDIS_ADDR, value: "redis://redis.veritas.svc.cluster.local:6379" }
+            - name: REDIS_ADDR
+              value: "redis://redis.veritas.svc.cluster.local:6379"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-exporter-auth
+                  key: REDIS_PASSWORD
           ports:
             - { name: metrics, containerPort: 9121 }
           resources:

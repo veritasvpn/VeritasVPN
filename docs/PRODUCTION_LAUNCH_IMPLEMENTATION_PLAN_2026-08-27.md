@@ -6,7 +6,7 @@ Source of truth for findings: Cursor canvas `production-readiness-audit` + live 
 
 **Launch gate:** all **Critical** and **High** items Done + verification checklist green. Medium/Low may ship as follow-ups only if explicitly deferred in writing.
 
-**Progress:** Phases 1–3 done (2026-08-27). Phase 3: downloads-v2 → downloads redirect; Windows/macOS coming-soon only; kill-switch copy qualified; Chrome zip 0.3.4+Turnstile; Android APK 0.1.5 SHA `ff7f9cf3…`; Linux v0.2.2 AppImage confirmed to bundle wstunnel. Desktop 0.2.3 AppImage/deb still to publish for mainnet checkout UI.
+**Progress:** Phases 1–4 done (2026-08-27). Phase 4: k3s canonical overlay (prod synced), secrets wipe-safety, Go 1.24 images live, redis-exporter auth + wg-manager scrape NP, BTCPAY keys required, readiness script on mainnet.
 
 ---
 

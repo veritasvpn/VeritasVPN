@@ -15,17 +15,16 @@ k3s-based deployment for VeritasVPN backend services and BTCPay Server.
 # 1. Build and push all service images to local registry
 REGISTRY=localhost:31500 TAG=latest bash deploy/k8s/scripts/push-images.sh
 
-# 2. Create secrets (required before first deploy)
-cp deploy/k8s/base/secrets.example.yaml deploy/k8s/base/secrets.yaml
-cp deploy/k8s/btcpay/secrets.example.yaml deploy/k8s/btcpay/secrets.yaml
-# Edit both files and replace CHANGE_ME with real values
+# 2. Create secrets (required before first deploy) — do NOT kustomize-apply secrets.yaml
+# See deploy/k8s/SECRETS.md. Use kubectl create secret / patch only.
 
 # 3. Create cloudflared tunnel token secret
 kubectl create namespace ingress-nginx
 kubectl create secret generic cloudflared-token -n ingress-nginx --from-literal=token=YOUR_TOKEN
 
-# 4. Apply the dev overlay
-bash deploy/k8s/scripts/apply.sh dev
+# 4. Apply the canonical production overlay (Dell) or dev for labs
+bash deploy/k8s/scripts/apply.sh k3s
+# bash deploy/k8s/scripts/apply.sh dev
 
 # 5. Check status
 make k8s-status
@@ -145,7 +144,7 @@ docker push localhost:31500/auth-svc:latest
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/apply.sh [dev|prod]` | Apply a Kustomize overlay |
+| `scripts/apply.sh [k3s|dev]` | Apply a Kustomize overlay (`k3s` = production; `prod` is a legacy alias) |
 | `scripts/push-images.sh` | Build and push all service images |
 
 ## Migrating from Docker Compose
