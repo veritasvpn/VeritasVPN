@@ -6,7 +6,7 @@ Source of truth for findings: Cursor canvas `production-readiness-audit` + live 
 
 **Launch gate:** all **Critical** and **High** items Done + verification checklist green. Medium/Low may ship as follow-ups only if explicitly deferred in writing.
 
-**Progress:** Phases 1–5 done/partial (2026-08-27). Phase 5: auth-svc rate-limit IP trusts nginx `X-Real-IP` only; nginx sets `$client_ip` from CF tunnel hop; `_headers` strips Pages ACAO `*` (needs Pages redeploy); testnet `btcpay` NS documented/scaled 0; H4 firewall script updated on host pending sudo reinstall.
+**Progress:** Phases 1–5 done/partial (2026-08-27). Phase 6 follow-up hardening done in repo (2026-08-27). Phase 5: auth-svc rate-limit IP trusts nginx `X-Real-IP` only; nginx sets `$client_ip` from CF tunnel hop; `_headers` strips Pages ACAO `*` (needs Pages redeploy); testnet `btcpay` NS documented/scaled 0; H4 firewall script updated on host pending sudo reinstall.
 
 ---
 
@@ -202,17 +202,19 @@ Do not cut over any overlay until Phase 4.
 
 Ship if time; otherwise list as known follow-ups in FEATURES / STATUS:
 
-| ID | Work |
-|----|------|
-| Billing webhook race | Transaction / row lock around settle |
-| Billing logout blacklist | Share Redis blacklist with billing verifier |
-| Password reset enumeration | Uniform 200 responses |
-| PII in logs | Hash emails via `logging.HashIdentifier` |
-| Linux IPv6 kill switch | Fail closed on IPv6 blackhole (or disable IPv6) |
-| Chrome `<all_urls>` zip | Rebuild zip from source host permissions; fix CI |
-| Floating init tags | Digest-pin `alpine`/`busybox` inits |
-| Health script | Assert `daemonset/veritas-wstunnel` ready |
-| PDB vs replicas=1 | Document single-node HA limits or adjust PDB |
+| ID | Work | Status |
+|----|------|--------|
+| Billing webhook race | Transaction / row lock around settle | **Done** — `SettlePaymentTx` locks payment + subscription rows |
+| Billing logout blacklist | Share Redis blacklist with billing verifier | **Done** — billing-svc checks `blacklist:{tokenHash}` via Redis |
+| Password reset enumeration | Uniform 200 responses | **Done** — unknown emails return same 200 message |
+| PII in logs | Hash emails via `logging.HashIdentifier` | **Done** — email/invoice fields hashed in auth + billing logs |
+| Linux IPv6 kill switch | Fail closed on IPv6 blackhole (or disable IPv6) | **Done** — mandatory v6 blackhole route + nft/ip6tables drop rules |
+| Chrome `<all_urls>` zip | Rebuild zip from source host permissions; fix CI | **Done** — zip rebuilt; CI validates published manifest |
+| Floating init tags | Digest-pin `alpine`/`busybox` inits | **Done** — wstunnel, nginx, nbxplorer init images pinned |
+| Health script | Assert `daemonset/veritas-wstunnel` ready | **Done** — added to `veritas-k8s-health.sh` |
+| PDB vs replicas=1 | Document single-node HA limits or adjust PDB | **Done** — documented in `deploy/k8s/README.md` |
+
+**Phase 6 status (2026-08-27):** All items implemented in repo. Dell deploy still required for billing-svc (Redis + settle lock), network policy, init digests, and health script install.
 
 ---
 

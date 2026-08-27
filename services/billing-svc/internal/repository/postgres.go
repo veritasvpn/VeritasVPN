@@ -172,6 +172,112 @@ func (p *Postgres) CompletePayment(ctx context.Context, providerTxnID string) er
 	return err
 }
 
+// SettlePaymentTx locks the payment row and subscription row, applies updates,
+// and marks the payment completed in a single transaction. Concurrent webhook
+// and reconcile calls for the same invoice serialize on the payment row.
+func (p *Postgres) SettlePaymentTx(
+	ctx context.Context,
+	invoiceID string,
+	apply func(pr *model.PaymentRecord, sub *model.Subscription) error,
+) (alreadyCompleted bool, err error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	pr, err := getPaymentForUpdate(ctx, tx, invoiceID)
+	if err != nil {
+		return false, err
+	}
+	if pr.Status == model.PaymentCompleted {
+		if err := tx.Commit(ctx); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	sub, err := getSubscriptionForUpdate(ctx, tx, pr.AccountID)
+	if err != nil {
+		return false, err
+	}
+
+	if err := apply(pr, sub); err != nil {
+		return false, err
+	}
+
+	updateQuery := `UPDATE subscriptions SET
+	           tier = $2, status = $3, payment_method = $4,
+	           current_period_start = $5, current_period_end = $6,
+	           cancel_at_period_end = $7, plan_id = $8, billing_period = $9,
+	           price_cents = $10, period_days = $11, updated_at = NOW()
+	           WHERE id = $1`
+	if _, err := tx.Exec(ctx, updateQuery,
+		sub.ID, sub.Tier, sub.Status, sub.PaymentMethod,
+		sub.CurrentPeriodStart, sub.CurrentPeriodEnd, sub.CancelAtPeriodEnd,
+		sub.PlanID, sub.BillingPeriod, sub.PriceCents, sub.PeriodDays,
+	); err != nil {
+		return false, fmt.Errorf("update subscription: %w", err)
+	}
+
+	completeQuery := `UPDATE payment_records SET status = $2
+	                  WHERE provider_transaction_id = $1 AND status = $3`
+	ct, err := tx.Exec(ctx, completeQuery, invoiceID, model.PaymentCompleted, model.PaymentPending)
+	if err != nil {
+		return false, fmt.Errorf("complete payment: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return false, fmt.Errorf("payment not pending for invoice %s", invoiceID)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func getPaymentForUpdate(ctx context.Context, tx pgx.Tx, providerTxnID string) (*model.PaymentRecord, error) {
+	query := `SELECT id, subscription_id, COALESCE(account_id, ''), amount, currency, status,
+	           provider_transaction_id, plan_id, period_days, created_at
+	           FROM payment_records WHERE provider_transaction_id = $1 FOR UPDATE`
+
+	pr := &model.PaymentRecord{}
+	err := tx.QueryRow(ctx, query, providerTxnID).Scan(
+		&pr.ID, &pr.SubscriptionID, &pr.AccountID, &pr.Amount, &pr.Currency,
+		&pr.Status, &pr.ProviderTransactionID, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, pgx.ErrNoRows
+		}
+		return nil, fmt.Errorf("lock payment: %w", err)
+	}
+	return pr, nil
+}
+
+func getSubscriptionForUpdate(ctx context.Context, tx pgx.Tx, accountID string) (*model.Subscription, error) {
+	query := `SELECT id, account_id, tier, status, payment_method,
+	           current_period_start, current_period_end, cancel_at_period_end,
+	           plan_id, billing_period, price_cents, period_days,
+	           created_at, updated_at
+	           FROM subscriptions WHERE account_id = $1 FOR UPDATE`
+
+	sub := &model.Subscription{}
+	err := tx.QueryRow(ctx, query, accountID).Scan(
+		&sub.ID, &sub.AccountID, &sub.Tier, &sub.Status, &sub.PaymentMethod,
+		&sub.CurrentPeriodStart, &sub.CurrentPeriodEnd, &sub.CancelAtPeriodEnd,
+		&sub.PlanID, &sub.BillingPeriod, &sub.PriceCents, &sub.PeriodDays,
+		&sub.CreatedAt, &sub.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, pgx.ErrNoRows
+		}
+		return nil, fmt.Errorf("lock subscription: %w", err)
+	}
+	return sub, nil
+}
+
 func (p *Postgres) ListExpiredPremium(ctx context.Context, now time.Time) ([]*model.Subscription, error) {
 	query := `SELECT id, account_id, tier, status, payment_method,
 	           current_period_start, current_period_end, cancel_at_period_end,

@@ -284,7 +284,7 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email, password str
 
 	s.log.Info("account registered with email",
 		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
-		zap.String("email", email),
+		zap.String("email_hash", logging.HashIdentifier(email)),
 	)
 
 	s.publishEvent("account.registered", map[string]interface{}{"account_type": "email"})
@@ -343,7 +343,8 @@ func (s *AuthService) SignInWithEmail(ctx context.Context, email, password strin
 func (s *AuthService) RequestPasswordReset(ctx context.Context, emailAddr string) error {
 	acc, err := s.db.GetAccountByEmail(ctx, emailAddr)
 	if err != nil {
-		return fmt.Errorf("no account found with this email")
+		// Uniform response — do not reveal whether the email is registered.
+		return nil
 	}
 
 	token, err := libcrypto.GenerateResetToken()

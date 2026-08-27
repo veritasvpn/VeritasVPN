@@ -72,6 +72,9 @@ spec:
         - podSelector:
             matchLabels:
               app: wg-manager
+        - podSelector:
+            matchLabels:
+              app: billing-svc
       ports:
         - port: 6379
           protocol: TCP
@@ -402,6 +405,12 @@ spec:
               app: nats
       ports:
         - port: 4222
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - port: 6379
     - to:
         - namespaceSelector:
             matchLabels:

@@ -205,7 +205,7 @@ func (h *HTTPHandler) handleSignIn(w http.ResponseWriter, r *http.Request) {
 
 	accessToken, refreshToken, accountID, expiresAt, err := h.service.SignInWithEmail(r.Context(), req.Email, req.Password)
 	if err != nil {
-		h.log.Warn("sign in failed", zap.String("email", req.Email), zap.Error(err))
+		h.log.Warn("sign in failed", zap.String("email_hash", logging.HashIdentifier(req.Email)), zap.Error(err))
 		writeHTTPError(w, http.StatusUnauthorized, "incorrect email or password")
 		return
 	}
@@ -356,8 +356,6 @@ func (h *HTTPHandler) handleResetPassword(w http.ResponseWriter, r *http.Request
 
 	if err := h.service.RequestPasswordReset(r.Context(), req.Email); err != nil {
 		h.log.Warn("password reset request failed", zap.Error(err))
-		writeHTTPError(w, http.StatusNotFound, err.Error())
-		return
 	}
 
 	writeHTTPJSON(w, http.StatusOK, map[string]interface{}{

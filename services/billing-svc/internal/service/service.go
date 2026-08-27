@@ -2,512 +2,527 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/nats-io/nats.go"
+	"github.com/veritasvpn/lib/config"
+	libcrypto "github.com/veritasvpn/lib/crypto"
+	jwtlib "github.com/veritasvpn/lib/jwt"
 	"github.com/veritasvpn/lib/logging"
-	"github.com/veritasvpn/services/billing-svc/internal/model"
-	"github.com/veritasvpn/services/billing-svc/internal/provider"
-	"github.com/veritasvpn/services/billing-svc/internal/repository"
+	"github.com/veritasvpn/services/auth-svc/internal/email"
+	"github.com/veritasvpn/services/auth-svc/internal/model"
+	"github.com/veritasvpn/services/auth-svc/internal/repository"
+	"github.com/veritasvpn/services/auth-svc/internal/turnstile"
 	"go.uber.org/zap"
 )
 
-type BillingConfig struct {
-	PremiumPriceUSDCents int64
-	PremiumPeriodDays    int
-	BitcoinReadinessURL  string
+type AuthService struct {
+	log   *logging.Logger
+	db    *repository.Postgres
+	redis *repository.Redis
+	jwt   *jwtlib.Manager
+	email *email.Client
+	cfg   *config.Config
+	nats  *nats.Conn
 }
 
-type BillingService struct {
-	log      *logging.Logger
-	db       *repository.Postgres
-	natsConn *nats.Conn
-	invoices provider.InvoiceCreator
-	btcpay   *provider.BTCPayProvider // nil when mock-only
-	mock     *provider.MockBTCPayProvider
-	cfg      BillingConfig
-	http     *http.Client
+func New(log *logging.Logger, db *repository.Postgres, redis *repository.Redis, jwt *jwtlib.Manager, emailClient *email.Client, cfg *config.Config) *AuthService {
+	return &AuthService{log: log, db: db, redis: redis, jwt: jwt, email: emailClient, cfg: cfg}
 }
 
-func New(
-	log *logging.Logger,
-	db *repository.Postgres,
-	natsConn *nats.Conn,
-	invoices provider.InvoiceCreator,
-	btcpay *provider.BTCPayProvider,
-	mock *provider.MockBTCPayProvider,
-	cfg BillingConfig,
-) *BillingService {
-	return &BillingService{
-		log:      log,
-		db:       db,
-		natsConn: natsConn,
-		invoices: invoices,
-		btcpay:   btcpay,
-		mock:     mock,
-		cfg:      cfg,
-		http:     &http.Client{Timeout: 3 * time.Second},
-	}
-}
+func (s *AuthService) SetNATS(nc *nats.Conn) { s.nats = nc }
 
-var (
-	ErrBitcoinNotReady            = errors.New("Bitcoin payments are temporarily unavailable while the node synchronizes")
-	ErrBitcoinWalletNotConfigured = errors.New("Bitcoin payments are temporarily unavailable while the payment wallet is being configured")
-)
-
-func (s *BillingService) bitcoinReady(ctx context.Context) error {
-	if s.cfg.BitcoinReadinessURL == "" {
-		return nil
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.BitcoinReadinessURL, nil)
-	if err != nil {
-		return ErrBitcoinNotReady
-	}
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return ErrBitcoinNotReady
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return ErrBitcoinNotReady
-	}
-	return nil
-}
-
-func (s *BillingService) Ready(ctx context.Context) error {
-	if err := s.db.Ping(ctx); err != nil {
-		return err
-	}
-	return s.bitcoinReady(ctx)
-}
-
-func (s *BillingService) PremiumAmountCents() int64 {
-	if s.cfg.PremiumPriceUSDCents <= 0 {
-		return 300
-	}
-	return s.cfg.PremiumPriceUSDCents
-}
-
-func (s *BillingService) periodDuration() time.Duration {
-	days := s.cfg.PremiumPeriodDays
-	if days <= 0 {
-		days = 30
-	}
-	return time.Duration(days) * 24 * time.Hour
-}
-
-// EnsureFree creates an active free subscription if none exists.
-func (s *BillingService) EnsureFree(ctx context.Context, accountID string) (*model.Subscription, error) {
-	sub, err := s.db.GetSubscription(ctx, accountID)
-	if err == nil {
-		return sub, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, err
-	}
-
-	now := time.Now().UTC()
-	sub = &model.Subscription{
-		AccountID:          accountID,
-		Tier:               model.TierFree,
-		Status:             model.StatusActive,
-		PaymentMethod:      model.PaymentNone,
-		PlanID:             "free",
-		BillingPeriod:      "lifetime",
-		PriceCents:         0,
-		PeriodDays:         0,
-		CurrentPeriodStart: now,
-		CurrentPeriodEnd:   now.Add(100 * 365 * 24 * time.Hour),
-		CancelAtPeriodEnd:  false,
-	}
-	if err := s.db.CreateSubscription(ctx, sub); err != nil {
-		return nil, fmt.Errorf("create free subscription: %w", err)
-	}
-	return sub, nil
-}
-
-// GetStatus returns subscription status, ensuring a free row exists.
-func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*model.StatusResponse, error) {
-	sub, err := s.EnsureFree(ctx, accountID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Webhooks are the primary payment signal. If an account has an outstanding
-	// checkout, also ask BTCPay for its authoritative invoice state. This makes
-	// the return-to-app and Refresh flows recover from delayed webhook delivery
-	// without ever activating an unpaid invoice.
-	if sub.Tier != model.TierPremium {
-		if err := s.reconcilePendingPayment(ctx, accountID); err != nil {
-			s.log.Warn("pending payment reconciliation failed",
-				zap.String("account_hash", logging.HashIdentifier(accountID)),
-				zap.Error(err),
-			)
-		} else if refreshed, err := s.db.GetSubscription(ctx, accountID); err == nil {
-			sub = refreshed
-		}
-	}
-
-	// Treat expired premium as free for API consumers.
-	if sub.Tier == model.TierPremium && sub.Status == model.StatusActive && time.Now().UTC().After(sub.CurrentPeriodEnd) {
-		if err := s.expireOne(ctx, sub); err != nil {
-			s.log.Error("failed to expire premium during status", zap.Error(err))
-		} else {
-			sub, err = s.db.GetSubscription(ctx, accountID)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	start := sub.CurrentPeriodStart
-	end := sub.CurrentPeriodEnd
-	isPremium := sub.Tier == model.TierPremium && sub.Status == model.StatusActive && time.Now().UTC().Before(sub.CurrentPeriodEnd)
-
-	return &model.StatusResponse{
-		AccountID:          sub.AccountID,
-		Tier:               sub.Tier,
-		Status:             sub.Status,
-		PaymentMethod:      sub.PaymentMethod,
-		CurrentPeriodStart: &start,
-		CurrentPeriodEnd:   &end,
-		CancelAtPeriodEnd:  sub.CancelAtPeriodEnd,
-		IsPremium:          isPremium,
-		PlanID:             sub.PlanID,
-		BillingPeriod:      sub.BillingPeriod,
-		PriceCents:         sub.PriceCents,
-		PeriodDays:         sub.PeriodDays,
-	}, nil
-}
-
-func (s *BillingService) reconcilePendingPayment(ctx context.Context, accountID string) error {
-	if s.btcpay == nil {
-		return nil
-	}
-	payment, err := s.db.GetLatestPendingPayment(ctx, accountID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	status, err := s.btcpay.GetInvoiceStatus(ctx, payment.ProviderTransactionID)
-	if err != nil {
-		return err
-	}
-	if strings.EqualFold(status, "settled") {
-		return s.SettleInvoice(ctx, payment.ProviderTransactionID, accountID)
-	}
-	return nil
-}
-
-// CreatePremiumCheckout starts a Bitcoin checkout for premium. Does NOT activate until paid.
-func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, paymentMethod, planID string) (checkoutURL string, err error) {
-	if err := s.bitcoinReady(ctx); err != nil {
-		return "", err
-	}
-	if accountID == "" {
-		return "", fmt.Errorf("account_id is required")
-	}
-	plan, ok := model.PlanByID(planID)
-	if !ok {
-		return "", fmt.Errorf("unknown billing plan")
-	}
-
-	existing, err := s.db.GetSubscription(ctx, accountID)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return "", err
-	}
-	if err == nil && existing.Tier == model.TierPremium && existing.Status == model.StatusActive && time.Now().UTC().Before(existing.CurrentPeriodEnd) && !existing.CancelAtPeriodEnd {
-		return "", fmt.Errorf("already subscribed to premium until %s", existing.CurrentPeriodEnd.Format(time.RFC3339))
-	}
-
-	now := time.Now().UTC()
-	var sub *model.Subscription
-	keepActive := existing != nil && existing.Tier == model.TierPremium &&
-		existing.Status == model.StatusActive && existing.CancelAtPeriodEnd &&
-		now.Before(existing.CurrentPeriodEnd)
-	if keepActive {
-		// A canceled-at-period-end subscription stays active while the user
-		// pays for the next period; do not interrupt current VPN access.
-		sub = existing
-	} else {
-		sub = &model.Subscription{
-			AccountID:          accountID,
-			Tier:               model.TierPremium,
-			Status:             model.StatusPending,
-			PaymentMethod:      paymentMethod,
-			PlanID:             plan.ID,
-			BillingPeriod:      plan.BillingPeriod,
-			PriceCents:         plan.PriceCents,
-			PeriodDays:         plan.PeriodDays,
-			CurrentPeriodStart: now,
-			CurrentPeriodEnd:   now, // activated on settle
-			CancelAtPeriodEnd:  false,
-		}
-		// Keep an existing free subscription visible until payment settles.
-		if existing != nil && existing.Tier == model.TierFree {
-			sub.Tier = model.TierFree
-			sub.Status = model.StatusActive
-			sub.PaymentMethod = paymentMethod
-			sub.CurrentPeriodStart = existing.CurrentPeriodStart
-			sub.CurrentPeriodEnd = existing.CurrentPeriodEnd
-		}
-		if err := s.db.CreateSubscription(ctx, sub); err != nil {
-			return "", fmt.Errorf("upsert subscription: %w", err)
-		}
-		sub, err = s.db.GetSubscription(ctx, accountID)
-		if err != nil {
-			return "", err
-		}
-	}
-
-	amountCents := plan.PriceCents
-	amountUSD := float64(amountCents) / 100.0
-
-	invoiceID, url, err := s.invoices.CreateInvoice(accountID, model.TierPremium, paymentMethod, plan.ID, amountUSD)
-	if err != nil {
-		if errors.Is(err, provider.ErrStoreWalletNotConfigured) {
-			return "", ErrBitcoinWalletNotConfigured
-		}
-		return "", fmt.Errorf("create invoice: %w", err)
-	}
-
-	if err := s.db.CreatePaymentRecord(ctx, &model.PaymentRecord{
-		SubscriptionID:        sub.ID,
-		AccountID:             accountID,
-		Amount:                amountCents,
-		Currency:              "usd",
-		Status:                model.PaymentPending,
-		ProviderTransactionID: invoiceID,
-		PlanID:                plan.ID,
-		PeriodDays:            plan.PeriodDays,
-	}); err != nil {
-		return "", fmt.Errorf("create payment record: %w", err)
-	}
-
-	s.log.Info("premium checkout created",
-		zap.String("account_hash", logging.HashIdentifier(accountID)),
-		zap.String("invoice_id", invoiceID),
-		zap.Int64("amount_cents", amountCents),
-		zap.String("plan_id", plan.ID),
-	)
-
-	return url, nil
-}
-
-func (s *BillingService) CancelSubscription(ctx context.Context, accountID string) error {
-	if err := s.db.CancelSubscription(ctx, accountID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("subscription not found")
-		}
-		return err
-	}
-	sub, _ := s.db.GetSubscription(ctx, accountID)
-	tier := ""
-	if sub != nil {
-		tier = sub.Tier
-	}
-	s.publishEvent("subscription.canceled", map[string]interface{}{
-		"account_id": accountID,
-		"tier":       tier,
-	})
-	return nil
-}
-
-func (s *BillingService) ProcessBTCPayWebhook(ctx context.Context, payload []byte, signature string) error {
-	if s.btcpay == nil {
-		return fmt.Errorf("btcpay provider not configured")
-	}
-	event, err := s.btcpay.ParseWebhook(payload, signature)
-	if err != nil {
-		return err
-	}
-
-	s.log.Info("btcpay webhook",
-		zap.String("type", event.Type),
-		zap.String("invoice_id", event.InvoiceID),
-	)
-
-	switch event.Type {
-	case "InvoiceSettled":
-		// Activate only after final settlement. Do not use InvoiceReceivedPayment
-		// (unconfirmed / partial) — that can grant Premium before funds are final.
-		return s.SettleInvoice(ctx, event.InvoiceID, event.AccountID)
-	default:
-		return nil
-	}
-}
-
-// SettleInvoice activates or renews premium after payment confirmation.
-func (s *BillingService) SettleInvoice(ctx context.Context, invoiceID, accountIDHint string) error {
-	if invoiceID == "" {
-		return fmt.Errorf("invoice_id required")
-	}
-
-	pr, err := s.db.GetPaymentByProviderTxn(ctx, invoiceID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("unknown invoice")
-		}
-		return err
-	}
-	if pr.Status == model.PaymentCompleted {
-		return nil // idempotent
-	}
-
-	accountID := pr.AccountID
-	if accountID == "" {
-		accountID = accountIDHint
-	}
-	if accountID == "" {
-		return fmt.Errorf("missing account_id for invoice")
-	}
-
-	sub, err := s.db.GetSubscription(ctx, accountID)
-	if err != nil {
-		return err
-	}
-
-	now := time.Now().UTC()
-	periodStart := now
-	if sub.Tier == model.TierPremium && sub.Status == model.StatusActive && sub.CurrentPeriodEnd.After(now) {
-		periodStart = sub.CurrentPeriodEnd
-	}
-	periodDays := pr.PeriodDays
-	planID := pr.PlanID
-	plan, ok := model.PlanByID(planID)
-	if !ok {
-		plan, _ = model.PlanByID(model.PlanMonthly)
-		planID = plan.ID
-	}
-	if periodDays <= 0 {
-		periodDays = plan.PeriodDays
-	}
-	periodEnd := periodStart.Add(time.Duration(periodDays) * 24 * time.Hour)
-
-	paymentMethod := model.PaymentBTCPay
-	sub.Tier = model.TierPremium
-	sub.Status = model.StatusActive
-	sub.PaymentMethod = paymentMethod
-	sub.PlanID = planID
-	sub.BillingPeriod = plan.BillingPeriod
-	sub.PriceCents = pr.Amount
-	sub.PeriodDays = periodDays
-	sub.CurrentPeriodStart = periodStart
-	sub.CurrentPeriodEnd = periodEnd
-	sub.CancelAtPeriodEnd = false
-
-	if err := s.db.UpdateSubscription(ctx, sub); err != nil {
-		return fmt.Errorf("activate premium: %w", err)
-	}
-	if err := s.db.CompletePayment(ctx, invoiceID); err != nil {
-		return fmt.Errorf("complete payment: %w", err)
-	}
-
-	s.publishEvent("subscription.renewed", renewedEventPayload(
-		accountID,
-		model.TierPremium,
-		paymentMethod,
-		planID,
-		periodDays,
-		periodEnd,
-	))
-
-	s.log.Info("premium activated",
-		zap.String("account_hash", logging.HashIdentifier(accountID)),
-		zap.String("invoice_id", invoiceID),
-		zap.Time("period_end", periodEnd),
-	)
-	return nil
-}
-
-// SettleMockInvoice is used by the local mock checkout page.
-func (s *BillingService) SettleMockInvoice(ctx context.Context, invoiceID string) error {
-	if s.mock == nil {
-		return fmt.Errorf("mock payments disabled")
-	}
-	inv, err := s.mock.MarkSettled(invoiceID)
-	if err != nil {
-		return err
-	}
-	return s.SettleInvoice(ctx, invoiceID, inv.AccountID)
-}
-
-func (s *BillingService) GetMockInvoice(invoiceID string) (provider.MockInvoice, bool) {
-	if s.mock == nil {
-		return provider.MockInvoice{}, false
-	}
-	return s.mock.Get(invoiceID)
-}
-
-func (s *BillingService) ExpireDueSubscriptions(ctx context.Context) (int, error) {
-	subs, err := s.db.ListExpiredPremium(ctx, time.Now().UTC())
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, sub := range subs {
-		if err := s.expireOne(ctx, sub); err != nil {
-			s.log.Error("expire failed", zap.String("account_hash", logging.HashIdentifier(sub.AccountID)), zap.Error(err))
-			continue
-		}
-		n++
-	}
-	return n, nil
-}
-
-func (s *BillingService) expireOne(ctx context.Context, sub *model.Subscription) error {
-	now := time.Now().UTC()
-	sub.Tier = model.TierFree
-	sub.Status = model.StatusActive
-	sub.PaymentMethod = model.PaymentNone
-	sub.CurrentPeriodStart = now
-	sub.CurrentPeriodEnd = now.Add(100 * 365 * 24 * time.Hour)
-	sub.CancelAtPeriodEnd = false
-	if err := s.db.UpdateSubscription(ctx, sub); err != nil {
-		return err
-	}
-	s.publishEvent("subscription.expired", map[string]interface{}{
-		"account_id": sub.AccountID,
-		"tier":       model.TierFree,
-	})
-	return nil
-}
-
-// renewedEventPayload is consumed by auth-svc and wg-manager entitlement sync.
-// account_id and period_end are required — without them listeners no-op.
-func renewedEventPayload(
-	accountID, tier, paymentMethod, planID string,
-	periodDays int,
-	periodEnd time.Time,
-) map[string]interface{} {
-	return map[string]interface{}{
-		"account_id":     accountID,
-		"tier":           tier,
-		"payment_method": paymentMethod,
-		"plan_id":        planID,
-		"period_days":    periodDays,
-		"period_end":     periodEnd.UTC(),
-	}
-}
-
-func (s *BillingService) publishEvent(subject string, payload map[string]interface{}) {
-	if s.natsConn == nil {
+func (s *AuthService) publishEvent(subject string, payload map[string]interface{}) {
+	if s.nats == nil {
 		return
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		s.log.Error("failed to marshal event payload", zap.Error(err))
+		s.log.Warn("failed to marshal activity event", zap.Error(err))
 		return
 	}
-	if err := s.natsConn.Publish(subject, data); err != nil {
-		s.log.Error("failed to publish NATS event", zap.String("subject", subject), zap.Error(err))
+	if err := s.nats.Publish(subject, data); err != nil {
+		s.log.Warn("failed to publish activity event", zap.String("subject", subject), zap.Error(err))
 	}
+}
+
+func (s *AuthService) RateLimited(ctx context.Context, key string, limit int, window time.Duration) bool {
+	limited, err := s.redis.CheckRateLimit(ctx, "auth:"+key, limit, window)
+	if err != nil {
+		s.log.Warn("rate limit unavailable", zap.Error(err))
+		return true
+	}
+	return limited
+}
+
+func hashInput(input string) string {
+	h := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(h[:])
+}
+
+func (s *AuthService) Register(ctx context.Context, deviceID, publicKey string) (string, string, string, int64, error) {
+	if deviceID == "" || publicKey == "" {
+		return "", "", "", 0, fmt.Errorf("device_id and public_key are required")
+	}
+
+	hashedDeviceID := hashInput(deviceID)
+	hashedPublicKey := hashInput(publicKey)
+
+	accountID, err := libcrypto.GenerateAccountID()
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate account id: %w", err)
+	}
+
+	acc := &model.Account{
+		ID:               accountID,
+		HashedDeviceID:   hashedDeviceID,
+		HashedPublicKey:  hashedPublicKey,
+		SubscriptionTier: "free",
+	}
+
+	if err := s.db.CreateAccount(ctx, acc); err != nil {
+		s.log.Error("failed to create account", zap.Error(err))
+		return "", "", "", 0, fmt.Errorf("create account: %w", err)
+	}
+
+	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
+	}
+
+	refreshToken, err := libcrypto.GenerateRefreshToken()
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate refresh token: %w", err)
+	}
+
+	refreshTokenHash := hashInput(refreshToken)
+	rt := &model.RefreshToken{
+		AccountID: acc.ID,
+		TokenHash: refreshTokenHash,
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	}
+
+	if err := s.db.StoreRefreshToken(ctx, rt); err != nil {
+		return "", "", "", 0, fmt.Errorf("store refresh token: %w", err)
+	}
+
+	s.log.Info("account registered",
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
+		zap.String("tier", acc.SubscriptionTier),
+	)
+
+	s.publishEvent("account.registered", map[string]interface{}{"account_type": "device"})
+
+	return accessToken, refreshToken, acc.ID, expiresAt, nil
+}
+
+func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (string, string, int64, error) {
+	tokenHash := hashInput(refreshToken)
+
+	rt, err := s.db.GetRefreshToken(ctx, tokenHash)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("invalid refresh token: %w", err)
+	}
+
+	if err := s.db.DeleteRefreshToken(ctx, tokenHash); err != nil {
+		s.log.Warn("failed to delete old refresh token", zap.Error(err))
+	}
+
+	acc, err := s.db.GetAccountByID(ctx, rt.AccountID)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("get account: %w", err)
+	}
+	if acc.Email != nil && acc.EmailVerifiedAt == nil {
+		return "", "", 0, fmt.Errorf("email_not_verified")
+	}
+
+	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("generate access token: %w", err)
+	}
+
+	newRefreshToken, err := libcrypto.GenerateRefreshToken()
+	if err != nil {
+		return "", "", 0, fmt.Errorf("generate refresh token: %w", err)
+	}
+
+	newTokenHash := hashInput(newRefreshToken)
+	newRT := &model.RefreshToken{
+		AccountID: acc.ID,
+		TokenHash: newTokenHash,
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	}
+
+	if err := s.db.StoreRefreshToken(ctx, newRT); err != nil {
+		return "", "", 0, fmt.Errorf("store new refresh token: %w", err)
+	}
+
+	return accessToken, newRefreshToken, expiresAt, nil
+}
+
+func (s *AuthService) ValidateToken(ctx context.Context, accessToken string) (*jwtlib.Claims, error) {
+	tokenHash := hashInput(accessToken)
+
+	blacklisted, err := s.redis.IsTokenBlacklisted(ctx, tokenHash)
+	if err != nil {
+		return nil, fmt.Errorf("check blacklist: %w", err)
+	}
+	if blacklisted {
+		return nil, fmt.Errorf("token has been revoked")
+	}
+
+	claims, err := s.jwt.ValidateAccessToken(accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("validate token: %w", err)
+	}
+	if _, err := s.db.GetAccountByID(ctx, claims.AccountID); err != nil {
+		return nil, fmt.Errorf("account is no longer active: %w", err)
+	}
+
+	return claims, nil
+}
+
+func (s *AuthService) GetAccount(ctx context.Context, accountID string) (*model.Account, error) {
+	return s.db.GetAccountByID(ctx, accountID)
+}
+
+func (s *AuthService) DeleteAccount(ctx context.Context, accountID string) error {
+	if err := s.db.DeleteAccount(ctx, accountID); err != nil {
+		return fmt.Errorf("delete account: %w", err)
+	}
+
+	s.log.Info("account permanently deleted", zap.String("account_hash", logging.HashIdentifier(accountID)))
+	return nil
+}
+
+// LogoutAllSessions revokes every refresh token for the account and blacklists
+// the caller's current access token so it cannot be reused until it expires.
+func (s *AuthService) LogoutAllSessions(ctx context.Context, accountID, accessToken string) error {
+	if err := s.db.DeleteAllRefreshTokens(ctx, accountID); err != nil {
+		return fmt.Errorf("delete refresh tokens: %w", err)
+	}
+
+	ttl := s.cfg.AccessTokenTTL
+	if claims, err := s.jwt.ValidateAccessToken(accessToken); err == nil && claims.ExpiresAt != nil {
+		if remaining := time.Until(claims.ExpiresAt.Time); remaining > 0 {
+			ttl = remaining
+		}
+	}
+	if ttl > 0 {
+		if err := s.redis.BlacklistToken(ctx, hashInput(accessToken), ttl); err != nil {
+			return fmt.Errorf("blacklist access token: %w", err)
+		}
+	}
+
+	s.log.Info("all sessions logged out", zap.String("account_hash", logging.HashIdentifier(accountID)))
+	return nil
+}
+
+func (s *AuthService) RegisterWithEmail(ctx context.Context, email, password string) (string, string, string, int64, error) {
+	if email == "" || password == "" {
+		return "", "", "", 0, fmt.Errorf("email and password are required")
+	}
+	if err := validatePassword(password); err != nil {
+		return "", "", "", 0, err
+	}
+
+	passwordHash, err := libcrypto.HashPassword(password)
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("hash password: %w", err)
+	}
+
+	accountID, err := libcrypto.GenerateAccountID()
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate account id: %w", err)
+	}
+
+	deviceID, err := libcrypto.GenerateRefreshToken()
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate device id: %w", err)
+	}
+
+	emailVal := email
+	acc := &model.Account{
+		ID:               accountID,
+		HashedDeviceID:   hashInput(deviceID),
+		HashedPublicKey:  "",
+		Email:            &emailVal,
+		PasswordHash:     &passwordHash,
+		SubscriptionTier: "free",
+	}
+
+	if err := s.db.CreateAccountWithEmail(ctx, acc); err != nil {
+		s.log.Error("failed to create account with email", zap.Error(err))
+		return "", "", "", 0, fmt.Errorf("create account: %w", err)
+	}
+
+	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
+	}
+
+	refreshToken, err := libcrypto.GenerateRefreshToken()
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate refresh token: %w", err)
+	}
+
+	refreshTokenHash := hashInput(refreshToken)
+	rt := &model.RefreshToken{
+		AccountID: acc.ID,
+		TokenHash: refreshTokenHash,
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	}
+
+	if err := s.db.StoreRefreshToken(ctx, rt); err != nil {
+		return "", "", "", 0, fmt.Errorf("store refresh token: %w", err)
+	}
+
+	s.log.Info("account registered with email",
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
+		zap.String("email_hash", logging.HashIdentifier(email)),
+	)
+
+	s.publishEvent("account.registered", map[string]interface{}{"account_type": "email"})
+
+	return accessToken, refreshToken, acc.ID, expiresAt, nil
+}
+
+func (s *AuthService) SignInWithEmail(ctx context.Context, email, password string) (string, string, string, int64, error) {
+	if email == "" || password == "" {
+		return "", "", "", 0, fmt.Errorf("email and password are required")
+	}
+	if len(password) < 10 {
+		return "", "", "", 0, fmt.Errorf("invalid email or password")
+	}
+
+	acc, err := s.db.GetAccountByEmail(ctx, email)
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("invalid email or password: %w", err)
+	}
+
+	if acc.PasswordHash == nil || !libcrypto.CheckPassword(password, *acc.PasswordHash) {
+		return "", "", "", 0, fmt.Errorf("invalid email or password")
+	}
+	if acc.EmailVerifiedAt == nil {
+		return "", "", "", 0, fmt.Errorf("email_not_verified")
+	}
+
+	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
+	}
+
+	refreshToken, err := libcrypto.GenerateRefreshToken()
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate refresh token: %w", err)
+	}
+
+	refreshTokenHash := hashInput(refreshToken)
+	rt := &model.RefreshToken{
+		AccountID: acc.ID,
+		TokenHash: refreshTokenHash,
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	}
+
+	if err := s.db.StoreRefreshToken(ctx, rt); err != nil {
+		return "", "", "", 0, fmt.Errorf("store refresh token: %w", err)
+	}
+
+	s.log.Info("user signed in with email",
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
+	)
+
+	return accessToken, refreshToken, acc.ID, expiresAt, nil
+}
+
+func (s *AuthService) RequestPasswordReset(ctx context.Context, emailAddr string) error {
+	acc, err := s.db.GetAccountByEmail(ctx, emailAddr)
+	if err != nil {
+		// Uniform response — do not reveal whether the email is registered.
+		return nil
+	}
+
+	token, err := libcrypto.GenerateResetToken()
+	if err != nil {
+		return fmt.Errorf("generate reset token: %w", err)
+	}
+
+	expiry := time.Now().Add(1 * time.Hour)
+	if err := s.db.SetResetToken(ctx, acc.ID, hashInput(token), expiry); err != nil {
+		return fmt.Errorf("set reset token: %w", err)
+	}
+
+	s.log.Info("password reset requested",
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
+	)
+
+	if s.email != nil {
+		resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.cfg.PublicBaseURL, token)
+		if err := s.email.Send(ctx, email.SendRequest{
+			From:    "VeritasVPN <noreply@veritasvpn.cloud>",
+			To:      emailAddr,
+			Subject: "Reset your VeritasVPN password",
+			HTML:    resetEmailHTML(resetURL),
+		}); err != nil {
+			s.log.Error("failed to send reset email", zap.Error(err))
+		} else {
+			s.log.Info("reset email sent", zap.String("account_hash", logging.HashIdentifier(acc.ID)))
+		}
+	}
+
+	return nil
+}
+
+func resetEmailHTML(resetURL string) string {
+	return `<!DOCTYPE html>
+<html>
+<body style="font-family: sans-serif; background: #0a0a0f; color: #e0e0e0; padding: 40px; text-align: center;">
+  <h2 style="color: #00d2ff;">VeritasVPN</h2>
+  <p>You requested a password reset. Click the button below to set a new password. This link expires in 1 hour.</p>
+  <a href="` + resetURL + `" style="display: inline-block; margin: 20px 0; padding: 14px 32px; background: linear-gradient(135deg, #00d2ff, #7b61ff); color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600;">Reset Password</a>
+  <p style="color: #888; font-size: 13px;">If you did not request this, you can safely ignore this email.</p>
+</body>
+</html>`
+}
+
+func (s *AuthService) ResetPassword(ctx context.Context, resetToken, newPassword string) error {
+	if err := validatePassword(newPassword); err != nil {
+		return err
+	}
+
+	acc, err := s.db.GetAccountByResetToken(ctx, hashInput(resetToken))
+	if err != nil {
+		return fmt.Errorf("invalid or expired reset token")
+	}
+
+	passwordHash, err := libcrypto.HashPassword(newPassword)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+
+	if err := s.db.UpdateAccountPassword(ctx, acc.ID, passwordHash); err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+
+	s.log.Info("password reset completed",
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
+	)
+
+	return nil
+}
+
+func (s *AuthService) GetAccountByEmail(ctx context.Context, email string) (*model.Account, error) {
+	return s.db.GetAccountByEmail(ctx, email)
+}
+
+func (s *AuthService) RegisterAnonymous(ctx context.Context) (string, string, string, int64, error) {
+	accountID, err := libcrypto.GenerateAccountID()
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate account id: %w", err)
+	}
+
+	deviceID, err := libcrypto.GenerateRefreshToken()
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate device id: %w", err)
+	}
+
+	acc := &model.Account{
+		ID:               accountID,
+		HashedDeviceID:   hashInput(deviceID),
+		HashedPublicKey:  "",
+		SubscriptionTier: "free",
+	}
+
+	if err := s.db.CreateAccount(ctx, acc); err != nil {
+		s.log.Error("failed to create anonymous account", zap.Error(err))
+		return "", "", "", 0, fmt.Errorf("create account: %w", err)
+	}
+
+	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
+	}
+
+	refreshToken, err := libcrypto.GenerateRefreshToken()
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate refresh token: %w", err)
+	}
+
+	refreshTokenHash := hashInput(refreshToken)
+	rt := &model.RefreshToken{
+		AccountID: acc.ID,
+		TokenHash: refreshTokenHash,
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	}
+
+	if err := s.db.StoreRefreshToken(ctx, rt); err != nil {
+		return "", "", "", 0, fmt.Errorf("store refresh token: %w", err)
+	}
+
+	s.log.Info("anonymous account created",
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
+	)
+
+	s.publishEvent("account.registered", map[string]interface{}{"account_type": "anonymous"})
+
+	return accessToken, refreshToken, acc.ID, expiresAt, nil
+}
+
+func (s *AuthService) SignInWithAccountID(ctx context.Context, accountID string) (string, string, string, int64, error) {
+	if accountID == "" {
+		return "", "", "", 0, fmt.Errorf("account_id is required")
+	}
+
+	acc, err := s.db.GetAccountByID(ctx, accountID)
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("invalid account_id")
+	}
+
+	// Account ID restore is only for anonymous accounts. Email accounts must use password.
+	if acc.Email != nil && strings.TrimSpace(*acc.Email) != "" {
+		return "", "", "", 0, fmt.Errorf("use email and password to sign in to this account")
+	}
+	if acc.PasswordHash != nil && strings.TrimSpace(*acc.PasswordHash) != "" {
+		return "", "", "", 0, fmt.Errorf("use email and password to sign in to this account")
+	}
+
+	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
+	}
+
+	refreshToken, err := libcrypto.GenerateRefreshToken()
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("generate refresh token: %w", err)
+	}
+
+	refreshTokenHash := hashInput(refreshToken)
+	rt := &model.RefreshToken{
+		AccountID: acc.ID,
+		TokenHash: refreshTokenHash,
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	}
+
+	if err := s.db.StoreRefreshToken(ctx, rt); err != nil {
+		return "", "", "", 0, fmt.Errorf("store refresh token: %w", err)
+	}
+
+	s.log.Info("anonymous user signed in",
+		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
+	)
+
+	return accessToken, refreshToken, acc.ID, expiresAt, nil
+}
+
+func (s *AuthService) TurnstileEnabled() bool {
+	return strings.TrimSpace(s.cfg.TurnstileSecretKey) != ""
+}
+
+func (s *AuthService) VerifyTurnstile(ctx context.Context, token, remoteIP string) error {
+	return turnstile.Verify(ctx, s.cfg.TurnstileSecretKey, token, remoteIP)
 }

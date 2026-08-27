@@ -161,6 +161,9 @@ jobs:
           node --check clients/browser-extension/js/background.js
           node --check clients/browser-extension/js/popup.js
           node --check clients/browser-extension/js/auth.js
+          test -f website/downloads/veritasvpn-chrome.zip
+          unzip -p website/downloads/veritasvpn-chrome.zip manifest.json > /tmp/published-manifest.json
+          node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('/tmp/published-manifest.json')); if(m.host_permissions.includes('<all_urls>')) throw new Error('Published chrome zip must not request <all_urls>');"
           mkdir -p "$RUNNER_TEMP/veritasvpn-extension"
           cp -R clients/browser-extension/. "$RUNNER_TEMP/veritasvpn-extension/"
           (cd "$RUNNER_TEMP/veritasvpn-extension" && zip -qr "$RUNNER_TEMP/veritasvpn-extension.zip" .)

@@ -28,6 +28,7 @@ for target in \
   'deployment/auth-svc:veritas' \
   'deployment/wg-manager:veritas' \
   'deployment/billing-svc:veritas' \
+  'daemonset/veritas-wstunnel:veritas' \
   'statefulset/bitcoind-mainnet:btcpay-mainnet' \
   'statefulset/nbxplorer-mainnet:btcpay-mainnet' \
   'deployment/btcpayserver-mainnet:btcpay-mainnet' \

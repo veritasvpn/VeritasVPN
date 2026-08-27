@@ -65,6 +65,13 @@ spec:
                 secretKeyRef:
                   name: veritas-secrets
                   key: JWT_SECRET
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: REDIS_PASSWORD
             - name: AGENT_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:

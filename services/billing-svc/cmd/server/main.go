@@ -83,6 +83,18 @@ func main() {
 
 	db := repository.NewPostgres(dbPool)
 
+	var redisStore *repository.Redis
+	if cfg.RedisURL != "" {
+		rs, err := repository.NewRedis(cfg.RedisURL)
+		if err != nil {
+			log.Fatal("redis unavailable", zap.Error(err))
+		}
+		redisStore = rs
+		log.Info("connected to Redis for token blacklist")
+	} else {
+		log.Warn("REDIS_URL empty — revoked access tokens will not be rejected by billing-svc")
+	}
+
 	var (
 		invoiceCreator provider.InvoiceCreator
 		btcpay         *provider.BTCPayProvider
@@ -119,7 +131,7 @@ func main() {
 		BitcoinReadinessURL:  cfg.BitcoinReadinessURL,
 	})
 
-	tokenVerifier := tokenauth.NewVerifier(cfg.JWTSecret)
+	tokenVerifier := tokenauth.NewVerifier(cfg.JWTSecret, redisStore)
 	billingHandler := handler.NewBillingHandler(log, svc, tokenVerifier, cfg.AllowedCORSOrigins(), cfg.CheckoutSuccessURL, useMock)
 
 	mux := http.NewServeMux()

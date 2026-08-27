@@ -851,6 +851,13 @@ cleanup_killswitch() {{
     iptables -F "$KILLSWITCH_CHAIN" 2>/dev/null || true
     iptables -X "$KILLSWITCH_CHAIN" 2>/dev/null || true
   fi
+  if command -v ip6tables >/dev/null 2>&1; then
+    while ip6tables -C OUTPUT -j "${{KILLSWITCH_CHAIN}}_V6" 2>/dev/null; do
+      ip6tables -D OUTPUT -j "${{KILLSWITCH_CHAIN}}_V6" 2>/dev/null || break
+    done
+    ip6tables -F "${{KILLSWITCH_CHAIN}}_V6" 2>/dev/null || true
+    ip6tables -X "${{KILLSWITCH_CHAIN}}_V6" 2>/dev/null || true
+  fi
 }}
 
 install_killswitch() {{
@@ -868,6 +875,9 @@ install_killswitch() {{
       fi
     fi
     nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" drop || return 1
+    nft add rule inet "$KILLSWITCH_TABLE" output meta nfproto ipv6 oifname "lo" accept || return 1
+    nft add rule inet "$KILLSWITCH_TABLE" output meta nfproto ipv6 oifname "$IFACE_NAME" accept || return 1
+    nft add rule inet "$KILLSWITCH_TABLE" output meta nfproto ipv6 drop || return 1
     return 0
   fi
   if command -v iptables >/dev/null 2>&1; then
@@ -884,6 +894,14 @@ install_killswitch() {{
       fi
     fi
     iptables -A "$KILLSWITCH_CHAIN" -j DROP || return 1
+    if command -v ip6tables >/dev/null 2>&1; then
+      ip6tables -N "${{KILLSWITCH_CHAIN}}_V6" 2>/dev/null || true
+      ip6tables -F "${{KILLSWITCH_CHAIN}}_V6" || return 1
+      ip6tables -C OUTPUT -j "${{KILLSWITCH_CHAIN}}_V6" 2>/dev/null || ip6tables -I OUTPUT 1 -j "${{KILLSWITCH_CHAIN}}_V6" || return 1
+      ip6tables -A "${{KILLSWITCH_CHAIN}}_V6" -o lo -j ACCEPT || return 1
+      ip6tables -A "${{KILLSWITCH_CHAIN}}_V6" -o "$IFACE_NAME" -j ACCEPT || return 1
+      ip6tables -A "${{KILLSWITCH_CHAIN}}_V6" -j DROP || return 1
+    fi
     return 0
   fi
   return 1
@@ -1046,8 +1064,22 @@ if ! ip route replace blackhole default metric 1 2>/tmp/veritas-wg-killswitch-er
   cat /tmp/veritas-wg-killswitch-error.log >&2 || true
   exit 1
 fi
-# If IPv6 is enabled, keep a fail-closed default as an additional safeguard.
-ip -6 route replace blackhole default metric 1 2>/tmp/veritas-wg-killswitch-v6-error.log || true
+# If IPv6 is enabled, require the same fail-closed default route safeguard.
+if ! ip -6 route replace blackhole default metric 1 2>/tmp/veritas-wg-killswitch-v6-error.log; then
+  cleanup_killswitch
+  ip route del 0.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
+  ip route del 128.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
+  ip route del blackhole default metric 1 2>/dev/null || true
+  ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
+  [[ -n "$ROUTE_IP" && "$ROUTE_IP" != "127.0.0.1" ]] && ip route del "$ROUTE_IP" 2>/dev/null || true
+  ip link set "$IFACE_NAME" down 2>/dev/null || true
+  kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
+  [[ -f "$STEALTH_PID_FILE" ]] && kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+  rm -f "$PID_FILE" "$STEALTH_PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
+  echo "Could not install the IPv6 VPN kill switch; normal internet was left unchanged" >&2
+  cat /tmp/veritas-wg-killswitch-v6-error.log >&2 || true
+  exit 1
+fi
 
 # Firewall kill switch is mandatory (no off option; parity with Android lockdown).
 # Blackhole routes alone are not enough — abort if nftables/iptables rules cannot be installed.
@@ -1312,6 +1344,13 @@ if command -v iptables >/dev/null 2>&1; then
   done
   iptables -F VERITASVPN_KILLSWITCH 2>/dev/null || true
   iptables -X VERITASVPN_KILLSWITCH 2>/dev/null || true
+fi
+if command -v ip6tables >/dev/null 2>&1; then
+  while ip6tables -C OUTPUT -j VERITASVPN_KILLSWITCH_V6 2>/dev/null; do
+    ip6tables -D OUTPUT -j VERITASVPN_KILLSWITCH_V6 2>/dev/null || break
+  done
+  ip6tables -F VERITASVPN_KILLSWITCH_V6 2>/dev/null || true
+  ip6tables -X VERITASVPN_KILLSWITCH_V6 2>/dev/null || true
 fi
 ip route del blackhole default metric 1 2>/dev/null || true
 ip -6 route del blackhole default metric 1 2>/dev/null || true

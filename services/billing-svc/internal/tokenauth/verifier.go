@@ -6,14 +6,20 @@ import (
 	"fmt"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/veritasvpn/lib/tokenhash"
 )
 
-type Verifier struct {
-	secret []byte
+type TokenBlacklist interface {
+	IsTokenBlacklisted(ctx context.Context, tokenHash string) (bool, error)
 }
 
-func NewVerifier(secret string) *Verifier {
-	return &Verifier{secret: []byte(secret)}
+type Verifier struct {
+	secret    []byte
+	blacklist TokenBlacklist
+}
+
+func NewVerifier(secret string, blacklist TokenBlacklist) *Verifier {
+	return &Verifier{secret: []byte(secret), blacklist: blacklist}
 }
 
 type veritasClaims struct {
@@ -44,6 +50,16 @@ func (v *Verifier) Verify(ctx context.Context, tokenStr string) (string, string,
 
 	if claims.AccountID == "" {
 		return "", "", errors.New("missing account_id")
+	}
+
+	if v.blacklist != nil {
+		blacklisted, err := v.blacklist.IsTokenBlacklisted(ctx, tokenhash.Hash(tokenStr))
+		if err != nil {
+			return "", "", fmt.Errorf("blacklist check: %w", err)
+		}
+		if blacklisted {
+			return "", "", errors.New("token revoked")
+		}
 	}
 
 	return claims.AccountID, claims.Tier, nil

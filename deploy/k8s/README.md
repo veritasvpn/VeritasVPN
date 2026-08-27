@@ -85,12 +85,16 @@ The Kustomize base references `secrets.yaml` which must exist locally but is git
 - **Redis**: runAsNonRoot (uid 999), requirepass authentication, capabilities.drop: ALL
 - **veritas-agent**: privileged (required for WireGuard/netlink), hostNetwork, health probes on wg0 + UDP 51820
 
+## Pod disruption budgets (single-node)
+
+The `base/pdb.yaml` resources set `minAvailable: 1` for auth-svc, wg-manager, billing-svc, postgres, and nginx. On a **single-node** k3s cluster (Dell), voluntary disruptions (node drain, cluster upgrade) can still take the only replica offline — PDBs block eviction but do not provide HA. Multi-replica overlays or additional nodes are required for true zero-downtime rollouts.
+
 ## Network Policies
 
 All ingress denied by default in `veritas` namespace. Specific allow rules:
 - nginx ← ingress-nginx namespace (port 8000)
 - postgres ← auth-svc, wg-manager, billing-svc (port 5432)
-- redis ← auth-svc, wg-manager (port 6379)
+- redis ← auth-svc, wg-manager, billing-svc (port 6379)
 - NATS ← auth-svc, wg-manager, billing-svc (port 4222)
 - auth-svc/wg-manager/billing-svc ← nginx (port 8080)
 - agent (hostNetwork) can reach wg-manager via cluster DNS on port 8080
