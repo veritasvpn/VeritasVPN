@@ -7,6 +7,7 @@ WORKDIR /app
 COPY go.work go.work.sum* ./
 COPY lib/config/ lib/config/
 COPY lib/logging/ lib/logging/
+COPY lib/tokenhash/ lib/tokenhash/
 COPY services/billing-svc/ services/billing-svc/
 
 WORKDIR /app/services/billing-svc
