@@ -1,4 +1,4 @@
-import { initAuthUI } from './auth-release-12.js?v=auth18';
+import { initAuthUI } from './auth-release-12.js?v=auth19';
 import { initBillingUI } from './billing.js?v=5';
 
 document.addEventListener('DOMContentLoaded', () => {

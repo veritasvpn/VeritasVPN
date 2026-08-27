@@ -42,7 +42,7 @@
         <section class="downloads-hero downloads-hero--installer">
             <div class="container">
                 <span class="downloads-hero-emblem" aria-hidden="true"><img src="../assets/logo-mark.png" alt=""></span>
-                <span class="downloads-kicker">Linux desktop release v0.2.5</span>
+                <span class="downloads-kicker">Linux desktop release v0.2.6</span>
                 <h1>VeritasVPN for Linux</h1>
                 <p>A WireGuard-only native build connected to the VeritasVPN node in Paraguay, with private DNS threat protection for malware and phishing domains.</p>
                 <div class="hero-actions installer-hero-action">
@@ -119,12 +119,22 @@
                 <button type="button" class="auth-reset" id="authReset">Forgot password?</button>
                 <button type="submit" class="btn btn-primary btn-block" id="authSubmit">Sign in</button>
             </form>
+            <div id="authForgot" class="auth-forgot" hidden>
+                <label class="auth-field"><span>Email</span><input type="email" id="authForgotEmail" required></label>
+                <button type="button" class="btn btn-primary btn-block" id="authForgotSubmit">Send reset link</button>
+                <button type="button" class="auth-forgot-back" id="authForgotBack">Back to sign in</button>
+            </div>
+            <div id="authVerifyPending" class="auth-forgot" hidden>
+                <p class="auth-verify-copy">We sent a verification link to <strong id="authVerifyEmail"></strong>. Open it to confirm your account before signing in.</p>
+                <button type="button" class="btn btn-primary btn-block" id="authVerifyResend">Resend verification email</button>
+                <button type="button" class="auth-forgot-back" id="authVerifyBack">← Back to sign in</button>
+            </div>
             <button type="button" class="auth-anon-link" id="authAnonSignup">Skip email — create anonymous account</button>
             <button type="button" class="auth-anon-link" id="authAnonSignin" hidden>Sign in with Account ID instead</button>
             <div class="auth-divider"><span>or</span></div>
             <button type="button" class="auth-switch" id="authSwitchHint">Don't have an account? Sign up</button>
         </div>
     </div>
-    <script type="module" src="../js/main-install.js?v=auth18"></script>
+    <script type="module" src="../js/main-install.js?v=auth19"></script>
 </body>
 </html>

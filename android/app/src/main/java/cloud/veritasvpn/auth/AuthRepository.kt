@@ -176,7 +176,7 @@ class AuthRepository(context: Context) {
         else -> "Request failed ($code)"
     }
 
-    class VerificationRequired(email: String) : Exception(
+    class VerificationRequired(val email: String) : Exception(
         "Check $email for a verification link. Verify it before signing in."
     )
 

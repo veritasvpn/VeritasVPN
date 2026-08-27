@@ -380,6 +380,11 @@
                 <button type="button" class="btn btn-primary btn-block" id="authForgotSubmit">Send reset link</button>
                 <button type="button" class="auth-forgot-back" id="authForgotBack">Back to sign in</button>
             </div>
+            <div id="authVerifyPending" class="auth-forgot" hidden>
+                <p class="auth-verify-copy">We sent a verification link to <strong id="authVerifyEmail"></strong>. Open it to confirm your account before signing in.</p>
+                <button type="button" class="btn btn-primary btn-block" id="authVerifyResend">Resend verification email</button>
+                <button type="button" class="auth-forgot-back" id="authVerifyBack">← Back to sign in</button>
+            </div>
             <button type="button" class="auth-anon-link" id="authAnonSignup">Skip email — create anonymous account</button>
             <button type="button" class="auth-anon-link" id="authAnonSignin" hidden>Sign in with Account ID instead</button>
             <div class="auth-divider"><span>or</span></div>
@@ -387,6 +392,6 @@
         </div>
     </div>
 
-    <script type="module" src="js/app-entry-12.js?v=auth17"></script>
+    <script type="module" src="js/app-entry-12.js?v=auth19"></script>
 </body>
 </html>

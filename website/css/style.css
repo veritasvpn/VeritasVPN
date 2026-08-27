@@ -1390,6 +1390,16 @@ body.auth-modal-open { overflow: hidden; }
 }
 .auth-forgot-back:hover { color: var(--leaf); }
 
+.auth-verify-copy {
+  color: var(--paper-dim);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0 0 16px;
+  text-align: center;
+}
+
+.auth-verify-copy strong { color: var(--paper); }
+
 /* —— Misc pages that share style.css —— */
 .trust-bar, .features, .how-it-works, .transparency, .pricing, .downloads, .faq {
   /* keep section class hooks working if older markup remains */

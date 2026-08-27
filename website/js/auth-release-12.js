@@ -268,6 +268,10 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   const forgotBackBtn = document.getElementById('authForgotBack');
   const forgotSubmit = document.getElementById('authForgotSubmit');
   const forgotEmail = document.getElementById('authForgotEmail');
+  const verifyPendingView = document.getElementById('authVerifyPending');
+  const verifyPendingEmail = document.getElementById('authVerifyEmail');
+  const verifyPendingBackBtn = document.getElementById('authVerifyBack');
+  const verifyPendingResendBtn = document.getElementById('authVerifyResend');
   const loggedOut = document.getElementById('navAuthLoggedOut');
   const loggedIn = document.getElementById('navAuthLoggedIn');
   const userEmailEl = document.getElementById('navUserEmail');
@@ -286,6 +290,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
 
   let mode = 'signin';
   let busy = false;
+  let pendingVerifyEmail = '';
   let pendingDashboardRedirect = false;
   let turnstileWidgetId = null;
   let turnstileToken = '';
@@ -469,8 +474,24 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
       const divider = document.querySelector('.auth-divider');
       if (divider) divider.hidden = true;
       if (forgotView) forgotView.hidden = false;
+      if (verifyPendingView) verifyPendingView.hidden = true;
+    } else if (mode === 'verify-pending') {
+      if (titleEl) titleEl.textContent = 'Verify your email';
+      if (form) form.hidden = true;
+      if (tabsContainer) tabsContainer.hidden = true;
+      const brand = document.querySelector('.auth-brand');
+      if (brand) brand.hidden = true;
+      if (switchHint) switchHint.hidden = true;
+      if (anonSignupBtn) anonSignupBtn.hidden = true;
+      if (anonSigninBtn) anonSigninBtn.hidden = true;
+      const divider = document.querySelector('.auth-divider');
+      if (divider) divider.hidden = true;
+      if (forgotView) forgotView.hidden = true;
+      if (verifyPendingView) verifyPendingView.hidden = false;
+      if (verifyPendingEmail) verifyPendingEmail.textContent = pendingVerifyEmail;
     } else {
       if (forgotView) forgotView.hidden = true;
+      if (verifyPendingView) verifyPendingView.hidden = true;
       if (form) form.hidden = false;
       if (tabsContainer) tabsContainer.hidden = false;
       const brand = document.querySelector('.auth-brand');
@@ -516,6 +537,11 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
     }
     setError('');
     syncTurnstileForMode();
+  }
+
+  function showVerifyPending(email) {
+    pendingVerifyEmail = email;
+    setMode('verify-pending');
   }
 
   function openModal(preferredMode = 'signin') {
@@ -677,7 +703,7 @@ function renderUser(user) {
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (busy) return;
-    if (mode === 'forgot') return;
+    if (mode === 'forgot' || mode === 'verify-pending') return;
     setError('');
 
     if (mode === 'anon-signup') {
@@ -770,7 +796,7 @@ function renderUser(user) {
       });
       if (data.verification_required) {
         pendingDashboardRedirect = false;
-        setError(`Check ${email} for a verification link. You must verify it before signing in.`, { success: true, action: 'Resend verification email' });
+        showVerifyPending(email);
       } else {
         const user = { email: email, account_id: data.account_id };
         setSession(user, data.access_token, data.refresh_token);
@@ -781,7 +807,6 @@ function renderUser(user) {
       pendingDashboardRedirect = false;
       const mapped = mapAuthError(err.message);
       if (mode === 'signin' && mapped.toLowerCase().includes('verify your email')) {
-        setVerificationResendEmail(email);
         setError(mapped, { action: 'Resend verification email' });
       } else {
         setError(mapped);
@@ -837,6 +862,28 @@ function renderUser(user) {
     e.preventDefault();
     setError('');
     setMode('signin');
+  });
+
+  verifyPendingBackBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    pendingVerifyEmail = '';
+    setError('');
+    setMode('signin');
+  });
+
+  verifyPendingResendBtn?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (busy || !pendingVerifyEmail) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api('/api/v1/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email: pendingVerifyEmail }) });
+      setError('If this account is awaiting verification, a new link has been sent.', { success: true });
+    } catch {
+      setError('Could not resend the email. Please try again shortly.');
+    } finally {
+      setBusy(false);
+    }
   });
 
   resetBtn?.addEventListener('click', (e) => {

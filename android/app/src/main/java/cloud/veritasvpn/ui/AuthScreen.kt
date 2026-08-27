@@ -14,6 +14,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -61,6 +62,7 @@ fun AuthScreen(
     var notice by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var verificationResendEmail by remember { mutableStateOf<String?>(null) }
+    var pendingVerificationEmail by remember { mutableStateOf<String?>(null) }
     var resendLoading by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var forgotPassword by remember { mutableStateOf(false) }
@@ -171,6 +173,74 @@ fun AuthScreen(
                 Text(if (loading) "Sending…" else if (resetCooldown > 0) "Try again in $resetCooldown s" else "Send reset link", color = Color.White)
             }
             TextButton(onClick = { forgotPassword = false; error = null; resetSent = false }) {
+                Text("Back to sign in", color = CyanHover, fontWeight = FontWeight.Medium)
+            }
+            return
+        }
+
+        if (pendingVerificationEmail != null) {
+            IconButton(
+                onClick = {
+                    pendingVerificationEmail = null
+                    notice = null
+                    error = null
+                    mode = AuthMode.SIGN_IN
+                },
+                modifier = Modifier.align(Alignment.Start)
+            ) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to sign in", tint = CyanHover)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("Verify your email", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Confirm your account creation by clicking the verification link we sent to $pendingVerificationEmail.",
+                color = PaperMuted,
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center
+            )
+            notice?.let {
+                Spacer(Modifier.height(12.dp))
+                Text(it, color = CyanHover, fontSize = 13.sp, textAlign = TextAlign.Center)
+            }
+            error?.let {
+                Spacer(Modifier.height(12.dp))
+                Text(it, color = ErrorRed, fontSize = 13.sp, textAlign = TextAlign.Center)
+            }
+            Spacer(Modifier.height(20.dp))
+            Button(
+                onClick = {
+                    val email = pendingVerificationEmail ?: return@Button
+                    resendLoading = true
+                    notice = null
+                    error = null
+                    scope.launch {
+                        try {
+                            withContext(Dispatchers.IO) { authRepo.resendVerification(email) }
+                            notice = "A new verification link was sent to $email."
+                        } catch (e: Exception) {
+                            error = e.message ?: "Could not resend the verification email. Try again."
+                        } finally {
+                            resendLoading = false
+                        }
+                    }
+                },
+                enabled = !resendLoading,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Royal)
+            ) {
+                Text(
+                    if (resendLoading) "Sending verification email…" else "Resend verification email",
+                    color = Color.White
+                )
+            }
+            TextButton(onClick = {
+                pendingVerificationEmail = null
+                notice = null
+                error = null
+                mode = AuthMode.SIGN_IN
+            }) {
                 Text("Back to sign in", color = CyanHover, fontWeight = FontWeight.Medium)
             }
             return
@@ -496,7 +566,14 @@ fun AuthScreen(
                                 onAuthenticated()
                             }
                         } catch (e: cloud.veritasvpn.auth.AuthRepository.VerificationRequired) {
-                            notice = e.message
+                            if (method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP) {
+                                pendingVerificationEmail = e.email
+                                notice = null
+                                error = null
+                            } else {
+                                verificationResendEmail = e.email
+                                error = e.message
+                            }
                         } catch (e: cloud.veritasvpn.auth.AuthRepository.AccountAlreadyExists) {
                             error = e.message
                             verificationResendEmail = e.email

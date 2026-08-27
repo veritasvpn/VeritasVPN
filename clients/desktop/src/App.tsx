@@ -718,6 +718,7 @@ function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [verificationResendEmail, setVerificationResendEmail] = useState("");
+  const [pendingVerificationEmail, setPendingVerificationEmail] = useState<string | null>(null);
   const [resendLoading, setResendLoading] = useState(false);
   const [forgotPassword, setForgotPassword] = useState(false);
   const [resetSent, setResetSent] = useState(false);
@@ -926,6 +927,7 @@ function App() {
     setError("");
     setNotice("");
     setVerificationResendEmail("");
+    setPendingVerificationEmail(null);
     setNewAccountId("");
     setForgotPassword(false);
   }, []);
@@ -977,8 +979,13 @@ function App() {
       }
     } catch (err) {
       if (err instanceof VerificationRequiredError) {
-        setVerificationResendEmail(err.email);
-        setError(err.message);
+        if (mode === "signup" && method === "email") {
+          setPendingVerificationEmail(err.email);
+          setError("");
+        } else {
+          setVerificationResendEmail(err.email);
+          setError(err.message);
+        }
       } else if (err instanceof AccountAlreadyExistsError) {
         setVerificationResendEmail(err.email);
         setError(err.message);
@@ -1008,15 +1015,16 @@ function App() {
     }
   }, [email]);
 
-  const handleResendVerification = useCallback(async () => {
-    if (!verificationResendEmail) return;
+  const handleResendVerification = useCallback(async (targetEmail?: string) => {
+    const emailToResend = targetEmail || verificationResendEmail;
+    if (!emailToResend) return;
     setResendLoading(true);
     setNotice("");
     try {
-      await resendVerification(verificationResendEmail);
+      await resendVerification(emailToResend);
       setError("");
-      setVerificationResendEmail("");
-      setNotice(`A new verification link was sent to ${verificationResendEmail}.`);
+      if (!targetEmail) setVerificationResendEmail("");
+      setNotice(`A new verification link was sent to ${emailToResend}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not resend the verification email. Try again.");
     } finally {
@@ -1660,6 +1668,28 @@ function App() {
 
   if (!user || (newAccountId && method === "accountId" && mode === "signup")) {
     const showingNewId = Boolean(newAccountId);
+    if (pendingVerificationEmail) {
+      return (
+        <div className="app auth-screen">
+          <div className="brand">
+            <img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" />
+            <h1>Veritas<span>VPN</span></h1>
+          </div>
+          <div className="auth-card">
+            <h2>Verify your email</h2>
+            <p className="auth-subcopy">
+              Confirm your account creation by clicking the verification link we sent to <strong>{pendingVerificationEmail}</strong>.
+            </p>
+            {notice && <div className="notice">{notice}</div>}
+            {error && <div className="error">{error}</div>}
+            <button type="button" className="btn-primary" disabled={resendLoading} onClick={() => handleResendVerification(pendingVerificationEmail)}>
+              {resendLoading ? "Sending verification email…" : "Resend verification email"}
+            </button>
+            <button type="button" className="auth-switch-link" onClick={() => { setPendingVerificationEmail(null); setError(""); setNotice(""); switchMode("signin"); }}>← Back to sign in</button>
+          </div>
+        </div>
+      );
+    }
     if (forgotPassword) {
       return (
         <div className="app auth-screen">
@@ -1704,7 +1734,7 @@ function App() {
           {notice && <div className="notice">{notice}</div>}
           {error && <div className="error">{error}</div>}
           {verificationResendEmail && (
-            <button type="button" className="btn-outline" disabled={resendLoading} onClick={handleResendVerification}>
+            <button type="button" className="btn-outline" disabled={resendLoading} onClick={() => handleResendVerification()}>
               {resendLoading ? "Sending verification email…" : "Resend verification email"}
             </button>
           )}
