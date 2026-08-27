@@ -109,3 +109,5 @@ website/downloads/veritasvpn-macos-*.dmg
 
 # Website downloads generated outside the current release flow
 website/downloads/veritasvpn-linux.*
+website/downloads/VeritasVPN_*.AppImage
+website/downloads/VeritasVPN_*.deb

@@ -24,6 +24,9 @@ jobs:
           # Pages has a 25 MiB per-file limit; the APK is streamed by a Pages Function.
           rsync -a \
             --exclude 'downloads/veritasvpn-linux.AppImage' \
+            --exclude 'downloads/veritasvpn-linux.deb' \
+            --exclude 'downloads/VeritasVPN_*.AppImage' \
+            --exclude 'downloads/VeritasVPN_*.deb' \
             --exclude 'downloads/veritasvpn-android.apk' \
             --exclude 'downloads/veritasvpn-macos.dmg' \
             --exclude 'functions' \
