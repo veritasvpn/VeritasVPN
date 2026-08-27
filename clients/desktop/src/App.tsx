@@ -26,12 +26,23 @@ import {
   BillingStatus,
 } from "./billing";
 import { AUTH_API } from "./config";
+import { obtainTurnstileToken } from "./turnstile";
 import veritasMark from "./assets/veritas-mark.png";
 import "./App.css";
 
 type AuthMode = "signin" | "signup";
 type AuthMethod = "email" | "accountId";
 type TunnelMode = "wireguard" | "";
+
+/** Production BTCPay checkout hosts (mainnet). Reject anything else. */
+const ALLOWED_BTCPAY_CHECKOUT_PREFIXES = [
+  "https://btcpay-mainnet.veritasvpn.cloud/",
+] as const;
+
+function isAllowedBtcpayCheckoutUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  return ALLOWED_BTCPAY_CHECKOUT_PREFIXES.some((prefix) => url.startsWith(prefix));
+}
 
 interface ConnectResult {
   success: boolean;
@@ -946,7 +957,8 @@ function App() {
           setUser(u);
           setAccountId("");
         } else {
-          const u = await doRegisterAnonymous();
+          const turnstileToken = await obtainTurnstileToken();
+          const u = await doRegisterAnonymous(turnstileToken);
           setNewAccountId(u.account_id);
           setUser(u);
         }
@@ -956,7 +968,8 @@ function App() {
         setEmail("");
         setPassword("");
       } else {
-        const u = await doSignUp(email, password);
+        const turnstileToken = await obtainTurnstileToken();
+        const u = await doSignUp(email, password, turnstileToken);
         setUser(u);
         setEmail("");
         setPassword("");
@@ -1036,10 +1049,10 @@ function App() {
         body: JSON.stringify({ tier: "premium", payment_method: "btcpay", plan_id: selectedPlan }),
       });
       const data = await response.json() as { checkout_url?: string; error?: string };
-      if (!response.ok || !data.checkout_url?.startsWith("https://btcpay.veritasvpn.cloud/")) {
+      if (!response.ok || !isAllowedBtcpayCheckoutUrl(data.checkout_url)) {
         throw new Error(data.error || "The billing server returned an invalid checkout.");
       }
-      setCheckoutUrl(data.checkout_url);
+      setCheckoutUrl(data.checkout_url!);
     } catch (err) {
       setBillingError(err instanceof Error ? err.message : "Could not start checkout.");
     } finally {
@@ -1736,7 +1749,8 @@ function App() {
             </>
           ) : mode === "signin" ? (
             <>
-              <input type="text" placeholder="Account ID" value={accountId} onChange={(e) => setAccountId(e.target.value)} required autoComplete="off" spellCheck={false} />
+              <p className="auth-hint">Anonymous Account ID only — email accounts must use password.</p>
+              <input type="text" placeholder="Anonymous Account ID" value={accountId} onChange={(e) => setAccountId(e.target.value)} required autoComplete="off" spellCheck={false} />
               <button type="submit" disabled={loading} className="btn-primary">{loading ? "Please wait…" : "Sign in with Account ID"}</button>
             </>
           ) : (

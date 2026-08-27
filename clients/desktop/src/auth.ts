@@ -54,7 +54,10 @@ async function authAPI(
   const url = `${AUTH_API}${path}`;
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Veritas-Client": "desktop",
+    },
     body: JSON.stringify(body),
     maxRedirections: 0,
   });
@@ -165,14 +168,23 @@ export function passwordStrengthScore(password: string): number {
 
 export async function signUp(
   email: string,
-  password: string
+  password: string,
+  turnstileToken: string
 ): Promise<User> {
   const normalizedEmail = email.trim().toLowerCase();
+  if (!turnstileToken.trim()) throw new Error("Complete verification to continue.");
   const url = `${AUTH_API}/api/v1/auth/register`;
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: normalizedEmail, password }),
+    headers: {
+      "Content-Type": "application/json",
+      "X-Veritas-Client": "desktop",
+    },
+    body: JSON.stringify({
+      email: normalizedEmail,
+      password,
+      turnstile_token: turnstileToken,
+    }),
     maxRedirections: 0,
   });
   const text = await res.text();
@@ -207,7 +219,7 @@ export async function resendVerification(email: string): Promise<void> {
   await authAPI("/api/v1/auth/resend-verification", { email: normalizedEmail });
 }
 
-/** Sign in with an anonymous (or any) account ID — no password. */
+/** Sign in with an anonymous account ID — no password. Email accounts must use password. */
 export async function signInWithAccountId(accountId: string): Promise<User> {
   const id = accountId.trim();
   if (!id) throw new Error("Enter your account ID.");
@@ -221,8 +233,11 @@ export async function signInWithAccountId(accountId: string): Promise<User> {
 }
 
 /** Create an anonymous account; caller must show `account_id` to the user once. */
-export async function registerAnonymous(): Promise<User> {
-  const data = await authAPI("/api/v1/auth/register-anonymous");
+export async function registerAnonymous(turnstileToken: string): Promise<User> {
+  if (!turnstileToken.trim()) throw new Error("Complete verification to continue.");
+  const data = await authAPI("/api/v1/auth/register-anonymous", {
+    turnstile_token: turnstileToken,
+  });
   return persistSession(
     { account_id: data.account_id || "", is_anonymous: true },
     data
@@ -233,8 +248,11 @@ export async function registerAnonymous(): Promise<User> {
 export async function downloadAccountFile(): Promise<void> {
   const token = getStoredToken();
   if (!token) return;
-  const url = `${AUTH_API}/api/v1/auth/download-account?token=${encodeURIComponent(token)}`;
-  const res = await fetch(url, { maxRedirections: 0 });
+  const url = `${AUTH_API}/api/v1/auth/download-account`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    maxRedirections: 0,
+  });
   const text = await res.text();
   const blob = new Blob([text], { type: "text/plain" });
   const blobUrl = URL.createObjectURL(blob);

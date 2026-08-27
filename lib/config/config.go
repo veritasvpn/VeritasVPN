@@ -90,7 +90,7 @@ func envOrDefault(key, defaultVal string) string {
 }
 
 func envRequired(key string) string {
-	return os.Getenv(key)
+	return strings.TrimSpace(os.Getenv(key))
 }
 
 func intEnvOrDefault(key string, defaultVal int) int {

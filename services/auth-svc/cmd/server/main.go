@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +35,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer log.Sync()
+
+	if strings.TrimSpace(cfg.JWTSecret) == "" || len(cfg.JWTSecret) < 32 {
+		log.Fatal("JWT_SECRET must be set to at least 32 characters")
+	}
+	if cfg.IsProduction() && strings.TrimSpace(cfg.TurnstileSecretKey) == "" {
+		log.Fatal("TURNSTILE_SECRET_KEY is required in production")
+	}
 
 	dbPool, err := connectDatabase(cfg.DatabaseURL, log)
 	if err != nil {

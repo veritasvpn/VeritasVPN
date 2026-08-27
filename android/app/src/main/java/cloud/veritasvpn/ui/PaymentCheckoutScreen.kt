@@ -45,8 +45,11 @@ fun PaymentCheckoutScreen(checkoutUrl: String, onClose: () -> Unit, onRefreshPla
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                             val uri = request.url
-                            if (uri.host == "veritasvpn.cloud") { onRefreshPlan(); onClose(); return true }
-                            if (uri.scheme == "https" && uri.host == "btcpay.veritasvpn.cloud") return false
+                            if (uri.host == "veritasvpn.cloud" || uri.host == "www.veritasvpn.cloud") {
+                                onRefreshPlan(); onClose(); return true
+                            }
+                            // Allow only production BTCPay mainnet checkout pages in-app.
+                            if (uri.scheme == "https" && uri.host == "btcpay-mainnet.veritasvpn.cloud") return false
                             if (uri.scheme == "bitcoin") {
                                 runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
                                 return true

@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -27,36 +28,27 @@ func NewHTTPHandler(log *logging.Logger, svc *service.AuthService, corsOrigins [
 }
 
 func clientIP(r *http.Request) string {
-	if value := strings.TrimSpace(strings.Split(r.Header.Get("CF-Connecting-IP"), ",")[0]); value != "" {
+	// Trust X-Real-IP only — nginx sets it from the Cloudflare tunnel hop.
+	// Do not read CF-Connecting-IP / X-Forwarded-For here; clients can spoof them.
+	if value := strings.TrimSpace(strings.Split(r.Header.Get("X-Real-IP"), ",")[0]); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); value != "" {
-		return value
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
 	}
-	return strings.Split(r.RemoteAddr, ":")[0]
+	return host
 }
 
 func (h *HTTPHandler) verifyTurnstileIfRequired(w http.ResponseWriter, r *http.Request, token string) bool {
+	// When Turnstile is configured, every register path must present a valid token.
+	// Origin / X-Veritas-Client are telemetry only — they must not gate enforcement.
 	if !h.service.TurnstileEnabled() {
 		return true
 	}
 
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	client := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Veritas-Client")))
-	require := false
-	if origin != "" {
-		if _, ok := h.corsMap[origin]; ok {
-			require = true
-		}
-	}
-	switch client {
-	case "android", "desktop", "web":
-		require = true
-	}
-	if !require {
-		return true
-	}
-
 	if err := h.service.VerifyTurnstile(r.Context(), token, clientIP(r)); err != nil {
 		h.log.Warn("turnstile verification failed",
 			zap.String("origin", origin),
@@ -437,9 +429,14 @@ func (h *HTTPHandler) handleDownloadAccount(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	token := r.URL.Query().Get("token")
+	// Prefer Authorization header. Query ?token= is accepted temporarily for
+	// older clients but must not be the primary path (leaks into logs/Referer).
+	token := extractBearer(r)
 	if token == "" {
-		token = extractBearer(r)
+		if q := strings.TrimSpace(r.URL.Query().Get("token")); q != "" {
+			h.log.Warn("download-account used deprecated query token")
+			token = q
+		}
 	}
 	if token == "" {
 		writeHTTPError(w, http.StatusUnauthorized, "missing authorization token")

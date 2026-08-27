@@ -42,9 +42,20 @@
   <script>
     const SITE_KEY = '0x4AAAAAAEcMj2cCveWsarot';
     function post(payload) {
+      const raw = JSON.stringify(payload);
       try {
         if (window.VeritasTurnstile && window.VeritasTurnstile.postMessage) {
-          window.VeritasTurnstile.postMessage(JSON.stringify(payload));
+          window.VeritasTurnstile.postMessage(raw);
+        }
+      } catch (_) {}
+      try {
+        if (window.opener && !window.opener.closed) {
+          window.opener.postMessage({ source: 'veritas-turnstile', ...payload }, '*');
+        }
+      } catch (_) {}
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ source: 'veritas-turnstile', ...payload }, '*');
         }
       } catch (_) {}
     }

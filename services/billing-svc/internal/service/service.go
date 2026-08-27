@@ -336,7 +336,9 @@ func (s *BillingService) ProcessBTCPayWebhook(ctx context.Context, payload []byt
 	)
 
 	switch event.Type {
-	case "InvoiceSettled", "InvoiceReceivedPayment":
+	case "InvoiceSettled":
+		// Activate only after final settlement. Do not use InvoiceReceivedPayment
+		// (unconfirmed / partial) — that can grant Premium before funds are final.
 		return s.SettleInvoice(ctx, event.InvoiceID, event.AccountID)
 	default:
 		return nil
@@ -409,12 +411,14 @@ func (s *BillingService) SettleInvoice(ctx context.Context, invoiceID, accountID
 		return fmt.Errorf("complete payment: %w", err)
 	}
 
-	s.publishEvent("subscription.renewed", map[string]interface{}{
-		"tier":           model.TierPremium,
-		"payment_method": paymentMethod,
-		"plan_id":        planID,
-		"period_days":    periodDays,
-	})
+	s.publishEvent("subscription.renewed", renewedEventPayload(
+		accountID,
+		model.TierPremium,
+		paymentMethod,
+		planID,
+		periodDays,
+		periodEnd,
+	))
 
 	s.log.Info("premium activated",
 		zap.String("account_hash", logging.HashIdentifier(accountID)),
@@ -475,6 +479,23 @@ func (s *BillingService) expireOne(ctx context.Context, sub *model.Subscription)
 		"tier":       model.TierFree,
 	})
 	return nil
+}
+
+// renewedEventPayload is consumed by auth-svc and wg-manager entitlement sync.
+// account_id and period_end are required — without them listeners no-op.
+func renewedEventPayload(
+	accountID, tier, paymentMethod, planID string,
+	periodDays int,
+	periodEnd time.Time,
+) map[string]interface{} {
+	return map[string]interface{}{
+		"account_id":     accountID,
+		"tier":           tier,
+		"payment_method": paymentMethod,
+		"plan_id":        planID,
+		"period_days":    periodDays,
+		"period_end":     periodEnd.UTC(),
+	}
 }
 
 func (s *BillingService) publishEvent(subject string, payload map[string]interface{}) {

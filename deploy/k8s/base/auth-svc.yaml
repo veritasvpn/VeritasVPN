@@ -33,7 +33,7 @@ spec:
     spec:
       containers:
         - name: auth-svc
-          image: localhost:31500/auth-svc@sha256:2f9848f73626eb1a4993caa9158558ea9914a5b8ad6c510878674a07f5c48480
+          image: localhost:31500/auth-svc@sha256:ac52a7c5c996c1cccc605d3a6e6f861f8eef35057696e5bdf158aa83628632bb
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -100,7 +100,6 @@ spec:
                 secretKeyRef:
                   name: veritas-secrets
                   key: TURNSTILE_SECRET_KEY
-                  optional: true
             - name: PUBLIC_BASE_URL
               valueFrom:
                 configMapKeyRef:

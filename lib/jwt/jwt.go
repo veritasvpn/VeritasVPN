@@ -1,7 +1,9 @@
 package jwt
 
 import (
+	"crypto/rand"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -71,5 +73,9 @@ func (m *Manager) ValidateAccessToken(tokenStr string) (*Claims, error) {
 
 func generateJTI() string {
 	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Extremely unlikely; fall back to time-based uniqueness rather than zeros.
+		return fmt.Sprintf("%x%x", time.Now().UnixNano(), os.Getpid())
+	}
 	return fmt.Sprintf("%x", b)
 }

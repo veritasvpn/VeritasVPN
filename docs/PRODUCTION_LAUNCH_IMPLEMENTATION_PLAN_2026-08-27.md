@@ -6,7 +6,7 @@ Source of truth for findings: Cursor canvas `production-readiness-audit` + live 
 
 **Launch gate:** all **Critical** and **High** items Done + verification checklist green. Medium/Low may ship as follow-ups only if explicitly deferred in writing.
 
-**Progress:** Phases 1–4 done (2026-08-27). Phase 4: k3s canonical overlay (prod synced), secrets wipe-safety, Go 1.24 images live, redis-exporter auth + wg-manager scrape NP, BTCPAY keys required, readiness script on mainnet.
+**Progress:** Phases 1–5 done/partial (2026-08-27). Phase 5: auth-svc rate-limit IP trusts nginx `X-Real-IP` only; nginx sets `$client_ip` from CF tunnel hop; `_headers` strips Pages ACAO `*` (needs Pages redeploy); testnet `btcpay` NS documented/scaled 0; H4 firewall script updated on host pending sudo reinstall.
 
 ---
 
@@ -186,6 +186,15 @@ Do not cut over any overlay until Phase 4.
 **Verify:** external SSH to `170.51.31.139:22` fails; LAN/Tailscale SSH works; live site HEAD has no `ACAO: *`; health no longer needs testnet.
 
 **Phase 5 exit:** node not casually SSH-scannable; edge headers match security story.
+
+**Phase 5 status (2026-08-27):**
+
+| Item | Status | Notes |
+|------|--------|-------|
+| M3 rate-limit IP | **Done** | auth-svc `clientIP()` uses `X-Real-IP` only; nginx `$client_ip` map from CF-Connecting-IP at trusted hop |
+| M1 ACAO `*` | **Partial** | `website/_headers` adds `! Access-Control-Allow-Origin`; live site still shows `*` until Pages redeploy or CF Transform Rule |
+| M2 testnet NS | **Partial** | `btcpay` NS exists, all workloads 0/0; 3 PVCs retained; `deploy/k8s/btcpay/README.md` marks deprecated; delete needs human backup confirm |
+| H4 SSH WAN | **Partial** | `veritas-firewall.service` active (Aug 22 rules); repo script newer than `/usr/local/sbin/veritas-firewall`; sudo password failed — human must reinstall + verify WAN probe |
 
 ---
 

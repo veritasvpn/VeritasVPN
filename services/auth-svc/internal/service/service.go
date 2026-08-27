@@ -352,7 +352,7 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, emailAddr string
 	}
 
 	expiry := time.Now().Add(1 * time.Hour)
-	if err := s.db.SetResetToken(ctx, acc.ID, token, expiry); err != nil {
+	if err := s.db.SetResetToken(ctx, acc.ID, hashInput(token), expiry); err != nil {
 		return fmt.Errorf("set reset token: %w", err)
 	}
 
@@ -394,7 +394,7 @@ func (s *AuthService) ResetPassword(ctx context.Context, resetToken, newPassword
 		return err
 	}
 
-	acc, err := s.db.GetAccountByResetToken(ctx, resetToken)
+	acc, err := s.db.GetAccountByResetToken(ctx, hashInput(resetToken))
 	if err != nil {
 		return fmt.Errorf("invalid or expired reset token")
 	}
@@ -480,6 +480,14 @@ func (s *AuthService) SignInWithAccountID(ctx context.Context, accountID string)
 	acc, err := s.db.GetAccountByID(ctx, accountID)
 	if err != nil {
 		return "", "", "", 0, fmt.Errorf("invalid account_id")
+	}
+
+	// Account ID restore is only for anonymous accounts. Email accounts must use password.
+	if acc.Email != nil && strings.TrimSpace(*acc.Email) != "" {
+		return "", "", "", 0, fmt.Errorf("use email and password to sign in to this account")
+	}
+	if acc.PasswordHash != nil && strings.TrimSpace(*acc.PasswordHash) != "" {
+		return "", "", "", 0, fmt.Errorf("use email and password to sign in to this account")
 	}
 
 	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
