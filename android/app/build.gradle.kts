@@ -14,8 +14,10 @@ val releaseSigningConfigured = listOf(
     releaseKeyAlias,
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
-val releaseTaskRequested = gradle.startParameter.taskNames.any {
-    it.contains("release", ignoreCase = true)
+val releaseTaskRequested = gradle.startParameter.taskNames.any { task ->
+    task.contains("assembleRelease", ignoreCase = true) ||
+        task.contains("bundleRelease", ignoreCase = true) ||
+        task.contains("publishRelease", ignoreCase = true)
 }
 
 if (releaseTaskRequested && !releaseSigningConfigured) {

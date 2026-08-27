@@ -118,9 +118,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -129,9 +126,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build WireGuard Go for Android
-        run: bash build-wg-android.sh
-        working-directory: android
+      # Native libwg-go.so comes from com.wireguard.android:tunnel (Maven AAR).
 
       - name: Restore Android signing key
         env:
