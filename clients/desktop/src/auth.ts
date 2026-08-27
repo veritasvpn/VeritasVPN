@@ -27,6 +27,31 @@ export interface User {
   is_anonymous?: boolean;
 }
 
+function defaultAuthError(status: number): string {
+  switch (status) {
+    case 401:
+      return "incorrect email or password";
+    case 403:
+      return "verify your email before signing in";
+    case 429:
+      return "too many sign-in attempts; try again later";
+    default:
+      return `request failed (${status})`;
+  }
+}
+
+function extractAuthError(
+  data: (AuthResponse & AuthError & { message?: string }) | undefined,
+  status: number,
+  rawText: string
+): string {
+  const fromJson = (data?.error || data?.message || "").trim();
+  if (fromJson) return fromJson;
+  const trimmed = rawText.trim();
+  if (trimmed && !trimmed.startsWith("{")) return trimmed;
+  return defaultAuthError(status);
+}
+
 function humanizeError(msg: string): string {
   const m = msg.toLowerCase();
   if (m.includes("incorrect email or password") || m.includes("invalid email or password")) {
@@ -40,9 +65,13 @@ function humanizeError(msg: string): string {
   if (m.includes("email_not_verified") || m.includes("verify your email")) {
     return "Verify your email before signing in.";
   }
+  if (m.includes("too many")) return msg.endsWith(".") ? msg : `${msg}.`;
   if (m.includes("already exists")) return "An account with this email already exists.";
   if (m.includes("account") && (m.includes("invalid") || m.includes("not found") || m.includes("id"))) {
     return "Account ID not found.";
+  }
+  if (m.startsWith("request failed (")) {
+    return "Could not reach the sign-in service. Check your connection and try again.";
   }
   return msg;
 }
@@ -62,14 +91,14 @@ async function authAPI(
     maxRedirections: 0,
   });
   const text = await res.text();
-  let data: AuthResponse & AuthError;
+  let data: AuthResponse & AuthError & { message?: string };
   try {
-    data = JSON.parse(text) as AuthResponse & AuthError;
+    data = JSON.parse(text) as AuthResponse & AuthError & { message?: string };
   } catch {
-    data = { error: text || `Request failed (${res.status})` } as AuthResponse & AuthError;
+    data = { error: extractAuthError(undefined, res.status, text) };
   }
   if (!res.ok) {
-    throw new Error(humanizeError(data.error || `Request failed (${res.status})`));
+    throw new Error(humanizeError(extractAuthError(data, res.status, text)));
   }
   return data;
 }
@@ -118,14 +147,22 @@ export async function signIn(
   password: string
 ): Promise<User> {
   const normalizedEmail = email.trim().toLowerCase();
-  const data = await authAPI("/api/v1/auth/signin", {
-    email: normalizedEmail,
-    password,
-  });
-  return persistSession(
-    { email: data.email || normalizedEmail, account_id: data.account_id || "" },
-    data
-  );
+  try {
+    const data = await authAPI("/api/v1/auth/signin", {
+      email: normalizedEmail,
+      password,
+    });
+    return persistSession(
+      { email: data.email || normalizedEmail, account_id: data.account_id || "" },
+      data
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "";
+    if (msg.toLowerCase().includes("verify your email")) {
+      throw new VerificationRequiredError(normalizedEmail);
+    }
+    throw err;
+  }
 }
 
 export class VerificationRequiredError extends Error {
@@ -188,14 +225,14 @@ export async function signUp(
     maxRedirections: 0,
   });
   const text = await res.text();
-  let data: AuthResponse & AuthError;
+  let data: AuthResponse & AuthError & { message?: string };
   try {
-    data = JSON.parse(text) as AuthResponse & AuthError;
+    data = JSON.parse(text) as AuthResponse & AuthError & { message?: string };
   } catch {
-    data = { error: text || `Request failed (${res.status})` } as AuthResponse & AuthError;
+    data = { error: extractAuthError(undefined, res.status, text) };
   }
   if (!res.ok) {
-    const msg = humanizeError(data.error || `Request failed (${res.status})`);
+    const msg = humanizeError(extractAuthError(data, res.status, text));
     if (msg === "An account with this email already exists.") {
       throw new AccountAlreadyExistsError(normalizedEmail);
     }

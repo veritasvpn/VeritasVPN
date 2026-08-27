@@ -206,6 +206,10 @@ func (h *HTTPHandler) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	accessToken, refreshToken, accountID, expiresAt, err := h.service.SignInWithEmail(r.Context(), req.Email, req.Password)
 	if err != nil {
 		h.log.Warn("sign in failed", zap.String("email_hash", logging.HashIdentifier(req.Email)), zap.Error(err))
+		if strings.Contains(err.Error(), "email_not_verified") {
+			writeHTTPError(w, http.StatusForbidden, "verify your email before signing in")
+			return
+		}
 		writeHTTPError(w, http.StatusUnauthorized, "incorrect email or password")
 		return
 	}

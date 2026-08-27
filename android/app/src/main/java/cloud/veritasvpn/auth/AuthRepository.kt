@@ -41,7 +41,13 @@ class AuthRepository(context: Context) {
         val normalized = email.trim().lowercase()
         val data = ApiClient.post("/api/v1/auth/signin",
             mapOf("email" to normalized, "password" to password)).use { res ->
-            if (!res.isSuccessful) throw Error(extractError(res))
+            if (!res.isSuccessful) {
+                val message = extractError(res)
+                if (message.contains("Verify your email", ignoreCase = true)) {
+                    throw VerificationRequired(normalized)
+                }
+                throw Error(message)
+            }
             ApiClient.parse<AuthResponse>(res)
                 ?: throw Error("The server returned an invalid sign-in response.")
         }
@@ -148,15 +154,26 @@ class AuthRepository(context: Context) {
 
     private fun extractError(res: okhttp3.Response): String {
         val err = ApiClient.parse<cloud.veritasvpn.api.AuthError>(res)
-        val msg = err?.error ?: "Request failed (${res.code})"
+        val msg = err?.error?.takeIf { it.isNotBlank() } ?: defaultAuthError(res.code)
         return when {
-            msg.contains("email_not_verified", true) -> "Verify your email before signing in."
-            msg.contains("incorrect email or password", true) -> "Incorrect email or password."
+            msg.contains("email_not_verified", true) || msg.contains("verify your email", true) ->
+                "Verify your email before signing in."
+            msg.contains("incorrect email or password", true) || msg.contains("invalid email or password", true) ->
+                "Incorrect email or password."
             msg.contains("password must be at least", true) -> "Password must be at least 10 characters."
             msg.contains("already exists", true) -> "An account with this email already exists."
+            msg.contains("too many", true) -> if (msg.endsWith(".")) msg else "$msg."
             msg.contains("account", true) -> "Account ID not found."
+            msg.startsWith("Request failed (") -> "Could not reach the sign-in service. Check your connection and try again."
             else -> msg
         }
+    }
+
+    private fun defaultAuthError(code: Int): String = when (code) {
+        401 -> "Incorrect email or password."
+        403 -> "Verify your email before signing in."
+        429 -> "Too many sign-in attempts; try again later."
+        else -> "Request failed ($code)"
     }
 
     class VerificationRequired(email: String) : Exception(

@@ -58,11 +58,38 @@ async function api(path, options = {}) {
       ...(options.headers || {}),
     },
   });
-  const data = await res.json().catch(() => ({}));
+  const rawText = await res.text();
+  let data = {};
+  try {
+    data = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    data = {};
+  }
   if (!res.ok) {
-    throw new Error(data.error || `Request failed (${res.status})`);
+    throw new Error(extractAuthError(data, res.status, rawText));
   }
   return data;
+}
+
+function defaultAuthError(status) {
+  switch (status) {
+    case 401:
+      return 'incorrect email or password';
+    case 403:
+      return 'verify your email before signing in';
+    case 429:
+      return 'too many sign-in attempts; try again later';
+    default:
+      return `request failed (${status})`;
+  }
+}
+
+function extractAuthError(data, status, rawText = '') {
+  const fromJson = String(data?.error || data?.message || '').trim();
+  if (fromJson) return fromJson;
+  const trimmed = String(rawText || '').trim();
+  if (trimmed && !trimmed.startsWith('{')) return trimmed;
+  return defaultAuthError(status);
 }
 
 async function apiWithAuth(path, options = {}) {
@@ -182,12 +209,21 @@ function mapAuthError(message) {
   const msg = (message || '').toLowerCase();
   if (msg.includes('verification failed')) return 'Verification failed. Complete the check and try again.';
   if (msg.includes('verification required')) return 'Complete the verification check before continuing.';
-  if (msg.includes('email_not_verified')) return 'Verify your email before signing in. Check your inbox or request a new link.';
+  if (msg.includes('verify your email') || msg.includes('email_not_verified')) {
+    return 'Verify your email before signing in.';
+  }
   if (msg.includes('password must be at least')) return 'Password must be at least 10 characters.';
   if (msg.includes('already exists')) return 'An account already exists with this email. Sign in instead.';
   if (msg.includes('invalid email address')) return 'Invalid email address.';
+  if (msg.includes('too many')) return message.endsWith('.') ? message : `${message}.`;
+  if (msg.includes('incorrect email or password') || msg.includes('invalid email or password')) {
+    return 'Incorrect email or password.';
+  }
   if (msg.includes('password')) return 'Incorrect email or password.';
   if (msg.includes('account_id')) return 'Account ID not found.';
+  if (msg.startsWith('request failed (')) {
+    return 'Could not reach the sign-in service. Check your connection and try again.';
+  }
   return message || 'Something went wrong. Please try again.';
 }
 
@@ -743,7 +779,13 @@ function renderUser(user) {
       }
     } catch (err) {
       pendingDashboardRedirect = false;
-      setError(mapAuthError(err.message));
+      const mapped = mapAuthError(err.message);
+      if (mode === 'signin' && mapped.toLowerCase().includes('verify your email')) {
+        setVerificationResendEmail(email);
+        setError(mapped, { action: 'Resend verification email' });
+      } else {
+        setError(mapped);
+      }
       if (mode === 'signup') resetTurnstileWidget();
     } finally {
       setBusy(false);

@@ -66,14 +66,41 @@ async function authAPI(endpoint, body) {
     },
     body: JSON.stringify(body),
   });
-  const data = await res.json();
+  const rawText = await res.text();
+  let data = {};
+  try {
+    data = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    data = {};
+  }
   if (!res.ok) {
-    const msg = data?.error || 'Authentication failed';
+    const msg = extractAuthError(data, res.status, rawText);
     const error = new Error(humanizeError(msg));
     error.status = res.status;
     throw error;
   }
   return data;
+}
+
+function defaultAuthError(status) {
+  switch (status) {
+    case 401:
+      return 'incorrect email or password';
+    case 403:
+      return 'verify your email before signing in';
+    case 429:
+      return 'too many sign-in attempts; try again later';
+    default:
+      return 'authentication failed';
+  }
+}
+
+function extractAuthError(data, status, rawText = '') {
+  const fromJson = String(data?.error || data?.message || '').trim();
+  if (fromJson) return fromJson;
+  const trimmed = String(rawText || '').trim();
+  if (trimmed && !trimmed.startsWith('{')) return trimmed;
+  return defaultAuthError(status);
 }
 
 async function refreshSession() {
