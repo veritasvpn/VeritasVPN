@@ -12,7 +12,7 @@ COPY services/billing-svc/ services/billing-svc/
 WORKDIR /app/services/billing-svc
 RUN GOWORK=off go mod tidy && GOWORK=off CGO_ENABLED=0 GOOS=linux go build -o /app/billing-svc ./cmd/server/
 
-FROM alpine:3.19
+FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /app/billing-svc /usr/local/bin/billing-svc
 EXPOSE 8080

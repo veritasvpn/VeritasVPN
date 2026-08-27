@@ -7,7 +7,7 @@ WORKDIR /src/services/veritas-agent
 RUN go mod tidy
 RUN CGO_ENABLED=0 go build -o /usr/local/bin/veritas-agent ./cmd/agent/
 
-FROM alpine:3.19
+FROM alpine:3.22
 RUN apk add --no-cache ca-certificates wireguard-tools nftables iproute2
 COPY --from=builder /usr/local/bin/veritas-agent /usr/local/bin/veritas-agent
 CMD ["/usr/local/bin/veritas-agent"]

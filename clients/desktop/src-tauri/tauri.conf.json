@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicholas/tauri/refs/heads/v2/crates/tauri-config-schema/schema.json",
   "productName": "VeritasVPN",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "identifier": "cloud.veritasvpn.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; img-src 'self' asset: data: https:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://veritasvpn.cloud https://api.veritasvpn.cloud https://btcpay.veritasvpn.cloud https://api.ipify.org https://ifconfig.me https://icanhazip.com; frame-src https://btcpay.veritasvpn.cloud; worker-src 'self' blob:"
+      "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; img-src 'self' asset: data: https:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://veritasvpn.cloud https://api.veritasvpn.cloud https://btcpay-mainnet.veritasvpn.cloud https://api.ipify.org https://ifconfig.me https://icanhazip.com; frame-src https://btcpay-mainnet.veritasvpn.cloud; worker-src 'self' blob:"
     }
   },
   "bundle": {

@@ -49,7 +49,17 @@ spec:
             - name: DATABASE_URL
               value: "postgres://veritas:$(DB_PASSWORD)@postgres:5432/veritas?sslmode=prefer"
             - name: NATS_URL
-              value: "nats://nats:4222"
+              value: "nats://$(NATS_USER):$(NATS_PASSWORD)@nats:4222"
+            - name: NATS_USER
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_USER
+            - name: NATS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_PASSWORD
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:

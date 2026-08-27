@@ -12,7 +12,7 @@ WORKDIR /app/services/wg-manager
 RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -o /app/wg-manager ./cmd/server/
 
-FROM alpine:3.19
+FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /app/wg-manager /usr/local/bin/wg-manager
 EXPOSE 8080

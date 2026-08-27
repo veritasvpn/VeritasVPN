@@ -20,11 +20,22 @@ groups:
         annotations:
           summary: "VeritasVPN API is unavailable"
       - alert: BTCPayUnavailable
-        expr: probe_success{instance="https://btcpay-mainnet.veritasvpn.cloud/"} == 0
+        expr: probe_success{instance="http://btcpayserver-mainnet.btcpay-mainnet.svc.cluster.local:49392/"} == 0
         for: 5m
         labels: { severity: critical }
         annotations:
-          summary: "BTCPay mainnet payment page is unavailable"
+          summary: "In-cluster BTCPay mainnet is unavailable"
+          description: "Blackbox probes the cluster service (not the Cloudflare Access public URL)."
+      - alert: StealthTunnelUnavailable
+        # In-cluster probes of the public WAN IP often fail hairpin NAT; LAN/node
+        # reachability is the reliable signal that wstunnel is listening.
+        expr: count(probe_success{job="blackbox-stealth"} == 1) == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Stealth TLS listener (wstunnel :443) is unavailable"
+          description: "No blackbox-stealth target succeeded (LAN/node TLS on :443)."
+
       - alert: DellDiskFilling
         expr: 100 * (1 - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) > 85
         for: 10m
@@ -240,12 +251,13 @@ groups:
           summary: "Encrypted VeritasVPN backup is stale"
           description: "No backup has passed restore validation in the last 48 hours."
       - alert: VeritasBackupArchiveTooSmall
-        expr: veritas_backup_archive_bytes > 0 and veritas_backup_archive_bytes < 500000
+        # Healthy small DBs produce ~100KB encrypted archives; 50KB catches empty/truncated packs.
+        expr: veritas_backup_archive_bytes > 0 and veritas_backup_archive_bytes < 50000
         for: 12h
         labels: { severity: warning }
         annotations:
           summary: "VeritasVPN backup archive is unexpectedly small"
-          description: "Archive under 500KB may mean BTCPay/mainnet dumps were skipped. Check deploy/backup/backup-k3s.sh."
+          description: "Archive under 50KB may mean dumps were skipped or truncated. Check deploy/backup/backup-k3s.sh."
       - alert: VeritasOffsiteBackupStale
         expr: time() - veritas_backup_offsite_last_success_timestamp > 172800
         for: 30m

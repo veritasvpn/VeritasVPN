@@ -6,3 +6,21 @@ modules:
       method: GET
       preferred_ip_protocol: ip4
       follow_redirects: true
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      # BTCPay and some internal services may return 302/401 without being "down".
+      valid_status_codes: [200, 301, 302, 401, 403]
+
+  tcp_connect:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      preferred_ip_protocol: ip4
+
+  tls_connect:
+    prober: tcp
+    timeout: 8s
+    tcp:
+      preferred_ip_protocol: ip4
+      tls: true
+      tls_config:
+        insecure_skip_verify: true

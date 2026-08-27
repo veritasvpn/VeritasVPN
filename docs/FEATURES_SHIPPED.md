@@ -1,6 +1,6 @@
 # Features shipped (source of truth)
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
 ## Core VPN
 - WireGuard on Linux desktop, Android, CLI; Chrome HTTP proxy extension

@@ -7,10 +7,18 @@ bad() { printf '[FAIL] %s\n' "$1" >&2; FAIL=1; }
 warn() { printf '[WARN] %s\n' "$1"; }
 
 if kubectl wait --for=condition=Ready node --all --timeout=10s >/dev/null 2>&1; then ok 'k3s node ready'; else bad 'k3s node is not ready'; fi
-for ns in veritas btcpay btcpay-mainnet monitoring ingress-nginx; do
+
+# Production namespaces only. Testnet (btcpay) is retired / optional.
+for ns in veritas btcpay-mainnet monitoring ingress-nginx; do
   if kubectl get namespace "$ns" >/dev/null 2>&1; then ok "namespace $ns exists"; else bad "namespace $ns is missing"; fi
 done
-if kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded --no-headers 2>/dev/null | grep -q .; then
+if kubectl get namespace btcpay >/dev/null 2>&1; then
+  warn 'namespace btcpay still exists (testnet retired; ignore scaled-down resources)'
+fi
+
+# Ignore pods in retired testnet namespace when judging cluster health.
+if kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded --no-headers 2>/dev/null \
+  | awk '$1 != "btcpay" { print }' | grep -q .; then
   bad 'one or more pods are not running or completed successfully'
 else
   ok 'all pods are running or completed successfully'
@@ -20,11 +28,8 @@ for target in \
   'deployment/auth-svc:veritas' \
   'deployment/wg-manager:veritas' \
   'deployment/billing-svc:veritas' \
-  'statefulset/bitcoind:btcpay' \
   'statefulset/bitcoind-mainnet:btcpay-mainnet' \
-  'statefulset/nbxplorer:btcpay' \
   'statefulset/nbxplorer-mainnet:btcpay-mainnet' \
-  'deployment/btcpayserver:btcpay' \
   'deployment/btcpayserver-mainnet:btcpay-mainnet' \
   'deployment/prometheus:monitoring' \
   'deployment/grafana:monitoring'; do
@@ -36,19 +41,12 @@ for target in \
   fi
 done
 
-# Bitcoin RPC/IBD is payment-plane only. Never fail the node health timer for it.
-bitcoin_ready_replicas="$(kubectl -n btcpay get deployment bitcoin-readiness -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
-if [[ "$bitcoin_ready_replicas" == "1" ]]; then
-  ok 'btcpay/bitcoin-readiness ready'
-else
-  warn 'btcpay/bitcoin-readiness is not ready; Bitcoin payments remain gated'
-fi
-
+# Mainnet Bitcoin IBD is payment-plane only. Never fail the VPN health timer for it.
 bitcoin_mainnet_ready_replicas="$(kubectl -n btcpay-mainnet get deployment bitcoin-readiness-mainnet -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
 if [[ "$bitcoin_mainnet_ready_replicas" == "1" ]]; then
   ok 'btcpay-mainnet/bitcoin-readiness-mainnet ready'
 else
-  warn 'btcpay-mainnet/bitcoin-readiness-mainnet is not ready; mainnet billing remains intentionally unavailable'
+  warn 'btcpay-mainnet/bitcoin-readiness-mainnet is not ready; mainnet billing may be gated'
 fi
 
 check_http() {
@@ -59,7 +57,7 @@ check_http 'public API health' 'https://api.veritasvpn.cloud/healthz'
 billing_code="$(curl -sS --max-time 10 -o /dev/null -w "%{http_code}" https://api.veritasvpn.cloud/api/v1/billing/readyz || true)"
 bitcoin_metrics=""
 bitcoin_pf_log="$(mktemp)"
-kubectl -n btcpay port-forward svc/bitcoin-readiness 18080:8080 >"$bitcoin_pf_log" 2>&1 &
+kubectl -n btcpay-mainnet port-forward svc/bitcoin-readiness-mainnet 18080:8080 >"$bitcoin_pf_log" 2>&1 &
 bitcoin_pf_pid=$!
 for _ in $(seq 1 25); do
   if bitcoin_metrics="$(curl -fsS --max-time 1 http://127.0.0.1:18080/metrics 2>/dev/null)"; then
@@ -85,7 +83,29 @@ else
   warn "public API billing readiness returned HTTP $billing_code (payment plane)"
 fi
 check_http 'public website' 'https://veritasvpn.cloud/'
-check_http 'public BTCPay' 'https://btcpay.veritasvpn.cloud/'
+
+# BTCPay public hostname is Cloudflare Access-gated — do not hard-fail on it.
+# In-cluster mainnet service is the payment-plane health signal.
+btcpay_code="$(curl -sS --max-time 5 -o /dev/null -w "%{http_code}" \
+  http://btcpayserver-mainnet.btcpay-mainnet.svc.cluster.local:49392/ 2>/dev/null || true)"
+if [[ "$btcpay_code" =~ ^(200|302|301|401|403)$ ]]; then
+  ok "in-cluster BTCPay mainnet responds (HTTP $btcpay_code)"
+else
+  # From host Network, cluster DNS may be unreachable — fall back via kubectl.
+  if kubectl -n btcpay-mainnet get deploy btcpayserver-mainnet -o jsonpath='{.status.readyReplicas}' 2>/dev/null | grep -q '^1$'; then
+    ok 'BTCPay mainnet deployment ready (cluster DNS unreachable from host)'
+  else
+    bad 'BTCPay mainnet is not ready'
+  fi
+fi
+
+# Stealth / wstunnel TCP 443 on the VPN node.
+if curl -fsS --max-time 5 -o /dev/null https://127.0.0.1:443/ 2>/dev/null \
+  || timeout 3 bash -c 'echo >/dev/tcp/127.0.0.1/443' 2>/dev/null; then
+  ok 'stealth listener TCP 443 is open on localhost'
+else
+  bad 'stealth listener TCP 443 is not reachable on localhost'
+fi
 
 dns_http_code="$(curl -sS --max-time 5 -o /dev/null -w "%{http_code}" https://cloudflare-dns.com/dns-query || true)"
 if [[ "$dns_http_code" != "000" ]]; then
@@ -99,11 +119,11 @@ else
   bad "VPN DNS forwarder failed to resolve api.veritasvpn.cloud"
 fi
 
-if kubectl -n btcpay get pod bitcoind-0 >/dev/null 2>&1; then
-  if kubectl -n btcpay exec bitcoind-0 -- sh -c 'bitcoin-cli -conf=/etc/bitcoin-rpc/bitcoin.conf getblockchaininfo >/dev/null 2>&1' >/dev/null 2>&1; then
-    ok 'Bitcoin RPC responds'
+if kubectl -n btcpay-mainnet get pod bitcoind-mainnet-0 >/dev/null 2>&1; then
+  if kubectl -n btcpay-mainnet exec bitcoind-mainnet-0 -- sh -c 'bitcoin-cli -conf=/etc/bitcoin-rpc/bitcoin.conf getblockchaininfo >/dev/null 2>&1' >/dev/null 2>&1; then
+    ok 'Bitcoin mainnet RPC responds'
   else
-    warn 'Bitcoin RPC is unavailable (payment plane; not a VPN failure)'
+    warn 'Bitcoin mainnet RPC is unavailable (payment plane; not a VPN failure)'
   fi
 fi
 
@@ -133,17 +153,22 @@ if command -v nft >/dev/null 2>&1; then
   fi
 fi
 
-FILTER_TABLE="$(nft list table inet veritas_filter 2>/dev/null || true)"
-if grep -Fq '9090' <<<"$FILTER_TABLE"; then
-  ok 'host firewall protects agent metrics on uplink'
+FILTER_TABLE=""
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+  FILTER_TABLE="$(nft list table inet veritas_filter 2>/dev/null || true)"
+  if grep -Fq '9090' <<<"$FILTER_TABLE"; then
+    ok 'host firewall protects agent metrics on uplink'
+  else
+    warn 'host firewall metrics protection not detected'
+  fi
+  if grep -Fq 'iifname "tailscale0" tcp dport' <<<"$FILTER_TABLE" \
+    && grep -Eq 'iifname "tailscale0" counter.*drop' <<<"$FILTER_TABLE"; then
+    ok 'Tailnet host access is explicitly allowlisted'
+  else
+    bad 'Tailnet host access is not explicitly restricted'
+  fi
 else
-  warn 'host firewall metrics protection not detected'
-fi
-if grep -Fq 'iifname "tailscale0" tcp dport' <<<"$FILTER_TABLE" \
-  && grep -Eq 'iifname "tailscale0" counter.*drop' <<<"$FILTER_TABLE"; then
-  ok 'Tailnet host access is explicitly allowlisted'
-else
-  bad 'Tailnet host access is not explicitly restricted'
+  warn 'skipping host firewall/tailnet checks (need root)'
 fi
 if curl -fsS --max-time 2 http://127.0.0.1:9090/healthz >/dev/null 2>&1; then
   ok 'agent /healthz responds on localhost'
@@ -152,12 +177,16 @@ else
 fi
 
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/veritasvpn}"
-latest="$(find "$BACKUP_ROOT" -maxdepth 1 -type f -name 'veritasvpn-*.tar.gz.enc' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
-if [[ -n "$latest" ]]; then
-  age=$(( ( $(date +%s) - $(stat -c %Y "$latest") ) / 3600 ))
-  if (( age <= 25 )); then ok "encrypted backup age ${age}h"; else bad "encrypted backup is ${age}h old"; fi
+if [[ ! -r "$BACKUP_ROOT" ]]; then
+  warn "backup root not readable ($BACKUP_ROOT); skip age check"
 else
-  bad 'no encrypted backup found'
+  latest="$(find "$BACKUP_ROOT" -maxdepth 1 -type f -name 'veritasvpn-*.tar.gz.enc' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
+  if [[ -n "$latest" ]]; then
+    age=$(( ( $(date +%s) - $(stat -c %Y "$latest") ) / 3600 ))
+    if (( age <= 25 )); then ok "encrypted backup age ${age}h"; else bad "encrypted backup is ${age}h old"; fi
+  else
+    bad 'no encrypted backup found'
+  fi
 fi
 
 if (( FAIL )); then

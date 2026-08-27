@@ -9,16 +9,19 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:ad4a05eb67aafbad86d80e6d77893d8194055155f3d592f147d00c15331f67c9
+    digest: sha256:163ad169dc1a39fbfcf43147d7c394bbcb4f54a3dc21d7a4ddb30488c2eefc81
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    digest: sha256:18142a2380d60d83a1f78e2815b075bf0be0ea91bfffefcbac54f0fd79792686
+    digest: sha256:9ebc38b70046de288de7a5c3e90c929c666b10aadb7d2b9186afd102adc526cc
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    digest: sha256:891bcca9d15113915b0641b7781cc07dfd954fbaeab715676662ba632efa0abf
+    digest: sha256:b5b5dbc1c2fe484307dcea2bf3492496aadc2fa8bcde517e4c5e99ce286f0ba5
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    digest: sha256:c531dfa9dc0f88bb57aeb2afb68299f893e4b840905c9a3787fbdd415712be90
+    digest: sha256:7e2681db82493c0fe2ad1abfe8b74c757050ea9181a7e47c66120f05b755f6c2
+  - name: localhost:31500/wstunnel
+    newName: localhost:31500/wstunnel
+    digest: sha256:4169260f4a2dc84df3c97aeba46882d5f7ee1b6ef94427b6c7f86951fc3b89b1
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
     digest: sha256:735d0c4463bf3f0e87133f5e62e17749bb47efe7d83d9daac9c7e9c8c9ce7579
@@ -84,99 +87,5 @@ patches:
         path: /data/BTCPAY_PUBLIC_URL
         value: "https://btcpay-mainnet.veritasvpn.cloud"
 
-  # Auth env with Redis/NATS auth
-  - target:
-      kind: Deployment
-      name: auth-svc
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/env/2/value
-        value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
-      - op: replace
-        path: /spec/template/spec/containers/0/env/3/value
-        value: "nats://$(NATS_USER):$(NATS_PASSWORD)@nats:4222"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: REDIS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: REDIS_PASSWORD
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_USER
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_USER
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_PASSWORD
-
-  # WG-Manager env with Redis/NATS auth
-  - target:
-      kind: Deployment
-      name: wg-manager
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/env/2/value
-        value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
-      - op: replace
-        path: /spec/template/spec/containers/0/env/3/value
-        value: "nats://$(NATS_USER):$(NATS_PASSWORD)@nats:4222"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: REDIS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: REDIS_PASSWORD
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_USER
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_USER
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_PASSWORD
-
-  # Billing env with NATS auth
-  - target:
-      kind: Deployment
-      name: billing-svc
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/env/2/value
-        value: "nats://$(NATS_USER):$(NATS_PASSWORD)@nats:4222"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_USER
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_USER
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: NATS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: veritas-secrets
-              key: NATS_PASSWORD
+  # Redis/NATS auth env vars live in base manifests (auth-svc, wg-manager, billing-svc).
+  # Do not JSON-patch env value/valueFrom here — that creates invalid dual fields on apply.

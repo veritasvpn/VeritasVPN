@@ -6,13 +6,14 @@ IMAGE_PREFIX="${IMAGE_PREFIX:-}"
 TAG="${TAG:?TAG must be set to an immutable version or digest}"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 
-services=("auth-svc" "wg-manager" "billing-svc" "veritas-agent" "veritas-proxy")
+services=("auth-svc" "wg-manager" "billing-svc" "veritas-agent" "veritas-proxy" "wstunnel")
 dockerfiles=(
   "services/auth-svc/Dockerfile"
   "services/wg-manager/Dockerfile"
   "services/billing-svc/Dockerfile"
   "services/veritas-agent/Dockerfile"
   "containers/proxy-gateway/Dockerfile"
+  "services/wstunnel/Dockerfile"
 )
 
 echo "Building images for: ${REGISTRY}"

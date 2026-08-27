@@ -3,7 +3,9 @@ kind: Kustomization
 
 resources:
   - namespace.yaml
-  - secrets.yaml
+  # secrets.yaml is intentionally NOT applied by kustomize — production
+  # veritas-secrets is cluster-managed. Applying an incomplete secrets.yaml
+  # wipes keys (e.g. STEALTH_PATH_PREFIX, TURNSTILE_SECRET_KEY).
   - configmap.yaml
   - nginx-configmap.yaml
   - nats-configmap.yaml

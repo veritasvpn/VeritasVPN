@@ -22,7 +22,7 @@ spec:
         - operator: Exists
       initContainers:
         - name: open-stealth-port
-          image: alpine:3.19
+          image: alpine:3.22
           imagePullPolicy: IfNotPresent
           securityContext:
             capabilities:
@@ -54,19 +54,20 @@ spec:
               value: "443"
       containers:
         - name: wstunnel
-          image: alpine:3.19
+          image: localhost:31500/wstunnel:latest
           imagePullPolicy: IfNotPresent
           securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
             capabilities:
               add: ["NET_BIND_SERVICE"]
-            allowPrivilegeEscalation: false
+              drop: ["ALL"]
           command:
             - /bin/sh
             - -c
             - |
               set -eu
-              install -m 0755 /binaries/wstunnel /tmp/wstunnel
-              exec /tmp/wstunnel server \
+              exec /usr/local/bin/wstunnel server \
                 --restrict-http-upgrade-path-prefix "$STEALTH_PATH_PREFIX" \
                 --restrict-to 127.0.0.1:51820 \
                 "wss://0.0.0.0:${STEALTH_LISTEN_PORT}"
@@ -81,15 +82,21 @@ spec:
                 configMapKeyRef:
                   name: veritas-config
                   key: STEALTH_ENDPOINT_PORT
-          volumeMounts:
-            - name: wstunnel-bin
-              mountPath: /binaries
-              readOnly: true
           ports:
             - name: stealth
               containerPort: 443
               hostPort: 443
               protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: 443
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 443
+            initialDelaySeconds: 5
+            periodSeconds: 20
           resources:
             requests:
               cpu: 20m
@@ -97,8 +104,3 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
-      volumes:
-        - name: wstunnel-bin
-          hostPath:
-            path: /home/jpg/VeritasVPN/clients/desktop/src-tauri/resources/bin
-            type: Directory
