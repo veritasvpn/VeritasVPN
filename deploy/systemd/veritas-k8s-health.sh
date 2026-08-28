@@ -131,13 +131,35 @@ fi
 if command -v wg >/dev/null 2>&1 && wg show wg0 >/dev/null 2>&1; then
   peers="$(wg show wg0 latest-handshakes | awk '$2 > 0 { count++ } END { print count+0 }')"
   configured="$(wg show wg0 peers | wc -l | tr -d ' ')"
-  if [ "$configured" -eq 0 ] || [ "$peers" -gt 0 ]; then
-    ok "WireGuard interface healthy ($configured configured peers)"
+  if [ "$configured" -eq 0 ]; then
+    warn 'WireGuard interface is present with no user peers; interface presence alone does not prove connectivity'
+  elif [ "$peers" -gt 0 ]; then
+    ok "WireGuard interface has $peers peer(s) with a handshake"
   else
     bad 'WireGuard peers have no recent handshakes'
   fi
 else
   warn 'WireGuard interface is not present on this host'
+fi
+
+# The scheduled GitHub runner is outside the Dell network and validates the
+# actual app-facing path: authentication, provisioning, UDP handshake, DNS,
+# HTTPS egress, disconnect, and revocation.
+synthetic_json="$(curl -fsS --max-time 10 \
+  'https://api.github.com/repos/veritasvpn/VeritasVPN/actions/workflows/vpn-e2e.yml/runs?status=completed&per_page=1' \
+  2>/dev/null || true)"
+synthetic_conclusion="$(jq -r '.workflow_runs[0].conclusion // empty' <<<"$synthetic_json" 2>/dev/null || true)"
+synthetic_updated="$(jq -r '.workflow_runs[0].updated_at // empty' <<<"$synthetic_json" 2>/dev/null || true)"
+if [[ "$synthetic_conclusion" == "success" && -n "$synthetic_updated" ]]; then
+  synthetic_ts="$(date -d "$synthetic_updated" +%s 2>/dev/null || printf '0')"
+  synthetic_age=$(( ($(date +%s) - synthetic_ts) / 3600 ))
+  if (( synthetic_ts > 0 && synthetic_age <= 3 )); then
+    ok "external WireGuard synthetic passed ${synthetic_age}h ago"
+  else
+    bad 'external WireGuard synthetic result is stale'
+  fi
+else
+  bad 'external WireGuard synthetic has no recent successful run'
 fi
 
 # Host hardening checks (best-effort; missing tools become warnings).

@@ -6,6 +6,10 @@ metadata:
   labels:
     app: veritas-wstunnel
 spec:
+  # This pod exclusively owns host TCP 443, so a surge rollout cannot run two
+  # copies. The transactional deploy script performs the guarded replacement.
+  updateStrategy:
+    type: OnDelete
   selector:
     matchLabels:
       app: veritas-wstunnel
@@ -54,7 +58,7 @@ spec:
               value: "443"
       containers:
         - name: wstunnel
-          image: localhost:31500/wstunnel:latest
+          image: localhost:31500/wstunnel@sha256:4169260f4a2dc84df3c97aeba46882d5f7ee1b6ef94427b6c7f86951fc3b89b1
           imagePullPolicy: IfNotPresent
           securityContext:
             runAsUser: 0

@@ -100,8 +100,10 @@ fi
 if kubectl -n veritas exec ds/veritas-agent -- wg show wg0 >/dev/null 2>&1; then
   peers="$(kubectl -n veritas exec ds/veritas-agent -- wg show wg0 latest-handshakes 2>/dev/null | awk '$2 > 0 { count++ } END { print count+0 }')"
   configured="$(kubectl -n veritas exec ds/veritas-agent -- wg show wg0 peers 2>/dev/null | wc -l | tr -d ' ')"
-  if [ "$configured" -eq 0 ] || [ "$peers" -gt 0 ]; then
-    ok "WireGuard interface healthy ($configured configured peers)"
+  if [ "$configured" -eq 0 ]; then
+    warn 'WireGuard interface is present with no user peers; interface presence alone does not prove connectivity'
+  elif [ "$peers" -gt 0 ]; then
+    ok "WireGuard interface has $peers peer(s) with a handshake"
   else
     bad 'WireGuard peers have no recent handshakes'
   fi

@@ -23,6 +23,11 @@ metadata:
   labels:
     app: veritas-agent
 spec:
+  # The VPN node is currently single-node and this pod owns host networking.
+  # Do not let a bad image automatically evict the only working agent. The
+  # transactional deploy script preflights the image and rotates this pod.
+  updateStrategy:
+    type: OnDelete
   selector:
     matchLabels:
       app: veritas-agent

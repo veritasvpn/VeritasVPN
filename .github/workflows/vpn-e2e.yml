@@ -1,0 +1,28 @@
+name: External VPN end-to-end
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-vpn-e2e
+  cancel-in-progress: false
+
+jobs:
+  wireguard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install WireGuard test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends wireguard-tools dnsutils jq curl
+      - name: Test authentication, provisioning, tunnel, DNS, egress and revocation
+        env:
+          VERITAS_E2E_ACCOUNT_ID: ${{ secrets.VERITAS_E2E_ACCOUNT_ID }}
+        run: sudo --preserve-env=VERITAS_E2E_ACCOUNT_ID deploy/verify/external-wireguard-e2e.sh
