@@ -28,7 +28,6 @@ for target in \
   'deployment/auth-svc:veritas' \
   'deployment/wg-manager:veritas' \
   'deployment/billing-svc:veritas' \
-  'daemonset/veritas-wstunnel:veritas' \
   'statefulset/bitcoind-mainnet:btcpay-mainnet' \
   'statefulset/nbxplorer-mainnet:btcpay-mainnet' \
   'deployment/btcpayserver-mainnet:btcpay-mainnet' \
@@ -39,6 +38,22 @@ for target in \
     ok "$namespace/$resource ready"
   else
     bad "$namespace/$resource is not ready"
+  fi
+done
+
+# OnDelete daemonsets intentionally do not support `kubectl rollout status`.
+# Validate both readiness and the actual running digest instead.
+for daemonset in veritas-agent veritas-wstunnel; do
+  desired="$(kubectl -n veritas get daemonset "$daemonset" -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || true)"
+  ready="$(kubectl -n veritas get daemonset "$daemonset" -o jsonpath='{.status.numberReady}' 2>/dev/null || true)"
+  desired_image="$(kubectl -n veritas get daemonset "$daemonset" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+  running_image="$(kubectl -n veritas get pods -l "app=$daemonset" -o json 2>/dev/null \
+    | jq -r '.items[] | select(.metadata.deletionTimestamp == null) | .spec.containers[0].image' \
+    | head -1)"
+  if [[ -n "$desired" && "$desired" != "0" && "$ready" == "$desired" && "$running_image" == "$desired_image" ]]; then
+    ok "veritas/daemonset/$daemonset ready on desired image"
+  else
+    bad "veritas/daemonset/$daemonset is not ready on its desired image"
   fi
 done
 
