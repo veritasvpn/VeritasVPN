@@ -31,7 +31,9 @@ for i in "${!services[@]}"; do
     ctx="${ROOT}/containers/proxy-gateway"
   fi
   echo "--- Building ${img} ---"
-  docker build -t "${img}" -f "${ROOT}/${df}" "${ctx}"
+  # The production host provides its working resolver through the host network.
+  # Using it here avoids Docker daemon DNS overrides and affects build steps only.
+  docker build --network=host -t "${img}" -f "${ROOT}/${df}" "${ctx}"
   docker push "${img}"
 done
 

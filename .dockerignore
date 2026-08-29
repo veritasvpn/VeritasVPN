@@ -1,8 +1,13 @@
-.git
-backups
-data
-clients
-website
-docs
-*.log
-*.tmp
+# Production service images use the repository root as their build context but
+# copy only Go workspace metadata, shared libraries, and service source. Deny
+# everything else so local artifacts, client bundles, backups, and credentials
+# can never enter the Docker build context.
+**
+!go.work
+!go.work.sum
+!api/
+!api/**
+!lib/
+!lib/**
+!services/
+!services/**
