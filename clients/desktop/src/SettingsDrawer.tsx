@@ -174,14 +174,6 @@ export function SettingsDrawer({
                 <b className={stealthMode ? "on" : ""}>{stealthMode ? "On" : "Off"}</b>
               </button>
             )}
-            <p className="menu-static-note">
-              Kill switch always on · no off option
-              <span className="menu-note">
-                {linuxDesktop
-                  ? "Firewall + fail-closed routes while connected"
-                  : "Tunnel routing keeps traffic inside the VPN while connected"}
-              </span>
-            </p>
           </section>
 
           <section className="settings-drawer-section settings-drawer-section--session" aria-label="Session">

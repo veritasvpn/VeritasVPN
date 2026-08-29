@@ -210,10 +210,6 @@ fun SettingsDrawer(
                             note = "Exclude LAN · per-app bypass",
                             onClick = { navigate(onTunnelSettings) },
                         )
-                        SettingsDrawerStaticNote(
-                            title = "Kill switch always on",
-                            body = "Always-on VPN and block-without-VPN in system settings — no off option.",
-                        )
                     }
 
                     SettingsDrawerSection(title = "Session") {
@@ -289,35 +285,5 @@ private fun SettingsDrawerNavItem(
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
-    }
-}
-
-@Composable
-private fun SettingsDrawerStaticNote(
-    title: String,
-    body: String,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(9.dp))
-            .background(Cyan.copy(alpha = 0.06f))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-    ) {
-        Text(
-            text = title,
-            color = PaperDim,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-        )
-        Text(
-            text = body,
-            color = PaperDim,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
-            lineHeight = 14.sp,
-            modifier = Modifier.padding(top = 4.dp),
-        )
     }
 }
