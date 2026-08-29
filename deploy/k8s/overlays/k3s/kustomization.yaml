@@ -9,22 +9,22 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:e0563db7b31e6d59e7bbd6c18fb196efbaeca49b607c90b0d410c65a5807bea0
+    digest: sha256:4c64f71ded38fcce2e1b2c01c31b4ecdcaaaf850c7befb3dc9c82bcfd747b699
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    digest: sha256:4676d8b2983c9f4b1b21074e9fff323dcf39c300c55c1996fded00944f6e3b70
+    digest: sha256:d17a5b1b95503a28403b2d85d8a5924afc221a5cc4f5d1d0455005082f17e9ae
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    digest: sha256:e9473f0bcd9ad39d11811b50fcab20cbd7f6fd84cce49784923fc1a05a7f1bfb
+    digest: sha256:ec30e98cb0a55485d7531ba5b709c236a315e433431e95e36b935b3fa75643e4
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     digest: sha256:4edfa4894255599d18862d3cd6e05947391d44a9b01aa6cb55cf771c3ae41a7a
   - name: localhost:31500/wstunnel
     newName: localhost:31500/wstunnel
-    digest: sha256:4169260f4a2dc84df3c97aeba46882d5f7ee1b6ef94427b6c7f86951fc3b89b1
+    digest: sha256:54ed252229d1e29505d2b59e3bf05b77c7038939a87646c27f4267853a4a8f3b
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
-    digest: sha256:ab5ddbef3fd013a62a1cbe067d796819de1cdcdd8128f3ab8be3f57bb41d060d
+    digest: sha256:f75d943527d786af56a70b60171c1dfa1e01bfa96d5af296786c4d2c1e6f8fd9
   - name: localhost:31500/telegram-notifier
     newName: localhost:31500/telegram-notifier
     digest: sha256:dbb8587bfd81060e12b8f21f890954e046521da511603b9d0c25786ae08f8cf2
