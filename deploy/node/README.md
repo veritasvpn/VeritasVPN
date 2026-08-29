@@ -79,6 +79,16 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now veritas-firewall.service
 ```
 
+## SSH hardening
+
+Keys-only sshd drop-in plus fail2ban sshd jail (Tailscale-aware ignore list):
+
+```bash
+sudo bash deploy/security/install-ssh-hardening.sh
+```
+
+Verify: `sshd -T | grep -E 'passwordauthentication|maxauthtries|x11forwarding'` and `fail2ban-client status sshd`.
+
 WireGuard private key path on k3s nodes: `/etc/wireguard/private.key` (agent hostPath). Bandwidth caps remain host-owned via `veritas-bandwidth.timer` (tc); the agent no longer installs nft meters.
 
 ## VPN DNS protection

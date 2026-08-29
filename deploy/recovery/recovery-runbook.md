@@ -63,6 +63,7 @@ sudo install -m 600 /var/lib/veritasvpn/recovery/wireguard-private.key \
 sudo ./deploy/node/bootstrap-wg.sh
 sudo ./deploy/node/persist-rules.sh
 sudo ./deploy/security/install-host-auditing.sh
+sudo bash ./deploy/security/install-ssh-hardening.sh
 ```
 
 Restore the audited K3s configuration with `write-kubeconfig-mode: "0600"` and Secret encryption enabled before application Secrets are loaded. Restart K3s and require `sudo k3s secrets-encrypt status` to report enabled.

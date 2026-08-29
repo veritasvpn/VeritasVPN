@@ -1,0 +1,8 @@
+# VeritasVPN sshd jail — install via deploy/security/install-ssh-hardening.sh
+[sshd]
+enabled = true
+maxretry = 5
+bantime = 1h
+findtime = 10m
+# LAN admin + Tailscale; never ban loopback or the tailnet CGNAT range.
+ignoreip = 127.0.0.1/8 ::1 192.168.0.0/16 100.64.0.0/10
