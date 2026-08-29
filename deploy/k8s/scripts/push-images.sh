@@ -12,7 +12,7 @@ dockerfiles=(
   "services/wg-manager/Dockerfile"
   "services/billing-svc/Dockerfile"
   "services/veritas-agent/Dockerfile"
-  "containers/proxy-gateway/Dockerfile"
+  "services/browser-proxy/Dockerfile"
   "services/wstunnel/Dockerfile"
 )
 
@@ -27,9 +27,6 @@ for i in "${!services[@]}"; do
     img="${REGISTRY}/${svc}:${TAG}"
   fi
   ctx="${ROOT}"
-  if [ "$svc" = "veritas-proxy" ]; then
-    ctx="${ROOT}/containers/proxy-gateway"
-  fi
   echo "--- Building ${img} ---"
   # The production host provides its working resolver through the host network.
   # Using it here avoids Docker daemon DNS overrides and affects build steps only.

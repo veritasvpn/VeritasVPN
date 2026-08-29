@@ -33,7 +33,9 @@ Then set `STEALTH_ENABLED=true`, `STEALTH_ENDPOINT_HOST`, `STEALTH_ENDPOINT_PORT
 
 7. Moving to a VPS later: run the same bootstrap, set `PUBLIC_IP` / `EGRESS_IFACE`, point DNS/tunnel at the VPS. The agent/manager contract stays the same.
 
-SOCKS (`veritas-proxy` :1080) remains for the Chrome extension only. Desktop/CLI use WireGuard.
+The authenticated HTTP CONNECT proxy (`veritas-proxy` :1080) is reserved for
+the Chrome extension. It accepts only Premium access JWTs; desktop and CLI
+clients use WireGuard directly.
 
 ## Useful information (AI)
 
