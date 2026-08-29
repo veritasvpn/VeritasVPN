@@ -2041,11 +2041,11 @@ function App() {
       {showSignOutConfirm && (
         <div className="dialog-overlay" role="presentation" onClick={() => setShowSignOutConfirm(false)}>
           <div className="dialog-card" role="alertdialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-            <strong>Sign out?</strong>
+            <strong>Sign out from this device?</strong>
             <p>Signing out will disconnect your VPN. Continue?</p>
             <div className="dialog-actions">
               <button type="button" onClick={() => setShowSignOutConfirm(false)}>Cancel</button>
-              <button type="button" className="danger-solid" onClick={handleSignOut}>Sign out</button>
+              <button type="button" className="danger-solid" onClick={handleSignOut}>Sign out from this device</button>
             </div>
           </div>
         </div>

@@ -119,6 +119,46 @@
   border-color: var(--accent);
 }
 
+.account-session {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.account-session-label {
+  margin: 0 8px 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.account-signout-btn {
+  width: 100%;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  text-align: left;
+}
+
+.account-signout-btn:hover {
+  background: rgba(239, 68, 68, 0.22);
+  color: #fecaca;
+}
+
+.account-actions .account-signout-btn {
+  width: auto;
+  flex: 1 1 220px;
+}
+
 .account-main {
   display: flex;
   flex-direction: column;

@@ -56,6 +56,7 @@ import cloud.veritasvpn.ui.theme.Line
 import cloud.veritasvpn.ui.theme.Paper
 import cloud.veritasvpn.ui.theme.PaperDim
 import cloud.veritasvpn.ui.theme.PaperMuted
+import cloud.veritasvpn.ui.theme.ErrorRed
 import kotlin.math.roundToInt
 
 private val DrawerOpenEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
@@ -214,13 +215,13 @@ fun SettingsDrawer(
 
                     SettingsDrawerSection(title = "Session") {
                         SettingsDrawerNavItem(
-                            label = "Sign out everywhere",
-                            muted = true,
+                            label = "Sign out from all devices",
+                            danger = true,
                             onClick = { navigate(onSignOutEverywhere) },
                         )
                         SettingsDrawerNavItem(
-                            label = "Sign out",
-                            muted = true,
+                            label = "Sign out from this device",
+                            danger = true,
                             onClick = { navigate(onSignOut) },
                         )
                     }
@@ -262,17 +263,24 @@ private fun SettingsDrawerNavItem(
     onClick: () -> Unit,
     note: String? = null,
     muted: Boolean = false,
+    danger: Boolean = false,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(9.dp))
+            .background(if (danger) ErrorRed.copy(alpha = 0.14f) else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 12.dp),
     ) {
         Text(
             text = label,
-            color = if (muted) PaperMuted else Paper,
+            color = when {
+                danger -> ErrorRed
+                muted -> PaperMuted
+                else -> Paper
+            },
             fontWeight = if (muted) FontWeight.Medium else FontWeight.SemiBold,
             fontSize = 15.sp,
         )

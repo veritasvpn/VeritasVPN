@@ -17,6 +17,7 @@ const boot = document.getElementById('accountBoot');
 const emailEl = document.getElementById('accountEmail');
 const upgradeBtn = document.getElementById('headerUpgradeBtn');
 const signOutBtn = document.getElementById('accountSignOut');
+const signOutAllBtn = document.getElementById('accountSignOutAll');
 const mobileNavBtn = document.getElementById('accountMobileNav');
 const sidebar = document.querySelector('.account-sidebar');
 
@@ -343,8 +344,8 @@ function renderAccount(user) {
         }</code>
         <div class="account-actions">
           ${!isAnonymous ? '<button type="button" class="btn btn-outline" data-action="reset-password">Send password reset email</button>' : ''}
-          <button type="button" class="btn btn-outline" data-action="logout-all">Sign out everywhere</button>
-          <button type="button" class="btn btn-primary" data-action="signout">Sign out</button>
+          <button type="button" class="btn account-signout-btn" data-action="logout-all">Sign out from all devices</button>
+          <button type="button" class="btn account-signout-btn" data-action="signout">Sign out from this device</button>
         </div>
       </div>
     </section>
@@ -713,6 +714,12 @@ upgradeBtn?.addEventListener('click', () => {
 
 signOutBtn?.addEventListener('click', async () => {
   await signOutHandler();
+  window.location.href = '/';
+});
+
+signOutAllBtn?.addEventListener('click', async () => {
+  if (!confirm('Sign out of VeritasVPN on all devices and browsers?')) return;
+  await logoutAllSessions();
   window.location.href = '/';
 });
 

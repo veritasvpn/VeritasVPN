@@ -76,13 +76,13 @@ fun DashboardScreen(
     if (showSignOutConfirmation) {
         AlertDialog(
             onDismissRequest = { showSignOutConfirmation = false },
-            title = { Text("Sign out?", color = Paper, fontWeight = FontWeight.Bold) },
+            title = { Text("Sign out from this device?", color = Paper, fontWeight = FontWeight.Bold) },
             text = { Text("Signing out will disconnect your VPN. Continue?", color = PaperMuted) },
             confirmButton = {
                 Button(
                     onClick = { showSignOutConfirmation = false; onSignOut() },
                     colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
-                ) { Text("Sign out", color = Ink, fontWeight = FontWeight.Bold) }
+                ) { Text("Sign out from this device", color = Ink, fontWeight = FontWeight.Bold) }
             },
             dismissButton = { TextButton(onClick = { showSignOutConfirmation = false }) { Text("Cancel", color = CyanHover) } },
             containerColor = CardElevated
@@ -91,7 +91,7 @@ fun DashboardScreen(
     if (showSignOutEverywhereConfirmation) {
         AlertDialog(
             onDismissRequest = { showSignOutEverywhereConfirmation = false },
-            title = { Text("Sign out everywhere?", color = Paper, fontWeight = FontWeight.Bold) },
+            title = { Text("Sign out from all devices?", color = Paper, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
                     "This revokes all sessions on every device, disconnects VPN on this device, and signs you out locally.",
@@ -102,7 +102,7 @@ fun DashboardScreen(
                 Button(
                     onClick = { showSignOutEverywhereConfirmation = false; onSignOutEverywhere() },
                     colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
-                ) { Text("Sign out everywhere", color = Color.White, fontWeight = FontWeight.Bold) }
+                ) { Text("Sign out from all devices", color = Color.White, fontWeight = FontWeight.Bold) }
             },
             dismissButton = {
                 TextButton(onClick = { showSignOutEverywhereConfirmation = false }) {

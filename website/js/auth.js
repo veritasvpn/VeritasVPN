@@ -278,6 +278,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   const userMenuBtn = document.getElementById('navUserMenuBtn');
   const userMenu = document.getElementById('navUserMenu');
   const signOutBtn = document.getElementById('authSignOut');
+  const signOutAllBtn = document.getElementById('authSignOutAll');
   const dashboardLinks = document.querySelectorAll('[data-open-dashboard]');
   const turnstileEl = document.getElementById('authTurnstile');
   const params = new URLSearchParams(window.location.search);
@@ -906,11 +907,19 @@ function renderUser(user) {
 
   signOutBtn?.addEventListener('click', async (e) => {
     e.preventDefault();
-    clearSession();
+    await signOutHandler();
     renderUser(null);
     if (window.location.pathname.startsWith('/account')) {
       window.location.href = '/';
     }
+  });
+
+  signOutAllBtn?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!confirm('Sign out of VeritasVPN on all devices and browsers?')) return;
+    await logoutAllSessions();
+    renderUser(null);
+    window.location.href = '/';
   });
 
   if (params.get('signin') === '1') {
@@ -937,6 +946,23 @@ function renderUser(user) {
 }
 
 export async function signOutHandler() {
+  clearSession();
+  currentUser = null;
+  notifyListeners(null);
+}
+
+export async function logoutAllSessions() {
+  const token = getAccessToken();
+  if (token) {
+    await fetch(`${AUTH_API}/api/v1/auth/logout-all`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: '{}',
+    }).catch(() => undefined);
+  }
   clearSession();
   currentUser = null;
   notifyListeners(null);

@@ -7,9 +7,9 @@ Downloadable artifacts served by the static website.
 | File | Purpose |
 |------|---------|
 | `veritasvpn-chrome.zip` | Internal v0.3.6 validation build; public download remains paused pending gateway approval and end-to-end testing |
-| `veritasvpn-android.apk` | v0.1.10 signed Android release; streamed by `functions/downloads/veritasvpn-android.apk.js` from GitHub Releases (`v0.2.10`) |
-| `veritasvpn-linux.deb` | v0.2.10 build; streamed by `functions/downloads/veritasvpn-linux.deb.js` from GitHub Releases (`v0.2.10`) |
-| `veritasvpn-linux.AppImage` | v0.2.10 build; streamed by `functions/downloads/veritasvpn-linux.AppImage.js` from GitHub Releases (`v0.2.10`) |
+| `veritasvpn-android.apk` | v0.1.11 signed Android release; streamed by `functions/downloads/veritasvpn-android.apk.js` from GitHub Releases (`v0.2.11`) |
+| `veritasvpn-linux.deb` | v0.2.11 build; streamed by `functions/downloads/veritasvpn-linux.deb.js` from GitHub Releases (`v0.2.11`) |
+| `veritasvpn-linux.AppImage` | v0.2.11 build; streamed by `functions/downloads/veritasvpn-linux.AppImage.js` from GitHub Releases (`v0.2.11`) |
 
 ## Useful information (AI)
 

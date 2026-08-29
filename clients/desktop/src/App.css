@@ -480,8 +480,13 @@ input::placeholder { color: var(--paper-dim); }
 }
 
 .settings-drawer button.danger {
-  color: var(--paper-muted);
-  font-weight: 500;
+  color: var(--error);
+  font-weight: 600;
+  background: rgba(255, 107, 122, 0.14);
+}
+
+.settings-drawer button.danger:hover {
+  background: rgba(255, 107, 122, 0.24);
 }
 
 .settings-drawer button.menu-toggle {

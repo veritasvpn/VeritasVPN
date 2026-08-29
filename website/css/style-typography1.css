@@ -345,6 +345,14 @@ button { font-family: inherit; }
   display: block;
 }
 .nav-user-menu-item:hover { background: var(--ink-3); color: var(--paper); }
+.nav-user-menu-item--signout {
+  background: rgba(255, 107, 122, 0.12);
+  color: #ffb4bc;
+}
+.nav-user-menu-item--signout:hover {
+  background: rgba(255, 107, 122, 0.22);
+  color: #ffd5da;
+}
 
 /* —— Hero (one composition, brand-first, map plane) —— */
 .hero {

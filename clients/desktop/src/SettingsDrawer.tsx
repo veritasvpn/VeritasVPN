@@ -179,10 +179,10 @@ export function SettingsDrawer({
           <section className="settings-drawer-section settings-drawer-section--session" aria-label="Session">
             <p className="settings-drawer-label">Session</p>
             <button type="button" className="danger" onClick={() => void onSignOutEverywhere()}>
-              Sign out everywhere
+              Sign out from all devices
             </button>
             <button type="button" className="danger" onClick={onRequestSignOut}>
-              Sign out
+              Sign out from this device
             </button>
           </section>
         </div>
