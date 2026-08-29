@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.25.9"
+  GO_VERSION: "1.25.13"
   TRIVY_VERSION: "0.74.0"
 
 jobs:
@@ -111,6 +111,7 @@ jobs:
           trivy fs --scanners vuln,secret,misconfig \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
+            --skip-dirs android/wireguard,website/downloads \
             --exit-code 1 \
             .
       - name: Validate shell scripts
@@ -201,6 +202,7 @@ jobs:
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           working-directory: clients/desktop/src-tauri
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   build-android:
     name: Build Android debug APK

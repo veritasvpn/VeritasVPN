@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 AS builder
+FROM golang:1.25.13-alpine@sha256:1e0126852075c9c60731c8ba49088448b91f63e2aed97ca9d1a9791622a05946 AS builder
 WORKDIR /src
 COPY services/bitcoin-readiness/go.mod ./services/bitcoin-readiness/
 COPY services/bitcoin-readiness/main.go ./services/bitcoin-readiness/

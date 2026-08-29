@@ -1,4 +1,4 @@
-go 1.22
+go 1.25.0
 
 use (
 	./api
@@ -8,10 +8,10 @@ use (
 	./lib/jwt
 	./lib/logging
 	./services/auth-svc
-	./services/bitcoin-readiness
 	./services/billing-svc
+	./services/bitcoin-readiness
 	./services/browser-proxy
-	./services/veritas-agent
 	./services/telegram-notifier
+	./services/veritas-agent
 	./services/wg-manager
 )
