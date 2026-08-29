@@ -31,6 +31,9 @@ jobs:
       - name: Bundle WireGuard Go
         run: bash scripts/bundle-wg-linux.sh
         working-directory: clients/desktop
+      - name: Bundle wstunnel for Stealth mode
+        run: bash scripts/bundle-wstunnel-linux.sh
+        working-directory: clients/desktop
       - name: Install and audit dependencies
         run: |
           npm ci
