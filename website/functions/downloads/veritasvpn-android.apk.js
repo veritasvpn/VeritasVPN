@@ -1,4 +1,5 @@
-const APK_URL = "https://raw.githubusercontent.com/veritasvpn/VeritasVPN/master/website/downloads/veritasvpn-android.apk";
+const APK_URL =
+  "https://github.com/veritasvpn/VeritasVPN/releases/download/v0.2.8/veritasvpn-android.apk";
 
 export async function onRequestGet() {
   const upstream = await fetch(APK_URL, {

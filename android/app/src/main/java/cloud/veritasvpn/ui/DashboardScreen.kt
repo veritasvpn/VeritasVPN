@@ -112,6 +112,7 @@ fun DashboardScreen(
             containerColor = CardElevated
         )
     }
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -132,73 +133,15 @@ fun DashboardScreen(
                 modifier = Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)),
                 contentScale = ContentScale.Crop
             )
-            Box {
-                IconButton(
-                    onClick = { showSettingsMenu = true },
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .background(CardElevated)
-                        .border(1.dp, LineStrong, CircleShape)
-                ) {
-                    Icon(Icons.Rounded.Settings, "Open settings", tint = CyanHover, modifier = Modifier.size(21.dp))
-                }
-                DropdownMenu(
-                    expanded = showSettingsMenu,
-                    onDismissRequest = { showSettingsMenu = false },
-                    containerColor = CardElevated
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(if (isPremium) "Premium" else "Plans", color = Paper, fontWeight = FontWeight.SemiBold) },
-                        onClick = { showSettingsMenu = false; onPlans() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Devices", color = Paper, fontWeight = FontWeight.SemiBold) },
-                        onClick = { showSettingsMenu = false; onDevices() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Port forwarding", color = Paper, fontWeight = FontWeight.SemiBold) },
-                        onClick = { showSettingsMenu = false; onPortForwards() }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Network map", color = Paper, fontWeight = FontWeight.SemiBold) },
-                        onClick = { showSettingsMenu = false; showNetworkMap = true }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Split tunnel", color = Paper, fontWeight = FontWeight.SemiBold) },
-                        onClick = { showSettingsMenu = false; onTunnelSettings() }
-                    )
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text("Stealth mode", color = PaperMuted, fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    "Available on the Linux desktop app — not in this Android build yet.",
-                                    color = PaperDim,
-                                    fontSize = 12.sp,
-                                    lineHeight = 15.sp
-                                )
-                            }
-                        },
-                        onClick = { showSettingsMenu = false },
-                        enabled = false
-                    )
-                    HorizontalDivider(color = Line)
-                    DropdownMenuItem(
-                        text = { Text("Sign out", color = PaperMuted, fontWeight = FontWeight.Medium) },
-                        onClick = {
-                            showSettingsMenu = false
-                            if (connected || connecting) showSignOutConfirmation = true else onSignOut()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Sign out everywhere", color = PaperMuted, fontWeight = FontWeight.Medium) },
-                        onClick = {
-                            showSettingsMenu = false
-                            showSignOutEverywhereConfirmation = true
-                        }
-                    )
-                }
+            IconButton(
+                onClick = { showSettingsMenu = true },
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(CardElevated)
+                    .border(1.dp, LineStrong, CircleShape)
+            ) {
+                Icon(Icons.Rounded.Settings, "Open settings", tint = CyanHover, modifier = Modifier.size(21.dp))
             }
         }
 
@@ -333,6 +276,23 @@ fun DashboardScreen(
             }
         }
         }
+    }
+
+    SettingsDrawer(
+        open = showSettingsMenu,
+        onDismiss = { showSettingsMenu = false },
+        isPremium = isPremium,
+        killSwitchEnabled = killSwitchEnabled,
+        onPlans = onPlans,
+        onNetworkMap = { showNetworkMap = true },
+        onDevices = onDevices,
+        onPortForwards = onPortForwards,
+        onTunnelSettings = onTunnelSettings,
+        onSignOut = {
+            if (connected || connecting) showSignOutConfirmation = true else onSignOut()
+        },
+        onSignOutEverywhere = { showSignOutEverywhereConfirmation = true },
+    )
     }
 }
 

@@ -28,6 +28,7 @@ import {
 } from "./billing";
 import { AUTH_API } from "./config";
 import { obtainTurnstileToken } from "./turnstile";
+import { SettingsDrawer } from "./SettingsDrawer";
 import veritasMark from "./assets/veritas-mark.png";
 import "./App.css";
 
@@ -777,6 +778,7 @@ function App() {
   const reconnectAttemptRef = useRef(0);
   const reconnectingRef = useRef(false);
   const reconnectTimerRef = useRef<number | null>(null);
+  const settingsCogRef = useRef<HTMLButtonElement>(null);
   const peerIdRef = useRef("");
   const autoReconnectRef = useRef(autoReconnect);
   const subscriptionActiveRef = useRef(subscriptionActive);
@@ -1044,6 +1046,16 @@ function App() {
       setResendLoading(false);
     }
   }, [verificationResendEmail]);
+
+  const closeSettings = useCallback(() => setShowSettings(false), []);
+
+  const openNetworkMap = useCallback(() => {
+    setShowSettings(false);
+    setShowNetworkMap(true);
+    setShowPlans(false);
+    setShowDevices(false);
+    setShowPortForwards(false);
+  }, []);
 
   const openPlans = useCallback(() => {
     setShowSettings(false);
@@ -1827,55 +1839,16 @@ function App() {
       <header className="app-header blueprint-header">
         <img className="brand-logo" src={veritasMark} alt="VeritasVPN" />
         {!showPlans && !showDevices && !showPortForwards && (
-          <div className="blueprint-settings-wrap">
-            <button className="blueprint-cog" onClick={() => setShowSettings((open) => !open)} aria-label="Open settings" aria-expanded={showSettings}>⚙</button>
-            {showSettings && (
-              <div className="blueprint-menu">
-                <button type="button" onClick={openPlans}>{subscriptionActive ? "Premium" : "Plans"}</button>
-                <button type="button" onClick={() => { setShowSettings(false); setShowNetworkMap(true); }}>Network map</button>
-                <button type="button" onClick={openDevices}>Devices</button>
-                <button type="button" onClick={openPortForwards}>Port forwarding</button>
-                <hr />
-                <button type="button" className="menu-toggle" onClick={toggleAutoReconnect}>
-                  <span>Auto-reconnect</span>
-                  <b className={autoReconnect ? "on" : ""}>{autoReconnect ? "On" : "Off"}</b>
-                </button>
-                <button type="button" className="menu-toggle" onClick={toggleExcludeLan}>
-                  <span>Exclude LAN<span className="menu-note">Reconnect to apply</span></span>
-                  <b className={excludeLan ? "on" : ""}>{excludeLan ? "On" : "Off"}</b>
-                </button>
-                <button
-                  type="button"
-                  className="menu-toggle"
-                  onClick={toggleStealthMode}
-                  disabled={!linuxDesktop}
-                  aria-disabled={!linuxDesktop}
-                >
-                  <span>
-                    Stealth mode
-                    <span className="menu-note">{linuxDesktop ? "TLS wrap · reconnect" : "Linux only"}</span>
-                  </span>
-                  <b className={linuxDesktop && stealthMode ? "on" : ""}>
-                    {!linuxDesktop ? "—" : stealthMode ? "On" : "Off"}
-                  </b>
-                </button>
-                {linuxDesktop ? (
-                  <p className="menu-static-note">
-                    Kill switch always on · no off option
-                    <span className="menu-note">Firewall + fail-closed routes while connected</span>
-                  </p>
-                ) : (
-                  <p className="menu-static-note">
-                    Kill switch is Linux-only in this build
-                    <span className="menu-note">macOS uses tunnel routing without the Linux firewall ruleset</span>
-                  </p>
-                )}
-                <hr />
-                <button type="button" className="danger" onClick={() => void handleSignOutEverywhere()}>Sign out everywhere</button>
-                <button type="button" className="danger" onClick={requestSignOut}>Sign out</button>
-              </div>
-            )}
-          </div>
+          <button
+            ref={settingsCogRef}
+            className="blueprint-cog"
+            onClick={() => setShowSettings((open) => !open)}
+            aria-label="Open settings"
+            aria-expanded={showSettings}
+            aria-controls="settings-drawer"
+          >
+            ⚙
+          </button>
         )}
       </header>
 
@@ -2044,6 +2017,26 @@ function App() {
           </>
         )}
       </main>
+
+      <SettingsDrawer
+        open={showSettings}
+        onClose={closeSettings}
+        returnFocusRef={settingsCogRef}
+        subscriptionActive={subscriptionActive}
+        linuxDesktop={linuxDesktop}
+        autoReconnect={autoReconnect}
+        excludeLan={excludeLan}
+        stealthMode={stealthMode}
+        onOpenPlans={openPlans}
+        onOpenNetworkMap={openNetworkMap}
+        onOpenDevices={openDevices}
+        onOpenPortForwards={openPortForwards}
+        onToggleAutoReconnect={toggleAutoReconnect}
+        onToggleExcludeLan={toggleExcludeLan}
+        onToggleStealthMode={toggleStealthMode}
+        onSignOutEverywhere={handleSignOutEverywhere}
+        onRequestSignOut={requestSignOut}
+      />
 
       {showSignOutConfirm && (
         <div className="dialog-overlay" role="presentation" onClick={() => setShowSignOutConfirm(false)}>
