@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+env:
+  GO_VERSION: "1.25.9"
+  TRIVY_VERSION: "0.74.0"
+
 jobs:
   lint-and-test:
     name: Lint & Test
@@ -39,7 +43,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Run tests
         env:
@@ -58,7 +62,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
       - name: Run govulncheck
         run: |
           for module in api lib/config lib/logging lib/crypto lib/jwt services/auth-svc services/wg-manager services/billing-svc services/veritas-agent services/browser-proxy clients/cli; do
@@ -94,19 +98,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
+      - name: Install Trivy
+        run: |
+          curl -sfL --retry 5 --retry-delay 3 \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            | tar -xz -C /usr/local/bin trivy
+          trivy --version
+        env:
+          TRIVY_VERSION: ${{ env.TRIVY_VERSION }}
+      - name: Scan repository
+        run: |
+          trivy fs --scanners vuln,secret,misconfig \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            .
       - name: Validate shell scripts
         run: find deploy scripts -type f -name '*.sh' -print0 | xargs -0 -r shellcheck
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
       - name: Validate Kubernetes manifests
         run: |
           go install sigs.k8s.io/kustomize/kustomize/v5@v5.7.1
@@ -125,7 +136,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Build ${{ matrix.service }}
         run: |
@@ -149,7 +160,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.24"
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Build CLI (${{ matrix.os }}/${{ matrix.arch }})
         env:
@@ -181,6 +192,10 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npm run build
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Install Linux desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libglib2.0-dev librsvg2-dev pkg-config
       - run: cargo check --locked
         working-directory: clients/desktop/src-tauri
       - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
@@ -299,10 +314,15 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Install Trivy
+        run: |
+          curl -sfL --retry 5 --retry-delay 3 \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            | tar -xz -C /usr/local/bin trivy
+          trivy --version
+        env:
+          TRIVY_VERSION: ${{ env.TRIVY_VERSION }}
       - name: Scan pushed image
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
-        with:
-          image-ref: ghcr.io/${{ env.REGISTRY_OWNER }}/veritasvpn/${{ matrix.service }}:${{ github.sha }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '1'
+        run: |
+          trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            "ghcr.io/${{ env.REGISTRY_OWNER }}/veritasvpn/${{ matrix.service }}:${{ github.sha }}"
