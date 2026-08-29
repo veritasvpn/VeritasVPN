@@ -5,34 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Payment received — VeritasVPN</title>
   <link rel="stylesheet" href="../css/style-typography1.css">
+  <link rel="stylesheet" href="../css/page-utilities.css">
   <link rel="icon" type="image/png" href="../assets/favicon.png">
 </head>
 <body>
-  <main class="hero" style="min-height:100vh;display:flex;align-items:center;">
-    <div class="container" style="text-align:center;max-width:560px;margin:0 auto;">
-      <img src="../assets/logo-mark.png" alt="" width="64" height="64" style="margin-bottom:20px;">
-      <h1 class="hero-title" style="font-size:40px;">You're Premium.</h1>
-      <p class="hero-subtitle" style="margin-left:auto;margin-right:auto;">Cryptocurrency payment confirmed. Refreshing your session…</p>
+  <main class="hero page-centered">
+    <div class="container centered-copy">
+      <img class="brand-mark-spaced" src="../assets/logo-mark.png" alt="" width="64" height="64">
+      <h1 class="hero-title display-title">You're Premium.</h1>
+      <p class="hero-subtitle centered-subtitle">Cryptocurrency payment confirmed. Refreshing your session…</p>
       <a class="btn btn-primary btn-lg" href="/account/#/subscription">Open dashboard</a>
-      <p style="margin-top:16px;color:var(--text-muted);font-size:14px;">Sign in with your account ID if prompted. Re-open the desktop or Android app (or refresh) so WireGuard uses your new Premium limit.</p>
+      <p class="supporting-note">Sign in with your account ID if prompted. Re-open the desktop or Android app (or refresh) so WireGuard uses your new Premium limit.</p>
     </div>
   </main>
-  <script type="module">
-    import { forceRefreshAccessToken } from '../js/auth.js';
-
-    async function refreshAndRedirect() {
-      try { await forceRefreshAccessToken(); } catch (_) {}
-
-      if (window.opener && !window.opener.closed) {
-        window.opener.location.href = '/account/#/subscription';
-        window.close();
-        return;
-      }
-
-      window.location.replace('/account/#/subscription');
-    }
-
-    setTimeout(refreshAndRedirect, 1500);
-  </script>
+  <script type="module" src="../js/billing-success.js"></script>
 </body>
 </html>

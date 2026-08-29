@@ -7,6 +7,42 @@ use std::process::Command;
 use tauri::{AppHandle, Manager};
 use x25519_dalek::{PublicKey, StaticSecret};
 
+const KEYRING_SERVICE: &str = "cloud.veritasvpn.desktop";
+
+fn keyring_entry(name: &str) -> Result<keyring::Entry, String> {
+    if name != "access_token" && name != "refresh_token" {
+        return Err("unsupported credential name".into());
+    }
+    keyring::Entry::new(KEYRING_SERVICE, name).map_err(|e| format!("open secure credential store: {e}"))
+}
+
+#[tauri::command]
+fn secure_credential_set(name: String, value: String) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("credential value cannot be empty".into());
+    }
+    keyring_entry(&name)?
+        .set_password(&value)
+        .map_err(|e| format!("store credential securely: {e}"))
+}
+
+#[tauri::command]
+fn secure_credential_get(name: String) -> Result<Option<String>, String> {
+    match keyring_entry(&name)?.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("read secure credential: {e}")),
+    }
+}
+
+#[tauri::command]
+fn secure_credential_delete(name: String) -> Result<(), String> {
+    match keyring_entry(&name)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("delete secure credential: {e}")),
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WgTunnelConfig {
     pub private_key: String,
@@ -420,12 +456,16 @@ if [[ -f "$IFACE_FILE" ]]; then
   OLD="$(cat "$IFACE_FILE")"
   route -n delete -net 0.0.0.0/1 -interface "$OLD" 2>/dev/null || true
   route -n delete -net 128.0.0.0/1 -interface "$OLD" 2>/dev/null || true
+  route -n delete -inet6 ::/1 ::1 2>/dev/null || true
+  route -n delete -inet6 8000::/1 ::1 2>/dev/null || true
   ifconfig "$OLD" down 2>/dev/null || true
   rm -f "$IFACE_FILE"
 fi
 # Drop stale split-default routes even if iface file was lost
 route -n delete -net 0.0.0.0/1 2>/dev/null || true
 route -n delete -net 128.0.0.0/1 2>/dev/null || true
+route -n delete -inet6 ::/1 ::1 2>/dev/null || true
+route -n delete -inet6 8000::/1 ::1 2>/dev/null || true
 pkill -f '/wireguard-go utun' 2>/dev/null || true
 rm -f /var/run/wireguard/*.sock 2>/dev/null || true
 if [[ -f "$DNS_PID_FILE" ]]; then
@@ -530,6 +570,24 @@ route -n delete -net 128.0.0.0/1 -interface "$IFACE" 2>/dev/null || true
 route -n add -net 0.0.0.0/1 -interface "$IFACE"
 route -n add -net 128.0.0.0/1 -interface "$IFACE"
 
+# The current service is IPv4-only. Install two more-specific blackhole routes
+# so IPv6 cannot bypass the VPN. Track these exact routes and remove only them
+# during rollback/disconnect, leaving the user's normal IPv6 default intact.
+if ! route -n add -inet6 -blackhole ::/1 ::1 2>/tmp/veritas-wg-killswitch-v6-error.log || \
+   ! route -n add -inet6 -blackhole 8000::/1 ::1 2>>/tmp/veritas-wg-killswitch-v6-error.log; then
+  route -n delete -inet6 ::/1 ::1 2>/dev/null || true
+  route -n delete -inet6 8000::/1 ::1 2>/dev/null || true
+  route -n delete -net 0.0.0.0/1 -interface "$IFACE" 2>/dev/null || true
+  route -n delete -net 128.0.0.0/1 -interface "$IFACE" 2>/dev/null || true
+  route -n delete -net 10.0.0.0/24 -interface "$IFACE" 2>/dev/null || true
+  [[ -n "$ENDPOINT_IP" ]] && route -n delete -host "$ENDPOINT_IP" 2>/dev/null || true
+  ifconfig "$IFACE" down 2>/dev/null || true
+  kill "$(cat "$PID_FILE")" 2>/dev/null || true
+  rm -f "$PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
+  echo "Could not install the IPv6 VPN kill switch; normal internet was restored" >&2
+  exit 1
+fi
+
 # Active network service for DNS (not "first listed").
 SERVICE="$(networksetup -listnetworkserviceorder 2>/dev/null | awk -v iface="$GW_IF" '
   /^\([0-9]+\) / {{
@@ -622,6 +680,8 @@ if ! kill -0 "$(cat "$DNS_PID_FILE")" 2>/dev/null || \
   networksetup -setdnsservers "$SERVICE" Empty 2>/dev/null || true
   route -n delete -net 0.0.0.0/1 -interface "$IFACE" 2>/dev/null || true
   route -n delete -net 128.0.0.0/1 -interface "$IFACE" 2>/dev/null || true
+  route -n delete -inet6 ::/1 ::1 2>/dev/null || true
+  route -n delete -inet6 8000::/1 ::1 2>/dev/null || true
   route -n delete -net 10.0.0.0/24 -interface "$IFACE" 2>/dev/null || true
   [[ -n "$ENDPOINT_IP" ]] && route -n delete -host "$ENDPOINT_IP" 2>/dev/null || true
   ifconfig "$IFACE" down 2>/dev/null || true
@@ -659,6 +719,8 @@ fi
 if [[ "$DNS_OK" -ne 1 || "$HTTPS_OK" -ne 1 ]]; then
   route -n delete -net 0.0.0.0/1 -interface "$IFACE" 2>/dev/null || true
   route -n delete -net 128.0.0.0/1 -interface "$IFACE" 2>/dev/null || true
+  route -n delete -inet6 ::/1 ::1 2>/dev/null || true
+  route -n delete -inet6 8000::/1 ::1 2>/dev/null || true
   route -n delete -net 10.0.0.0/24 -interface "$IFACE" 2>/dev/null || true
   [[ -n "$ENDPOINT_IP" ]] && route -n delete -host "$ENDPOINT_IP" 2>/dev/null || true
   route -n delete -host 1.1.1.1 2>/dev/null || true
@@ -1233,6 +1295,8 @@ if [[ -n "$IFACE" ]]; then
 fi
 route -n delete -net 0.0.0.0/1 2>/dev/null || true
 route -n delete -net 128.0.0.0/1 2>/dev/null || true
+route -n delete -inet6 ::/1 ::1 2>/dev/null || true
+route -n delete -inet6 8000::/1 ::1 2>/dev/null || true
 
 # Remove pinned endpoint host route.
 if [[ -n "$ENDPOINT_IP" ]]; then
@@ -1613,6 +1677,9 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            secure_credential_set,
+            secure_credential_get,
+            secure_credential_delete,
             wireguard_available,
             generate_wg_keys,
             connect_wireguard,

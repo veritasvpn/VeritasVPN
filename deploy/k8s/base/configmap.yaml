@@ -9,6 +9,10 @@ data:
   LOG_FORMAT: "console"
   CORS_ORIGINS: "http://localhost:8000,http://127.0.0.1:8000"
   PUBLIC_BASE_URL: "https://veritasvpn.cloud"
+  JWT_ISSUER: "https://api.veritasvpn.cloud"
+  JWT_AUDIENCE: "veritasvpn-api"
+  ACCESS_TOKEN_TTL: "15m"
+  REFRESH_TOKEN_TTL: "720h"
 
   POSTGRES_DB: "veritas"
   POSTGRES_USER: "veritas"
@@ -34,6 +38,10 @@ data:
   SERVER_CITY: "local"
   SERVER_COUNTRY: "AR"
   MANAGER_ENDPOINT: "http://wg-manager:8080"
+  BROWSER_PROXY_HOST: ""
+  BROWSER_PROXY_PORT: "41080"
+  BROWSER_PROXY_SCHEME: "http"
+  BROWSER_EXPECTED_EGRESS_IP: ""
 
   WG_INTERFACE: "wg0"
   # Router forwards public UDP 443 to Dell UDP 51820. Keep the advertised

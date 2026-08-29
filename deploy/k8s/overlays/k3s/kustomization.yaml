@@ -63,6 +63,12 @@ patches:
         path: /data/PUBLIC_IP
         value: "170.51.31.139"
       - op: replace
+        path: /data/BROWSER_PROXY_HOST
+        value: "170.51.31.139"
+      - op: replace
+        path: /data/BROWSER_EXPECTED_EGRESS_IP
+        value: "170.51.31.139"
+      - op: replace
         path: /data/STEALTH_ENABLED
         value: "true"
       - op: replace

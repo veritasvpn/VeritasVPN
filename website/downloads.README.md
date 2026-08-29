@@ -5,7 +5,7 @@
 Primary download offers:
 
 1. **macOS** → `install/macos.html` (desktop WireGuard / Tauri — DMG pending)
-2. **Chrome** → `install/chrome.html` (extension ZIP available now)
+2. **Chrome** → `install/chrome.html` (download paused pending gateway validation)
 
 Other platforms listed as coming soon.
 

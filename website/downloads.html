@@ -3,10 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Download VeritasVPN for Chrome, Android, and Linux. Other platforms are coming soon.">
+    <meta name="description" content="Download VeritasVPN for Android and Linux. Chrome, Windows, and macOS are coming soon.">
     <title>Download VeritasVPN</title>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="css/style-typography1.css">
+    <link rel="stylesheet" href="css/page-utilities.css">
     <link rel="icon" type="image/png" href="assets/favicon.png">
 </head>
 <body>
@@ -36,18 +37,18 @@
             <div class="container">
                 <span class="downloads-hero-emblem" aria-hidden="true"><img src="assets/logo-mark.png" alt=""></span>
                 <h1>Choose your VeritasVPN app</h1>
-                <p>One private account across Chrome, Android, and Linux. Every available app connects to the same secure VeritasVPN network in Paraguay.</p>
+                <p>One private account across Android and Linux today, with Chrome, Windows, and macOS in active development.</p>
             </div>
         </section>
 
         <section class="downloads platform-catalog" id="downloads">
             <div class="container">
                 <div class="platform-grid" aria-label="VeritasVPN apps">
-                    <a class="platform-card is-available" href="/install/chrome.html">
-                        <span class="platform-badge">Available now</span>
+                    <a class="platform-card" href="/install/chrome.html">
+                        <span class="platform-badge">Gateway hardening</span>
                         <span class="platform-icon platform-icon--chrome" aria-hidden="true"><img src="assets/icon-chrome-veritas.svg" alt=""></span>
                         <div><h2>Chrome</h2><p>Private browsing through the authenticated Veritas gateway. Fast, focused protection for every Chrome tab.</p></div>
-                        <span class="platform-action">Get Chrome extension <b>→</b></span>
+                        <span class="platform-action">View Chrome status <b>→</b></span>
                     </a>
 
                     <a class="platform-card is-available" href="/install/android.html">
@@ -76,7 +77,7 @@
 
     <footer class="footer">
         <div class="container">
-            <div class="footer-bottom" style="border-top:none;padding-top:0;">
+            <div class="footer-bottom footer-bottom-compact">
                 <p>&copy; 2026 VeritasVPN. All rights reserved.</p>
                 <p class="footer-tagline"><a href="/">Home</a> · <a href="/#pricing">Pricing</a></p>
             </div>
@@ -85,15 +86,6 @@
 
     <div class="auth-modal is-hidden" id="authModal" aria-hidden="true"></div>
 
-    <script type="module">
-        import { isAlphaEnabled } from './js/config.js?v=alpha';
-        import { initAuthUI } from './js/auth.js';
-        if (isAlphaEnabled()) {
-            const nav = document.getElementById('navAuthDownloads');
-            nav.classList.remove('is-hidden');
-            nav.innerHTML = '<button type="button" class="btn btn-primary nav-login" data-auth-open="signin">Log in</button>';
-            initAuthUI();
-        }
-    </script>
+    <script type="module" src="./js/downloads-page.js"></script>
 </body>
 </html>

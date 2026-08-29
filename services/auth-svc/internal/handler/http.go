@@ -431,15 +431,7 @@ func (h *HTTPHandler) handleDownloadAccount(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Prefer Authorization header. Query ?token= is accepted temporarily for
-	// older clients but must not be the primary path (leaks into logs/Referer).
 	token := extractBearer(r)
-	if token == "" {
-		if q := strings.TrimSpace(r.URL.Query().Get("token")); q != "" {
-			h.log.Warn("download-account used deprecated query token")
-			token = q
-		}
-	}
 	if token == "" {
 		writeHTTPError(w, http.StatusUnauthorized, "missing authorization token")
 		return

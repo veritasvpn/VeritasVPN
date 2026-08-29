@@ -1,3 +1,4 @@
 /index.html  /  301
 /downloads-v2.html  /downloads.html  301
 /install/windows-v2.html  /install/windows.html  301
+https://www.veritasvpn.cloud/*  https://veritasvpn.cloud/:splat  301

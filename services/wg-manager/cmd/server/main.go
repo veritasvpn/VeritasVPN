@@ -5,15 +5,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
-	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/veritasvpn/lib/config"
+	jwtlib "github.com/veritasvpn/lib/jwt"
 	"github.com/veritasvpn/lib/logging"
 	"github.com/veritasvpn/services/wg-manager/internal/communicator"
 	"github.com/veritasvpn/services/wg-manager/internal/entitlement"
@@ -110,7 +111,25 @@ func main() {
 		log.Info("stealth WireGuard endpoint enabled", "host", stealthHost, "port", stealthPort)
 	}
 	svcMetrics := metrics.New()
-	httpHandler := handler.NewHTTPHandler(svc, sseHub, pool, svcMetrics, cfg.JWTSecret, cfg.AgentAuthToken, log)
+	jwtManager, err := jwtlib.NewManagerWithKeys(
+		cfg.JWTSecret,
+		"",
+		cfg.JWTPublicKeys,
+		"",
+		cfg.JWTIssuer,
+		cfg.JWTAudience,
+		time.Hour,
+	)
+	if err != nil {
+		log.Fatal("invalid JWT verifier configuration", "error", err)
+	}
+	httpHandler := handler.NewHTTPHandler(svc, sseHub, pool, svcMetrics, jwtManager, cfg.AgentAuthToken, log)
+	httpHandler.SetBrowserGateway(handler.BrowserGateway{
+		Scheme:           cfg.BrowserProxyScheme,
+		Host:             cfg.BrowserProxyHost,
+		Port:             cfg.BrowserProxyPort,
+		ExpectedEgressIP: cfg.BrowserExpectedEgressIP,
+	})
 
 	httpAddr := cfg.HTTPServerAddr()
 	httpSrv := &http.Server{

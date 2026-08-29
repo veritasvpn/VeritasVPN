@@ -37,21 +37,21 @@ type PeerConfig struct {
 }
 
 type Service struct {
-	postgres           *repository.Postgres
-	redis              *repository.Redis
-	scheduler          *scheduler.Scheduler
-	communicator       *communicator.Communicator
-	natsConn           *nats.Conn
-	authToken          string
-	freeRegions        []string
-	lanIP              string
-	lanPort            int32
-	stealthHost        string
-	stealthPort        int32
-	stealthPathPrefix  string
-	stealthAvailable   bool
-	tierCache          *entitlement.TierCache
-	log                *logging.Logger
+	postgres          *repository.Postgres
+	redis             *repository.Redis
+	scheduler         *scheduler.Scheduler
+	communicator      *communicator.Communicator
+	natsConn          *nats.Conn
+	authToken         string
+	freeRegions       []string
+	lanIP             string
+	lanPort           int32
+	stealthHost       string
+	stealthPort       int32
+	stealthPathPrefix string
+	stealthAvailable  bool
+	tierCache         *entitlement.TierCache
+	log               *logging.Logger
 }
 
 func New(
@@ -425,19 +425,22 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 	})
 
 	return &PeerConfig{
-		PeerID:                 peer.ID,
-		ServerID:               srv.ID,
-		ServerHostname:         srv.Hostname,
-		ServerPublicKey:        srv.PublicKey,
-		ServerEndpoint:         endpoint,
-		StealthEndpoint:        s.ClientStealthEndpoint(srv, clientIP),
-		StealthAvailable:       s.StealthAvailable(),
-		StealthPathPrefix:      s.StealthPathPrefix(),
-		AssignedIP:             assignedIP,
-		DNSServer:              srv.DNSServer,
-		PresharedKey:           psk,
-		AllowedIPs:             []string{assignedIP},
-		ClientAllowedIPs:       []string{"0.0.0.0/0"},
+		PeerID:            peer.ID,
+		ServerID:          srv.ID,
+		ServerHostname:    srv.Hostname,
+		ServerPublicKey:   srv.PublicKey,
+		ServerEndpoint:    endpoint,
+		StealthEndpoint:   s.ClientStealthEndpoint(srv, clientIP),
+		StealthAvailable:  s.StealthAvailable(),
+		StealthPathPrefix: s.StealthPathPrefix(),
+		AssignedIP:        assignedIP,
+		DNSServer:         srv.DNSServer,
+		PresharedKey:      psk,
+		AllowedIPs:        []string{assignedIP},
+		// The production tunnel currently provides IPv4 egress only. Advertising
+		// the IPv6 default to managed clients makes IPv6 fail closed inside the
+		// tunnel instead of bypassing it on dual-stack access networks.
+		ClientAllowedIPs:       []string{"0.0.0.0/0", "::/0"},
 		PersistentKeepaliveSec: 25,
 	}, nil
 }

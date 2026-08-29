@@ -1,0 +1,10 @@
+[Unit]
+Description=Audit VeritasVPN source and Kubernetes deployment drift
+After=k3s.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/home/jpg/VeritasVPN
+ExecStart=/home/jpg/VeritasVPN/deploy/verify/deployment-drift.sh

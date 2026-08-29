@@ -20,6 +20,8 @@ func TestVerifierRejectsBlacklistedToken(t *testing.T) {
 	secret := "test-jwt-secret-minimum-length"
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"account_id": "acc-test",
+		"sub":        "acc-test",
+		"iss":        "veritasvpn",
 		"tier":       "free",
 		"exp":        time.Now().Add(time.Hour).Unix(),
 	})
@@ -38,6 +40,8 @@ func TestVerifierAcceptsNonBlacklistedToken(t *testing.T) {
 	secret := "test-jwt-secret-minimum-length"
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"account_id": "acc-test",
+		"sub":        "acc-test",
+		"iss":        "veritasvpn",
 		"tier":       "free",
 		"exp":        time.Now().Add(time.Hour).Unix(),
 	})

@@ -36,8 +36,8 @@ func main() {
 	}
 	defer log.Sync()
 
-	if strings.TrimSpace(cfg.JWTSecret) == "" || len(cfg.JWTSecret) < 32 {
-		log.Fatal("JWT_SECRET must be set to at least 32 characters")
+	if strings.TrimSpace(cfg.JWTPrivateKey) == "" && (strings.TrimSpace(cfg.JWTSecret) == "" || len(cfg.JWTSecret) < 32) {
+		log.Fatal("JWT_ED25519_PRIVATE_KEY or a JWT_SECRET of at least 32 characters is required")
 	}
 	if cfg.IsProduction() && strings.TrimSpace(cfg.TurnstileSecretKey) == "" {
 		log.Fatal("TURNSTILE_SECRET_KEY is required in production")
@@ -57,7 +57,18 @@ func main() {
 	log.Info("connected to Redis")
 
 	db := repository.NewPostgres(dbPool)
-	jwtMgr := jwtlib.NewManager(cfg.JWTSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL)
+	jwtMgr, err := jwtlib.NewManagerWithKeys(
+		cfg.JWTSecret,
+		cfg.JWTPrivateKey,
+		cfg.JWTPublicKeys,
+		cfg.JWTActiveKeyID,
+		cfg.JWTIssuer,
+		cfg.JWTAudience,
+		cfg.AccessTokenTTL,
+	)
+	if err != nil {
+		log.Fatal("invalid JWT key configuration", zap.Error(err))
+	}
 	var emailClient *email.Client
 	if cfg.ResendAPIKey != "" {
 		emailClient = email.NewClient(cfg.ResendAPIKey)

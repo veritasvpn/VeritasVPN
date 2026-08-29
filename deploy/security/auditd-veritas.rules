@@ -1,0 +1,9 @@
+## VeritasVPN host integrity watches. Load with augenrules --load.
+-w /etc/rancher/k3s/ -p wa -k veritas_k3s_config
+-w /var/lib/rancher/k3s/server/cred/ -p wa -k veritas_k3s_credentials
+-w /etc/wireguard/ -p wa -k veritas_wireguard
+-w /etc/nftables.conf -p wa -k veritas_firewall
+-w /etc/systemd/system/ -p wa -k veritas_systemd
+-w /usr/local/sbin/veritas-k8s-health -p wa -k veritas_monitoring
+-w /home/jpg/VeritasVPN/deploy/ -p wa -k veritas_deployment
+

@@ -1062,7 +1062,7 @@ class MainActivity : ComponentActivity() {
 
     private fun buildWireGuardConfig(context: Context, peer: PeerResponse, keyPair: KeyPair): String {
         val dns = peer.dnsServer ?: "1.1.1.1"
-        val serverAllowed = peer.clientAllowedIps ?: peer.allowedIps ?: listOf("0.0.0.0/0")
+        val serverAllowed = peer.clientAllowedIps ?: peer.allowedIps ?: listOf("0.0.0.0/0", "::/0")
         val allowed = VpnSettings.resolveAllowedIps(context, serverAllowed).joinToString(",")
         val bypassApps = VpnSettings.bypassApps(context)
         return buildString {

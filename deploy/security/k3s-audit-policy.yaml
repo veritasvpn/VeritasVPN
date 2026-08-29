@@ -1,0 +1,30 @@
+apiVersion: audit.k8s.io/v1
+kind: Policy
+omitStages:
+  - RequestReceived
+rules:
+  # Secret bodies and authentication material must never enter audit logs.
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets", "serviceaccounts/token"]
+  - level: Metadata
+    userGroups: ["system:authenticated"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+  - level: Metadata
+    nonResourceURLs: ["/api*", "/version"]
+  - level: None
+    users: ["system:kube-proxy"]
+    verbs: ["watch"]
+  - level: None
+    userGroups: ["system:nodes"]
+    verbs: ["get"]
+    resources:
+      - group: ""
+        resources: ["nodes", "nodes/status"]
+  - level: None
+    resources:
+      - group: ""
+        resources: ["events"]
+  - level: Metadata
+

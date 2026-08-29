@@ -191,8 +191,8 @@ function renderDownloads() {
         </a>
         <a class="download-tile" href="/install/chrome.html">
           <h3>Chrome</h3>
-          <p>Browser extension — available now. Load unpacked from the ZIP.</p>
-          <span class="btn btn-primary btn-sm">Add to Chrome</span>
+          <p>Browser extension — authenticated gateway hardening in progress.</p>
+          <span class="btn btn-primary btn-sm">View status</span>
         </a>
         <a class="download-tile" href="/install/linux.html">
           <h3>Linux</h3>

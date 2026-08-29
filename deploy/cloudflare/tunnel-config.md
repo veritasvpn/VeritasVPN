@@ -1,19 +1,20 @@
 # Cloudflare Tunnel Configuration
 
-## Current Setup
+## Current setup
 
-The production Cloudflare Zero Trust tunnel connects:
-- `veritasvpn.cloud` → Nginx (via K8s ingress or compose fallback)
-- `www.veritasvpn.cloud` → same
-- `btcpay.veritasvpn.cloud` → BTCPay Server
+- `veritasvpn.cloud` and `www.veritasvpn.cloud` are served by Cloudflare Pages; they do not route to the Dell.
+- `api.veritasvpn.cloud` routes through the K3s Cloudflare connector to ingress-nginx.
+- `btcpay-mainnet.veritasvpn.cloud` routes to the mainnet BTCPay Kubernetes Service and is Access-gated.
+- `analytics.veritasvpn.cloud` routes to Grafana and is Access-gated.
+- The retired `btcpay.veritasvpn.cloud` testnet route must not be used by clients.
 
 ## Ingress Rules (configured in Cloudflare Zero Trust dashboard)
 
 ```
-# Public routes
-veritasvpn.cloud         → http://nginx:80
-www.veritasvpn.cloud     → http://nginx:80
-btcpay.veritasvpn.cloud  → http://btcpayserver:49392
+# Dell-origin routes
+api.veritasvpn.cloud             → http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:80
+btcpay-mainnet.veritasvpn.cloud  → http://btcpayserver-mainnet.btcpay-mainnet.svc.cluster.local:49392
+analytics.veritasvpn.cloud       → http://grafana.monitoring.svc.cluster.local:3000
 
 # Catch-all (returns 404 for any other hostname)
 *.veritasvpn.cloud       → 404 (catch-all)
@@ -25,7 +26,8 @@ Apply Cloudflare Access policies to administrative routes:
 
 ```
 # Protected routes (require authentication)
-api.veritasvpn.cloud/admin/* → Allow: email ending in @veritasvpn.cloud
+analytics.veritasvpn.cloud       → Allow: named administrator identity
+btcpay-mainnet.veritasvpn.cloud  → Allow: named administrator identity
 ```
 
 ## WAF Rules (configured in Cloudflare dashboard)
@@ -44,14 +46,10 @@ api.veritasvpn.cloud/admin/* → Allow: email ending in @veritasvpn.cloud
 
 ## Tunnel Connector
 
-Only ONE tunnel connector should run at a time:
-1. **Production**: K8s cloudflared deployment (ingress-nginx namespace)
-2. **Fallback**: Docker compose `--profile tunnel-fallback` cloudflared service
+Only the K3s `cloudflared` deployment in `ingress-nginx` is supported. The Docker Compose fallback is retired and must remain stopped.
 
-Both must NOT run simultaneously with the same tunnel token.
+## Dell origin protection
 
-## Pi Origin Protection
-
-- No HTTP ports on the Pi are exposed to the internet
-- The Pi's public IP should NOT resolve any hostname
-- Verify: `curl -H "Host: veritasvpn.cloud" http://<pi-public-ip>` should fail
+- No HTTP management port on the Dell is exposed directly to the internet.
+- Only UDP 51820, stealth TCP 443, and authenticated browser-proxy TCP 41080 are router-forwarded.
+- SSH, Kubernetes, Prometheus, Grafana origin, databases, and registries stay LAN/Tailscale-only.

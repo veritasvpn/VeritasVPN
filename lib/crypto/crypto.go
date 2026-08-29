@@ -32,7 +32,9 @@ func GenerateRefreshToken() (string, error) {
 }
 
 func GenerateAccountID() (string, error) {
-	b := make([]byte, 8)
+	// Account IDs are bearer credentials for anonymous accounts. Use 128 bits
+	// of CSPRNG entropy so online guessing remains infeasible at any scale.
+	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("random read: %w", err)
 	}

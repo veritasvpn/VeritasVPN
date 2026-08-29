@@ -60,11 +60,21 @@ spec:
                 secretKeyRef:
                   name: veritas-secrets
                   key: NATS_PASSWORD
-            - name: JWT_SECRET
+            - name: JWT_ED25519_PUBLIC_KEYS
               valueFrom:
                 secretKeyRef:
                   name: veritas-secrets
-                  key: JWT_SECRET
+                  key: JWT_ED25519_PUBLIC_KEYS
+            - name: JWT_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: JWT_ISSUER
+            - name: JWT_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: JWT_AUDIENCE
             - name: REDIS_URL
               value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
             - name: REDIS_PASSWORD

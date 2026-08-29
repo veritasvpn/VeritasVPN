@@ -1,0 +1,5 @@
+Contact: https://github.com/veritasvpn/VeritasVPN/security/advisories/new
+Expires: 2027-08-28T23:59:59Z
+Preferred-Languages: en
+Canonical: https://veritasvpn.cloud/.well-known/security.txt
+Policy: https://github.com/veritasvpn/VeritasVPN/security/policy

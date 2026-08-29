@@ -1,0 +1,9 @@
+# Default ownership and explicit review boundaries for production-sensitive code.
+* @JPG19
+/.github/workflows/ @JPG19
+/deploy/ @JPG19
+/services/ @JPG19
+/lib/ @JPG19
+/clients/ @JPG19
+/android/ @JPG19
+/website/ @JPG19

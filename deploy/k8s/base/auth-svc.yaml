@@ -69,6 +69,41 @@ spec:
                 secretKeyRef:
                   name: veritas-secrets
                   key: JWT_SECRET
+            - name: JWT_ED25519_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: JWT_ED25519_PRIVATE_KEY
+            - name: JWT_ED25519_PUBLIC_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: JWT_ED25519_PUBLIC_KEYS
+            - name: JWT_ACTIVE_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: JWT_ACTIVE_KEY_ID
+            - name: JWT_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: JWT_ISSUER
+            - name: JWT_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: JWT_AUDIENCE
+            - name: ACCESS_TOKEN_TTL
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: ACCESS_TOKEN_TTL
+            - name: REFRESH_TOKEN_TTL
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: REFRESH_TOKEN_TTL
             - name: LOG_LEVEL
               valueFrom:
                 configMapKeyRef:

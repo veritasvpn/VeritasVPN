@@ -3,10 +3,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"log"
@@ -19,22 +22,39 @@ import (
 )
 
 type claims struct {
-	Exp  int64  `json:"exp"`
-	Sub  string `json:"sub"`
-	Tier string `json:"tier"`
-	Iss  string `json:"iss"`
+	Exp      int64           `json:"exp"`
+	Sub      string          `json:"sub"`
+	Tier     string          `json:"tier"`
+	Iss      string          `json:"iss"`
+	Aud      json.RawMessage `json:"aud"`
+	TokenUse string          `json:"token_use"`
 }
 type proxy struct {
-	secret    []byte
-	transport *http.Transport
+	secret     []byte
+	publicKeys map[string]ed25519.PublicKey
+	issuer     string
+	audience   string
+	transport  *http.Transport
 }
 
 func main() {
 	secret := os.Getenv("JWT_SECRET")
-	if len(secret) < 32 {
-		log.Fatal("JWT_SECRET must contain at least 32 characters")
+	publicKeys, err := parsePublicKeys(os.Getenv("JWT_ED25519_PUBLIC_KEYS"))
+	if err != nil {
+		log.Fatalf("invalid JWT_ED25519_PUBLIC_KEYS: %v", err)
 	}
-	p := &proxy{secret: []byte(secret), transport: &http.Transport{
+	if len(secret) < 32 && len(publicKeys) == 0 {
+		log.Fatal("JWT_ED25519_PUBLIC_KEYS or JWT_SECRET must be configured")
+	}
+	issuer := strings.TrimSpace(os.Getenv("JWT_ISSUER"))
+	if issuer == "" {
+		issuer = "https://api.veritasvpn.cloud"
+	}
+	audience := strings.TrimSpace(os.Getenv("JWT_AUDIENCE"))
+	if audience == "" {
+		audience = "veritasvpn-api"
+	}
+	p := &proxy{secret: []byte(secret), publicKeys: publicKeys, issuer: issuer, audience: audience, transport: &http.Transport{
 		Proxy:               nil,
 		DialContext:         dialPublic,
 		ForceAttemptHTTP2:   false,
@@ -69,10 +89,54 @@ func (p *proxy) authorized(header string) bool {
 		return false
 	}
 	parts := strings.SplitN(string(raw), ":", 2)
-	return len(parts) == 2 && parts[0] == "veritas" && validateJWT(parts[1], p.secret)
+	return len(parts) == 2 && parts[0] == "veritas" && validateJWT(parts[1], p.secret, p.publicKeys, p.issuer, p.audience)
 }
 
-func validateJWT(token string, secret []byte) bool {
+func parsePublicKeys(value string) (map[string]ed25519.PublicKey, error) {
+	keys := make(map[string]ed25519.PublicKey)
+	if strings.TrimSpace(value) == "" {
+		return keys, nil
+	}
+	var encoded map[string]string
+	if err := json.Unmarshal([]byte(value), &encoded); err != nil {
+		return nil, err
+	}
+	for kid, publicPEM := range encoded {
+		block, _ := pem.Decode([]byte(publicPEM))
+		if block == nil {
+			return nil, errors.New("invalid public key PEM")
+		}
+		parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		key, ok := parsed.(ed25519.PublicKey)
+		if !ok {
+			return nil, errors.New("public key is not Ed25519")
+		}
+		keys[kid] = key
+	}
+	return keys, nil
+}
+
+func audienceContains(raw json.RawMessage, expected string) bool {
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		return one == expected
+	}
+	var many []string
+	if json.Unmarshal(raw, &many) != nil {
+		return false
+	}
+	for _, value := range many {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func validateJWT(token string, secret []byte, publicKeys map[string]ed25519.PublicKey, issuer, audience string) bool {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return false
@@ -81,9 +145,33 @@ func validateJWT(token string, secret []byte) bool {
 	if err != nil {
 		return false
 	}
-	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
-	if !hmac.Equal(sig, mac.Sum(nil)) {
+	var header struct {
+		Alg string `json:"alg"`
+		Kid string `json:"kid"`
+	}
+	headerBody, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil || json.Unmarshal(headerBody, &header) != nil {
+		return false
+	}
+	signingInput := []byte(parts[0] + "." + parts[1])
+	legacyHMAC := false
+	switch header.Alg {
+	case "EdDSA":
+		key, ok := publicKeys[header.Kid]
+		if !ok || !ed25519.Verify(key, signingInput, sig) {
+			return false
+		}
+	case "HS256":
+		if len(secret) < 32 {
+			return false
+		}
+		mac := hmac.New(sha256.New, secret)
+		_, _ = mac.Write(signingInput)
+		if !hmac.Equal(sig, mac.Sum(nil)) {
+			return false
+		}
+		legacyHMAC = true
+	default:
 		return false
 	}
 	body, err := base64.RawURLEncoding.DecodeString(parts[1])
@@ -91,7 +179,13 @@ func validateJWT(token string, secret []byte) bool {
 		return false
 	}
 	var c claims
-	if json.Unmarshal(body, &c) != nil || c.Exp <= time.Now().Unix() || c.Sub == "" || c.Tier != "premium" || c.Iss != "veritasvpn" {
+	if json.Unmarshal(body, &c) != nil || c.Exp <= time.Now().Unix() || c.Sub == "" || c.Tier != "premium" {
+		return false
+	}
+	if legacyHMAC {
+		return c.Iss == "veritasvpn" || c.Iss == issuer
+	}
+	if c.Iss != issuer || c.TokenUse != "access" || !audienceContains(c.Aud, audience) {
 		return false
 	}
 	return true

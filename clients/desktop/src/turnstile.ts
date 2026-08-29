@@ -1,5 +1,6 @@
 /** Obtain a Cloudflare Turnstile token via the hosted mobile page (iframe). */
-const TURNSTILE_PAGE = "https://veritasvpn.cloud/turnstile-mobile";
+const TURNSTILE_ORIGIN = "https://veritasvpn.cloud";
+const TURNSTILE_PAGE = `${TURNSTILE_ORIGIN}/turnstile-mobile?return_origin=${encodeURIComponent(window.location.origin)}`;
 
 export function obtainTurnstileToken(timeoutMs = 120_000): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -50,6 +51,7 @@ export function obtainTurnstileToken(timeoutMs = 120_000): Promise<string> {
     }
 
     function onMessage(event: MessageEvent) {
+      if (event.origin !== TURNSTILE_ORIGIN) return;
       const data = event.data;
       if (!data || data.source !== "veritas-turnstile") return;
       if (data.type === "token" && typeof data.token === "string" && data.token) {

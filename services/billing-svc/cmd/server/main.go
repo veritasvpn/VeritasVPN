@@ -131,7 +131,16 @@ func main() {
 		BitcoinReadinessURL:  cfg.BitcoinReadinessURL,
 	})
 
-	tokenVerifier := tokenauth.NewVerifier(cfg.JWTSecret, redisStore)
+	tokenVerifier, err := tokenauth.NewVerifierWithKeys(
+		cfg.JWTSecret,
+		cfg.JWTPublicKeys,
+		cfg.JWTIssuer,
+		cfg.JWTAudience,
+		redisStore,
+	)
+	if err != nil {
+		log.Fatal("invalid JWT verifier configuration", zap.Error(err))
+	}
 	billingHandler := handler.NewBillingHandler(log, svc, tokenVerifier, cfg.AllowedCORSOrigins(), cfg.CheckoutSuccessURL, useMock)
 
 	mux := http.NewServeMux()

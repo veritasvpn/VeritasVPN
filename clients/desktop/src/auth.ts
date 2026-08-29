@@ -1,5 +1,6 @@
 import { AUTH_API } from "./config";
 import { fetch } from "@tauri-apps/plugin-http";
+import { invoke } from "@tauri-apps/api/core";
 
 interface AuthResponse {
   access_token?: string;
@@ -20,6 +21,44 @@ const STORAGE_KEYS = {
   accessToken: "veritas_access_token",
   refreshToken: "veritas_refresh_token",
 };
+
+let accessTokenCache: string | null = null;
+let refreshTokenCache: string | null = null;
+
+async function setSecureCredential(name: "access_token" | "refresh_token", value: string): Promise<void> {
+  await invoke("secure_credential_set", { name, value });
+}
+
+async function getSecureCredential(name: "access_token" | "refresh_token"): Promise<string | null> {
+  return invoke<string | null>("secure_credential_get", { name });
+}
+
+async function deleteSecureCredential(name: "access_token" | "refresh_token"): Promise<void> {
+  await invoke("secure_credential_delete", { name });
+}
+
+/** Load native Keychain/Credential Manager/Secret Service credentials.
+ * Existing plaintext localStorage tokens are migrated once, then removed.
+ */
+export async function initializeSecureAuth(): Promise<void> {
+  const legacyAccess = localStorage.getItem(STORAGE_KEYS.accessToken);
+  const legacyRefresh = localStorage.getItem(STORAGE_KEYS.refreshToken);
+  if (legacyAccess && legacyRefresh) {
+    await Promise.all([
+      setSecureCredential("access_token", legacyAccess),
+      setSecureCredential("refresh_token", legacyRefresh),
+    ]);
+    accessTokenCache = legacyAccess;
+    refreshTokenCache = legacyRefresh;
+  } else {
+    [accessTokenCache, refreshTokenCache] = await Promise.all([
+      getSecureCredential("access_token"),
+      getSecureCredential("refresh_token"),
+    ]);
+  }
+  localStorage.removeItem(STORAGE_KEYS.accessToken);
+  localStorage.removeItem(STORAGE_KEYS.refreshToken);
+}
 
 export interface User {
   email?: string;
@@ -103,11 +142,15 @@ async function authAPI(
   return data;
 }
 
-function persistSession(user: User, data: AuthResponse): User {
+async function persistSession(user: User, data: AuthResponse): Promise<User> {
   localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
   if (!data.access_token || !data.refresh_token) throw new Error("Authentication tokens were not returned.");
-  localStorage.setItem(STORAGE_KEYS.accessToken, data.access_token);
-  localStorage.setItem(STORAGE_KEYS.refreshToken, data.refresh_token);
+  await Promise.all([
+    setSecureCredential("access_token", data.access_token),
+    setSecureCredential("refresh_token", data.refresh_token),
+  ]);
+  accessTokenCache = data.access_token;
+  refreshTokenCache = data.refresh_token;
   return user;
 }
 
@@ -122,12 +165,12 @@ export function getStoredUser(): User | null {
 }
 
 export function getStoredToken(): string | null {
-  return localStorage.getItem(STORAGE_KEYS.accessToken);
+  return accessTokenCache;
 }
 
 /** Refresh access token so JWT tier matches billing after Premium purchase. */
 export async function refreshSession(): Promise<boolean> {
-  const rt = localStorage.getItem(STORAGE_KEYS.refreshToken);
+  const rt = refreshTokenCache;
   if (!rt) return false;
   try {
     const data = await authAPI("/api/v1/auth/refresh", {
@@ -135,7 +178,7 @@ export async function refreshSession(): Promise<boolean> {
     });
     const user = getStoredUser();
     if (!user) return false;
-    persistSession(user, data);
+    await persistSession(user, data);
     return true;
   } catch {
     return false;
@@ -152,7 +195,7 @@ export async function signIn(
       email: normalizedEmail,
       password,
     });
-    return persistSession(
+    return await persistSession(
       { email: data.email || normalizedEmail, account_id: data.account_id || "" },
       data
     );
@@ -241,7 +284,7 @@ export async function signUp(
   if (data.verification_required) {
     throw new VerificationRequiredError(normalizedEmail);
   }
-  return persistSession({ email: normalizedEmail, account_id: data.account_id || "" }, data);
+  return await persistSession({ email: normalizedEmail, account_id: data.account_id || "" }, data);
 }
 
 export async function resetPassword(email: string): Promise<void> {
@@ -263,7 +306,7 @@ export async function signInWithAccountId(accountId: string): Promise<User> {
   const data = await authAPI("/api/v1/auth/signin-account", {
     account_id: id,
   });
-  return persistSession(
+  return await persistSession(
     { account_id: data.account_id || "", is_anonymous: true },
     data
   );
@@ -275,7 +318,7 @@ export async function registerAnonymous(turnstileToken: string): Promise<User> {
   const data = await authAPI("/api/v1/auth/register-anonymous", {
     turnstile_token: turnstileToken,
   });
-  return persistSession(
+  return await persistSession(
     { account_id: data.account_id || "", is_anonymous: true },
     data
   );
@@ -302,8 +345,14 @@ export async function downloadAccountFile(): Promise<void> {
   URL.revokeObjectURL(blobUrl);
 }
 
-export function signOut(): void {
+export async function signOut(): Promise<void> {
   localStorage.removeItem(STORAGE_KEYS.user);
   localStorage.removeItem(STORAGE_KEYS.accessToken);
   localStorage.removeItem(STORAGE_KEYS.refreshToken);
+  accessTokenCache = null;
+  refreshTokenCache = null;
+  await Promise.all([
+    deleteSecureCredential("access_token"),
+    deleteSecureCredential("refresh_token"),
+  ]);
 }

@@ -10,8 +10,8 @@ import (
 
 	"errors"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	jwtlib "github.com/veritasvpn/lib/jwt"
 	"github.com/veritasvpn/lib/logging"
 	"github.com/veritasvpn/services/wg-manager/internal/entitlement"
 	"github.com/veritasvpn/services/wg-manager/internal/hub"
@@ -20,25 +20,37 @@ import (
 )
 
 type HTTPHandler struct {
-	svc       *service.Service
-	hub       *hub.Hub
-	pool      *pgxpool.Pool
-	metrics   *metrics.Metrics
-	jwtSecret []byte
-	authToken string
-	log       *logging.Logger
+	svc            *service.Service
+	hub            *hub.Hub
+	pool           *pgxpool.Pool
+	metrics        *metrics.Metrics
+	jwtManager     *jwtlib.Manager
+	authToken      string
+	log            *logging.Logger
+	browserGateway BrowserGateway
 }
 
-func NewHTTPHandler(svc *service.Service, h *hub.Hub, pool *pgxpool.Pool, m *metrics.Metrics, jwtSecret, authToken string, log *logging.Logger) *HTTPHandler {
+type BrowserGateway struct {
+	Scheme           string `json:"scheme"`
+	Host             string `json:"host"`
+	Port             int    `json:"port"`
+	ExpectedEgressIP string `json:"expected_egress_ip"`
+}
+
+func NewHTTPHandler(svc *service.Service, h *hub.Hub, pool *pgxpool.Pool, m *metrics.Metrics, jwtManager *jwtlib.Manager, authToken string, log *logging.Logger) *HTTPHandler {
 	return &HTTPHandler{
-		svc:       svc,
-		hub:       h,
-		pool:      pool,
-		metrics:   m,
-		jwtSecret: []byte(jwtSecret),
-		authToken: authToken,
-		log:       log,
+		svc:        svc,
+		hub:        h,
+		pool:       pool,
+		metrics:    m,
+		jwtManager: jwtManager,
+		authToken:  authToken,
+		log:        log,
 	}
+}
+
+func (h *HTTPHandler) SetBrowserGateway(gateway BrowserGateway) {
+	h.browserGateway = gateway
 }
 
 func (h *HTTPHandler) Routes() http.Handler {
@@ -55,6 +67,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	mux.HandleFunc("/api/v1/wg/port-forwards", h.handlePortForwards)
 	mux.HandleFunc("/api/v1/wg/port-forwards/", h.handlePortForwardByID)
 	mux.HandleFunc("/api/v1/wg/servers", h.handleListServers)
+	mux.HandleFunc("/api/v1/wg/browser-gateway", h.handleBrowserGateway)
 	return mux
 }
 
@@ -72,6 +85,28 @@ func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/wg/port-forwards", h.handlePortForwards)
 	mux.HandleFunc("/api/v1/wg/port-forwards/", h.handlePortForwardByID)
 	mux.HandleFunc("/api/v1/wg/servers", h.handleListServers)
+	mux.HandleFunc("/api/v1/wg/browser-gateway", h.handleBrowserGateway)
+}
+
+func (h *HTTPHandler) handleBrowserGateway(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_, tier, err := h.accountFromRequest(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+		return
+	}
+	if entitlement.NormalizeTier(tier) != "premium" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "premium subscription required"})
+		return
+	}
+	if h.browserGateway.Host == "" || h.browserGateway.ExpectedEgressIP == "" || h.browserGateway.Port <= 0 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "browser gateway unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.browserGateway)
 }
 
 func (h *HTTPHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -637,29 +672,14 @@ func (h *HTTPHandler) handlePortForwardByID(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-type claims struct {
-	AccountID string `json:"account_id"`
-	Tier      string `json:"tier"`
-	jwt.RegisteredClaims
-}
-
 func (h *HTTPHandler) accountFromRequest(r *http.Request) (accountID, tier string, err error) {
 	tokenStr := extractBearer(r)
 	if tokenStr == "" {
 		return "", "", errUnauthorized("missing bearer token")
 	}
-	token, err := jwt.ParseWithClaims(tokenStr, &claims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errUnauthorized("unexpected signing method")
-		}
-		return h.jwtSecret, nil
-	})
+	c, err := h.jwtManager.ValidateAccessToken(tokenStr)
 	if err != nil {
 		return "", "", errUnauthorized("invalid token")
-	}
-	c, ok := token.Claims.(*claims)
-	if !ok || !token.Valid || c.AccountID == "" {
-		return "", "", errUnauthorized("invalid token claims")
 	}
 	return c.AccountID, entitlement.NormalizeTier(c.Tier), nil
 }

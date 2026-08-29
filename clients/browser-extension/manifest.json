@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "VeritasVPN",
   "description": "Protect Chrome traffic through the authenticated VeritasVPN gateway in Paraguay.",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "action": {
     "default_popup": "popup.html",
     "default_title": "VeritasVPN",

@@ -9,13 +9,18 @@ import (
 )
 
 type Config struct {
-	ServerPort  string
-	DatabaseURL string
-	RedisURL    string
-	NatsURL     string
-	JWTSecret   string
-	LogLevel    string
-	Environment string
+	ServerPort     string
+	DatabaseURL    string
+	RedisURL       string
+	NatsURL        string
+	JWTSecret      string
+	JWTPrivateKey  string
+	JWTPublicKeys  string
+	JWTActiveKeyID string
+	JWTIssuer      string
+	JWTAudience    string
+	LogLevel       string
+	Environment    string
 
 	StripeSecretKey     string
 	StripeWebhookSecret string
@@ -34,11 +39,15 @@ type Config struct {
 	CORSOrigins          string
 	BillingPublicURL     string
 
-	AgentAuthToken string
+	AgentAuthToken          string
+	BrowserProxyHost        string
+	BrowserProxyPort        int
+	BrowserProxyScheme      string
+	BrowserExpectedEgressIP string
 
-	ResendAPIKey        string
-	TurnstileSecretKey  string
-	PublicBaseURL       string
+	ResendAPIKey       string
+	TurnstileSecretKey string
+	PublicBaseURL      string
 
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
@@ -46,13 +55,18 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
-		ServerPort:  envOrDefault("SERVER_PORT", "8080"),
-		DatabaseURL: envOrDefault("DATABASE_URL", "postgres://veritas:change-me@localhost:5432/veritas?sslmode=disable"),
-		RedisURL:    envOrDefault("REDIS_URL", "redis://localhost:6379/0"),
-		NatsURL:     envOrDefault("NATS_URL", "nats://localhost:4222"),
-		JWTSecret:   envRequired("JWT_SECRET"),
-		LogLevel:    envOrDefault("LOG_LEVEL", "info"),
-		Environment: envOrDefault("ENVIRONMENT", "development"),
+		ServerPort:     envOrDefault("SERVER_PORT", "8080"),
+		DatabaseURL:    envOrDefault("DATABASE_URL", "postgres://veritas:change-me@localhost:5432/veritas?sslmode=disable"),
+		RedisURL:       envOrDefault("REDIS_URL", "redis://localhost:6379/0"),
+		NatsURL:        envOrDefault("NATS_URL", "nats://localhost:4222"),
+		JWTSecret:      envRequired("JWT_SECRET"),
+		JWTPrivateKey:  envRequired("JWT_ED25519_PRIVATE_KEY"),
+		JWTPublicKeys:  envRequired("JWT_ED25519_PUBLIC_KEYS"),
+		JWTActiveKeyID: envRequired("JWT_ACTIVE_KEY_ID"),
+		JWTIssuer:      envOrDefault("JWT_ISSUER", "https://api.veritasvpn.cloud"),
+		JWTAudience:    envOrDefault("JWT_AUDIENCE", "veritasvpn-api"),
+		LogLevel:       envOrDefault("LOG_LEVEL", "info"),
+		Environment:    envOrDefault("ENVIRONMENT", "development"),
 
 		StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
 		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
@@ -71,7 +85,11 @@ func Load() *Config {
 		CORSOrigins:          envOrDefault("CORS_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000"),
 		BillingPublicURL:     envOrDefault("BILLING_PUBLIC_URL", "http://localhost:8083"),
 
-		AgentAuthToken: envRequired("AGENT_AUTH_TOKEN"),
+		AgentAuthToken:          envRequired("AGENT_AUTH_TOKEN"),
+		BrowserProxyHost:        envRequired("BROWSER_PROXY_HOST"),
+		BrowserProxyPort:        intEnvOrDefault("BROWSER_PROXY_PORT", 41080),
+		BrowserProxyScheme:      envOrDefault("BROWSER_PROXY_SCHEME", "http"),
+		BrowserExpectedEgressIP: envRequired("BROWSER_EXPECTED_EGRESS_IP"),
 
 		ResendAPIKey:       os.Getenv("RESEND_API_KEY"),
 		TurnstileSecretKey: os.Getenv("TURNSTILE_SECRET_KEY"),

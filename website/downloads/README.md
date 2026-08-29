@@ -6,7 +6,7 @@ Downloadable artifacts served by the static website.
 
 | File | Purpose |
 |------|---------|
-| `veritasvpn-chrome.zip` | v0.3.5 build; Chrome extension with clearer auth errors |
+| `veritasvpn-chrome.zip` | Internal v0.3.6 validation build; public download remains paused pending gateway approval and end-to-end testing |
 | `veritasvpn-android.apk` | v0.1.7 signed Android release; streamed by `functions/downloads/veritasvpn-android.apk.js` |
 | `veritasvpn-linux.deb` | v0.2.6 build; streamed by `functions/downloads/veritasvpn-linux.deb.js` from GitHub Releases (`v0.2.6`) |
 | `veritasvpn-linux.AppImage` | v0.2.6 build; streamed by `functions/downloads/veritasvpn-linux.AppImage.js` from GitHub Releases (`v0.2.6`) |

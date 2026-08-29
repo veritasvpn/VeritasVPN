@@ -153,6 +153,12 @@ func (p *Postgres) GetAccountByEmail(ctx context.Context, email string) (*model.
 }
 
 func (p *Postgres) UpdateAccountPassword(ctx context.Context, accountID, passwordHash string) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin password update: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
 	// Completing a reset proves access to the mailbox that received the one-time token.
 	// Treat that account as verified and clear any outstanding verification token.
 	query := `UPDATE accounts SET password_hash = $2,
@@ -160,8 +166,19 @@ func (p *Postgres) UpdateAccountPassword(ctx context.Context, accountID, passwor
 		verification_token_hash = NULL, verification_token_expiry = NULL,
 		reset_token = NULL, reset_token_expiry = NULL
 		WHERE id = $1`
-	_, err := p.pool.Exec(ctx, query, accountID, passwordHash)
-	return err
+	result, err := tx.Exec(ctx, query, accountID, passwordHash)
+	if err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("update password: account not found")
+	}
+	// A password reset is an account-recovery event. Revoke every refresh
+	// token atomically so stolen sessions cannot be renewed afterward.
+	if _, err := tx.Exec(ctx, `DELETE FROM refresh_tokens WHERE account_id = $1`, accountID); err != nil {
+		return fmt.Errorf("revoke sessions after password reset: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 func (p *Postgres) SetResetToken(ctx context.Context, accountID, token string, expiry time.Time) error {
@@ -283,6 +300,29 @@ func (p *Postgres) DeleteRefreshToken(ctx context.Context, tokenHash string) err
 	query := `DELETE FROM refresh_tokens WHERE token_hash = $1`
 	_, err := p.pool.Exec(ctx, query, tokenHash)
 	return err
+}
+
+// RotateRefreshToken consumes an existing token and inserts its replacement in
+// one transaction. The DELETE must affect exactly one row, which prevents two
+// concurrent replays of the same refresh token from both succeeding.
+func (p *Postgres) RotateRefreshToken(ctx context.Context, oldTokenHash string, replacement *model.RefreshToken) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin refresh token rotation: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	result, err := tx.Exec(ctx, `DELETE FROM refresh_tokens WHERE token_hash = $1 AND account_id = $2 AND expires_at > NOW()`, oldTokenHash, replacement.AccountID)
+	if err != nil {
+		return fmt.Errorf("consume refresh token: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("refresh token already used or expired")
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO refresh_tokens (account_id, token_hash, expires_at) VALUES ($1, $2, $3)`, replacement.AccountID, replacement.TokenHash, replacement.ExpiresAt); err != nil {
+		return fmt.Errorf("store rotated refresh token: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 func (p *Postgres) DeleteAllRefreshTokens(ctx context.Context, accountID string) error {

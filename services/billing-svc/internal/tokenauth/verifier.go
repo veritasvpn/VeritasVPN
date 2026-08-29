@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
-	"github.com/golang-jwt/jwt/v5"
+	jwtlib "github.com/veritasvpn/lib/jwt"
 	"github.com/veritasvpn/lib/tokenhash"
 )
 
@@ -14,18 +15,20 @@ type TokenBlacklist interface {
 }
 
 type Verifier struct {
-	secret    []byte
+	manager   *jwtlib.Manager
 	blacklist TokenBlacklist
 }
 
 func NewVerifier(secret string, blacklist TokenBlacklist) *Verifier {
-	return &Verifier{secret: []byte(secret), blacklist: blacklist}
+	return &Verifier{manager: jwtlib.NewManager(secret, time.Hour, 0), blacklist: blacklist}
 }
 
-type veritasClaims struct {
-	AccountID string `json:"account_id"`
-	Tier      string `json:"tier"`
-	jwt.RegisteredClaims
+func NewVerifierWithKeys(secret, publicKeysJSON, issuer, audience string, blacklist TokenBlacklist) (*Verifier, error) {
+	manager, err := jwtlib.NewManagerWithKeys(secret, "", publicKeysJSON, "", issuer, audience, time.Hour)
+	if err != nil {
+		return nil, err
+	}
+	return &Verifier{manager: manager, blacklist: blacklist}, nil
 }
 
 func (v *Verifier) Verify(ctx context.Context, tokenStr string) (string, string, error) {
@@ -33,21 +36,10 @@ func (v *Verifier) Verify(ctx context.Context, tokenStr string) (string, string,
 		return "", "", errors.New("missing token")
 	}
 
-	token, err := jwt.ParseWithClaims(tokenStr, &veritasClaims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-		}
-		return v.secret, nil
-	})
+	claims, err := v.manager.ValidateAccessToken(tokenStr)
 	if err != nil {
 		return "", "", fmt.Errorf("parse token: %w", err)
 	}
-
-	claims, ok := token.Claims.(*veritasClaims)
-	if !ok || !token.Valid {
-		return "", "", errors.New("invalid token claims")
-	}
-
 	if claims.AccountID == "" {
 		return "", "", errors.New("missing account_id")
 	}

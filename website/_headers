@@ -8,7 +8,7 @@
   Cross-Origin-Resource-Policy: same-origin
   X-Permitted-Cross-Domain-Policies: none
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: https://challenges.cloudflare.com; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com https://btcpay-mainnet.veritasvpn.cloud; connect-src 'self' https://api.veritasvpn.cloud https://btcpay-mainnet.veritasvpn.cloud https://cloudflareinsights.com https://challenges.cloudflare.com; worker-src 'self' blob: https://challenges.cloudflare.com
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: https://challenges.cloudflare.com; font-src 'self'; style-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com https://btcpay-mainnet.veritasvpn.cloud; connect-src 'self' https://api.veritasvpn.cloud https://btcpay-mainnet.veritasvpn.cloud https://cloudflareinsights.com https://challenges.cloudflare.com; worker-src 'self' blob: https://challenges.cloudflare.com
 
 /*.html
   Cache-Control: no-cache
@@ -19,3 +19,20 @@
 /*.js
   Content-Type: application/javascript; charset=utf-8
   Cache-Control: public, max-age=300
+
+/downloads/veritasvpn-android.apk
+  Content-Type: application/vnd.android.package-archive
+  Content-Disposition: attachment; filename="veritasvpn-android.apk"
+  Cache-Control: public, max-age=300
+
+/downloads/veritasvpn-chrome.zip
+  Content-Type: application/zip
+  Content-Disposition: attachment; filename="veritasvpn-chrome.zip"
+  Cache-Control: public, max-age=300
+
+/404.html
+  Cache-Control: no-store
+
+/.well-known/security.txt
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=86400

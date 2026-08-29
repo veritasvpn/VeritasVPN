@@ -16,10 +16,13 @@ jobs:
       deployments: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Prepare deploy directory
         run: |
+          (cd website/downloads && sha256sum --check SHA256SUMS)
+          unzip -t website/downloads/veritasvpn-chrome.zip >/dev/null
+          test "$(unzip -p website/downloads/veritasvpn-chrome.zip manifest.json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).version))')" = "0.3.6"
           mkdir -p dist-site
           # Pages has a 25 MiB per-file limit; the APK is streamed by a Pages Function.
           rsync -a \
@@ -28,6 +31,8 @@ jobs:
             --exclude 'downloads/VeritasVPN_*.AppImage' \
             --exclude 'downloads/VeritasVPN_*.deb' \
             --exclude 'downloads/veritasvpn-android.apk' \
+            --exclude 'downloads/veritasvpn-chrome.zip' \
+            --exclude 'downloads/SHA256SUMS' \
             --exclude 'downloads/veritasvpn-macos.dmg' \
             --exclude 'functions' \
             --exclude 'README.md' \
@@ -37,7 +42,7 @@ jobs:
           cp -a website/functions ./functions
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
 

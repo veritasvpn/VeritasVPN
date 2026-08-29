@@ -104,7 +104,7 @@ func (s *AuthService) Register(ctx context.Context, deviceID, publicKey string) 
 	rt := &model.RefreshToken{
 		AccountID: acc.ID,
 		TokenHash: refreshTokenHash,
-		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+		ExpiresAt: time.Now().Add(s.cfg.RefreshTokenTTL),
 	}
 
 	if err := s.db.StoreRefreshToken(ctx, rt); err != nil {
@@ -129,10 +129,6 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (st
 		return "", "", 0, fmt.Errorf("invalid refresh token: %w", err)
 	}
 
-	if err := s.db.DeleteRefreshToken(ctx, tokenHash); err != nil {
-		s.log.Warn("failed to delete old refresh token", zap.Error(err))
-	}
-
 	acc, err := s.db.GetAccountByID(ctx, rt.AccountID)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("get account: %w", err)
@@ -155,11 +151,11 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (st
 	newRT := &model.RefreshToken{
 		AccountID: acc.ID,
 		TokenHash: newTokenHash,
-		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+		ExpiresAt: time.Now().Add(s.cfg.RefreshTokenTTL),
 	}
 
-	if err := s.db.StoreRefreshToken(ctx, newRT); err != nil {
-		return "", "", 0, fmt.Errorf("store new refresh token: %w", err)
+	if err := s.db.RotateRefreshToken(ctx, tokenHash, newRT); err != nil {
+		return "", "", 0, fmt.Errorf("rotate refresh token: %w", err)
 	}
 
 	return accessToken, newRefreshToken, expiresAt, nil
@@ -275,7 +271,7 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email, password str
 	rt := &model.RefreshToken{
 		AccountID: acc.ID,
 		TokenHash: refreshTokenHash,
-		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+		ExpiresAt: time.Now().Add(s.cfg.RefreshTokenTTL),
 	}
 
 	if err := s.db.StoreRefreshToken(ctx, rt); err != nil {
@@ -326,7 +322,7 @@ func (s *AuthService) SignInWithEmail(ctx context.Context, email, password strin
 	rt := &model.RefreshToken{
 		AccountID: acc.ID,
 		TokenHash: refreshTokenHash,
-		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+		ExpiresAt: time.Now().Add(s.cfg.RefreshTokenTTL),
 	}
 
 	if err := s.db.StoreRefreshToken(ctx, rt); err != nil {
@@ -352,7 +348,7 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, emailAddr string
 		return fmt.Errorf("generate reset token: %w", err)
 	}
 
-	expiry := time.Now().Add(1 * time.Hour)
+	expiry := time.Now().Add(20 * time.Minute)
 	if err := s.db.SetResetToken(ctx, acc.ID, hashInput(token), expiry); err != nil {
 		return fmt.Errorf("set reset token: %w", err)
 	}
@@ -383,7 +379,7 @@ func resetEmailHTML(resetURL string) string {
 <html>
 <body style="font-family: sans-serif; background: #0a0a0f; color: #e0e0e0; padding: 40px; text-align: center;">
   <h2 style="color: #00d2ff;">VeritasVPN</h2>
-  <p>You requested a password reset. Click the button below to set a new password. This link expires in 1 hour.</p>
+  <p>You requested a password reset. Click the button below to set a new password. This one-time link expires in 20 minutes.</p>
   <a href="` + resetURL + `" style="display: inline-block; margin: 20px 0; padding: 14px 32px; background: linear-gradient(135deg, #00d2ff, #7b61ff); color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600;">Reset Password</a>
   <p style="color: #888; font-size: 13px;">If you did not request this, you can safely ignore this email.</p>
 </body>
@@ -457,7 +453,7 @@ func (s *AuthService) RegisterAnonymous(ctx context.Context) (string, string, st
 	rt := &model.RefreshToken{
 		AccountID: acc.ID,
 		TokenHash: refreshTokenHash,
-		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+		ExpiresAt: time.Now().Add(s.cfg.RefreshTokenTTL),
 	}
 
 	if err := s.db.StoreRefreshToken(ctx, rt); err != nil {
@@ -505,7 +501,7 @@ func (s *AuthService) SignInWithAccountID(ctx context.Context, accountID string)
 	rt := &model.RefreshToken{
 		AccountID: acc.ID,
 		TokenHash: refreshTokenHash,
-		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+		ExpiresAt: time.Now().Add(s.cfg.RefreshTokenTTL),
 	}
 
 	if err := s.db.StoreRefreshToken(ctx, rt); err != nil {

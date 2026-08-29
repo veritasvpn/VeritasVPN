@@ -19,6 +19,25 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "VeritasVPN API is unavailable"
+      - alert: PublicAPILatencyHigh
+        expr: probe_duration_seconds{instance="https://api.veritasvpn.cloud/healthz"} > 2
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "VeritasVPN API latency exceeds two seconds"
+      - alert: PublicTLSCertificateExpiring
+        expr: probe_ssl_earliest_cert_expiry{job="blackbox"} - time() < 1209600
+        for: 30m
+        labels: { severity: critical }
+        annotations:
+          summary: "A public VeritasVPN TLS certificate expires within 14 days"
+      - alert: BrowserProxyUnavailable
+        expr: probe_success{job="blackbox-browser-proxy"} == 0
+        for: 3m
+        labels: { severity: critical }
+        annotations:
+          summary: "The authenticated Chrome proxy listener is unavailable"
+          description: "TCP 41080 on the production VPN egress node cannot be reached."
       - alert: BTCPayUnavailable
         expr: probe_success{instance="http://btcpayserver-mainnet.btcpay-mainnet.svc.cluster.local:49392/"} == 0
         for: 5m
@@ -136,6 +155,12 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "A required VeritasVPN monitoring scrape is missing"
+      - alert: AlertmanagerUnavailable
+        expr: up{job="prometheus"} == 1 and prometheus_notifications_alertmanagers_discovered < 1
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Prometheus cannot discover Alertmanager"
 
       - alert: BitcoinReadinessServiceUnavailable
         expr: up{job="bitcoin-readiness-mainnet"} == 0

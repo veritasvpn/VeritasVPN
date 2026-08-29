@@ -1,6 +1,6 @@
 # Stealth sidecar: WireGuard over TLS/WebSocket (wstunnel).
 # Binary is baked in so the DaemonSet does not depend on a hostPath git checkout.
-FROM alpine:3.22 AS fetch
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS fetch
 ARG WSTUNNEL_VERSION=10.6.2
 ARG WSTUNNEL_ARCH=linux_amd64
 RUN apk add --no-cache curl ca-certificates \
@@ -10,7 +10,7 @@ RUN apk add --no-cache curl ca-certificates \
  && install -m 0755 "$(find /tmp -type f -name wstunnel | head -1)" /usr/local/bin/wstunnel \
  && /usr/local/bin/wstunnel --version
 
-FROM alpine:3.22
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
 RUN apk add --no-cache ca-certificates libgcc
 COPY --from=fetch /usr/local/bin/wstunnel /usr/local/bin/wstunnel
 # Bind :443 on hostNetwork requires root or net.ipv4.ip_unprivileged_port_start=0.

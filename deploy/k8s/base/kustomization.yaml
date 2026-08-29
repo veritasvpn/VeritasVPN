@@ -25,3 +25,13 @@ resources:
   - wstunnel.yaml
   - veritas-proxy.yaml
   - pdb.yaml
+
+# Application workloads do not call the Kubernetes API. Prevent Kubernetes
+# from injecting a powerful, unnecessary bearer token into every pod.
+patches:
+  - target:
+      kind: Deployment|StatefulSet|DaemonSet
+    patch: |-
+      - op: add
+        path: /spec/template/spec/automountServiceAccountToken
+        value: false

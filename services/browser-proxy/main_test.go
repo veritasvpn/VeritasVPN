@@ -22,19 +22,19 @@ func token(t *testing.T, secret []byte, exp int64, sub, tier string) string {
 
 func TestValidateJWT(t *testing.T) {
 	secret := []byte("a-production-length-test-secret-value")
-	if !validateJWT(token(t, secret, time.Now().Add(time.Minute).Unix(), "account-1", "premium"), secret) {
+	if !validateJWT(token(t, secret, time.Now().Add(time.Minute).Unix(), "account-1", "premium"), secret, nil, "https://api.veritasvpn.cloud", "veritasvpn-api") {
 		t.Fatal("valid token rejected")
 	}
-	if validateJWT(token(t, secret, time.Now().Add(time.Minute).Unix(), "account-1", "free"), secret) {
+	if validateJWT(token(t, secret, time.Now().Add(time.Minute).Unix(), "account-1", "free"), secret, nil, "https://api.veritasvpn.cloud", "veritasvpn-api") {
 		t.Fatal("unpaid token accepted")
 	}
-	if validateJWT(token(t, secret, time.Now().Add(-time.Minute).Unix(), "account-1", "premium"), secret) {
+	if validateJWT(token(t, secret, time.Now().Add(-time.Minute).Unix(), "account-1", "premium"), secret, nil, "https://api.veritasvpn.cloud", "veritasvpn-api") {
 		t.Fatal("expired token accepted")
 	}
-	if validateJWT(token(t, secret, time.Now().Add(time.Minute).Unix(), "", "premium"), secret) {
+	if validateJWT(token(t, secret, time.Now().Add(time.Minute).Unix(), "", "premium"), secret, nil, "https://api.veritasvpn.cloud", "veritasvpn-api") {
 		t.Fatal("token without subject accepted")
 	}
-	if validateJWT(token(t, []byte("different-production-length-secret"), time.Now().Add(time.Minute).Unix(), "account-1", "premium"), secret) {
+	if validateJWT(token(t, []byte("different-production-length-secret"), time.Now().Add(time.Minute).Unix(), "account-1", "premium"), secret, nil, "https://api.veritasvpn.cloud", "veritasvpn-api") {
 		t.Fatal("invalid signature accepted")
 	}
 }

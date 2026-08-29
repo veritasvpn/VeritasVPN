@@ -1,10 +1,8 @@
 import {
   AUTH_API,
   BILLING_API,
-  DEFAULT_PROXY,
   EGRESS_CHECK_URL,
   GEOLOCATION_URL,
-  EXPECTED_EGRESS_IP,
 } from './config.js';
 
 const STORAGE_KEYS = {
@@ -18,11 +16,26 @@ const STORAGE_KEYS = {
 };
 
 async function getStorage(keys) {
-  return chrome.storage.local.get(keys);
+  const persistentKeys = keys.filter(key => key !== STORAGE_KEYS.accessToken);
+  const [persistent, ephemeral] = await Promise.all([
+    chrome.storage.local.get(persistentKeys),
+    keys.includes(STORAGE_KEYS.accessToken)
+      ? chrome.storage.session.get([STORAGE_KEYS.accessToken])
+      : Promise.resolve({}),
+  ]);
+  return { ...persistent, ...ephemeral };
 }
 
 async function setStorage(obj) {
-  return chrome.storage.local.set(obj);
+  const persistent = { ...obj };
+  const accessToken = persistent[STORAGE_KEYS.accessToken];
+  delete persistent[STORAGE_KEYS.accessToken];
+  const writes = [];
+  if (Object.keys(persistent).length) writes.push(chrome.storage.local.set(persistent));
+  if (accessToken !== undefined) {
+    writes.push(chrome.storage.session.set({ [STORAGE_KEYS.accessToken]: accessToken }));
+  }
+  await Promise.all(writes);
 }
 
 export async function getSession() {
@@ -31,6 +44,7 @@ export async function getSession() {
     STORAGE_KEYS.accessToken,
     STORAGE_KEYS.connected,
     STORAGE_KEYS.blocked,
+    STORAGE_KEYS.proxy,
     STORAGE_KEYS.clientLocation,
   ]);
   return {
@@ -38,7 +52,7 @@ export async function getSession() {
     idToken: data[STORAGE_KEYS.accessToken] || null,
     connected: Boolean(data[STORAGE_KEYS.connected]),
     blocked: Boolean(data[STORAGE_KEYS.blocked]),
-    proxy: { ...DEFAULT_PROXY },
+    proxy: data[STORAGE_KEYS.proxy] || null,
     clientLocation: data[STORAGE_KEYS.clientLocation] || null,
   };
 }
@@ -46,12 +60,13 @@ export async function getSession() {
 export async function clearSession() {
   await chrome.storage.local.remove([
     STORAGE_KEYS.user,
-    STORAGE_KEYS.accessToken,
     STORAGE_KEYS.refreshToken,
     STORAGE_KEYS.connected,
     STORAGE_KEYS.blocked,
+    STORAGE_KEYS.proxy,
     STORAGE_KEYS.clientLocation,
   ]);
+  await chrome.storage.session.remove([STORAGE_KEYS.accessToken]);
   await clearProxy();
   await clearProxyAuth();
 }
@@ -62,7 +77,7 @@ async function authAPI(endpoint, body) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Veritas-Client': 'desktop',
+      'X-Veritas-Client': 'chrome-extension',
     },
     body: JSON.stringify(body),
   });
@@ -157,7 +172,7 @@ export async function signIn(email, password) {
 function obtainTurnstileToken(timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     const popup = window.open(
-      'https://veritasvpn.cloud/turnstile-mobile',
+      `https://veritasvpn.cloud/turnstile-mobile?return_origin=${encodeURIComponent(location.origin)}`,
       'veritas-turnstile',
       'width=380,height=280'
     );
@@ -183,6 +198,7 @@ function obtainTurnstileToken(timeoutMs = 120000) {
     }
 
     function onMessage(event) {
+      if (event.origin !== 'https://veritasvpn.cloud') return;
       const data = event.data;
       if (!data || data.source !== 'veritas-turnstile') return;
       if (data.type === 'token' && data.token) {
@@ -256,6 +272,19 @@ function proxyConfigured(proxy) {
   return Boolean(proxy?.host && Number(proxy?.port));
 }
 
+async function discoverBrowserGateway(token) {
+  const response = await fetch(`${AUTH_API}/api/v1/wg/browser-gateway`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  });
+  const gateway = await response.json().catch(() => ({}));
+  if (!response.ok || !proxyConfigured(gateway) || !gateway.expected_egress_ip) {
+    throw new Error(gateway.error || 'The VeritasVPN browser gateway is unavailable.');
+  }
+  await setStorage({ [STORAGE_KEYS.proxy]: gateway });
+  return gateway;
+}
+
 export async function resolveClientLocation(force = false) {
   const data = await getStorage([STORAGE_KEYS.clientLocation, STORAGE_KEYS.connected]);
   const cached = data[STORAGE_KEYS.clientLocation] || null;
@@ -310,7 +339,7 @@ export async function connect() {
   if (!billing.is_premium) {
     throw new Error('An active subscription is required. Open settings to manage your subscription.');
   }
-  const proxy = session.proxy;
+  const proxy = await discoverBrowserGateway(session.idToken);
   if (!proxyConfigured(proxy)) throw new Error('The VeritasVPN gateway is not configured.');
 
   const authState = await chrome.runtime.sendMessage({
@@ -335,7 +364,7 @@ export async function connect() {
     clearTimeout(timer);
     if (!response.ok) throw new Error(`Gateway validation returned HTTP ${response.status}.`);
     const result = await response.json();
-    if (result.ip !== EXPECTED_EGRESS_IP) throw new Error('Traffic did not exit through the Paraguay gateway.');
+    if (result.ip !== proxy.expected_egress_ip) throw new Error('Traffic did not exit through the selected VeritasVPN gateway.');
     await chrome.action.setBadgeText({ text: 'ON' });
     await chrome.action.setBadgeBackgroundColor({ color: '#09C7F5' });
     return { egressIp: result.ip, clientLocation };

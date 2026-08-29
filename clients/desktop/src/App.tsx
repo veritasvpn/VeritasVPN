@@ -4,6 +4,7 @@ import { fetch } from "@tauri-apps/plugin-http";
 import {
   getStoredUser,
   getStoredToken,
+  initializeSecureAuth,
   refreshSession,
   signIn as doSignIn,
   signUp as doSignUp,
@@ -704,7 +705,7 @@ function PortForwardsScreen({
 }
 
 function App() {
-  const [user, setUser] = useState<User | null>(getStoredUser);
+  const [user, setUser] = useState<User | null>(null);
   const [mode, setMode] = useState<AuthMode>("signin");
   const [method, setMethod] = useState<AuthMethod>("email");
   const [email, setEmail] = useState("");
@@ -783,6 +784,18 @@ function App() {
   const connectingRef = useRef(connecting);
   const excludeLanRef = useRef(excludeLan);
   const stealthModeRef = useRef(stealthMode);
+
+  useEffect(() => {
+    let cancelled = false;
+    initializeSecureAuth()
+      .then(() => {
+        if (!cancelled) setUser(getStoredUser());
+      })
+      .catch(() => {
+        if (!cancelled) setUser(null);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => { peerIdRef.current = peerId; }, [peerId]);
   useEffect(() => { autoReconnectRef.current = autoReconnect; }, [autoReconnect]);
@@ -1211,7 +1224,7 @@ function App() {
       createdPeerId = peer.peer_id;
       connectPeerRef.current = peer.peer_id;
 
-      const allowedRaw = peer.client_allowed_ips || peer.allowed_ips || ["0.0.0.0/0"];
+      const allowedRaw = peer.client_allowed_ips || peer.allowed_ips || ["0.0.0.0/0", "::/0"];
       const allowed = applyExcludeLan(allowedRaw, excludeLanRef.current);
       const useStealth = wantedStealth && !!peer.stealth_available && !!peer.stealth_endpoint;
       if (wantedStealth && !useStealth) {

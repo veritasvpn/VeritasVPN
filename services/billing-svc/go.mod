@@ -8,6 +8,7 @@ require (
 	github.com/nats-io/nats.go v1.36.0
 	github.com/redis/go-redis/v9 v9.5.3
 	github.com/veritasvpn/lib/config v0.0.0
+	github.com/veritasvpn/lib/jwt v0.0.0
 	github.com/veritasvpn/lib/logging v0.0.0
 	github.com/veritasvpn/lib/tokenhash v0.0.0
 	go.uber.org/zap v1.27.0
@@ -31,6 +32,7 @@ require (
 
 replace (
 	github.com/veritasvpn/lib/config => ../../lib/config
+	github.com/veritasvpn/lib/jwt => ../../lib/jwt
 	github.com/veritasvpn/lib/logging => ../../lib/logging
 	github.com/veritasvpn/lib/tokenhash => ../../lib/tokenhash
 )

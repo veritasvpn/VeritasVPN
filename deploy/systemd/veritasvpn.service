@@ -1,19 +1,7 @@
 [Unit]
-Description=VeritasVPN Docker Compose Stack
-Requires=docker.service
-After=docker.service network-online.target
-Wants=network-online.target
+Description=RETIRED - VeritasVPN Docker Compose stack must not run
+RefuseManualStart=yes
 
 [Service]
 Type=oneshot
-RemainAfterExit=true
-WorkingDirectory=/opt/veritasvpn
-ExecStartPre=/usr/bin/sleep 5
-ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod.yml down
-ExecReload=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.prod.yml restart
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
+ExecStart=/usr/bin/false

@@ -51,6 +51,7 @@ kind: ServiceAccount
 metadata:
   name: kube-state-metrics
   namespace: monitoring
+automountServiceAccountToken: true
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -58,7 +59,7 @@ metadata:
   name: veritas-kube-state-metrics
 rules:
   - apiGroups: [""]
-    resources: ["configmaps", "secrets", "nodes", "pods", "services", "resourcequotas", "replicationcontrollers", "limitranges", "persistentvolumeclaims", "persistentvolumes", "namespaces", "endpoints"]
+    resources: ["configmaps", "nodes", "pods", "services", "resourcequotas", "replicationcontrollers", "limitranges", "persistentvolumeclaims", "persistentvolumes", "namespaces", "endpoints"]
     verbs: ["list", "watch"]
   - apiGroups: ["apps"]
     resources: ["statefulsets", "daemonsets", "deployments", "replicasets"]

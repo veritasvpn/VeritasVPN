@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Current public service status for VeritasVPN.">
+  <title>Service status · VeritasVPN</title>
+  <link rel="icon" href="/assets/favicon.png">
+  <link rel="stylesheet" href="/css/account-action.css">
+  <link rel="stylesheet" href="/css/status.css">
+</head>
+<body>
+  <main class="card card-centered status-card">
+    <img class="logo" src="/assets/logo-mark.png" alt="VeritasVPN">
+    <h1 class="status">Service status</h1>
+    <p class="message-copy">Live checks of the public services required to sign in, connect, and download supported clients.</p>
+    <div class="status-list">
+      <div class="status-row"><strong>Website</strong><span id="website" class="status-indicator">Checking…</span></div>
+      <div class="status-row"><strong>Account and VPN API</strong><span id="api" class="status-indicator">Checking…</span></div>
+      <div class="status-row"><strong>Bitcoin checkout readiness</strong><span id="billing" class="status-indicator">Checking…</span></div>
+      <div class="status-row"><strong>Client downloads</strong><span id="downloads" class="status-indicator">Checking…</span></div>
+    </div>
+    <p id="checkedAt" class="status-timestamp">Checking now…</p>
+    <div class="actions"><a href="/">Return to VeritasVPN</a></div>
+  </main>
+  <script type="module" src="/js/status.js"></script>
+</body>
+</html>

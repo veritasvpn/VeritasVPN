@@ -302,8 +302,8 @@ function renderDownloads() {
       <div class="download-grid">
         <a class="download-tile" href="/install/chrome.html">
           <h3>Chrome</h3>
-          <p>Protect Chrome traffic with the VeritasVPN browser extension.</p>
-          <span class="btn btn-primary btn-sm">Download for Chrome</span>
+          <p>Authenticated browser gateway hardening and external egress testing are in progress.</p>
+          <span class="btn btn-primary btn-sm">View status</span>
         </a>
         <a class="download-tile" href="/install/linux.html">
           <h3>Linux</h3>

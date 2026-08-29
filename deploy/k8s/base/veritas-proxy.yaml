@@ -37,11 +37,21 @@ spec:
           image: localhost:31500/veritas-proxy@sha256:ab5ddbef3fd013a62a1cbe067d796819de1cdcdd8128f3ab8be3f57bb41d060d
           imagePullPolicy: IfNotPresent
           env:
-            - name: JWT_SECRET
+            - name: JWT_ED25519_PUBLIC_KEYS
               valueFrom:
                 secretKeyRef:
                   name: veritas-secrets
-                  key: JWT_SECRET
+                  key: JWT_ED25519_PUBLIC_KEYS
+            - name: JWT_ISSUER
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: JWT_ISSUER
+            - name: JWT_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: veritas-config
+                  key: JWT_AUDIENCE
           ports:
             - name: socks5
               containerPort: 1080

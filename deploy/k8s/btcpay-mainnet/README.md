@@ -1,8 +1,8 @@
 # Isolated BTCPay mainnet environment
 
 This directory provisions a second, isolated BTCPay Server environment for
-Bitcoin **mainnet**. It does not modify the existing \`btcpay\` namespace, which
-continues to serve Bitcoin testnet.
+Bitcoin **mainnet**. The old `btcpay` testnet namespace is retired and is not a
+production dependency.
 
 ## Layout
 
@@ -39,7 +39,5 @@ kubectl kustomize deploy/k8s/btcpay-mainnet >/dev/null
 kubectl -n btcpay-mainnet get pods,pvc
 \`\`\`
 
-The mainnet environment is deliberately separate. Do not repoint the existing
-\`btcpay.veritasvpn.cloud\` testnet hostname or app billing configuration until
-the mainnet node is synchronized, the wallet is configured, and a controlled
-cutover has been approved.
+The mainnet environment is the only supported payment stack. Keep checkout
+gated whenever Bitcoin readiness, NBXplorer, or the BTCPay service is unhealthy.

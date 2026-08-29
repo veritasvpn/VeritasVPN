@@ -7,6 +7,7 @@
     <title>Download VeritasVPN</title>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="css/style-typography1.css">
+    <link rel="stylesheet" href="css/page-utilities.css">
     <link rel="icon" type="image/png" href="assets/favicon.png">
 </head>
 <body>
@@ -48,7 +49,7 @@
             <div class="container">
                 <img src="assets/logo-mark.png" alt="" class="downloads-hero-mark" width="72" height="72">
                 <h1>Download VeritasVPN</h1>
-                <p>Get the Android or Linux WireGuard client, or add the Chrome extension. Windows and macOS remain coming soon.</p>
+                <p>Get the Android or Linux WireGuard client. Chrome, Windows, and macOS remain in active development.</p>
             </div>
         </section>
 
@@ -74,14 +75,14 @@
                         <span class="btn btn-primary">Get Linux</span>
                     </a>
 
-                    <a class="download-featured-card is-ready" href="/install/chrome.html" id="browser">
-                        <span class="download-featured-badge is-live">Available now</span>
+                    <a class="download-featured-card" href="/install/chrome.html" id="browser">
+                        <span class="download-featured-badge">Gateway hardening</span>
                         <span class="download-platform-icon download-featured-icon" aria-hidden="true">
                             <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3a7 7 0 016.53 4.5H12a2.5 2.5 0 00-2.16 1.25L7.07 7.3A7 7 0 0112 5zm-2.5 7A2.5 2.5 0 1012 9.5 2.5 2.5 0 009.5 12zM5.2 9.1l2.9 5A7 7 0 015 12c0-1.03.22-2 .61-2.9zm3.68 7.4L12 12.8l3.12 3.7A7 7 0 018.88 16.5zm8.05-1.4l-2.9-5H19A7 7 0 0116.93 15.1z"/></svg>
                         </span>
                         <h2>Chrome</h2>
-                        <p>Browser extension — sign in and connect. Same account as the website.</p>
-                        <span class="btn btn-primary">Add to Chrome</span>
+                        <p>Authenticated browser gateway security and external egress validation are in progress.</p>
+                        <span class="btn btn-primary">View status</span>
                     </a>
                 </div>
 
@@ -144,7 +145,7 @@
 
     <footer class="footer">
         <div class="container">
-            <div class="footer-bottom" style="border-top:none;padding-top:0;">
+            <div class="footer-bottom footer-bottom-compact">
                 <p>&copy; 2025 VeritasVPN. All rights reserved.</p>
                 <p class="footer-tagline"><a href="/">Home</a> · <a href="/#pricing">Pricing</a></p>
             </div>
@@ -167,7 +168,7 @@
             <form id="authForm" class="auth-form" novalidate>
                 <div id="authFormFields">
                 <label class="auth-field"><span>Email</span><input type="email" id="authEmail" required></label>
-                <label class="auth-field"><span>Password</span><input type="password" id="authPassword" required minlength="6"></label>
+                <label class="auth-field"><span>Password</span><input type="password" id="authPassword" required minlength="10"></label>
                 </div>
                 <button type="button" class="auth-reset" id="authReset">Forgot password?</button>
                 <button type="submit" class="btn btn-primary btn-block" id="authSubmit">Sign in</button>

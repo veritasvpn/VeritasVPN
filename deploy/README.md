@@ -1,4 +1,6 @@
-# VeritasVPN Production Deployment
+# VeritasVPN production deployment
+
+Production runs only on the Dell OptiPlex with K3s. The website is deployed independently by Cloudflare Pages. Raspberry Pi and Docker Compose instructions are retired; see `docs/DEPLOYMENT_SOURCE_OF_TRUTH.md`.
 
 ## Directory Layout
 
@@ -34,38 +36,19 @@ deploy/
 │   ├── redis-acl.conf         # Redis ACL rules
 │   ├── nats-server.conf       # NATS auth and limits
 │   └── .env.prod.example      # Production env template
-├── systemd/          # Systemd units
-│   └── veritasvpn.service     # Docker Compose stack as systemd service
+├── systemd/          # Dell K3s health, backup, drift, and hardware timers
 └── verify/           # Post-deployment verification
     └── boot-verify.sh         # Verify WireGuard, forwarding, services after boot
 ```
 
-## Quick Start (on Raspberry Pi)
+## Controlled deployment on the Dell
 
 ```bash
-cd /opt/veritasvpn
-
-# 1. Capture current state
-sudo bash deploy/backup/inventory.sh
-
-# 2. Run full backup
-bash deploy/backup/backup.sh
-
-# 3. Start production stack
-make prod-up
-
-# 4. Apply firewall (has auto-rollback)
-sudo bash deploy/firewall/apply-rules.sh
-
-# 5. Verify
-bash deploy/verify/boot-verify.sh
-bash deploy/monitoring/health-check.sh
-
-# 6. Enable on boot
-sudo cp deploy/systemd/veritasvpn.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now veritasvpn
-
-# 7. Install cron jobs
-sudo cp deploy/cron/veritas-crontab /etc/cron.d/veritasvpn
+cd /home/jpg/VeritasVPN
+git status --short
+sudo ./deploy/backup/backup-k3s.sh
+sudo ./deploy/backup/restore-test.sh
+sudo ./deploy/verify/production-readiness.sh
+sudo ./deploy/k8s/scripts/apply.sh k3s
+sudo ./deploy/verify/boot-verify.sh
 ```
