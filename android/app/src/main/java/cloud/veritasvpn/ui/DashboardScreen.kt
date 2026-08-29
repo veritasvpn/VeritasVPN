@@ -201,8 +201,8 @@ fun DashboardScreen(
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = if (killSwitchEnabled) "Kill switch on" else "Kill switch required",
-                    color = if (killSwitchEnabled) CyanHover else ErrorRed,
+                    text = "Kill switch on",
+                    color = CyanHover,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = 0.6.sp
@@ -282,7 +282,6 @@ fun DashboardScreen(
         open = showSettingsMenu,
         onDismiss = { showSettingsMenu = false },
         isPremium = isPremium,
-        killSwitchEnabled = killSwitchEnabled,
         onPlans = onPlans,
         onNetworkMap = { showNetworkMap = true },
         onDevices = onDevices,
@@ -303,7 +302,7 @@ fun KillSwitchRequiredDialog(
 ) {
     AlertDialog(
         onDismissRequest = onCancel,
-        title = { Text("Kill switch required", color = Paper, fontWeight = FontWeight.Bold) },
+        title = { Text("Enable always-on VPN", color = Paper, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(

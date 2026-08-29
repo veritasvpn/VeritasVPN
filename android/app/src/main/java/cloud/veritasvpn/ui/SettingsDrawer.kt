@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -65,7 +66,6 @@ fun SettingsDrawer(
     open: Boolean,
     onDismiss: () -> Unit,
     isPremium: Boolean,
-    killSwitchEnabled: Boolean,
     onPlans: () -> Unit,
     onNetworkMap: () -> Unit,
     onDevices: () -> Unit,
@@ -148,12 +148,13 @@ fun SettingsDrawer(
                 modifier = Modifier
                     .fillMaxHeight()
                     .width(drawerWidthDp)
-                    .background(CardElevated),
+                    .background(CardElevated)
+                    .statusBarsPadding(),
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 8.dp, top = 18.dp, bottom = 14.dp),
+                        .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -210,20 +211,8 @@ fun SettingsDrawer(
                             onClick = { navigate(onTunnelSettings) },
                         )
                         SettingsDrawerStaticNote(
-                            title = "Stealth mode",
-                            body = "Available on the Linux desktop app — not in this Android build yet.",
-                        )
-                        SettingsDrawerStaticNote(
-                            title = if (killSwitchEnabled) {
-                                "Kill switch on"
-                            } else {
-                                "Kill switch required"
-                            },
-                            body = if (killSwitchEnabled) {
-                                "Always-on VPN and block-without-VPN are enabled in system settings."
-                            } else {
-                                "Enable Always-on VPN and block connections without VPN before connecting."
-                            },
+                            title = "Kill switch always on",
+                            body = "Always-on VPN and block-without-VPN in system settings — no off option.",
                         )
                     }
 

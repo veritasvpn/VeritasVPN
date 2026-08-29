@@ -161,32 +161,27 @@ export function SettingsDrawer({
               </span>
               <b className={excludeLan ? "on" : ""}>{excludeLan ? "On" : "Off"}</b>
             </button>
-            <button
-              type="button"
-              className="menu-toggle"
-              onClick={onToggleStealthMode}
-              disabled={!linuxDesktop}
-              aria-disabled={!linuxDesktop}
-            >
-              <span>
-                Stealth mode
-                <span className="menu-note">{linuxDesktop ? "TLS wrap · reconnect" : "Linux only"}</span>
-              </span>
-              <b className={linuxDesktop && stealthMode ? "on" : ""}>
-                {!linuxDesktop ? "—" : stealthMode ? "On" : "Off"}
-              </b>
-            </button>
-            {linuxDesktop ? (
-              <p className="menu-static-note">
-                Kill switch always on · no off option
-                <span className="menu-note">Firewall + fail-closed routes while connected</span>
-              </p>
-            ) : (
-              <p className="menu-static-note">
-                Kill switch is Linux-only in this build
-                <span className="menu-note">macOS uses tunnel routing without the Linux firewall ruleset</span>
-              </p>
+            {linuxDesktop && (
+              <button
+                type="button"
+                className="menu-toggle"
+                onClick={onToggleStealthMode}
+              >
+                <span>
+                  Stealth mode
+                  <span className="menu-note">TLS wrap · reconnect</span>
+                </span>
+                <b className={stealthMode ? "on" : ""}>{stealthMode ? "On" : "Off"}</b>
+              </button>
             )}
+            <p className="menu-static-note">
+              Kill switch always on · no off option
+              <span className="menu-note">
+                {linuxDesktop
+                  ? "Firewall + fail-closed routes while connected"
+                  : "Tunnel routing keeps traffic inside the VPN while connected"}
+              </span>
+            </p>
           </section>
 
           <section className="settings-drawer-section settings-drawer-section--session" aria-label="Session">
