@@ -26,7 +26,6 @@ if nft list table inet veritas_filter >/dev/null 2>&1 && nft list table inet ver
 if dig +short +time=3 +tries=1 @10.0.0.1 api.veritasvpn.cloud A | grep -Eq '^[0-9]+(\.[0-9]+){3}$'; then ok 'VPN DNS forwarder resolves'; else bad 'VPN DNS forwarder failed'; fi
 if curl -fsS --max-time 10 https://api.veritasvpn.cloud/healthz >/dev/null; then ok 'public API healthy'; else bad 'public API unavailable'; fi
 if curl -fsS --max-time 10 https://veritasvpn.cloud/ >/dev/null; then ok 'public website healthy'; else bad 'public website unavailable'; fi
-if timeout 5 bash -c 'echo >/dev/tcp/170.51.31.139/41080' 2>/dev/null; then ok 'Chrome proxy port reachable'; else bad 'Chrome proxy port unavailable'; fi
 if timeout 5 bash -c 'echo >/dev/tcp/127.0.0.1/443' 2>/dev/null; then ok 'stealth TCP listener reachable'; else bad 'stealth TCP listener unavailable'; fi
 
 configured="$(wg show wg0 peers 2>/dev/null | wc -l | tr -d ' ')"

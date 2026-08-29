@@ -13,7 +13,7 @@ This restores the single production Dell after system-disk loss. It does not use
 
 - A recent `veritasvpn-*.tar.gz.enc` archive and its `.hmac` and `.sha256` sidecars.
 - The separately stored `/root/.config/veritasvpn/backup.key`.
-- Router access for UDP 51820 and TCP 443/41080 forwarding.
+- Router access for UDP 51820 and stealth TCP 443 forwarding.
 - Cloudflare, Tailscale, GitHub, DNS, and Android-signing access.
 
 Never paste credentials into this repository or a recovery ticket.
@@ -92,7 +92,8 @@ sudo ./deploy/k8s/scripts/apply.sh k3s
 ## 5. Restore public routing
 
 1. Update the `k3s` overlay if the Dell public IPv4 changed.
-2. Forward UDP 51820, TCP 443, and TCP 41080 to the Dell only.
+2. Forward UDP 51820 and TCP 443 to the Dell only. Do not expose TCP 41080
+   unless the Chrome gateway has separately passed its public-edge security review.
 3. Restore the Cloudflare Tunnel Secret and verify the API, analytics, and mainnet BTCPay routes.
 4. Keep all management ports private to LAN/Tailscale.
 
@@ -106,4 +107,4 @@ sudo ./deploy/backup/restore-test.sh
 
 Trigger `.github/workflows/vpn-e2e.yml` and require authentication, peer provisioning, external WireGuard handshake, VPN DNS, HTTPS egress, revocation, and normal-network restoration to pass. Test the Chrome proxy with a Premium synthetic account before enabling its public download.
 
-Rotate exposed credentials, securely delete `/var/lib/veritasvpn/recovery`, and record the K3s version, source commit, restored backup timestamp, public IP, achieved RPO/RTO, and test evidence. Confirm backup, restore rehearsal, VPN E2E, API, Chrome proxy, disk, TLS, and Alertmanager alarms are green.
+Rotate exposed credentials, securely delete `/var/lib/veritasvpn/recovery`, and record the K3s version, source commit, restored backup timestamp, public IP, achieved RPO/RTO, and test evidence. Confirm backup, restore rehearsal, VPN E2E, API, disk, TLS, and Alertmanager alarms are green. Validate the Chrome proxy only when that client is enabled.

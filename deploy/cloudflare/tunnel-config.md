@@ -51,5 +51,6 @@ Only the K3s `cloudflared` deployment in `ingress-nginx` is supported. The Docke
 ## Dell origin protection
 
 - No HTTP management port on the Dell is exposed directly to the internet.
-- Only UDP 51820, stealth TCP 443, and authenticated browser-proxy TCP 41080 are router-forwarded.
+- Only UDP 51820 and stealth TCP 443 are router-forwarded today. The
+  authenticated browser-proxy TCP 41080 edge remains closed while Chrome is paused.
 - SSH, Kubernetes, Prometheus, Grafana origin, databases, and registries stay LAN/Tailscale-only.
