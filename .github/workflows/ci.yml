@@ -115,7 +115,7 @@ jobs:
             --exit-code 1 \
             .
       - name: Validate shell scripts
-        run: find deploy scripts -type f -name '*.sh' -print0 | xargs -0 -r shellcheck
+        run: find deploy scripts -type f -name '*.sh' -print0 | xargs -0 -r shellcheck --severity=error
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
