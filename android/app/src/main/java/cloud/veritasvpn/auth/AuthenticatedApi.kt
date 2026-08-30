@@ -25,7 +25,7 @@ object AuthenticatedApi {
         return response
     }
 
-    inline fun <T> execute(auth: AuthRepository, block: (String) -> Response, parse: (Response) -> T): T {
+    inline fun <T> execute(auth: AuthRepository, noinline block: (String) -> Response, parse: (Response) -> T): T {
         return withAuth(auth, block).use(parse)
     }
 }

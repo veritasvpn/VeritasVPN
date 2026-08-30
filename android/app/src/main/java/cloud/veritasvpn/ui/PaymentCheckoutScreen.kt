@@ -66,7 +66,7 @@ fun PaymentCheckoutScreen(checkoutUrl: String, onClose: () -> Unit, onRefreshPla
             Modifier.fillMaxWidth(),
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.cardColors(containerColor = CardBg),
-            border = androidx.compose.foundation.BorderStroke(1.dp, CardBorder)
+            border = androidx.compose.foundation.BorderStroke(1.dp, Line)
         ) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(

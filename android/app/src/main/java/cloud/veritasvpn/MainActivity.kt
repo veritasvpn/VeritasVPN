@@ -152,28 +152,6 @@ class MainActivity : ComponentActivity() {
                 var checkoutMethod by remember { mutableStateOf<String?>(null) }
                 var checkoutUrl by remember { mutableStateOf<String?>(null) }
 
-                fun performLocalSignOut() {
-                    userWantsConnected = false
-                    hadEstablishedSession = false
-                    cancelReconnect()
-                    disconnectVpnService()
-                    peerIdForDisconnect()
-                    authRepo.signOut()
-                    billingStatus = null
-                    checkoutUrl = null
-                    billingError = null
-                    checkoutMethod = null
-                    showPlans = false
-                    showDevices = false
-                    showPortForwards = false
-                    showTunnelSettings = false
-                    user = null
-                }
-
-                fun handleSessionExpired() {
-                    performLocalSignOut()
-                }
-
                 fun ensureSessionFresh() {
                     scope.launch(Dispatchers.IO) {
                         if (user != null && !authRepo.validateSessionOnResume()) {
@@ -302,6 +280,28 @@ class MainActivity : ComponentActivity() {
                     reconnectAttempt = 0
                 }
 
+                fun performLocalSignOut() {
+                    userWantsConnected = false
+                    hadEstablishedSession = false
+                    cancelReconnect()
+                    disconnectVpnService()
+                    peerIdForDisconnect()
+                    authRepo.signOut()
+                    billingStatus = null
+                    checkoutUrl = null
+                    billingError = null
+                    checkoutMethod = null
+                    showPlans = false
+                    showDevices = false
+                    showPortForwards = false
+                    showTunnelSettings = false
+                    user = null
+                }
+
+                fun handleSessionExpired() {
+                    performLocalSignOut()
+                }
+
                 fun startCheckout(paymentMethod: String, planId: String) {
                     if (checkoutMethod != null) return
                     checkoutMethod = paymentMethod
@@ -353,7 +353,7 @@ class MainActivity : ComponentActivity() {
                         } catch (e: Exception) {
                             if (e is SessionExpiredException) {
                                 handleSessionExpired()
-                                return@launch
+                                return@LaunchedEffect
                             }
                         }
                     }
