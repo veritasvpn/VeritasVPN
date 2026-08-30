@@ -152,6 +152,49 @@ class MainActivity : ComponentActivity() {
                 var checkoutMethod by remember { mutableStateOf<String?>(null) }
                 var checkoutUrl by remember { mutableStateOf<String?>(null) }
 
+                fun disconnectVpnService() {
+                    context.startService(
+                        Intent(context, VeritasVpnService::class.java).apply {
+                            action = VeritasVpnService.ACTION_DISCONNECT
+                        }
+                    )
+                    connected = false
+                    connecting = false
+                    rxBytes = 0
+                    txBytes = 0
+                    handshakeMs = 0
+                    dnsBlockedCount = null
+                }
+
+                fun cancelReconnect() {
+                    reconnectJob?.cancel()
+                    reconnectJob = null
+                    reconnecting = false
+                    reconnectAttempt = 0
+                }
+
+                fun performLocalSignOut() {
+                    userWantsConnected = false
+                    hadEstablishedSession = false
+                    cancelReconnect()
+                    disconnectVpnService()
+                    peerIdForDisconnect()
+                    authRepo.signOut()
+                    billingStatus = null
+                    checkoutUrl = null
+                    billingError = null
+                    checkoutMethod = null
+                    showPlans = false
+                    showDevices = false
+                    showPortForwards = false
+                    showTunnelSettings = false
+                    user = null
+                }
+
+                fun handleSessionExpired() {
+                    performLocalSignOut()
+                }
+
                 fun ensureSessionFresh() {
                     scope.launch(Dispatchers.IO) {
                         if (user != null && !authRepo.validateSessionOnResume()) {
@@ -257,49 +300,6 @@ class MainActivity : ComponentActivity() {
                             portForwardsLoading = false
                         }
                     }
-                }
-
-                fun disconnectVpnService() {
-                    context.startService(
-                        Intent(context, VeritasVpnService::class.java).apply {
-                            action = VeritasVpnService.ACTION_DISCONNECT
-                        }
-                    )
-                    connected = false
-                    connecting = false
-                    rxBytes = 0
-                    txBytes = 0
-                    handshakeMs = 0
-                    dnsBlockedCount = null
-                }
-
-                fun cancelReconnect() {
-                    reconnectJob?.cancel()
-                    reconnectJob = null
-                    reconnecting = false
-                    reconnectAttempt = 0
-                }
-
-                fun performLocalSignOut() {
-                    userWantsConnected = false
-                    hadEstablishedSession = false
-                    cancelReconnect()
-                    disconnectVpnService()
-                    peerIdForDisconnect()
-                    authRepo.signOut()
-                    billingStatus = null
-                    checkoutUrl = null
-                    billingError = null
-                    checkoutMethod = null
-                    showPlans = false
-                    showDevices = false
-                    showPortForwards = false
-                    showTunnelSettings = false
-                    user = null
-                }
-
-                fun handleSessionExpired() {
-                    performLocalSignOut()
                 }
 
                 fun startCheckout(paymentMethod: String, planId: String) {
