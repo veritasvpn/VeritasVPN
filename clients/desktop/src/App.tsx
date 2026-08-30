@@ -1975,15 +1975,8 @@ function App() {
                     </div>
                   )}
                   <h2 className="connected-title">{reconnecting && !connected ? "Reconnecting…" : "You're protected"}</h2>
-                  <p>
-                    {reconnecting && !connected
-                      ? "Restoring your encrypted WireGuard tunnel."
-                      : "Your internet traffic is encrypted and routed through VeritasVPN."}
-                  </p>
-                  {connected && linuxDesktop && (
-                    <div className="killswitch-status" role="status">
-                      Kill switch on
-                    </div>
+                  {reconnecting && !connected && (
+                    <p>Restoring your encrypted WireGuard tunnel.</p>
                   )}
                   {(connected || reconnecting) && (
                     <button className="blueprint-disconnect" type="button" onClick={handleDisconnect} disabled={connecting && !reconnecting}>
@@ -2011,10 +2004,10 @@ function App() {
                       )}
                     </div>
                   )}
-                  {connected && (
+                  {connected && egressIp && (
                     <div className="protected-meta">
                       <i />
-                      {egressIp ? `Connected · ${egressIp}` : "Protected · WireGuard tunnel active"}
+                      {`Connected · ${egressIp}`}
                     </div>
                   )}
                 </>

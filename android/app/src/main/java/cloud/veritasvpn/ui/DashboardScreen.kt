@@ -180,24 +180,6 @@ fun DashboardScreen(
                     fontSize = 22.sp
                 )
             }
-            Spacer(Modifier.height(10.dp))
-            if (connected) {
-                Text(
-                    text = "Your internet traffic is encrypted and routed through VeritasVPN.",
-                    color = PaperMuted,
-                    fontSize = 14.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 24.dp)
-                )
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    text = "Kill switch on",
-                    color = CyanHover,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.6.sp
-                )
-            }
 
             Spacer(Modifier.height(24.dp))
 
@@ -222,24 +204,6 @@ fun DashboardScreen(
             }
 
             if (connected) {
-                Row(
-                    modifier = Modifier.padding(top = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(SuccessGreen)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = "Protected · WireGuard tunnel active",
-                        color = PaperDim,
-                        fontSize = 12.sp
-                    )
-                }
-
                 Spacer(Modifier.height(14.dp))
                 LiveTransferStats(
                     rxBytes = rxBytes,
