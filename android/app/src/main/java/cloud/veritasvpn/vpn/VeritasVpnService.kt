@@ -250,11 +250,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         }
         val now = System.currentTimeMillis()
         val handshakeAge = if (handshakeMs > 0L) (now - handshakeMs).coerceAtLeast(0L) else Long.MAX_VALUE
-        if (handshakeMs > 0L && handshakeAge <= HANDSHAKE_STALE_MS) {
+        // Track that we have seen a healthy handshake, but do NOT tear down the
+        // VpnService when WireGuard's natural ~2 minute rekey makes the age climb.
+        // Full reconnects drop Android's status-bar VPN icon and open a brief
+        // unprotected window. Recover only via explicit tunnel failure paths.
+        if (handshakeMs > 0L && handshakeAge <= HANDSHAKE_HEALTHY_MS) {
             hadGoodHandshake = true
             reconnectSignalSent = false
-        } else if (hadGoodHandshake && handshakeAge > HANDSHAKE_STALE_MS) {
-            signalReconnectNeeded()
         }
         sendBroadcast(
             Intent(ACTION_STATS).setPackage(packageName)
@@ -398,7 +400,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val PREFS_NAME = "veritas_vpn_state"
         const val KEY_CONFIG = "last_approved_config"
         private const val TAG = "VeritasVpnService"
-        private const val HANDSHAKE_STALE_MS = 120_000L
+        private const val HANDSHAKE_HEALTHY_MS = 180_000L
         private val EGRESS_ENDPOINTS = listOf(
             "https://api.ipify.org",
             "https://ifconfig.me/ip",

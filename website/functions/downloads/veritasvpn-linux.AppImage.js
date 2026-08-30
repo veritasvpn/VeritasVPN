@@ -1,5 +1,5 @@
 const APPIMAGE_URL =
-  "https://github.com/veritasvpn/VeritasVPN/releases/download/v0.2.16/veritasvpn-linux.AppImage";
+  "https://github.com/veritasvpn/VeritasVPN/releases/download/v0.2.17/veritasvpn-linux.AppImage";
 
 export async function onRequestGet() {
   const upstream = await fetch(APPIMAGE_URL, {

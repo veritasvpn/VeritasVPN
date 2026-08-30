@@ -76,7 +76,7 @@ interface PeerResponse {
 const CONNECT_TIMEOUT_MS = 25_000;
 const STATS_POLL_MS = 1_500;
 const PEERS_POLL_MS = 5_000;
-const HANDSHAKE_STALE_SEC = 120;
+const HANDSHAKE_HEALTHY_SEC = 180;
 const RECONNECT_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000];
 const LS_AUTO_RECONNECT = "veritas_auto_reconnect";
 const LS_EXCLUDE_LAN = "veritas_exclude_lan";
@@ -1446,17 +1446,17 @@ function App() {
           hadInterfaceUpRef.current = true;
         }
 
-        if (stats.interface_up && stats.last_handshake_sec > 0 && handshakeAge <= HANDSHAKE_STALE_SEC) {
+        if (stats.interface_up && stats.last_handshake_sec > 0 && handshakeAge <= HANDSHAKE_HEALTHY_SEC) {
           hadGoodHandshakeRef.current = true;
         }
 
-        const staleHandshake =
-          hadGoodHandshakeRef.current &&
-          (stats.last_handshake_sec <= 0 || handshakeAge > HANDSHAKE_STALE_SEC);
+        // Only reconnect when the tunnel interface is actually down.
+        // A handshake age past WireGuard's natural rekey (~2m) is normal while
+        // interface_up; tearing down for that alone drops the session briefly.
         const down = hadInterfaceUpRef.current && !stats.interface_up;
 
         if (
-          (down || staleHandshake) &&
+          down &&
           autoReconnectRef.current &&
           !userDisconnectedRef.current &&
           subscriptionActiveRef.current &&
