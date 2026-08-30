@@ -162,7 +162,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                             }
                             broadcastState(
                                 false,
-                                "VPN restore failed. Enable Android Always-on VPN and Block connections without VPN."
+                                "VPN restore failed. Tap Connect now to reconnect."
                             )
                             stopForeground(STOP_FOREGROUND_REMOVE)
                             stopSelf()
@@ -185,7 +185,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().remove(KEY_CONFIG).apply()
         broadcastState(
             false,
-            "VPN permission was revoked. Enable Always-on VPN and Block connections without VPN."
+            "VPN permission was revoked. Tap Connect now to reconnect."
         )
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()

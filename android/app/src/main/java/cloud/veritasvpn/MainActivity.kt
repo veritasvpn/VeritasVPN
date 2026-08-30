@@ -11,7 +11,6 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
-import android.provider.Settings
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import androidx.activity.ComponentActivity
@@ -42,7 +41,6 @@ import cloud.veritasvpn.ui.PaymentCheckoutScreen
 import cloud.veritasvpn.ui.TunnelSettingsScreen
 import cloud.veritasvpn.ui.theme.VeritasVPNTheme
 import cloud.veritasvpn.vpn.VeritasVpnService
-import cloud.veritasvpn.vpn.VpnKillSwitch
 import cloud.veritasvpn.vpn.VpnSettings
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -121,9 +119,6 @@ class MainActivity : ComponentActivity() {
                 var showDevices by remember { mutableStateOf(false) }
                 var showPortForwards by remember { mutableStateOf(false) }
                 var showTunnelSettings by remember { mutableStateOf(false) }
-                var showKillSwitchRequired by remember { mutableStateOf(false) }
-                var pendingConnectAfterKillSwitch by remember { mutableStateOf(false) }
-                var killSwitchEnabled by remember { mutableStateOf(VpnKillSwitch.isLockdownEnabled(context)) }
                 var devices by remember { mutableStateOf<List<PeerInfo>>(emptyList()) }
                 var devicesLoading by remember { mutableStateOf(false) }
                 var devicesError by remember { mutableStateOf<String?>(null) }
@@ -719,13 +714,6 @@ class MainActivity : ComponentActivity() {
                         statusMsg = "An active subscription is required. Open Plans to subscribe."
                         return
                     }
-                    killSwitchEnabled = VpnKillSwitch.isLockdownEnabled(context)
-                    if (!killSwitchEnabled) {
-                        pendingConnectAfterKillSwitch = true
-                        showKillSwitchRequired = true
-                        statusMsg = null
-                        return
-                    }
                     userWantsConnected = true
                     cancelReconnect()
                     connecting = true
@@ -740,15 +728,7 @@ class MainActivity : ComponentActivity() {
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
-                            killSwitchEnabled = VpnKillSwitch.isLockdownEnabled(context)
                             if (user != null) ensureSessionFresh()
-                            if (killSwitchEnabled && pendingConnectAfterKillSwitch) {
-                                pendingConnectAfterKillSwitch = false
-                                showKillSwitchRequired = false
-                                requestConnect()
-                            } else if (killSwitchEnabled) {
-                                showKillSwitchRequired = false
-                            }
                         }
                     }
                     lifecycleOwner.lifecycle.addObserver(observer)
@@ -985,18 +965,6 @@ class MainActivity : ComponentActivity() {
                             loadPortForwards()
                         },
                         onTunnelSettings = { showTunnelSettings = true },
-                        onOpenKillSwitchSettings = {
-                            context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
-                        },
-                        killSwitchEnabled = killSwitchEnabled,
-                        showKillSwitchRequired = showKillSwitchRequired,
-                        onDismissKillSwitchRequired = {
-                            showKillSwitchRequired = false
-                            pendingConnectAfterKillSwitch = false
-                            userWantsConnected = false
-                            connecting = false
-                            reconnecting = false
-                        },
                         isPremium = billingStatus?.isPremium == true,
                         billingReady = billingStatus != null,
                         statusMsg = statusMsg,
