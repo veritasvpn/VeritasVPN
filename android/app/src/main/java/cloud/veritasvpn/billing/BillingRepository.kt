@@ -5,7 +5,6 @@ import cloud.veritasvpn.api.BillingStatus
 import cloud.veritasvpn.api.CheckoutResponse
 import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.auth.AuthenticatedApi
-import cloud.veritasvpn.auth.SessionExpiredException
 
 class BillingRepository(private val auth: AuthRepository) {
     fun status(): BillingStatus = AuthenticatedApi.execute(
@@ -50,7 +49,9 @@ class BillingRepository(private val auth: AuthRepository) {
     }
 
     private fun billingError(code: Int, serverMessage: String?, fallback: String): Error {
-        if (code == 401) throw SessionExpiredException()
+        // Do not force a full sign-out on billing 401. Session expiry is handled
+        // by AuthenticatedApi only when refresh fails. Billing auth mismatches
+        // should surface as plan-load errors, not kick the user to login.
         return Error(serverMessage?.takeIf { it.isNotBlank() } ?: fallback)
     }
 
