@@ -59,6 +59,14 @@ type BTCPayInvoiceRequest struct {
 		RedirectURL          string   `json:"redirectURL"`
 		PaymentMethods       []string `json:"paymentMethods,omitempty"`
 		DefaultPaymentMethod string   `json:"defaultPaymentMethod,omitempty"`
+		// Accept small underpayments from wallet rounding (sats) so a single
+		// "Pay in wallet" send settles the invoice instead of demanding dust.
+		PaymentTolerance float64 `json:"paymentTolerance"`
+		// Never bake an estimated miner fee into the BIP21 amount. Wallets pay
+		// the invoice amount on-chain and add their own fee on top. Including a
+		// BTCPay network fee caused Exodus to underpay by a few sats, then
+		// demand a second payment plus another fee.
+		NetworkFeeMode string `json:"networkFeeMode"`
 	} `json:"checkout"`
 }
 
@@ -88,6 +96,8 @@ func (b *BTCPayProvider) CreateInvoice(accountID, tier, paymentMethod, planID st
 	invReq.Checkout.RedirectURL = b.redirectURL
 	invReq.Checkout.PaymentMethods = []string{"BTC-CHAIN"}
 	invReq.Checkout.DefaultPaymentMethod = "BTC-CHAIN"
+	invReq.Checkout.PaymentTolerance = 5 // percent; covers sat rounding from wallets
+	invReq.Checkout.NetworkFeeMode = "Never"
 
 	body, err := json.Marshal(invReq)
 	if err != nil {

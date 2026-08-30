@@ -36,7 +36,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: billing-svc
-          image: localhost:31500/billing-svc@sha256:891bcca9d15113915b0641b7781cc07dfd954fbaeab715676662ba632efa0abf
+          image: localhost:31500/billing-svc@sha256:7070156a283c095bdef20dd2342a17586eec7eb8ec66f2d70164abaeda02f57f
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
