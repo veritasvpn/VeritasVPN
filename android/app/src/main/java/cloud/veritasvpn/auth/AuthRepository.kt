@@ -2,8 +2,10 @@ package cloud.veritasvpn.auth
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Base64
 import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.AuthResponse
+import org.json.JSONObject
 
 data class User(
     val email: String? = null,
@@ -26,6 +28,44 @@ class AuthRepository(context: Context) {
 
     fun getAccessToken(): String? = prefs.getString("access_token", null)
     fun getRefreshToken(): String? = prefs.getString("refresh_token", null)
+
+    fun isAccessTokenExpired(skewSeconds: Long = 30): Boolean {
+        val token = getAccessToken() ?: return true
+        val parts = token.split('.')
+        if (parts.size < 2) return true
+        return try {
+            val payload = String(
+                Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+            )
+            val exp = JSONObject(payload).optLong("exp", 0L)
+            exp == 0L || exp <= (System.currentTimeMillis() / 1000) + skewSeconds
+        } catch (_: Exception) {
+            true
+        }
+    }
+
+    /** Returns a non-expired access token, refreshing the session when needed. */
+    fun getValidAccessToken(): String? {
+        val existing = getAccessToken()?.takeIf { it.isNotBlank() }
+        if (existing != null && !isAccessTokenExpired()) return existing
+        if (!refreshSession()) return null
+        return getAccessToken()?.takeIf { it.isNotBlank() }
+    }
+
+    fun requireAccessToken(): String {
+        return getValidAccessToken() ?: run {
+            signOut()
+            throw SessionExpiredException()
+        }
+    }
+
+    /** Returns false when a stored user was signed out because the session is dead. */
+    fun validateSessionOnResume(): Boolean {
+        if (getStoredUser() == null) return true
+        if (getValidAccessToken() != null) return true
+        signOut()
+        return false
+    }
 
     private fun persist(user: User, data: AuthResponse) {
         prefs.edit()

@@ -1,5 +1,5 @@
-import { initAuthUI } from './auth-release-12.js?v=auth19';
-import { initBillingUI } from './billing.js?v=5';
+import { initAuthUI } from './auth-release-12.js?v=auth20';
+import { initBillingUI } from './billing.js?v=6';
 
 document.addEventListener('DOMContentLoaded', () => {
   const navbar = document.getElementById('navbar');

@@ -11,7 +11,7 @@ data:
   PUBLIC_BASE_URL: "https://veritasvpn.cloud"
   JWT_ISSUER: "https://api.veritasvpn.cloud"
   JWT_AUDIENCE: "veritasvpn-api"
-  ACCESS_TOKEN_TTL: "15m"
+  ACCESS_TOKEN_TTL: "1h"
   REFRESH_TOKEN_TTL: "720h"
 
   POSTGRES_DB: "veritas"

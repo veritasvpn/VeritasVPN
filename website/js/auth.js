@@ -7,6 +7,7 @@ const STORAGE_KEYS = {
 };
 
 export const ACCOUNT_PATH = '/account/';
+export const SESSION_EXPIRED_EVENT = 'veritas-session-expired';
 
 let currentUser = null;
 let listeners = [];
@@ -93,32 +94,72 @@ function extractAuthError(data, status, rawText = '') {
 }
 
 async function apiWithAuth(path, options = {}) {
-  const token = getAccessToken();
+  const token = await getIdToken();
   if (!token) {
-    throw new Error('Not signed in');
+    forceSignOutOnExpiry();
+    throw new Error('Your session expired. Please sign in again.');
   }
-  try {
-    return await api(path, {
-      ...options,
-      headers: {
-        ...(options.headers || {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  } catch (err) {
-    if (err.message.includes('401') || err.message.includes('invalid token')) {
-      const refreshed = await refreshTokenSilently();
-      if (refreshed) {
-        return api(path, {
-          ...options,
-          headers: {
-            ...(options.headers || {}),
-            Authorization: `Bearer ${getAccessToken()}`,
-          },
-        });
-      }
+  const res = await fetch(`${AUTH_API}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Veritas-Client': 'web',
+      ...(options.headers || {}),
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (res.status === 401) {
+    const refreshed = await refreshTokenSilently();
+    if (!refreshed) {
+      forceSignOutOnExpiry();
+      throw new Error('Your session expired. Please sign in again.');
     }
-    throw err;
+    return apiWithAuth(path, options);
+  }
+  const rawText = await res.text();
+  let data = {};
+  try {
+    data = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    data = {};
+  }
+  if (!res.ok) {
+    throw new Error(extractAuthError(data, res.status, rawText));
+  }
+  return data;
+}
+
+/** Authenticated fetch for any Veritas API URL. Signs out immediately when the session is dead. */
+export async function apiFetch(url, options = {}) {
+  const token = await getIdToken();
+  if (!token) {
+    forceSignOutOnExpiry();
+    throw new Error('Your session expired. Please sign in again.');
+  }
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (res.status === 401) {
+    const refreshed = await refreshTokenSilently();
+    if (!refreshed) {
+      forceSignOutOnExpiry();
+      throw new Error('Your session expired. Please sign in again.');
+    }
+    return apiFetch(url, options);
+  }
+  return res;
+}
+
+export function forceSignOutOnExpiry() {
+  clearSession();
+  notifyListeners(null);
+  window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+  if (window.location.pathname.startsWith('/account')) {
+    window.location.replace('/?signin=1');
   }
 }
 
@@ -136,8 +177,6 @@ async function refreshTokenSilently() {
     }
     return true;
   } catch {
-    clearSession();
-    notifyListeners(null);
     return false;
   }
 }
@@ -160,6 +199,15 @@ export function onAuthStateChanged(fn) {
     const sessionUser = restoreSession();
     currentUser = sessionUser;
     authReady = true;
+    if (sessionUser) {
+      void getIdToken().then((token) => {
+        if (!token) fn(null);
+        else fn(sessionUser);
+      });
+      return () => {
+        listeners = listeners.filter((l) => l !== fn);
+      };
+    }
     fn(sessionUser);
   }
   return () => {
@@ -168,18 +216,17 @@ export function onAuthStateChanged(fn) {
 }
 
 export async function getIdToken() {
-  let token = getAccessToken();
+  const token = getAccessToken();
   if (!token) return null;
   const payload = parseJwt(token);
-  if (payload && payload.exp) {
-    const now = Math.floor(Date.now() / 1000);
-    if (payload.exp - now < 60) {
-      const ok = await refreshTokenSilently();
-      if (!ok) return null;
-      token = getAccessToken();
-    }
+  const now = Math.floor(Date.now() / 1000);
+  if (payload?.exp && payload.exp > now + 30) return token;
+  const ok = await refreshTokenSilently();
+  if (!ok) {
+    forceSignOutOnExpiry();
+    return null;
   }
-  return token;
+  return getAccessToken();
 }
 
 function parseJwt(token) {
@@ -245,6 +292,14 @@ function shouldRedirectToDashboardAfterAuth() {
 }
 
 export function initAuthUI({ redirectAfterAuth = true } = {}) {
+  if (!window.__veritasSessionWatchInstalled) {
+    window.__veritasSessionWatchInstalled = true;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || !restoreSession()) return;
+      void getIdToken();
+    });
+  }
+
   const modal = document.getElementById('authModal');
   const openButtons = document.querySelectorAll('[data-auth-open]');
   const gateButtons = document.querySelectorAll('[data-auth-gate]');

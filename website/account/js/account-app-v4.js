@@ -2,14 +2,14 @@ import {
   auth,
   onAuthStateChanged,
   signOutHandler,
-  getIdToken,
   sendPasswordResetEmail,
-} from '/js/auth.js?v=handoff1';
+  apiFetch,
+} from '/js/auth.js?v=handoff2';
 import {
   fetchBillingStatus,
   startPremiumCheckout,
   cancelSubscription,
-} from '/js/billing.js?v=5';
+} from '/js/billing.js?v=6';
 
 const content = document.getElementById('accountContent');
 const shell = document.getElementById('accountShell');
@@ -24,73 +24,46 @@ const sidebar = document.querySelector('.account-sidebar');
 let billingStatus = null;
 let flash = null;
 
-async function deleteCurrentAccount() {
-  const token = await getIdToken();
-  if (!token) throw new Error("Your session has expired. Please sign in again.");
-  const response = await fetch("https://api.veritasvpn.cloud/api/v1/auth/account", {
-    method: "DELETE",
-    headers: { Authorization: "Bearer " + token },
-  });
+async function authApiFetch(url, options = {}) {
+  const response = await apiFetch(url, options);
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || "Could not delete account");
+    throw new Error(data.error || `Request failed (${response.status})`);
   }
+  return data;
+}
+
+async function deleteCurrentAccount() {
+  await authApiFetch("https://api.veritasvpn.cloud/api/v1/auth/account", { method: "DELETE" });
   await signOutHandler();
 }
 
 async function logoutAllSessions() {
-  const token = await getIdToken();
-  if (!token) throw new Error("Your session has expired. Please sign in again.");
-  const response = await fetch("https://api.veritasvpn.cloud/api/v1/auth/logout-all", {
+  await authApiFetch("https://api.veritasvpn.cloud/api/v1/auth/logout-all", {
     method: "POST",
-    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: "{}",
   });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || "Could not sign out other sessions");
-  }
   await signOutHandler();
 }
 
 async function fetchPeers() {
-  const token = await getIdToken();
-  if (!token) throw new Error("Your session has expired. Please sign in again.");
-  const response = await fetch("https://api.veritasvpn.cloud/api/v1/wg/peers", {
-    headers: { Authorization: "Bearer " + token },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Could not load devices");
+  const data = await authApiFetch("https://api.veritasvpn.cloud/api/v1/wg/peers");
   return Array.isArray(data.peers) ? data.peers : [];
 }
 
 async function revokePeer(peerId) {
-  const token = await getIdToken();
-  if (!token) throw new Error("Your session has expired. Please sign in again.");
-  const response = await fetch("https://api.veritasvpn.cloud/api/v1/wg/peers/" + encodeURIComponent(peerId), {
+  await authApiFetch("https://api.veritasvpn.cloud/api/v1/wg/peers/" + encodeURIComponent(peerId), {
     method: "DELETE",
-    headers: { Authorization: "Bearer " + token },
   });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || "Could not revoke device");
-  }
 }
 
 async function fetchPortForwards() {
-  const token = await getIdToken();
-  if (!token) throw new Error("Your session has expired. Please sign in again.");
-  const response = await fetch("https://api.veritasvpn.cloud/api/v1/wg/port-forwards", {
-    headers: { Authorization: "Bearer " + token },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Could not load port forwards");
+  const data = await authApiFetch("https://api.veritasvpn.cloud/api/v1/wg/port-forwards");
   return Array.isArray(data.port_forwards) ? data.port_forwards : [];
 }
 
 async function createPortForward({ peerId, protocol, externalPort, internalPort }) {
-  const token = await getIdToken();
-  if (!token) throw new Error("Your session has expired. Please sign in again.");
   const body = {
     peer_id: peerId,
     protocol,
@@ -99,27 +72,17 @@ async function createPortForward({ peerId, protocol, externalPort, internalPort 
   if (internalPort !== '' && internalPort != null) {
     body.internal_port = Number(internalPort);
   }
-  const response = await fetch("https://api.veritasvpn.cloud/api/v1/wg/port-forwards", {
+  return authApiFetch("https://api.veritasvpn.cloud/api/v1/wg/port-forwards", {
     method: "POST",
-    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Could not create port forward");
-  return data;
 }
 
 async function deletePortForward(id) {
-  const token = await getIdToken();
-  if (!token) throw new Error("Your session has expired. Please sign in again.");
-  const response = await fetch("https://api.veritasvpn.cloud/api/v1/wg/port-forwards/" + encodeURIComponent(id), {
+  await authApiFetch("https://api.veritasvpn.cloud/api/v1/wg/port-forwards/" + encodeURIComponent(id), {
     method: "DELETE",
-    headers: { Authorization: "Bearer " + token },
   });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || "Could not delete port forward");
-  }
 }
 
 function shortId(id) {

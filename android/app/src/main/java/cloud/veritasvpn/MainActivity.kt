@@ -30,6 +30,8 @@ import cloud.veritasvpn.api.PeerResponse
 import cloud.veritasvpn.api.PortForwardInfo
 import cloud.veritasvpn.api.PortForwardListResponse
 import cloud.veritasvpn.auth.AuthRepository
+import cloud.veritasvpn.auth.AuthenticatedApi
+import cloud.veritasvpn.auth.SessionExpiredException
 import cloud.veritasvpn.billing.BillingRepository
 import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.DashboardScreen
@@ -106,7 +108,7 @@ class MainActivity : ComponentActivity() {
                 var user by remember { mutableStateOf(authRepo.getStoredUser()) }
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
-                val billingRepo = remember { BillingRepository() }
+                val billingRepo = remember { BillingRepository(authRepo) }
                 var connected by remember { mutableStateOf(false) }
                 var connecting by remember { mutableStateOf(false) }
                 var reconnecting by remember { mutableStateOf(false) }
@@ -150,13 +152,34 @@ class MainActivity : ComponentActivity() {
                 var checkoutMethod by remember { mutableStateOf<String?>(null) }
                 var checkoutUrl by remember { mutableStateOf<String?>(null) }
 
-                fun requireBillingToken(): String {
-                    authRepo.getAccessToken()?.takeIf { it.isNotBlank() }?.let { return it }
-                    if (authRepo.refreshSession()) {
-                        return authRepo.getAccessToken()
-                            ?: throw IllegalStateException("Your session expired. Sign in again.")
+                fun performLocalSignOut() {
+                    userWantsConnected = false
+                    hadEstablishedSession = false
+                    cancelReconnect()
+                    disconnectVpnService()
+                    peerIdForDisconnect()
+                    authRepo.signOut()
+                    billingStatus = null
+                    checkoutUrl = null
+                    billingError = null
+                    checkoutMethod = null
+                    showPlans = false
+                    showDevices = false
+                    showPortForwards = false
+                    showTunnelSettings = false
+                    user = null
+                }
+
+                fun handleSessionExpired() {
+                    performLocalSignOut()
+                }
+
+                fun ensureSessionFresh() {
+                    scope.launch(Dispatchers.IO) {
+                        if (user != null && !authRepo.validateSessionOnResume()) {
+                            withContext(Dispatchers.Main) { handleSessionExpired() }
+                        }
                     }
-                    throw IllegalStateException("Your session expired. Sign in again.")
                 }
 
                 fun refreshBilling() {
@@ -167,13 +190,17 @@ class MainActivity : ComponentActivity() {
                         try {
                             val status = withTimeout(8_000) {
                                 withContext(Dispatchers.IO) {
-                                    billingRepo.status(requireBillingToken())
+                                    billingRepo.status()
                                 }
                             }
                             billingStatus = status
                             writeCachedBillingStatus(context, user!!.accountId, status)
                             billingError = null
                         } catch (e: Exception) {
+                            if (e is SessionExpiredException) {
+                                handleSessionExpired()
+                                return@launch
+                            }
                             // Preserve the last verified plan during a transient
                             // network failure. It is safer and clearer than
                             // replacing an active cached plan with an error state.
@@ -196,10 +223,9 @@ class MainActivity : ComponentActivity() {
                     scope.launch {
                         try {
                             val list = withContext(Dispatchers.IO) {
-                                authRepo.refreshSession()
-                                val token = authRepo.getAccessToken()
-                                    ?: throw IllegalStateException("Not signed in")
-                                ApiClient.get("/api/v1/wg/peers", token).use { res ->
+                                AuthenticatedApi.execute(authRepo, { token ->
+                                    ApiClient.get("/api/v1/wg/peers", token)
+                                }) { res ->
                                     if (!res.isSuccessful) {
                                         throw IllegalStateException("Could not load devices (${res.code})")
                                     }
@@ -208,6 +234,10 @@ class MainActivity : ComponentActivity() {
                             }
                             devices = list
                         } catch (e: Exception) {
+                            if (e is SessionExpiredException) {
+                                handleSessionExpired()
+                                return@launch
+                            }
                             devicesError = e.message ?: "Could not load devices."
                         } finally {
                             devicesLoading = false
@@ -221,16 +251,17 @@ class MainActivity : ComponentActivity() {
                     scope.launch {
                         try {
                             val (peerList, forwardList) = withContext(Dispatchers.IO) {
-                                authRepo.refreshSession()
-                                val token = authRepo.getAccessToken()
-                                    ?: throw IllegalStateException("Not signed in")
-                                val peersResult = ApiClient.get("/api/v1/wg/peers", token).use { res ->
+                                val peersResult = AuthenticatedApi.execute(authRepo, { token ->
+                                    ApiClient.get("/api/v1/wg/peers", token)
+                                }) { res ->
                                     if (!res.isSuccessful) {
                                         throw IllegalStateException("Could not load devices (${res.code})")
                                     }
                                     ApiClient.parse<PeerListResponse>(res)?.peers.orEmpty()
                                 }
-                                val forwardsResult = ApiClient.get("/api/v1/wg/port-forwards", token).use { res ->
+                                val forwardsResult = AuthenticatedApi.execute(authRepo, { token ->
+                                    ApiClient.get("/api/v1/wg/port-forwards", token)
+                                }) { res ->
                                     if (!res.isSuccessful) {
                                         val err = ApiClient.parse<PortForwardListResponse>(res)?.error
                                         throw IllegalStateException(err ?: "Could not load port forwards (${res.code})")
@@ -243,6 +274,7 @@ class MainActivity : ComponentActivity() {
                             portForwards = forwardList
                         } catch (e: Exception) {
                             portForwardsError = e.message ?: "Could not load port forwards."
+                            if (e is SessionExpiredException) handleSessionExpired()
                         } finally {
                             portForwardsLoading = false
                         }
@@ -270,21 +302,6 @@ class MainActivity : ComponentActivity() {
                     reconnectAttempt = 0
                 }
 
-                fun performLocalSignOut() {
-                    userWantsConnected = false
-                    hadEstablishedSession = false
-                    cancelReconnect()
-                    disconnectVpnService()
-                    peerIdForDisconnect()
-                    authRepo.signOut()
-                    billingStatus = null
-                    showPlans = false
-                    showDevices = false
-                    showPortForwards = false
-                    showTunnelSettings = false
-                    user = null
-                }
-
                 fun startCheckout(paymentMethod: String, planId: String) {
                     if (checkoutMethod != null) return
                     checkoutMethod = paymentMethod
@@ -292,10 +309,14 @@ class MainActivity : ComponentActivity() {
                     scope.launch {
                         try {
                             val createdCheckoutUrl = withContext(Dispatchers.IO) {
-                                billingRepo.createCheckout(requireBillingToken(), paymentMethod, planId)
+                                billingRepo.createCheckout(paymentMethod, planId)
                             }
                             checkoutUrl = createdCheckoutUrl
                         } catch (e: Exception) {
+                            if (e is SessionExpiredException) {
+                                handleSessionExpired()
+                                return@launch
+                            }
                             billingError = e.message ?: "Could not open checkout."
                         } finally {
                             checkoutMethod = null
@@ -320,7 +341,7 @@ class MainActivity : ComponentActivity() {
                         try {
                             val status = withTimeout(7_000) {
                                 withContext(Dispatchers.IO) {
-                                    billingRepo.status(requireBillingToken())
+                                    billingRepo.status()
                                 }
                             }
                             billingStatus = status
@@ -329,7 +350,12 @@ class MainActivity : ComponentActivity() {
                                 checkoutUrl = null
                                 billingError = null
                             }
-                        } catch (_: Exception) { }
+                        } catch (e: Exception) {
+                            if (e is SessionExpiredException) {
+                                handleSessionExpired()
+                                return@launch
+                            }
+                        }
                     }
                 }
 
@@ -339,12 +365,16 @@ class MainActivity : ComponentActivity() {
                     scope.launch {
                         try {
                             withContext(Dispatchers.IO) {
-                                billingRepo.cancel(requireBillingToken())
+                                billingRepo.cancel()
                             }
                             billingStatus = withContext(Dispatchers.IO) {
-                                billingRepo.status(requireBillingToken())
+                                billingRepo.status()
                             }
                         } catch (e: Exception) {
+                            if (e is SessionExpiredException) {
+                                handleSessionExpired()
+                                return@launch
+                            }
                             billingError = e.message ?: "Could not cancel your subscription."
                         } finally { cancellationInProgress = false }
                     }
@@ -380,7 +410,8 @@ class MainActivity : ComponentActivity() {
                             setStatus = { msg -> statusMsg = msg },
                             setConnecting = { connecting = it },
                             isReconnect = isReconnect,
-                            onFailure = { markReconnectNeeded() }
+                            onFailure = { markReconnectNeeded() },
+                            onSessionExpired = { handleSessionExpired() }
                         )
                     }
                 }
@@ -416,7 +447,8 @@ class MainActivity : ComponentActivity() {
                             setStatus = { msg -> statusMsg = msg },
                             setConnecting = { connecting = it },
                             isReconnect = isReconnect,
-                            onFailure = { markReconnectNeeded() }
+                            onFailure = { markReconnectNeeded() },
+                            onSessionExpired = { handleSessionExpired() }
                         )
                     }
                 }
@@ -457,8 +489,9 @@ class MainActivity : ComponentActivity() {
                         if (oldPeer != null) {
                             peerCleanupJob = launch(Dispatchers.IO) {
                                 runCatching {
-                                    val token = authRepo.getAccessToken() ?: return@runCatching
-                                    ApiClient.delete("/api/v1/wg/peers/$oldPeer", token).close()
+                                    AuthenticatedApi.execute(authRepo, { token ->
+                                        ApiClient.delete("/api/v1/wg/peers/$oldPeer", token)
+                                    }) { it.close() }
                                 }
                             }
                             peerCleanupJob?.join()
@@ -518,11 +551,9 @@ class MainActivity : ComponentActivity() {
                             if (timedOutPeerId != null) {
                                 peerCleanupJob = scope.launch(Dispatchers.IO) {
                                     runCatching {
-                                        val token = authRepo.getAccessToken()
-                                            ?: return@runCatching
-                                        ApiClient.delete(
-                                            "/api/v1/wg/peers/$timedOutPeerId", token
-                                        ).close()
+                                        AuthenticatedApi.execute(authRepo, { token ->
+                                            ApiClient.delete("/api/v1/wg/peers/$timedOutPeerId", token)
+                                        }) { it.close() }
                                     }
                                 }
                             }
@@ -591,11 +622,11 @@ class MainActivity : ComponentActivity() {
                                             if (failedPeerId != null) {
                                                 peerCleanupJob = scope.launch(Dispatchers.IO) {
                                                     runCatching {
-                                                        val token = authRepo.getAccessToken()
-                                                            ?: return@runCatching
-                                                        ApiClient.delete(
-                                                            "/api/v1/wg/peers/$failedPeerId", token
-                                                        ).close()
+                                                        AuthenticatedApi.execute(authRepo, { token ->
+                                                            ApiClient.delete(
+                                                                "/api/v1/wg/peers/$failedPeerId", token
+                                                            )
+                                                        }) { it.close() }
                                                     }
                                                 }
                                             }
@@ -662,10 +693,10 @@ class MainActivity : ComponentActivity() {
                         if (peerId != null) {
                             runCatching {
                                 withContext(Dispatchers.IO) {
-                                    authRepo.refreshSession()
-                                    val token = authRepo.getAccessToken() ?: return@withContext null
-                                    ApiClient.get("/api/v1/wg/peers", token).use { res ->
-                                        if (!res.isSuccessful) return@use null
+                                    AuthenticatedApi.execute(authRepo, { token ->
+                                        ApiClient.get("/api/v1/wg/peers", token)
+                                    }) { res ->
+                                        if (!res.isSuccessful) return@execute null
                                         ApiClient.parse<PeerListResponse>(res)
                                             ?.peers
                                             ?.firstOrNull { it.id == peerId }
@@ -674,6 +705,8 @@ class MainActivity : ComponentActivity() {
                                 }
                             }.onSuccess { count ->
                                 if (count != null) dnsBlockedCount = count
+                            }.onFailure {
+                                if (it is SessionExpiredException) handleSessionExpired()
                             }
                         }
                         delay(5_000)
@@ -708,6 +741,7 @@ class MainActivity : ComponentActivity() {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
                             killSwitchEnabled = VpnKillSwitch.isLockdownEnabled(context)
+                            if (user != null) ensureSessionFresh()
                             if (killSwitchEnabled && pendingConnectAfterKillSwitch) {
                                 pendingConnectAfterKillSwitch = false
                                 showKillSwitchRequired = false
@@ -779,10 +813,9 @@ class MainActivity : ComponentActivity() {
                                         peerIdForDisconnect()
                                     }
                                     withContext(Dispatchers.IO) {
-                                        authRepo.refreshSession()
-                                        val token = authRepo.getAccessToken()
-                                            ?: throw IllegalStateException("Not signed in")
-                                        ApiClient.delete("/api/v1/wg/peers/${peer.id}", token).use { res ->
+                                        AuthenticatedApi.execute(authRepo, { token ->
+                                            ApiClient.delete("/api/v1/wg/peers/${peer.id}", token)
+                                        }) { res ->
                                             if (!res.isSuccessful) {
                                                 throw IllegalStateException("Revoke failed (${res.code})")
                                             }
@@ -790,6 +823,10 @@ class MainActivity : ComponentActivity() {
                                     }
                                     devices = devices.filterNot { it.id == peer.id }
                                 } catch (e: Exception) {
+                                    if (e is SessionExpiredException) {
+                                        handleSessionExpired()
+                                        return@launch
+                                    }
                                     devicesError = e.message ?: "Could not revoke device."
                                 } finally {
                                     revokingPeerId = null
@@ -816,16 +853,15 @@ class MainActivity : ComponentActivity() {
                             scope.launch {
                                 try {
                                     val created = withContext(Dispatchers.IO) {
-                                        authRepo.refreshSession()
-                                        val token = authRepo.getAccessToken()
-                                            ?: throw IllegalStateException("Not signed in")
                                         val body = mutableMapOf<String, Any>(
                                             "peer_id" to peerId,
                                             "protocol" to protocol,
                                             "external_port" to externalPort
                                         )
                                         if (internalPort != null) body["internal_port"] = internalPort
-                                        ApiClient.post("/api/v1/wg/port-forwards", body, token).use { res ->
+                                        AuthenticatedApi.execute(authRepo, { token ->
+                                            ApiClient.post("/api/v1/wg/port-forwards", body, token)
+                                        }) { res ->
                                             val parsed = ApiClient.parse<PortForwardInfo>(res)
                                             if (!res.isSuccessful) {
                                                 throw IllegalStateException(parsed?.error ?: "Could not create port forward (${res.code})")
@@ -835,6 +871,10 @@ class MainActivity : ComponentActivity() {
                                     }
                                     portForwards = listOf(created) + portForwards.filterNot { it.id == created.id }
                                 } catch (e: Exception) {
+                                    if (e is SessionExpiredException) {
+                                        handleSessionExpired()
+                                        return@launch
+                                    }
                                     portForwardsError = e.message ?: "Could not create port forward."
                                 } finally {
                                     portForwardCreating = false
@@ -848,10 +888,9 @@ class MainActivity : ComponentActivity() {
                             scope.launch {
                                 try {
                                     withContext(Dispatchers.IO) {
-                                        authRepo.refreshSession()
-                                        val token = authRepo.getAccessToken()
-                                            ?: throw IllegalStateException("Not signed in")
-                                        ApiClient.delete("/api/v1/wg/port-forwards/${pf.id}", token).use { res ->
+                                        AuthenticatedApi.execute(authRepo, { token ->
+                                            ApiClient.delete("/api/v1/wg/port-forwards/${pf.id}", token)
+                                        }) { res ->
                                             if (!res.isSuccessful) {
                                                 val err = ApiClient.parse<PortForwardInfo>(res)?.error
                                                 throw IllegalStateException(err ?: "Delete failed (${res.code})")
@@ -860,6 +899,10 @@ class MainActivity : ComponentActivity() {
                                     }
                                     portForwards = portForwards.filterNot { it.id == pf.id }
                                 } catch (e: Exception) {
+                                    if (e is SessionExpiredException) {
+                                        handleSessionExpired()
+                                        return@launch
+                                    }
                                     portForwardsError = e.message ?: "Could not delete port forward."
                                 } finally {
                                     deletingForwardId = null
@@ -893,11 +936,12 @@ class MainActivity : ComponentActivity() {
                             disconnectVpnService()
                             peerCleanupJob = scope.launch(Dispatchers.IO) {
                                 try {
-                                    val token = authRepo.getAccessToken()
-                                    if (token != null && disconnectedPeerId != null) {
-                                        ApiClient.delete(
-                                            "/api/v1/wg/peers/$disconnectedPeerId", token
-                                        ).close()
+                                    if (disconnectedPeerId != null) {
+                                        AuthenticatedApi.execute(authRepo, { token ->
+                                            ApiClient.delete(
+                                                "/api/v1/wg/peers/$disconnectedPeerId", token
+                                            )
+                                        }) { it.close() }
                                     }
                                 } catch (_: Exception) {}
                             }
@@ -1013,7 +1057,8 @@ class MainActivity : ComponentActivity() {
         setStatus: (String) -> Unit,
         setConnecting: (Boolean) -> Unit,
         isReconnect: Boolean = false,
-        onFailure: (() -> Unit)? = null
+        onFailure: (() -> Unit)? = null,
+        onSessionExpired: (() -> Unit)? = null,
     ) {
         if (currentPeerId != null) return
         setStatus(if (isReconnect) "Reconnecting…" else "Connecting...")
@@ -1024,15 +1069,14 @@ class MainActivity : ComponentActivity() {
                 // asynchronous cleanup could otherwise remove the new peer.
                 peerCleanupJob?.join()
                 val (keyPair, peer) = withContext(Dispatchers.IO) {
-                    authRepo.refreshSession()
-                    val token = authRepo.getAccessToken()
-                        ?: throw IllegalStateException("Not signed in")
                     val generated = KeyPair()
-                    val createdPeer = ApiClient.post(
-                        "/api/v1/wg/peers",
-                        mapOf("public_key" to generated.publicKey.toBase64()),
-                        token
-                    ).use { res ->
+                    val createdPeer = AuthenticatedApi.execute(authRepo, { token ->
+                        ApiClient.post(
+                            "/api/v1/wg/peers",
+                            mapOf("public_key" to generated.publicKey.toBase64()),
+                            token
+                        )
+                    }) { res ->
                         if (!res.isSuccessful) {
                             val err = ApiClient.parse<PeerResponse>(res)?.error
                             throw IllegalStateException(err ?: "Failed to create peer")
@@ -1052,6 +1096,10 @@ class MainActivity : ComponentActivity() {
                 VpnSettings.setCurrentPeerId(context, peer.peerId)
                 context.startForegroundService(intent)
             } catch (e: Exception) {
+                if (e is SessionExpiredException) {
+                    onSessionExpired?.invoke()
+                    return@launch
+                }
                 setConnecting(false)
                 setStatus(e.message?.takeIf { it.isNotBlank() }
                     ?: "Connection failed. Check your network and try again.")

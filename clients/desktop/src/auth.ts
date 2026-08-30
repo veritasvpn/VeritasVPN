@@ -168,6 +168,62 @@ export function getStoredToken(): string | null {
   return accessTokenCache;
 }
 
+export const SESSION_EXPIRED_EVENT = "veritas-session-expired";
+
+export class SessionExpiredError extends Error {
+  constructor() {
+    super("Your session expired. Sign in again.");
+    this.name = "SessionExpiredError";
+  }
+}
+
+function parseJwtPayload(token: string): { exp?: number } | null {
+  try {
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const base64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(atob(base64)) as { exp?: number };
+  } catch {
+    return null;
+  }
+}
+
+export function isAccessTokenExpired(token: string, skewSeconds = 30): boolean {
+  const payload = parseJwtPayload(token);
+  const exp = payload?.exp;
+  if (!exp) return true;
+  return exp <= Math.floor(Date.now() / 1000) + skewSeconds;
+}
+
+/** Returns a fresh access token, refreshing when expired. */
+export async function getValidAccessToken(): Promise<string | null> {
+  let token = getStoredToken();
+  if (token && !isAccessTokenExpired(token)) return token;
+  if (await refreshSession()) return getStoredToken();
+  return null;
+}
+
+export async function expireSession(): Promise<void> {
+  await signOut();
+  window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+}
+
+export async function requireAccessToken(): Promise<string> {
+  const token = await getValidAccessToken();
+  if (token) return token;
+  await expireSession();
+  throw new SessionExpiredError();
+}
+
+/** Validate session on app focus; returns false when the user was signed out. */
+export async function validateSessionOnResume(): Promise<boolean> {
+  if (!getStoredUser()) return true;
+  const token = await getValidAccessToken();
+  if (token) return true;
+  await expireSession();
+  return false;
+}
+
 /** Refresh access token so JWT tier matches billing after Premium purchase. */
 export async function refreshSession(): Promise<boolean> {
   const rt = refreshTokenCache;

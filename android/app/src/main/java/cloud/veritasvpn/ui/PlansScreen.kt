@@ -139,7 +139,7 @@ fun PlansScreen(
         if (!premium) {
             Spacer(Modifier.height(18.dp))
             Text("Pay privately", color = Paper, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            Text("Complete checkout securely inside VeritasVPN. Premium activates automatically after confirmation.", color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
+            Text("Complete checkout in your browser. Premium activates automatically after confirmation.", color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
             Spacer(Modifier.height(12.dp))
             Button(
                 onClick = { onCheckout("btcpay", selectedPlan) },

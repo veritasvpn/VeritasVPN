@@ -1,10 +1,11 @@
-import { getIdToken, requireAuthOrOpenModal, auth } from './auth.js';
+import { getIdToken, requireAuthOrOpenModal, auth, forceSignOutOnExpiry } from './auth.js';
 import { BILLING_API } from './config.js';
 
 async function api(path, options = {}) {
   const token = await getIdToken();
   if (!token) {
-    throw new Error('Not signed in');
+    forceSignOutOnExpiry();
+    throw new Error('Your session expired. Please sign in again.');
   }
   const method = options.method || 'GET';
   const headers = {
@@ -19,6 +20,10 @@ async function api(path, options = {}) {
     method,
     headers,
   });
+  if (res.status === 401) {
+    forceSignOutOnExpiry();
+    throw new Error('Your session expired. Please sign in again.');
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data.error || `Request failed (${res.status})`);
@@ -74,6 +79,7 @@ async function refreshStatus() {
     setPlanBadge(status);
     setUpgradeButtonsVisible(!status.is_premium);
   } catch (err) {
+    if (String(err.message || '').includes('session expired')) return;
     console.warn('billing status:', err);
     setPlanBadge({ is_premium: false });
     setUpgradeButtonsVisible(true);

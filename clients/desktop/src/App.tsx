@@ -3,9 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import {
   getStoredUser,
-  getStoredToken,
   initializeSecureAuth,
-  refreshSession,
   signIn as doSignIn,
   signUp as doSignUp,
   signInWithAccountId as doSignInAccountId,
@@ -19,7 +17,9 @@ import {
   VerificationRequiredError,
   AccountAlreadyExistsError,
   User,
+  validateSessionOnResume,
 } from "./auth";
+import { fetchWithAuth, SessionExpiredError, SESSION_EXPIRED_EVENT } from "./session";
 import {
   readCachedBillingStatus,
   writeCachedBillingStatus,
@@ -813,14 +813,42 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [resetCooldown]);
 
+  const expireAndReturnToSignIn = useCallback(() => {
+    if (user) clearCachedBillingStatus(user.account_id);
+    setSubscriptionActive(false);
+    setSubscriptionChecked(false);
+    setBillingStatus(null);
+    setCheckoutUrl(null);
+    setShowPlans(false);
+    setShowDevices(false);
+    setShowPortForwards(false);
+    setShowSettings(false);
+    void doSignOut();
+    setUser(null);
+  }, [user]);
+
+  useEffect(() => {
+    const onExpired = () => expireAndReturnToSignIn();
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+  }, [expireAndReturnToSignIn]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible" || !user) return;
+      void validateSessionOnResume().then((ok) => {
+        if (!ok) expireAndReturnToSignIn();
+      });
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [user, expireAndReturnToSignIn]);
+
   const refreshBillingStatus = useCallback(async () => {
     if (!user) return null;
     setBillingLoading(true);
     try {
-      await refreshSession();
-      const token = getStoredToken();
-      if (!token) throw new Error("Your session expired. Sign in again.");
-      const response = await fetch(`${AUTH_API}/api/v1/billing/status`, { headers: { Authorization: `Bearer ${token}` } });
+      const response = await fetchWithAuth(`${AUTH_API}/api/v1/billing/status`);
       const status = (await response.json()) as BillingStatus;
       if (!response.ok) throw new Error(status.error || "Could not load your subscription.");
       setBillingStatus(status);
@@ -830,6 +858,10 @@ function App() {
       setBillingError("");
       return status;
     } catch (err) {
+      if (err instanceof SessionExpiredError) {
+        expireAndReturnToSignIn();
+        return null;
+      }
       const hadCached = billingStatus !== null || readCachedBillingStatus(user.account_id) !== null;
       if (!hadCached) {
         setBillingStatus(null);
@@ -841,7 +873,7 @@ function App() {
     } finally {
       setBillingLoading(false);
     }
-  }, [user, billingStatus]);
+  }, [user, billingStatus, expireAndReturnToSignIn]);
 
   useEffect(() => {
     if (!user) {
@@ -904,13 +936,9 @@ function App() {
       connectPeerRef.current = "";
       await invoke<ConnectResult>("disconnect_wireguard").catch(() => undefined);
       if (timedOutPeer) {
-        const token = getStoredToken();
-        if (token) {
-          await fetch(`${AUTH_API}/api/v1/wg/peers/${timedOutPeer}`, {
-            method: "DELETE",
-            headers: { Authorization: `Bearer ${token}` },
-          }).catch(() => undefined);
-        }
+        await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${timedOutPeer}`, {
+          method: "DELETE",
+        }).catch(() => undefined);
       }
       setConnecting(false);
       setConnected(false);
@@ -1073,12 +1101,9 @@ function App() {
     setBillingBusy(true);
     setBillingError("");
     try {
-      await refreshSession();
-      const token = getStoredToken();
-      if (!token) throw new Error("Your session expired. Sign in again.");
-      const response = await fetch(`${AUTH_API}/api/v1/billing/subscribe`, {
+      const response = await fetchWithAuth(`${AUTH_API}/api/v1/billing/subscribe`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tier: "premium", payment_method: "btcpay", plan_id: selectedPlan }),
       });
       const data = await response.json() as { checkout_url?: string; error?: string };
@@ -1087,24 +1112,25 @@ function App() {
       }
       setCheckoutUrl(data.checkout_url!);
     } catch (err) {
+      if (err instanceof SessionExpiredError) {
+        expireAndReturnToSignIn();
+        return;
+      }
       setBillingError(err instanceof Error ? err.message : "Could not start checkout.");
     } finally {
       setBillingBusy(false);
       setCheckoutMethod(null);
     }
-  }, [billingBusy, checkoutMethod, selectedPlan]);
+  }, [billingBusy, checkoutMethod, selectedPlan, expireAndReturnToSignIn]);
 
   const cancelSubscription = useCallback(async () => {
     if (billingBusy) return;
     setBillingBusy(true);
     setBillingError("");
     try {
-      await refreshSession();
-      const token = getStoredToken();
-      if (!token) throw new Error("Your session expired. Sign in again.");
-      const response = await fetch(`${AUTH_API}/api/v1/billing/cancel`, {
+      const response = await fetchWithAuth(`${AUTH_API}/api/v1/billing/cancel`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: "{}",
       });
       const data = await response.json() as { error?: string };
@@ -1112,11 +1138,15 @@ function App() {
       await refreshBillingStatus();
       setShowCancelConfirmation(false);
     } catch (err) {
+      if (err instanceof SessionExpiredError) {
+        expireAndReturnToSignIn();
+        return;
+      }
       setBillingError(err instanceof Error ? err.message : "Could not cancel your subscription.");
     } finally {
       setBillingBusy(false);
     }
-  }, [billingBusy, refreshBillingStatus]);
+  }, [billingBusy, refreshBillingStatus, expireAndReturnToSignIn]);
 
   const fetchEgressIp = useCallback(async () => {
     for (const endpoint of EGRESS_ENDPOINTS) {
@@ -1144,33 +1174,35 @@ function App() {
     setDevicesLoading(true);
     setDevicesError("");
     try {
-      await refreshSession();
-      const token = getStoredToken();
-      if (!token) throw new Error("Your session expired. Sign in again.");
-      const response = await fetch(`${AUTH_API}/api/v1/wg/peers`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`);
       const data = (await response.json()) as { peers?: PeerInfo[]; error?: string };
       if (!response.ok) throw new Error(data.error || "Could not load devices.");
       setPeers(Array.isArray(data.peers) ? data.peers : []);
     } catch (err) {
+      if (err instanceof SessionExpiredError) {
+        expireAndReturnToSignIn();
+        return;
+      }
       setDevicesError(err instanceof Error ? err.message : "Could not load devices.");
     } finally {
       setDevicesLoading(false);
     }
-  }, []);
+  }, [expireAndReturnToSignIn]);
 
   const deletePeer = useCallback(async (id: string) => {
     if (!id) return;
-    const token = getStoredToken();
-    if (!token) return;
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 5000);
-    await fetch(`${AUTH_API}/api/v1/wg/peers/${id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal,
-    }).catch(() => undefined).finally(() => window.clearTimeout(timeout));
+    try {
+      await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${id}`, {
+        method: "DELETE",
+        signal: controller.signal,
+      });
+    } catch {
+      // best effort cleanup
+    } finally {
+      window.clearTimeout(timeout);
+    }
   }, []);
 
   const connectVpn = useCallback(async (opts?: { isReconnect?: boolean }): Promise<boolean> => {
@@ -1183,7 +1215,6 @@ function App() {
     setConnecting(true);
     connectPeerRef.current = "";
 
-    let token = "";
     let createdPeerId = "";
     try {
       // Drop any previous peer before registering a new one (reconnect + stale sessions).
@@ -1200,13 +1231,8 @@ function App() {
       }
 
       if (!opts?.isReconnect) showStatus("Creating secure keys…", false);
-      await refreshSession();
-      token = getStoredToken() || "";
-      if (!token) throw new Error("Not signed in");
 
-      const billingResponse = await fetch(`${AUTH_API}/api/v1/billing/status`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const billingResponse = await fetchWithAuth(`${AUTH_API}/api/v1/billing/status`);
       const billing = (await billingResponse.json()) as BillingStatus;
       if (!billingResponse.ok || !billing.is_premium) {
         setSubscriptionActive(false);
@@ -1221,9 +1247,9 @@ function App() {
       if (!available) throw new Error("WireGuard is unavailable in this build.");
 
       const keys = await invoke<KeyPair>("generate_wg_keys");
-      const res = await fetch(`${AUTH_API}/api/v1/wg/peers`, {
+      const res = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ public_key: keys.public_key }),
       });
       const peer = (await res.json()) as PeerResponse & { code?: string };
@@ -1277,11 +1303,12 @@ function App() {
       return true;
     } catch (err) {
       connectPeerRef.current = "";
-      if (createdPeerId && token) {
-        await fetch(`${AUTH_API}/api/v1/wg/peers/${createdPeerId}`, {
-          method: "DELETE",
-          headers: { Authorization: `Bearer ${token}` },
-        }).catch(() => undefined);
+      if (createdPeerId) {
+        await deletePeer(createdPeerId);
+      }
+      if (err instanceof SessionExpiredError) {
+        expireAndReturnToSignIn();
+        return false;
       }
       const message = formatConnectError(err, wantedStealth);
       showStatus(message, isStickyStatusMessage(message));
@@ -1289,7 +1316,7 @@ function App() {
     } finally {
       setConnecting(false);
     }
-  }, [user, fetchEgressIp, deletePeer, linuxDesktop, showStatus]);
+  }, [user, fetchEgressIp, deletePeer, linuxDesktop, showStatus, expireAndReturnToSignIn]);
 
   const handleConnect = useCallback(async () => {
     userDisconnectedRef.current = false;
@@ -1460,11 +1487,7 @@ function App() {
     let cancelled = false;
     const pollPeers = async () => {
       try {
-        const token = getStoredToken();
-        if (!token) return;
-        const response = await fetch(`${AUTH_API}/api/v1/wg/peers`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`);
         if (!response.ok || cancelled) return;
         const data = (await response.json()) as { peers?: PeerInfo[] };
         if (cancelled || !Array.isArray(data.peers)) return;
@@ -1472,8 +1495,8 @@ function App() {
         if (match && typeof match.dns_blocked_count === "number") {
           setDnsBlockedCount(match.dns_blocked_count);
         }
-      } catch {
-        // ignore
+      } catch (err) {
+        if (err instanceof SessionExpiredError) expireAndReturnToSignIn();
       }
     };
     void pollPeers();
@@ -1482,18 +1505,15 @@ function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [connected, peerId]);
+  }, [connected, peerId, expireAndReturnToSignIn]);
 
   const loadPortForwards = useCallback(async () => {
     setPortForwardsLoading(true);
     setPortForwardsError("");
     try {
-      await refreshSession();
-      const token = getStoredToken();
-      if (!token) throw new Error("Your session expired. Sign in again.");
       const [peersRes, pfRes] = await Promise.all([
-        fetch(`${AUTH_API}/api/v1/wg/peers`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(`${AUTH_API}/api/v1/wg/port-forwards`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`),
+        fetchWithAuth(`${AUTH_API}/api/v1/wg/port-forwards`),
       ]);
       const peersData = (await peersRes.json()) as { peers?: PeerInfo[]; error?: string };
       const pfData = (await pfRes.json()) as { port_forwards?: PortForwardInfo[]; error?: string };
@@ -1502,11 +1522,15 @@ function App() {
       setPeers(Array.isArray(peersData.peers) ? peersData.peers : []);
       setPortForwards(Array.isArray(pfData.port_forwards) ? pfData.port_forwards : []);
     } catch (err) {
+      if (err instanceof SessionExpiredError) {
+        expireAndReturnToSignIn();
+        return;
+      }
       setPortForwardsError(err instanceof Error ? err.message : "Could not load port forwards.");
     } finally {
       setPortForwardsLoading(false);
     }
-  }, []);
+  }, [expireAndReturnToSignIn]);
 
   const openDevices = useCallback(() => {
     setShowSettings(false);
@@ -1536,9 +1560,6 @@ function App() {
     setPortForwardCreating(true);
     setPortForwardsError("");
     try {
-      await refreshSession();
-      const token = getStoredToken();
-      if (!token) throw new Error("Your session expired. Sign in again.");
       const body: Record<string, unknown> = {
         peer_id: input.peerId,
         protocol: input.protocol,
@@ -1547,32 +1568,32 @@ function App() {
       if (input.internalPort != null && !Number.isNaN(input.internalPort)) {
         body.internal_port = input.internalPort;
       }
-      const response = await fetch(`${AUTH_API}/api/v1/wg/port-forwards`, {
+      const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/port-forwards`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const data = (await response.json().catch(() => ({}))) as PortForwardInfo & { error?: string };
       if (!response.ok) throw new Error(data.error || "Could not create port forward.");
       setPortForwards((list) => [data, ...list.filter((pf) => pf.id !== data.id)]);
     } catch (err) {
+      if (err instanceof SessionExpiredError) {
+        expireAndReturnToSignIn();
+        return;
+      }
       setPortForwardsError(err instanceof Error ? err.message : "Could not create port forward.");
     } finally {
       setPortForwardCreating(false);
     }
-  }, [portForwardCreating]);
+  }, [portForwardCreating, expireAndReturnToSignIn]);
 
   const deletePortForward = useCallback(async (id: string) => {
     if (!id || deletingForwardId) return;
     setDeletingForwardId(id);
     setPortForwardsError("");
     try {
-      await refreshSession();
-      const token = getStoredToken();
-      if (!token) throw new Error("Your session expired. Sign in again.");
-      const response = await fetch(`${AUTH_API}/api/v1/wg/port-forwards/${id}`, {
+      const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/port-forwards/${id}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) {
         const data = (await response.json().catch(() => ({}))) as { error?: string };
@@ -1580,11 +1601,15 @@ function App() {
       }
       setPortForwards((list) => list.filter((pf) => pf.id !== id));
     } catch (err) {
+      if (err instanceof SessionExpiredError) {
+        expireAndReturnToSignIn();
+        return;
+      }
       setPortForwardsError(err instanceof Error ? err.message : "Could not delete port forward.");
     } finally {
       setDeletingForwardId(null);
     }
-  }, [deletingForwardId]);
+  }, [deletingForwardId, expireAndReturnToSignIn]);
 
   const revokePeer = useCallback(async (peer: PeerInfo) => {
     if (!peer.id || revokingId) return;
@@ -1594,12 +1619,8 @@ function App() {
       if (peer.id === peerIdRef.current && (connectedRef.current || connectingRef.current)) {
         await handleDisconnect();
       }
-      await refreshSession();
-      const token = getStoredToken();
-      if (!token) throw new Error("Your session expired. Sign in again.");
-      const response = await fetch(`${AUTH_API}/api/v1/wg/peers/${peer.id}`, {
+      const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${peer.id}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) {
         const data = (await response.json().catch(() => ({}))) as { error?: string };
@@ -1607,11 +1628,15 @@ function App() {
       }
       setPeers((list) => list.filter((p) => p.id !== peer.id));
     } catch (err) {
+      if (err instanceof SessionExpiredError) {
+        expireAndReturnToSignIn();
+        return;
+      }
       setDevicesError(err instanceof Error ? err.message : "Could not revoke device.");
     } finally {
       setRevokingId(null);
     }
-  }, [revokingId, handleDisconnect]);
+  }, [revokingId, handleDisconnect, expireAndReturnToSignIn]);
 
   const toggleAutoReconnect = useCallback(() => {
     setAutoReconnect((prev) => {
@@ -1660,15 +1685,11 @@ function App() {
   const handleSignOutEverywhere = useCallback(async () => {
     setShowSettings(false);
     try {
-      await refreshSession();
-      const token = getStoredToken();
-      if (token) {
-        await fetch(`${AUTH_API}/api/v1/auth/logout-all`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: "{}",
-        }).catch(() => undefined);
-      }
+      await fetchWithAuth(`${AUTH_API}/api/v1/auth/logout-all`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }).catch(() => undefined);
     } catch {
       // still sign out locally
     }
