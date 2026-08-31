@@ -10,7 +10,7 @@
 
 | Item | Lasting mechanism | Status |
 |------|-------------------|--------|
-| Android/Linux **v0.2.19** release + Functions/SHA | Tag + `release.yml` + install pages + Functions pin | **pending release** |
+| Android/Linux **v0.2.19** release + Functions/SHA | Tag + `release.yml` + install pages + Functions pin | **released** (tag v0.2.19; SHA follow-up this commit) |
 | Dell tunnel-hold | `deploy/systemd/veritas-tunnel-hold.*` **and** `.github/workflows/tunnel-hold.yml` (daily GHA; no Dell sudo required) | **GHA armed on next push** |
 | prod-smoke green | `.github/workflows/prod-smoke.yml` + GH secret `VERITAS_E2E_ACCOUNT_ID` | **pending first run after v0.2.19** |
 | Remove `JWT_SECRET` from Secret | `delete-jwt-secret-after.sh` + user/system timer (after cutover+24h) | **armed; delete after 2026-09-01T18:42:00Z** |
@@ -87,12 +87,12 @@ If it fails: Cloudflare → Transform Rule → Response header → Remove `Acces
 
 | Check | Evidence |
 |-------|----------|
-| Release tag | |
-| prod-smoke run URL | |
-| Tunnel-hold timer | |
-| JWT_SECRET removed | |
-| WAN :22 | |
-| ACAO | |
+| Release tag | `v0.2.19` — https://github.com/veritasvpn/VeritasVPN/releases/tag/v0.2.19 |
+| prod-smoke run URL | _(dispatch after this SHA commit)_ |
+| Tunnel-hold | GHA `tunnel-hold.yml` on master; Dell user JWT timer armed |
+| JWT_SECRET removed | Timer armed; due ≥2026-09-01T18:42:00Z |
+| WAN :22 | Host firewall unit active; md5 matched repo 2026-08-31 |
+| ACAO | `verify-acao.sh` PASS 2026-08-31 |
 | Manual 5+ min connect | _(human)_ |
 | BTC settle | _(human or webhook smoke)_ |
 
