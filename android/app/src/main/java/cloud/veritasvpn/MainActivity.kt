@@ -40,8 +40,6 @@ import cloud.veritasvpn.ui.PortForwardsScreen
 import cloud.veritasvpn.ui.PaymentCheckoutScreen
 import cloud.veritasvpn.ui.TunnelSettingsScreen
 import cloud.veritasvpn.ui.theme.VeritasVPNTheme
-import android.provider.Settings
-import cloud.veritasvpn.vpn.VpnKillSwitch
 import cloud.veritasvpn.vpn.VeritasVpnService
 import cloud.veritasvpn.vpn.VpnSettings
 import androidx.lifecycle.Lifecycle
@@ -135,7 +133,6 @@ class MainActivity : ComponentActivity() {
                 var txBytes by remember { mutableStateOf(0L) }
                 var handshakeMs by remember { mutableStateOf(0L) }
                 var dnsBlockedCount by remember { mutableStateOf<Long?>(null) }
-                var showAlwaysOnTip by remember { mutableStateOf(false) }
                 var excludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
                 var bypassAppsText by remember {
                     mutableStateOf(VpnSettings.bypassApps(context).joinToString("\n"))
@@ -610,19 +607,6 @@ class MainActivity : ComponentActivity() {
                                         excludeLan = appliedExcludeLan
                                         bypassAppsText = appliedBypassAppsText
                                         statusMsg = null
-                                        val tipPrefs = SecurePrefs.open(
-                                            this@MainActivity,
-                                            "veritasvpn_permissions"
-                                        )
-                                        val tipShown = tipPrefs.getBoolean(
-                                            "always_on_vpn_tip_shown",
-                                            false
-                                        )
-                                        if (!tipShown &&
-                                            !VpnKillSwitch.isLockdownEnabled(this@MainActivity)
-                                        ) {
-                                            showAlwaysOnTip = true
-                                        }
                                     } else {
                                         rxBytes = 0
                                         txBytes = 0
@@ -746,15 +730,6 @@ class MainActivity : ComponentActivity() {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
                             if (user != null) ensureSessionFresh()
-                            if (VpnKillSwitch.isLockdownEnabled(context)) {
-                                if (showAlwaysOnTip) {
-                                    SecurePrefs.open(context, "veritasvpn_permissions")
-                                        .edit()
-                                        .putBoolean("always_on_vpn_tip_shown", true)
-                                        .apply()
-                                    showAlwaysOnTip = false
-                                }
-                            }
                         }
                     }
                     lifecycleOwner.lifecycle.addObserver(observer)
@@ -999,18 +974,7 @@ class MainActivity : ComponentActivity() {
                         rxBytes = rxBytes,
                         txBytes = txBytes,
                         handshakeMs = handshakeMs,
-                        dnsBlockedCount = dnsBlockedCount,
-                        showAlwaysOnTip = showAlwaysOnTip,
-                        onOpenVpnSettings = {
-                            startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
-                        },
-                        onDismissAlwaysOnTip = {
-                            SecurePrefs.open(context, "veritasvpn_permissions")
-                                .edit()
-                                .putBoolean("always_on_vpn_tip_shown", true)
-                                .apply()
-                            showAlwaysOnTip = false
-                        }
+                        dnsBlockedCount = dnsBlockedCount
                     )
                 }
             }

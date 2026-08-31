@@ -1,7 +1,7 @@
 # Pre-production plan: JWT cutover, Android Always-on tip, release smoke
 
 **Date:** 2026-08-31  
-**Status:** Implemented. Live Dell: auth/billing/proxy/wg-manager run **without** `JWT_SECRET` mounts (EdDSA-only). `JWT_SECRET` key retained in `veritas-secrets` for emergency rollback ≥24h. Android tip in tree at 0.2.19 (needs client release). Smoke scripts + `prod-smoke.yml` added; install Dell cron for tunnel-hold when ready.  
+**Status:** JWT cutover + smoke automation done. **Android Always-on tip removed** (0.2.20): post-connect dialog was bad UX; only the system VPN permission prompt remains. Always-on remains optional via FAQ/settings copy, not an in-app dialog.  
 **Goal:** Close three remaining soft-launch → public-production gaps without blocking invite-only Linux/Android use.
 
 **Current live state (Dell, 2026-08-31):**
