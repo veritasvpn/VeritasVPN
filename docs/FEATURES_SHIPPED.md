@@ -13,7 +13,7 @@ Last updated: 2026-08-27
 
 ## Client safety
 - Linux: firewall + route kill switch mandatory while connected (no in-app off toggle)
-- Android: kill switch mandatory (Always-on VPN + Block connections without VPN; no in-app off toggle)
+- Android: while connected, full-tunnel VpnService protects traffic; for leak protection if the tunnel drops, enable Always-on VPN + Block connections without VPN in Android system settings (apps cannot force these on)
 - Desktop auto-reconnect; Android auto-reconnect after established session
 - Split tunnel: exclude LAN (desktop/Android); Android per-app bypass
 

@@ -24,7 +24,7 @@ images:
     digest: sha256:54ed252229d1e29505d2b59e3bf05b77c7038939a87646c27f4267853a4a8f3b
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
-    digest: sha256:f75d943527d786af56a70b60171c1dfa1e01bfa96d5af296786c4d2c1e6f8fd9
+    digest: sha256:ab5ddbef3fd013a62a1cbe067d796819de1cdcdd8128f3ab8be3f57bb41d060d
   - name: localhost:31500/telegram-notifier
     newName: localhost:31500/telegram-notifier
     digest: sha256:dbb8587bfd81060e12b8f21f890954e046521da511603b9d0c25786ae08f8cf2

@@ -40,10 +40,14 @@ export async function startPremiumCheckout(paymentMethod = 'btcpay', planId = 'p
     method: 'POST',
     body: JSON.stringify({ tier: 'premium', payment_method: paymentMethod, plan_id: planId }),
   });
-  if (!data.checkout_url) {
+  const checkoutUrl = typeof data.checkout_url === 'string' ? data.checkout_url : '';
+  const allowed =
+    checkoutUrl.startsWith('https://btcpay-mainnet.veritasvpn.cloud/') ||
+    checkoutUrl.startsWith('https://btcpay.veritasvpn.cloud/');
+  if (!allowed) {
     throw new Error('No checkout URL returned');
   }
-  window.open(data.checkout_url, '_blank');
+  window.open(checkoutUrl, '_blank');
 }
 
 export async function cancelSubscription() {

@@ -75,11 +75,15 @@ groups:
         annotations:
           summary: "Dell memory usage exceeds 90%"
       - alert: KubernetesContainerRestarting
-        expr: increase(kube_pod_container_status_restarts_total{namespace=~"veritas|btcpay|btcpay-mainnet|ingress-nginx"}[15m]) > 2
+        # Only alert while the pod still exists (avoids sticky alerts after a CrashLoop pod is deleted).
+        expr: |
+          increase(kube_pod_container_status_restarts_total{namespace=~"veritas|btcpay|btcpay-mainnet|ingress-nginx"}[15m]) > 2
+          and on(namespace, pod) kube_pod_info
         for: 5m
         labels: { severity: warning }
         annotations:
-          summary: "A production container is repeatedly restarting"
+          summary: "Container {{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }}) is repeatedly restarting"
+          description: "Investigate CrashLoopBackOff, OOM, or missing env (e.g. JWT_SECRET). increase(restarts[15m]) > 2."
       - alert: KubernetesContainerOOMKilled
         expr: kube_pod_container_status_last_terminated_reason{namespace=~"veritas|btcpay|btcpay-mainnet|ingress-nginx",reason="OOMKilled"} == 1 and increase(kube_pod_container_status_restarts_total{namespace=~"veritas|btcpay|btcpay-mainnet|ingress-nginx"}[1h]) > 0
         for: 5m

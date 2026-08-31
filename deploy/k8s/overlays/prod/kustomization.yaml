@@ -28,6 +28,7 @@ images:
     digest: sha256:4169260f4a2dc84df3c97aeba46882d5f7ee1b6ef94427b6c7f86951fc3b89b1
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
+    # Keep in sync with live Dell + overlays/k3s (HS256 JWT_SECRET required).
     digest: sha256:ab5ddbef3fd013a62a1cbe067d796819de1cdcdd8128f3ab8be3f57bb41d060d
   - name: localhost:31500/telegram-notifier
     newName: localhost:31500/telegram-notifier

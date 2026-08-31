@@ -32,7 +32,10 @@ class BillingRepository(private val auth: AuthRepository) {
         if (!response.isSuccessful) {
             throw billingError(response.code, data?.error, "Could not start checkout.")
         }
-        data?.checkoutUrl?.takeIf { it.startsWith("https://") }
+        data?.checkoutUrl?.takeIf { url ->
+            url.startsWith("https://btcpay-mainnet.veritasvpn.cloud/") ||
+                url.startsWith("https://btcpay.veritasvpn.cloud/")
+        }
             ?: throw Error("The server returned an invalid checkout URL.")
     }
 

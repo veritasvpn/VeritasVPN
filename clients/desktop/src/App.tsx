@@ -773,6 +773,8 @@ function App() {
   const [deviceLabel, setDeviceLabel] = useState("Current location");
   const connectPeerRef = useRef("");
   const userDisconnectedRef = useRef(false);
+  const handleDisconnectRef = useRef<() => Promise<void>>(async () => {});
+  const clearReconnectTimerRef = useRef<() => void>(() => {});
   const hadGoodHandshakeRef = useRef(false);
   const hadInterfaceUpRef = useRef(false);
   const reconnectAttemptRef = useRef(0);
@@ -823,6 +825,12 @@ function App() {
     setShowDevices(false);
     setShowPortForwards(false);
     setShowSettings(false);
+    // Tear down tunnel + kill switch like manual sign-out (expiry previously left VPN up).
+    userDisconnectedRef.current = true;
+    clearReconnectTimerRef.current();
+    if (connectedRef.current || connectingRef.current) {
+      void handleDisconnectRef.current();
+    }
     void doSignOut();
     setUser(null);
   }, [user]);
@@ -1169,6 +1177,7 @@ function App() {
       reconnectTimerRef.current = null;
     }
   }, []);
+  clearReconnectTimerRef.current = clearReconnectTimer;
 
   const loadDevices = useCallback(async () => {
     setDevicesLoading(true);
@@ -1364,6 +1373,7 @@ function App() {
       setStatusMsg(err instanceof Error ? err.message : "Disconnect failed");
     }
   }, [tunnelMode, peerId, clearReconnectTimer, deletePeer]);
+  handleDisconnectRef.current = handleDisconnect;
 
   const attemptReconnect = useCallback(async () => {
     if (reconnectingRef.current) return;
