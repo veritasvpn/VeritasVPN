@@ -11,12 +11,12 @@
 | Item | Lasting mechanism | Status |
 |------|-------------------|--------|
 | Android/Linux **v0.2.19** release + Functions/SHA | Tag + `release.yml` + install pages + Functions pin | **pending release** |
-| Dell tunnel-hold | `deploy/systemd/veritas-tunnel-hold.{service,timer}` + `/etc/veritasvpn/e2e.env` | **pending install** |
-| prod-smoke green | `.github/workflows/prod-smoke.yml` + GH secret `VERITAS_E2E_ACCOUNT_ID` | **pending first run** |
-| Remove `JWT_SECRET` from Secret | `deploy/k8s/scripts/delete-jwt-secret-after.sh` + timer (after cutover+24h) | **armed; delete after 2026-09-01T18:42:00Z** |
+| Dell tunnel-hold | `deploy/systemd/veritas-tunnel-hold.*` **and** `.github/workflows/tunnel-hold.yml` (daily GHA; no Dell sudo required) | **GHA armed on next push** |
+| prod-smoke green | `.github/workflows/prod-smoke.yml` + GH secret `VERITAS_E2E_ACCOUNT_ID` | **pending first run after v0.2.19** |
+| Remove `JWT_SECRET` from Secret | `delete-jwt-secret-after.sh` + user/system timer (after cutover+24h) | **armed; delete after 2026-09-01T18:42:00Z** |
 | RELEASE_SMOKE tick | This file + `docs/RELEASE_SMOKE.md` evidence section | **in progress** |
-| SSH WAN lockdown | `deploy/node/veritas-firewall` + `deploy/ops/verify-ssh-wan.sh` | **verify on install** (Dell script already matches repo md5) |
-| Pages ACAO `*` | `website/_headers` unset + `deploy/ops/verify-acao.sh` (+ optional CF Transform) | **verify live; add Transform if regression** |
+| SSH WAN lockdown | `deploy/node/veritas-firewall` (Dell md5 already matched repo) + `verify-ssh-wan.sh` | **firewall installed; verify from off-LAN** |
+| Pages ACAO `*` | `website/_headers` + `deploy/ops/verify-acao.sh` in prod-smoke | **PASS (2026-08-31)** |
 
 Cutover reference: JWT mounts removed **2026-08-31T18:42:00Z** (Dell).
 
@@ -30,12 +30,16 @@ Cutover reference: JWT mounts removed **2026-08-31T18:42:00Z** (Dell).
 4. Refresh `website/downloads/SHA256SUMS` + install page digests + local APK; commit → Pages deploy.
 5. Run `prod-smoke` with `release_tag=v0.2.19`.
 
-## 2. Tunnel-hold (Dell)
+## 2. Tunnel-hold
+
+**Preferred (no Dell sudo):** GitHub Actions `.github/workflows/tunnel-hold.yml` (daily).
+
+**Optional on Dell** (when you have sudo once):
 
 ```bash
 sudo bash deploy/ops/install-soft-launch-closeout.sh
-# requires /etc/veritasvpn/e2e.env with VERITAS_E2E_ACCOUNT_ID=
-sudo systemctl status veritas-tunnel-hold.timer
+# Edit /etc/veritasvpn/e2e.env → VERITAS_E2E_ACCOUNT_ID=
+sudo systemctl enable --now veritas-tunnel-hold.timer
 ```
 
 ## 3. prod-smoke
@@ -49,10 +53,18 @@ Confirm secret exists: `gh secret list -R veritasvpn/VeritasVPN | grep VERITAS_E
 
 ## 4. JWT_SECRET deletion
 
-Armed oneshot/timer deletes key **only after** `/etc/veritasvpn/jwt-cutover-at` + 24h and only if no workload mounts `JWT_SECRET`. Manual:
+**No root required** (jpg user timer):
 
 ```bash
-sudo bash deploy/k8s/scripts/delete-jwt-secret-after.sh --force-if-due
+bash deploy/ops/install-jwt-cleanup-user.sh
+```
+
+System-wide alternative: `sudo bash deploy/ops/install-soft-launch-closeout.sh`.
+
+Manual when due:
+
+```bash
+bash deploy/k8s/scripts/delete-jwt-secret-after.sh --force-if-due
 ```
 
 ## 5. SSH WAN
