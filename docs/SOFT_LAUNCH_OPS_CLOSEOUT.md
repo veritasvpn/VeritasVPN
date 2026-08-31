@@ -98,7 +98,7 @@ If it fails: Cloudflare → Transform Rule → Response header → Remove `Acces
 |-------|----------|
 | Release tag | `v0.2.19` — https://github.com/veritasvpn/VeritasVPN/releases/tag/v0.2.19 |
 | prod-smoke run URL | https://github.com/veritasvpn/VeritasVPN/actions/runs/33444007922 (success) |
-| Tunnel-hold | vpn-e2e green after agent pin: https://github.com/veritasvpn/VeritasVPN/actions/runs/33446464674 ; hold uses streak-tolerant freshness check |
+| Tunnel-hold | **PASS** https://github.com/veritasvpn/VeritasVPN/actions/runs/33446956850 (after agent pin); short vpn-e2e https://github.com/veritasvpn/VeritasVPN/actions/runs/33446464674 |
 | JWT_SECRET removed | Timer armed on Dell (jpg user); due ≥2026-09-01T18:42:00Z |
 | WAN :22 | https://github.com/veritasvpn/VeritasVPN/actions/runs/33444195855 (PASS; LAN probes are false positives) |
 | ACAO | `verify-acao.sh` PASS 2026-08-31 (also in prod-smoke) |
