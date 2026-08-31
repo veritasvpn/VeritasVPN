@@ -10,13 +10,13 @@
 
 | Item | Lasting mechanism | Status |
 |------|-------------------|--------|
-| Android/Linux **v0.2.19** release + Functions/SHA | Tag + `release.yml` + install pages + Functions pin | **released** (tag v0.2.19; SHA follow-up this commit) |
-| Dell tunnel-hold | `deploy/systemd/veritas-tunnel-hold.*` **and** `.github/workflows/tunnel-hold.yml` (daily GHA; no Dell sudo required) | **GHA armed on next push** |
-| prod-smoke green | `.github/workflows/prod-smoke.yml` + GH secret `VERITAS_E2E_ACCOUNT_ID` | **pending first run after v0.2.19** |
-| Remove `JWT_SECRET` from Secret | `delete-jwt-secret-after.sh` + user/system timer (after cutover+24h) | **armed; delete after 2026-09-01T18:42:00Z** |
-| RELEASE_SMOKE tick | This file + `docs/RELEASE_SMOKE.md` evidence section | **in progress** |
-| SSH WAN lockdown | `deploy/node/veritas-firewall` (Dell md5 already matched repo) + `verify-ssh-wan.sh` | **firewall installed; verify from off-LAN** |
-| Pages ACAO `*` | `website/_headers` + `deploy/ops/verify-acao.sh` in prod-smoke | **PASS (2026-08-31)** |
+| Android/Linux **v0.2.19** release + Functions/SHA | Tag + `release.yml` + install pages + Functions pin | **DONE** — [release](https://github.com/veritasvpn/VeritasVPN/releases/tag/v0.2.19) |
+| Tunnel-hold (5+ min) | `.github/workflows/tunnel-hold.yml` daily (+ optional Dell systemd) | **DONE** — workflow on master; concurrency shared with vpn-e2e |
+| prod-smoke green | `.github/workflows/prod-smoke.yml` | **DONE** — [run](https://github.com/veritasvpn/VeritasVPN/actions/runs/33444007922) |
+| Remove `JWT_SECRET` from Secret | user timer `veritas-jwt-secret-cleanup` + script | **ARMED** — due ≥2026-09-01T18:42:00Z (auto) |
+| RELEASE_SMOKE tick | This board + `docs/RELEASE_SMOKE.md` | **DONE** for automated items; manual UX/BTC still human |
+| SSH WAN lockdown | `veritas-firewall` + off-LAN `.github/workflows/verify-wan-ssh.yml` | **VERIFY** — firewall active; GHA off-LAN probe |
+| Pages ACAO `*` | `_headers` + `verify-acao.sh` in prod-smoke | **DONE** — PASS 2026-08-31 |
 
 Cutover reference: JWT mounts removed **2026-08-31T18:42:00Z** (Dell).
 
@@ -69,11 +69,19 @@ bash deploy/k8s/scripts/delete-jwt-secret-after.sh --force-if-due
 
 ## 5. SSH WAN
 
+Dell intentionally allows SSH from **LAN + Tailscale** only. Probing from the LAN
+or from the node itself is **not** a WAN test.
+
 ```bash
-sudo bash deploy/ops/install-soft-launch-closeout.sh   # reinstalls firewall if drifted
-# From an off-LAN host:
-PUBLIC_IP=… bash deploy/ops/verify-ssh-wan.sh
+# Off-LAN (GitHub Actions — lasting):
+gh workflow run verify-wan-ssh.yml -R veritasvpn/VeritasVPN
+
+# Optional host reinstall when you have sudo:
+sudo bash deploy/ops/install-soft-launch-closeout.sh
 ```
+
+If the off-LAN probe fails (port open), reinstall `veritas-firewall` and confirm
+router does not DNAT WAN:22 to the host.
 
 ## 6. ACAO
 
@@ -88,11 +96,11 @@ If it fails: Cloudflare → Transform Rule → Response header → Remove `Acces
 | Check | Evidence |
 |-------|----------|
 | Release tag | `v0.2.19` — https://github.com/veritasvpn/VeritasVPN/releases/tag/v0.2.19 |
-| prod-smoke run URL | _(dispatch after this SHA commit)_ |
-| Tunnel-hold | GHA `tunnel-hold.yml` on master; Dell user JWT timer armed |
-| JWT_SECRET removed | Timer armed; due ≥2026-09-01T18:42:00Z |
-| WAN :22 | Host firewall unit active; md5 matched repo 2026-08-31 |
-| ACAO | `verify-acao.sh` PASS 2026-08-31 |
+| prod-smoke run URL | https://github.com/veritasvpn/VeritasVPN/actions/runs/33444007922 (success) |
+| Tunnel-hold | Workflow on master; first concurrent run failed (401 race) — fixed via shared `veritas-e2e-account` concurrency |
+| JWT_SECRET removed | Timer armed on Dell (jpg user); due ≥2026-09-01T18:42:00Z |
+| WAN :22 | Firewall active; use GHA `verify-wan-ssh.yml` (LAN probes are false positives) |
+| ACAO | `verify-acao.sh` PASS 2026-08-31 (also in prod-smoke) |
 | Manual 5+ min connect | _(human)_ |
 | BTC settle | _(human or webhook smoke)_ |
 

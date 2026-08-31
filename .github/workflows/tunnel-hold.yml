@@ -10,7 +10,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: tunnel-hold-e2e
+  # Serialize with vpn-e2e / tunnel-hold so logout-all does not race the same account.
+  group: veritas-e2e-account
   cancel-in-progress: false
 
 jobs:

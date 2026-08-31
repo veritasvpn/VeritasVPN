@@ -16,7 +16,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: prod-smoke
+  # Serialize with WireGuard E2E jobs that share VERITAS_E2E_ACCOUNT_ID.
+  group: veritas-e2e-account
   cancel-in-progress: false
 
 jobs:
