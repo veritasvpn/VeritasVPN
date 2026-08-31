@@ -47,6 +47,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.wireguard.crypto.KeyPair
 import kotlinx.coroutines.CoroutineScope
+import cloud.veritasvpn.secure.SecurePrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -62,7 +63,7 @@ private fun billingCacheKey(accountId: String, field: String): String =
     "billing_" + accountId + "_" + field
 
 private fun readCachedBillingStatus(context: Context, accountId: String): BillingStatus? {
-    val prefs = context.getSharedPreferences(BILLING_CACHE_PREFS, Context.MODE_PRIVATE)
+    val prefs = SecurePrefs.open(context, BILLING_CACHE_PREFS)
     if (!prefs.contains(billingCacheKey(accountId, "premium"))) return null
     return BillingStatus(
         tier = prefs.getString(billingCacheKey(accountId, "tier"), "free") ?: "free",
@@ -79,7 +80,7 @@ private fun writeCachedBillingStatus(
     accountId: String,
     status: BillingStatus
 ) {
-    context.getSharedPreferences(BILLING_CACHE_PREFS, Context.MODE_PRIVATE)
+    SecurePrefs.open(context, BILLING_CACHE_PREFS)
         .edit()
         .putString(billingCacheKey(accountId, "tier"), status.tier)
         .putString(billingCacheKey(accountId, "status"), status.status)
@@ -414,9 +415,9 @@ class MainActivity : ComponentActivity() {
                 fun startVpnAfterPermissions(isReconnect: Boolean = false) {
                     val notificationManager =
                         context.getSystemService(NotificationManager::class.java)
-                    val permissionPrefs = context.getSharedPreferences(
-                        "veritasvpn_permissions",
-                        Context.MODE_PRIVATE
+                    val permissionPrefs = SecurePrefs.open(
+                        context,
+                        "veritasvpn_permissions"
                     )
                     val promptAlreadyShown = permissionPrefs.getBoolean(
                         "notification_permission_prompted",

@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Base64
 import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.AuthResponse
+import cloud.veritasvpn.secure.SecurePrefs
 import org.json.JSONObject
 
 data class User(
@@ -15,7 +16,7 @@ data class User(
 
 class AuthRepository(context: Context) {
     private val prefs: SharedPreferences =
-        context.getSharedPreferences("veritas_auth", Context.MODE_PRIVATE)
+        SecurePrefs.open(context, "veritas_auth")
 
     fun getStoredUser(): User? {
         val id = prefs.getString("account_id", null) ?: return null

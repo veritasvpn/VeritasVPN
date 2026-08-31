@@ -16,6 +16,7 @@ import com.wireguard.config.Config
 import cloud.veritasvpn.MainActivity
 import cloud.veritasvpn.R
 import cloud.veritasvpn.api.ApiClient
+import cloud.veritasvpn.secure.SecurePrefs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,7 +55,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         when (intent?.action) {
             ACTION_CONNECT -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG) ?: return START_STICKY
-                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                vpnStatePrefs().edit()
                     .putString(KEY_CONFIG, config)
                     .apply()
                 hadGoodHandshake = false
@@ -107,7 +108,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
             }
             ACTION_DISCONNECT -> {
-                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                vpnStatePrefs().edit()
                     .remove(KEY_CONFIG)
                     .apply()
                 hadGoodHandshake = false
@@ -133,7 +134,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             else -> {
                 // Android may restart an Always-on VPN service without the original Intent.
                 // Keep the last approved configuration so the tunnel can be restored.
-                val savedConfig = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                val savedConfig = vpnStatePrefs()
                     .getString(KEY_CONFIG, null)
                 if (savedConfig != null) {
                     hadGoodHandshake = false
@@ -182,7 +183,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         hadGoodHandshake = false
         reconnectSignalSent = false
         runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().remove(KEY_CONFIG).apply()
+        vpnStatePrefs().edit().remove(KEY_CONFIG).apply()
         broadcastState(
             false,
             "VPN permission was revoked. Tap Connect now to reconnect."
@@ -214,7 +215,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             else -> {
                 stopStatsPolling()
                 stopForeground(STOP_FOREGROUND_REMOVE)
-                val intendedConnected = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                val intendedConnected = vpnStatePrefs()
                     .getString(KEY_CONFIG, null) != null
                 broadcastState(false, null)
                 if (intendedConnected) {
@@ -380,6 +381,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
+
+    private fun vpnStatePrefs() = SecurePrefs.open(this, PREFS_NAME)
 
     companion object {
         const val TUNNEL_NAME = "veritas"

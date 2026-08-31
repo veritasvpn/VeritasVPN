@@ -1,6 +1,7 @@
 package cloud.veritasvpn.vpn
 
 import android.content.Context
+import cloud.veritasvpn.secure.SecurePrefs
 
 /**
  * Client-side tunnel preferences (split tunnel / per-app bypass).
@@ -49,8 +50,7 @@ object VpnSettings {
         "208.0.0.0/4"
     )
 
-    private fun prefs(context: Context) =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private fun prefs(context: Context) = SecurePrefs.open(context, PREFS)
 
     fun excludeLan(context: Context): Boolean =
         prefs(context).getBoolean(KEY_EXCLUDE_LAN, false)
