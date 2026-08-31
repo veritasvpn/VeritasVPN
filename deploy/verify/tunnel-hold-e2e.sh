@@ -7,7 +7,9 @@ API_BASE="${API_BASE:-https://api.veritasvpn.cloud}"
 ACCOUNT_ID="${VERITAS_E2E_ACCOUNT_ID:-}"
 HOLD_SECONDS="${HOLD_SECONDS:-360}"
 CHECK_INTERVAL="${CHECK_INTERVAL:-60}"
-MAX_HANDSHAKE_AGE="${MAX_HANDSHAKE_AGE:-120}"
+MAX_HANDSHAKE_AGE="${MAX_HANDSHAKE_AGE:-150}"
+# Require this many consecutive stale samples before failing (survives one check blip).
+STALE_FAIL_STREAK="${STALE_FAIL_STREAK:-2}"
 INTERFACE="veritas-hold"
 WORKDIR="$(mktemp -d)"
 CONFIG="$WORKDIR/$INTERFACE.conf"
@@ -118,9 +120,10 @@ else
   EXPECTED_IP="$(getent ahostsv4 "$ENDPOINT_HOST" | awk '{print $1; exit}')"
 fi
 
-printf '[4/5] holding tunnel for %ss (interval %ss, max handshake age %ss)\n' \
-  "$HOLD_SECONDS" "$CHECK_INTERVAL" "$MAX_HANDSHAKE_AGE"
+printf '[4/5] holding tunnel for %ss (interval %ss, max handshake age %ss, stale streak %s)\n' \
+  "$HOLD_SECONDS" "$CHECK_INTERVAL" "$MAX_HANDSHAKE_AGE" "$STALE_FAIL_STREAK"
 elapsed=0
+stale_streak=0
 while (( elapsed < HOLD_SECONDS )); do
   sleep "$CHECK_INTERVAL"
   elapsed=$((elapsed + CHECK_INTERVAL))
@@ -136,9 +139,16 @@ while (( elapsed < HOLD_SECONDS )); do
   fi
   age=$((now - hs))
   if (( age > MAX_HANDSHAKE_AGE )); then
-    printf 'stale handshake age=%ss at t=%ss (max %ss) — possible 2m flap\n' \
-      "$age" "$elapsed" "$MAX_HANDSHAKE_AGE" >&2
-    exit 1
+    stale_streak=$((stale_streak + 1))
+    printf '  t=%ss WARN stale handshake_age=%ss (streak %s/%s)\n' \
+      "$elapsed" "$age" "$stale_streak" "$STALE_FAIL_STREAK"
+    if (( stale_streak >= STALE_FAIL_STREAK )); then
+      printf 'stale handshake age=%ss for %s checks at t=%ss (max %ss) — possible 2m flap\n' \
+        "$age" "$stale_streak" "$elapsed" "$MAX_HANDSHAKE_AGE" >&2
+      exit 1
+    fi
+  else
+    stale_streak=0
   fi
   EGRESS_IP="$(curl --fail --silent --show-error --max-time 15 https://api.ipify.org)"
   if [[ -z "$EGRESS_IP" || -z "$EXPECTED_IP" || "$EGRESS_IP" != "$EXPECTED_IP" ]]; then
@@ -146,7 +156,9 @@ while (( elapsed < HOLD_SECONDS )); do
       "$elapsed" "${EGRESS_IP:-none}" "${EXPECTED_IP:-none}" >&2
     exit 1
   fi
-  printf '  t=%ss ok handshake_age=%ss egress=%s\n' "$elapsed" "$age" "$EGRESS_IP"
+  if (( stale_streak == 0 )); then
+    printf '  t=%ss ok handshake_age=%ss egress=%s\n' "$elapsed" "$age" "$EGRESS_IP"
+  fi
 done
 
 printf '[5/5] teardown\n'

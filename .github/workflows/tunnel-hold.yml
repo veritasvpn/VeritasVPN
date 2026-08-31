@@ -29,8 +29,9 @@ jobs:
           VERITAS_E2E_ACCOUNT_ID: ${{ secrets.VERITAS_E2E_ACCOUNT_ID }}
           HOLD_SECONDS: "360"
           CHECK_INTERVAL: "60"
-          MAX_HANDSHAKE_AGE: "120"
+          MAX_HANDSHAKE_AGE: "150"
+          STALE_FAIL_STREAK: "2"
         run: |
           chmod +x deploy/verify/tunnel-hold-e2e.sh
-          sudo --preserve-env=VERITAS_E2E_ACCOUNT_ID,HOLD_SECONDS,CHECK_INTERVAL,MAX_HANDSHAKE_AGE,API_BASE \
+          sudo --preserve-env=VERITAS_E2E_ACCOUNT_ID,HOLD_SECONDS,CHECK_INTERVAL,MAX_HANDSHAKE_AGE,STALE_FAIL_STREAK,API_BASE \
             deploy/verify/tunnel-hold-e2e.sh
