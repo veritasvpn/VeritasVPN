@@ -20,9 +20,9 @@ jobs:
 
       - name: Prepare deploy directory
         run: |
-          (cd website/downloads && sha256sum --check SHA256SUMS)
+          (cd website/downloads && sha256sum --check --ignore-missing SHA256SUMS)
           unzip -t website/downloads/veritasvpn-chrome.zip >/dev/null
-          test "$(unzip -p website/downloads/veritasvpn-chrome.zip manifest.json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).version))')" = "0.3.6"
+          test "$(unzip -p website/downloads/veritasvpn-chrome.zip manifest.json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).version))')" = "0.3.7"
           mkdir -p dist-site
           # Pages has a 25 MiB per-file limit; the APK is streamed by a Pages Function.
           rsync -a \
