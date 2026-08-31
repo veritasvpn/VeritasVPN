@@ -13,10 +13,11 @@ ship/ops + host/edge leftovers).
 | Sign-in + Premium + EdDSA JWT + download SHA | `.github/workflows/prod-smoke.yml` → `deploy/verify/prod-smoke-api.sh` (daily + release + dispatch) |
 | ACAO `*` absent on marketing URLs | `deploy/ops/verify-acao.sh` (also invoked from prod-smoke) |
 | Short WireGuard connect | `.github/workflows/vpn-e2e.yml` → `deploy/verify/external-wireguard-e2e.sh` (hourly) |
-| 5+ min tunnel, no 2m flap | Dell **systemd** `veritas-tunnel-hold.timer` → `deploy/verify/tunnel-hold-e2e.sh` |
+| 5+ min tunnel, no 2m flap | `.github/workflows/tunnel-hold.yml` (daily) → `deploy/verify/tunnel-hold-e2e.sh` (+ optional Dell systemd) |
+| Agent heartbeat + public `:443` | Dell → `deploy/ops/verify-agent-health.sh` (after any agent/wg-manager roll) |
 | BTCPay webhook → Premium | Dell → `BTCPAY_WEBHOOK_SECRET=… deploy/verify/billing-webhook-smoke.sh` (**never** mock in prod) |
 | JWT_SECRET gone from Secret (post-drain) | `veritas-jwt-secret-cleanup.timer` → `delete-jwt-secret-after.sh` |
-| SSH WAN closed | `deploy/ops/verify-ssh-wan.sh` from off-LAN |
+| SSH WAN closed | `.github/workflows/verify-wan-ssh.yml` / `deploy/ops/verify-ssh-wan.sh` from off-LAN |
 
 ### Dell install (once)
 

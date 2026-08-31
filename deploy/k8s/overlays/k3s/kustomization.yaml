@@ -12,13 +12,13 @@ images:
     digest: sha256:e4415ac8b93128b2beaf864b887a3a3e67135dd1d2392386c241ae492d3b49d1
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    digest: sha256:d17a5b1b95503a28403b2d85d8a5924afc221a5cc4f5d1d0455005082f17e9ae
+    digest: sha256:944dbbcbbe1f259dbca23dcf956244370f54e908fcbf467414d93ce9788ccd80
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
     digest: sha256:ec30e98cb0a55485d7531ba5b709c236a315e433431e95e36b935b3fa75643e4
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    digest: sha256:4edfa4894255599d18862d3cd6e05947391d44a9b01aa6cb55cf771c3ae41a7a
+    digest: sha256:62905883a2156ea86d530fe26d28d4f1d0a7b2cac31107bbe00fc7beb038d3fc
   - name: localhost:31500/wstunnel
     newName: localhost:31500/wstunnel
     digest: sha256:54ed252229d1e29505d2b59e3bf05b77c7038939a87646c27f4267853a4a8f3b

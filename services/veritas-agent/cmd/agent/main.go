@@ -141,9 +141,8 @@ func (c *httpAgentClient) SendHeartbeat(ctx context.Context, req *HeartbeatReque
 		return fmt.Errorf("create heartbeat request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if c.authToken != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
-	}
+	// Always send bearer (same as stream/applied). wg-manager rejects missing/mismatched tokens with 401.
+	httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

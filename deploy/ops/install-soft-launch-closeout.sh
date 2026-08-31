@@ -86,7 +86,12 @@ fi
 chmod +x "$REPO_ROOT/deploy/ops/"*.sh "$REPO_ROOT/deploy/verify/"*.sh \
   "$REPO_ROOT/deploy/k8s/scripts/delete-jwt-secret-after.sh" 2>/dev/null || true
 
-printf '\nCloseout install complete.\n'
+# After rolling wg-manager, restart the agent so it re-registers with the current
+# image pin (stale agent: heartbeat 401 + wg_port 51820 breaks WAN E2E):
+#   kubectl -n veritas delete pod -l app=veritas-agent
+#   bash deploy/ops/verify-agent-health.sh
+
 systemctl list-timers 'veritas-*' --no-pager 2>/dev/null || true
 printf '\nNext: bash %s/deploy/ops/verify-acao.sh\n' "$REPO_ROOT"
-printf '      PUBLIC_IP=… bash %s/deploy/ops/verify-ssh-wan.sh  (from off-LAN)\n' "$REPO_ROOT"
+printf '      bash %s/deploy/ops/verify-agent-health.sh\n' "$REPO_ROOT"
+printf '      PUBLIC_IP=… bash %s/deploy/ops/verify-ssh-wan.sh  (from off-LAN / GHA)\n' "$REPO_ROOT"
