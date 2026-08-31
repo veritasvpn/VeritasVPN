@@ -33,7 +33,7 @@ for command in curl jq sha256sum; do
   command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 2; }
 done
 
-printf '[1/5] authenticating\n'
+printf '[1/6] authenticating\n'
 signin_code="$(curl --silent --show-error --max-time 20 \
   -o "$WORKDIR/signin.json" -w '%{http_code}' \
   -H 'Content-Type: application/json' \
@@ -46,7 +46,7 @@ fi
 ACCESS_TOKEN="$(jq -r '.access_token // empty' "$WORKDIR/signin.json")"
 [[ -n "$ACCESS_TOKEN" ]] || { printf 'sign-in response missing access_token\n' >&2; exit 1; }
 
-printf '[2/5] asserting Premium billing status\n'
+printf '[2/6] asserting Premium billing status\n'
 status_code="$(curl --silent --show-error --max-time 20 \
   -o "$WORKDIR/billing.json" -w '%{http_code}' \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
@@ -58,7 +58,7 @@ fi
 jq -e '.is_premium == true' "$WORKDIR/billing.json" >/dev/null \
   || { printf 'expected is_premium=true: %s\n' "$(cat "$WORKDIR/billing.json")" >&2; exit 1; }
 
-printf '[3/5] asserting access token algorithm\n'
+printf '[3/6] asserting access token algorithm\n'
 header_b64="$(printf '%s' "$ACCESS_TOKEN" | cut -d. -f1)"
 # JWT uses base64url without padding.
 while (( ${#header_b64} % 4 )); do header_b64="${header_b64}="; done
@@ -71,7 +71,7 @@ else
 fi
 printf '  alg=%s kid=%s\n' "$alg" "$(printf '%s' "$header_json" | jq -r '.kid // empty')"
 
-printf '[4/5] resolving release tag and SHA256SUMS\n'
+printf '[4/6] resolving release tag and SHA256SUMS\n'
 if [[ -z "$RELEASE_TAG" ]]; then
   RELEASE_TAG="$(curl --silent --show-error --max-time 20 \
     -H 'Accept: application/vnd.github+json' \
@@ -83,7 +83,7 @@ fi
 sums_url="https://github.com/veritasvpn/VeritasVPN/releases/download/${RELEASE_TAG}/SHA256SUMS"
 curl --fail --silent --show-error --max-time 60 -L -o "$WORKDIR/SHA256SUMS" "$sums_url"
 
-printf '[5/5] verifying GitHub release asset digests (+ optional live download sample)\n'
+printf '[5/6] verifying GitHub release asset digests (+ live download sample)\n'
 # Verify APK from GitHub against SHA256SUMS (present on every client release).
 apk_name="veritasvpn-android.apk"
 grep -E "[[:space:]]${apk_name}\$" "$WORKDIR/SHA256SUMS" >"$WORKDIR/apk.sum" \
@@ -103,5 +103,9 @@ if [[ "$expected" != "$actual" ]]; then
     "$apk_name" "$expected" "$actual" >&2
   exit 1
 fi
+
+printf '[6/6] verifying marketing site has no Access-Control-Allow-Origin: *\n'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SITE_BASE="$SITE_BASE" bash "$SCRIPT_DIR/../ops/verify-acao.sh"
 
 printf 'Production API + download smoke: PASS (tag=%s)\n' "$RELEASE_TAG"

@@ -24,9 +24,12 @@ Direct edits to live Kubernetes objects, server source files, Cloudflare Pages f
 
 ## Release smoke
 
-After every production or client release, follow `docs/RELEASE_SMOKE.md`:
+After every production or client release, follow `docs/RELEASE_SMOKE.md` and the
+status board in `docs/SOFT_LAUNCH_OPS_CLOSEOUT.md`:
 
-- CI `prod-smoke.yml` — sign-in, Premium, EdDSA JWT, download SHA match
+- CI `prod-smoke.yml` — sign-in, Premium, EdDSA JWT, download SHA, ACAO check
 - Hourly `vpn-e2e.yml` — short tunnel
-- Dell `tunnel-hold-e2e.sh` — 5+ minute hold
+- Dell `veritas-tunnel-hold.timer` — 5+ minute hold
 - Dell `billing-webhook-smoke.sh` — signed BTCPay settle (no mock in prod)
+- Dell `veritas-jwt-secret-cleanup.timer` — removes `JWT_SECRET` after drain
+- `deploy/ops/verify-ssh-wan.sh` / `verify-acao.sh` — host/edge regressions

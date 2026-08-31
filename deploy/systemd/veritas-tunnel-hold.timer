@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily VeritasVPN tunnel-hold smoke (04:15 local)
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

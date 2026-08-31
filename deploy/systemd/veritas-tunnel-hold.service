@@ -1,0 +1,13 @@
+[Unit]
+Description=VeritasVPN WireGuard tunnel hold (5+ min, no-flap)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/veritasvpn/e2e.env
+WorkingDirectory=/home/jpg/VeritasVPN
+ExecStart=/home/jpg/VeritasVPN/deploy/verify/tunnel-hold-e2e.sh
+# Failures land in the journal; Alertmanager covers cluster, not this host oneshot.
+StandardOutput=journal
+StandardError=journal
