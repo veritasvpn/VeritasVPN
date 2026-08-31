@@ -36,7 +36,11 @@ services:
       DATABASE_URL: postgres://veritas:${DB_PASSWORD:-change-me}@postgres:5432/veritas?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       NATS_URL: nats://nats:4222
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      JWT_ED25519_PRIVATE_KEY: ${JWT_ED25519_PRIVATE_KEY:?JWT_ED25519_PRIVATE_KEY must be set in .env}
+      JWT_ED25519_PUBLIC_KEYS: ${JWT_ED25519_PUBLIC_KEYS:?JWT_ED25519_PUBLIC_KEYS must be set in .env}
+      JWT_ACTIVE_KEY_ID: ${JWT_ACTIVE_KEY_ID:?JWT_ACTIVE_KEY_ID must be set in .env}
+      JWT_ISSUER: ${JWT_ISSUER:-https://api.veritasvpn.cloud}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-veritasvpn-api}
       LOG_LEVEL: info
       LOG_FORMAT: console
       ENVIRONMENT: production
@@ -62,7 +66,9 @@ services:
       DATABASE_URL: postgres://veritas:${DB_PASSWORD:-change-me}@postgres:5432/veritas?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       NATS_URL: nats://nats:4222
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      JWT_ED25519_PUBLIC_KEYS: ${JWT_ED25519_PUBLIC_KEYS:?JWT_ED25519_PUBLIC_KEYS must be set in .env}
+      JWT_ISSUER: ${JWT_ISSUER:-https://api.veritasvpn.cloud}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-veritasvpn-api}
       AGENT_AUTH_TOKEN: ${AGENT_AUTH_TOKEN:?AGENT_AUTH_TOKEN must be set in .env}
       LOG_LEVEL: info
       LOG_FORMAT: console
@@ -113,7 +119,9 @@ services:
     environment:
       DATABASE_URL: postgres://veritas:${DB_PASSWORD:-change-me}@postgres:5432/veritas?sslmode=disable
       NATS_URL: nats://nats:4222
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      JWT_ED25519_PUBLIC_KEYS: ${JWT_ED25519_PUBLIC_KEYS:?JWT_ED25519_PUBLIC_KEYS must be set in .env}
+      JWT_ISSUER: ${JWT_ISSUER:-https://api.veritasvpn.cloud}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-veritasvpn-api}
       AGENT_AUTH_TOKEN: ${AGENT_AUTH_TOKEN:?AGENT_AUTH_TOKEN must be set in .env}
       BTCPAY_SERVER_URL: ${BTCPAY_SERVER_URL:-http://host.docker.internal:49392}
       BTCPAY_API_KEY: ${BTCPAY_API_KEY:-}
@@ -145,7 +153,9 @@ services:
       dockerfile: services/browser-proxy/Dockerfile
     container_name: veritas-proxy
     environment:
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      JWT_ED25519_PUBLIC_KEYS: ${JWT_ED25519_PUBLIC_KEYS:?JWT_ED25519_PUBLIC_KEYS must be set in .env}
+      JWT_ISSUER: ${JWT_ISSUER:-https://api.veritasvpn.cloud}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-veritasvpn-api}
     ports:
       - "1080:1080/tcp"
     restart: unless-stopped

@@ -56,13 +56,46 @@ fun DashboardScreen(
     rxBytes: Long = 0,
     txBytes: Long = 0,
     handshakeMs: Long = 0,
-    dnsBlockedCount: Long? = null
+    dnsBlockedCount: Long? = null,
+    showAlwaysOnTip: Boolean = false,
+    onOpenVpnSettings: () -> Unit = {},
+    onDismissAlwaysOnTip: () -> Unit = {}
 ) {
     var showSignOutConfirmation by remember { mutableStateOf(false) }
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var showNetworkMap by remember { mutableStateOf(false) }
 
+    if (showAlwaysOnTip) {
+        AlertDialog(
+            onDismissRequest = onDismissAlwaysOnTip,
+            title = {
+                Text(
+                    "Stay protected if the tunnel drops",
+                    color = Paper,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    "In Android VPN settings, enable Always-on VPN and “Block connections without VPN” for VeritasVPN. The app can’t turn these on for you.",
+                    color = PaperMuted
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = onOpenVpnSettings,
+                    colors = ButtonDefaults.buttonColors(containerColor = CyanHover)
+                ) { Text("Open VPN settings", color = Ink, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissAlwaysOnTip) {
+                    Text("Got it", color = CyanHover)
+                }
+            },
+            containerColor = CardElevated
+        )
+    }
     if (showSignOutConfirmation) {
         AlertDialog(
             onDismissRequest = { showSignOutConfirmation = false },

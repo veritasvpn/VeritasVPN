@@ -83,7 +83,7 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "Container {{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }}) is repeatedly restarting"
-          description: "Investigate CrashLoopBackOff, OOM, or missing env (e.g. JWT_SECRET). increase(restarts[15m]) > 2."
+          description: "Investigate CrashLoopBackOff, OOM, or missing env (e.g. JWT_ED25519_PUBLIC_KEYS). increase(restarts[15m]) > 2."
       - alert: KubernetesContainerOOMKilled
         expr: kube_pod_container_status_last_terminated_reason{namespace=~"veritas|btcpay|btcpay-mainnet|ingress-nginx",reason="OOMKilled"} == 1 and increase(kube_pod_container_status_restarts_total{namespace=~"veritas|btcpay|btcpay-mainnet|ingress-nginx"}[1h]) > 0
         for: 5m

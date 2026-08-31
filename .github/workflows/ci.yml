@@ -49,7 +49,6 @@ jobs:
         env:
           DATABASE_URL: postgres://veritas:ci-test-password@localhost:5432/veritas?sslmode=disable
           REDIS_URL: redis://localhost:6379/0
-          JWT_SECRET: test-secret-for-ci-purposes-only
           AGENT_AUTH_TOKEN: test-agent-token
         run: |
           go test ./api/... ./lib/config/... ./lib/logging/... ./lib/crypto/... ./lib/jwt/... ./services/auth-svc/... ./services/wg-manager/... ./services/billing-svc/... ./services/veritas-agent/... ./services/browser-proxy/... ./services/bitcoin-readiness/... ./clients/cli/... -v -count=1 && go test ./services/telegram-notifier/... -v -count=1

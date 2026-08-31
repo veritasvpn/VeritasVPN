@@ -166,12 +166,23 @@ func (m *Manager) GenerateAccessToken(accountID, tier string) (string, int64, er
 	if len(m.hmacSecret) == 0 {
 		return "", 0, fmt.Errorf("access-token signer is not configured")
 	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ENVIRONMENT")), "production") {
+		return "", 0, fmt.Errorf("HS256 mint is disabled in production; configure JWT_ED25519_PRIVATE_KEY")
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString(m.hmacSecret)
 	if err != nil {
 		return "", 0, fmt.Errorf("sign token: %w", err)
 	}
 	return signed, expires.Unix(), nil
+}
+
+func (m *Manager) validMethods() []string {
+	methods := []string{jwt.SigningMethodEdDSA.Alg()}
+	if len(m.hmacSecret) > 0 {
+		methods = append(methods, jwt.SigningMethodHS256.Alg())
+	}
+	return methods
 }
 
 func (m *Manager) ValidateAccessToken(tokenStr string) (*Claims, error) {
@@ -194,7 +205,7 @@ func (m *Manager) ValidateAccessToken(tokenStr string) (*Claims, error) {
 		default:
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
-	}, jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg(), jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired())
+	}, jwt.WithValidMethods(m.validMethods()), jwt.WithExpirationRequired())
 	if err != nil {
 		return nil, fmt.Errorf("parse token: %w", err)
 	}

@@ -27,7 +27,9 @@ need() {
 }
 
 need DB_PASSWORD
-need JWT_SECRET
+need JWT_ED25519_PRIVATE_KEY
+need JWT_ED25519_PUBLIC_KEYS
+need JWT_ACTIVE_KEY_ID
 need AGENT_AUTH_TOKEN
 
 REDIS_PASSWORD="${REDIS_PASSWORD:-$DB_PASSWORD}"
@@ -52,7 +54,6 @@ fi
 
 BTC_RPC_PASSWORD="${BTC_RPC_PASSWORD:-}"
 if [ -z "$BTC_RPC_PASSWORD" ]; then
-  # BITCOIN_EXTRA_ARGS embeds rpcpassword=...
   BTC_RPC_PASSWORD="$(docker inspect btcpay-bitcoind-1 \
     --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
     | awk -F= '/^BITCOIN_EXTRA_ARGS=/{print; exit}' \
@@ -66,25 +67,52 @@ fi
 BTC_RPC_USER="${BTC_RPC_USER:-btcpay_rpc}"
 
 umask 077
-cat > "$OUT_BASE" <<EOF
-apiVersion: v1
+python3 - <<'PY' "$OUT_BASE" \
+  "$DB_PASSWORD" "$JWT_ED25519_PRIVATE_KEY" "$JWT_ED25519_PUBLIC_KEYS" "$JWT_ACTIVE_KEY_ID" \
+  "$AGENT_AUTH_TOKEN" "$REDIS_PASSWORD" "$NATS_USER" "$NATS_PASSWORD" \
+  "$RESEND_API_KEY" "$BTCPAY_API_KEY" "$BTCPAY_STORE_ID" "$BTCPAY_WEBHOOK_SECRET"
+import pathlib, sys, urllib.parse
+
+out = pathlib.Path(sys.argv[1])
+(
+    db_password, jwt_private, jwt_public, jwt_kid, agent, redis_pw, nats_user, nats_pw,
+    resend, btcpay_key, btcpay_store, btcpay_wh,
+) = sys.argv[2:]
+
+def q(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+private = jwt_private.replace("\\n", "\n")
+if "\n" in private:
+    indented = "\n".join(("    " + line) if line else "" for line in private.rstrip("\n").splitlines())
+    private_yaml = "|-\n" + indented
+else:
+    private_yaml = q(private)
+
+redis_url = "redis://:" + urllib.parse.quote(redis_pw, safe="") + "@redis:6379/0"
+out.write_text(f"""apiVersion: v1
 kind: Secret
 metadata:
   name: veritas-secrets
   namespace: veritas
 type: Opaque
 stringData:
-  DB_PASSWORD: $(printf '%s' "$DB_PASSWORD" | sed 's/"/\\"/g')
-  JWT_SECRET: $(printf '%s' "$JWT_SECRET" | sed 's/"/\\"/g')
-  AGENT_AUTH_TOKEN: $(printf '%s' "$AGENT_AUTH_TOKEN" | sed 's/"/\\"/g')
-  REDIS_PASSWORD: $(printf '%s' "$REDIS_PASSWORD" | sed 's/"/\\"/g')
-  NATS_USER: $(printf '%s' "$NATS_USER" | sed 's/"/\\"/g')
-  NATS_PASSWORD: $(printf '%s' "$NATS_PASSWORD" | sed 's/"/\\"/g')
-  RESEND_API_KEY: $(printf '%s' "$RESEND_API_KEY" | sed 's/"/\\"/g')
-  BTCPAY_API_KEY: $(printf '%s' "$BTCPAY_API_KEY" | sed 's/"/\\"/g')
-  BTCPAY_STORE_ID: $(printf '%s' "$BTCPAY_STORE_ID" | sed 's/"/\\"/g')
-  BTCPAY_WEBHOOK_SECRET: $(printf '%s' "$BTCPAY_WEBHOOK_SECRET" | sed 's/"/\\"/g')
-EOF
+  DB_PASSWORD: {q(db_password)}
+  JWT_ED25519_PRIVATE_KEY: {private_yaml}
+  JWT_ED25519_PUBLIC_KEYS: {q(jwt_public)}
+  JWT_ACTIVE_KEY_ID: {q(jwt_kid)}
+  AGENT_AUTH_TOKEN: {q(agent)}
+  REDIS_PASSWORD: {q(redis_pw)}
+  REDIS_URL: {q(redis_url)}
+  NATS_USER: {q(nats_user)}
+  NATS_PASSWORD: {q(nats_pw)}
+  RESEND_API_KEY: {q(resend)}
+  BTCPAY_API_KEY: {q(btcpay_key)}
+  BTCPAY_STORE_ID: {q(btcpay_store)}
+  BTCPAY_WEBHOOK_SECRET: {q(btcpay_wh)}
+""")
+print("Wrote base secrets")
+PY
 
 cat > "$OUT_BTCPAY" <<EOF
 apiVersion: v1
@@ -101,34 +129,13 @@ EOF
 
 chmod 600 "$OUT_BASE" "$OUT_BTCPAY"
 
-# Validate YAML keys exist without printing values
-# Inject REDIS_URL (URL-encoded password) without relying on k8s env expansion
-python3 - <<'PY2' "$OUT_BASE"
-import pathlib, re, urllib.parse, sys
-p = pathlib.Path(sys.argv[1])
-text = p.read_text()
-# parse REDIS_PASSWORD from yaml stringData
-m = re.search(r'REDIS_PASSWORD:\s*(.+)', text)
-if not m:
-    raise SystemExit('REDIS_PASSWORD missing')
-pw = m.group(1).strip()
-url = 'redis://:' + urllib.parse.quote(pw, safe='') + '@redis:6379/0'
-if 'REDIS_URL:' in text:
-    text = re.sub(r'REDIS_URL:\s*.*', 'REDIS_URL: ' + url, text)
-else:
-    text = text.replace('  REDIS_PASSWORD: ' + pw, '  REDIS_PASSWORD: ' + pw + '\n  REDIS_URL: ' + url)
-p.write_text(text)
-print('REDIS_URL injected')
-PY2
-
 python3 - <<'PY' "$OUT_BASE" "$OUT_BTCPAY"
 import sys
 try:
     import yaml
 except ImportError:
-    # minimal check: files non-empty and contain required keys
     for path, keys in [
-        (sys.argv[1], ["DB_PASSWORD", "JWT_SECRET", "AGENT_AUTH_TOKEN", "REDIS_PASSWORD"]),
+        (sys.argv[1], ["DB_PASSWORD", "JWT_ED25519_PRIVATE_KEY", "JWT_ED25519_PUBLIC_KEYS", "JWT_ACTIVE_KEY_ID", "AGENT_AUTH_TOKEN", "REDIS_PASSWORD"]),
         (sys.argv[2], ["BTCPAY_POSTGRES_PASSWORD", "BTC_RPC_PASSWORD", "BTC_RPC_USER"]),
     ]:
         text = open(path).read()
@@ -139,7 +146,7 @@ except ImportError:
     raise SystemExit(0)
 
 for path, keys in [
-    (sys.argv[1], ["DB_PASSWORD", "JWT_SECRET", "AGENT_AUTH_TOKEN", "REDIS_PASSWORD", "NATS_USER", "NATS_PASSWORD"]),
+    (sys.argv[1], ["DB_PASSWORD", "JWT_ED25519_PRIVATE_KEY", "JWT_ED25519_PUBLIC_KEYS", "JWT_ACTIVE_KEY_ID", "AGENT_AUTH_TOKEN", "REDIS_PASSWORD", "NATS_USER", "NATS_PASSWORD"]),
     (sys.argv[2], ["BTCPAY_POSTGRES_PASSWORD", "BTC_RPC_PASSWORD", "BTC_RPC_USER"]),
 ]:
     doc = yaml.safe_load(open(path))

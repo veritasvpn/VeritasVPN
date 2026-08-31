@@ -25,7 +25,9 @@ check_file() {
 }
 
 echo "--- environment variables ---"
-check_var "JWT_SECRET" "JWT signing key (>=32 hex chars)"
+check_var "JWT_ED25519_PRIVATE_KEY" "Ed25519 JWT private key (auth mint)"
+check_var "JWT_ED25519_PUBLIC_KEYS" "Ed25519 JWT public key JSON map"
+check_var "JWT_ACTIVE_KEY_ID" "Active JWT kid"
 check_var "AGENT_AUTH_TOKEN" "Agent auth token"
 check_var "DB_PASSWORD" "PostgreSQL password"
 check_var "REDIS_PASSWORD" "Redis password"

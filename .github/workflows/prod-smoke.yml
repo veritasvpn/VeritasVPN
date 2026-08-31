@@ -1,0 +1,35 @@
+name: Production smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "GitHub release tag (empty = latest)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "27 5 * * *"
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prod-smoke
+  cancel-in-progress: false
+
+jobs:
+  api-and-downloads:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Sign-in, Premium, EdDSA JWT, download SHA
+        env:
+          VERITAS_E2E_ACCOUNT_ID: ${{ secrets.VERITAS_E2E_ACCOUNT_ID }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || github.event.release.tag_name || '' }}
+          REQUIRE_EDDSA: "true"
+        run: |
+          chmod +x deploy/verify/prod-smoke-api.sh
+          deploy/verify/prod-smoke-api.sh

@@ -21,3 +21,12 @@ The Raspberry Pi and Linux desktop are not application or VPN production nodes. 
 7. Record the deployed commit and retain the transactional rollback snapshot.
 
 Direct edits to live Kubernetes objects, server source files, Cloudflare Pages files, or client artifacts create drift and must be reconciled back into `master` immediately.
+
+## Release smoke
+
+After every production or client release, follow `docs/RELEASE_SMOKE.md`:
+
+- CI `prod-smoke.yml` — sign-in, Premium, EdDSA JWT, download SHA match
+- Hourly `vpn-e2e.yml` — short tunnel
+- Dell `tunnel-hold-e2e.sh` — 5+ minute hold
+- Dell `billing-webhook-smoke.sh` — signed BTCPay settle (no mock in prod)

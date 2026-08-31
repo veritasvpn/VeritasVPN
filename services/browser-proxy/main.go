@@ -38,13 +38,13 @@ type proxy struct {
 }
 
 func main() {
-	secret := os.Getenv("JWT_SECRET")
+	secret := os.Getenv("JWT_SECRET") // optional legacy HS256; omit in production
 	publicKeys, err := parsePublicKeys(os.Getenv("JWT_ED25519_PUBLIC_KEYS"))
 	if err != nil {
 		log.Fatalf("invalid JWT_ED25519_PUBLIC_KEYS: %v", err)
 	}
-	if len(secret) < 32 && len(publicKeys) == 0 {
-		log.Fatal("JWT_ED25519_PUBLIC_KEYS or JWT_SECRET must be configured")
+	if len(publicKeys) == 0 {
+		log.Fatal("JWT_ED25519_PUBLIC_KEYS must be configured")
 	}
 	issuer := strings.TrimSpace(os.Getenv("JWT_ISSUER"))
 	if issuer == "" {

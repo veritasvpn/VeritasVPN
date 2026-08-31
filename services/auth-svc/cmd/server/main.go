@@ -36,8 +36,11 @@ func main() {
 	}
 	defer log.Sync()
 
-	if strings.TrimSpace(cfg.JWTPrivateKey) == "" && (strings.TrimSpace(cfg.JWTSecret) == "" || len(cfg.JWTSecret) < 32) {
-		log.Fatal("JWT_ED25519_PRIVATE_KEY or a JWT_SECRET of at least 32 characters is required")
+	if strings.TrimSpace(cfg.JWTPrivateKey) == "" {
+		log.Fatal("JWT_ED25519_PRIVATE_KEY is required")
+	}
+	if strings.TrimSpace(cfg.JWTPublicKeys) == "" || strings.TrimSpace(cfg.JWTActiveKeyID) == "" {
+		log.Fatal("JWT_ED25519_PUBLIC_KEYS and JWT_ACTIVE_KEY_ID are required")
 	}
 	if cfg.IsProduction() && strings.TrimSpace(cfg.TurnstileSecretKey) == "" {
 		log.Fatal("TURNSTILE_SECRET_KEY is required in production")

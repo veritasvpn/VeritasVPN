@@ -60,14 +60,6 @@ spec:
                 secretKeyRef:
                   name: veritas-secrets
                   key: NATS_PASSWORD
-            # Keep JWT_SECRET until auth-svc fully issues Ed25519 access tokens.
-            # Without it, legacy HS256 sessions get 401 on /billing/status and
-            # clients force sign-out immediately after login.
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: veritas-secrets
-                  key: JWT_SECRET
             - name: JWT_ED25519_PUBLIC_KEYS
               valueFrom:
                 secretKeyRef:

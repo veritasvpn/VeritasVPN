@@ -37,13 +37,6 @@ spec:
           image: localhost:31500/veritas-proxy@sha256:ab5ddbef3fd013a62a1cbe067d796819de1cdcdd8128f3ab8be3f57bb41d060d
           imagePullPolicy: IfNotPresent
           env:
-            # Keep JWT_SECRET until auth-svc fully issues Ed25519 access tokens.
-            # The live proxy image still validates HS256 with this secret.
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: veritas-secrets
-                  key: JWT_SECRET
             - name: JWT_ED25519_PUBLIC_KEYS
               valueFrom:
                 secretKeyRef:

@@ -9,7 +9,7 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:4c64f71ded38fcce2e1b2c01c31b4ecdcaaaf850c7befb3dc9c82bcfd747b699
+    digest: sha256:e4415ac8b93128b2beaf864b887a3a3e67135dd1d2392386c241ae492d3b49d1
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
     digest: sha256:d17a5b1b95503a28403b2d85d8a5924afc221a5cc4f5d1d0455005082f17e9ae
@@ -24,7 +24,7 @@ images:
     digest: sha256:54ed252229d1e29505d2b59e3bf05b77c7038939a87646c27f4267853a4a8f3b
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
-    digest: sha256:ab5ddbef3fd013a62a1cbe067d796819de1cdcdd8128f3ab8be3f57bb41d060d
+    digest: sha256:d109615c29a383fe5c7c2de0632da9984edec7b812f0d04309b58e8022897eed
   - name: localhost:31500/telegram-notifier
     newName: localhost:31500/telegram-notifier
     digest: sha256:dbb8587bfd81060e12b8f21f890954e046521da511603b9d0c25786ae08f8cf2

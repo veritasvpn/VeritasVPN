@@ -64,11 +64,6 @@ spec:
                 secretKeyRef:
                   name: veritas-secrets
                   key: NATS_PASSWORD
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: veritas-secrets
-                  key: JWT_SECRET
             - name: JWT_ED25519_PRIVATE_KEY
               valueFrom:
                 secretKeyRef:
