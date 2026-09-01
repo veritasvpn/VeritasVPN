@@ -13,18 +13,24 @@ While the user intends to stay connected, clients must **soft-adapt** to underla
 changes automatically. Soft-adapt must **not** delete/recreate the server peer
 and must **not** show a second permission dialog.
 
+**Android status-bar VPN icon:** must stay visible for the whole intended session.
+It may disappear only after the user taps **Disconnect** (or the system revokes
+VPN permission). Network switches must not tear down `VpnService`.
+
 Hard reconnect (new peer / full bring-up) remains the fallback when the tunnel
-interface is actually gone.
+interface is actually gone *and* sticky restore cannot bring it back — not for
+routine underlay changes.
 
 ## Android (`VeritasVpnService`)
 
 1. Register a `NetworkRequest` with `INTERNET` + **`NOT_VPN`** (never `registerDefaultNetworkCallback` — VPN bring-up looks like a new default network and caused a connect/disconnect loop in 0.2.21).
 2. Fingerprint underlay transports only (wifi/cell/eth/bt) — never `TRANSPORT_VPN`.
 3. After each successful UP, ignore underlay callbacks for **`PATH_ADAPT_GRACE_MS` (10s)**.
-4. On a real underlay change: debounce, then soft bounce `DOWN→UP` with the same config (`softAdapting` suppresses reconnect broadcasts).
-5. Soft-adapt failures request at most one full reconnect (gated), not a storm.
+4. On a real underlay change: debounce, then call **`VpnService.setUnderlyingNetworks(...)`** on the still-UP tunnel. **Never** `backend.setState(DOWN)` for path adapt — GoBackend’s DOWN path `stopSelf()`s the service and drops the VPN icon (0.2.21–0.2.22 soft bounce).
+5. On underlay `onLost`, failover-bind to the next best underlay; leave the tunnel up.
+6. Unexpected tunnel DOWN while a saved config remains: preserve config and let `START_STICKY` / Always-on restore — do **not** broadcast a UI disconnect that deletes the peer.
 
-Shipped in **0.2.22+** (0.2.21 had the loop bug).
+Shipped keep-alive rebind in **0.2.23+** (0.2.22 still bounced DOWN→UP).
 
 ## Linux desktop (`refresh_endpoint_route`)
 
@@ -42,5 +48,6 @@ No WireGuard host route; TCP to the proxy reopens on the new path. No change req
 
 1. Connect on Wi‑Fi (same LAN as the node is fine).
 2. Switch to cellular or another Wi‑Fi **without** opening the app’s Disconnect.
-3. Within a few seconds, browsing should recover with the VPN still on.
-4. Android status bar VPN icon should stay present (soft bounce, not a full session tear-down).
+3. The Android status-bar VPN key/icon must **never** disappear during the switch.
+4. Within a few seconds, browsing should recover with the app still showing connected.
+5. Only after tapping **Disconnect** should the VPN icon go away.

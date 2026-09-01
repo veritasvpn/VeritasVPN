@@ -45,16 +45,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var statsJob: Job? = null
     private var validationGeneration = 0L
     private var hadGoodHandshake = false
-    private var reconnectSignalSent = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var watchingNetworks = false
     private var lastNetworkId: Int? = null
     private var lastTransportFingerprint: String? = null
     private var pathAdaptJob: Job? = null
     private var lastPathAdaptAtMs = 0L
-    @Volatile private var softAdapting = false
     /** Ignore underlay callbacks until this uptime; VPN bring-up looks like a path change. */
     @Volatile private var tunnelStableAfterMs = 0L
+    /** True while the user intends to stay connected (saved config present). */
+    private fun sessionIntended(): Boolean =
+        vpnStatePrefs().getString(KEY_CONFIG, null) != null
 
     override fun onCreate() {
         super.onCreate()
@@ -73,9 +74,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     .putString(KEY_CONFIG, config)
                     .apply()
                 hadGoodHandshake = false
-                reconnectSignalSent = false
                 pathAdaptJob?.cancel()
-                softAdapting = false
                 tunnelStableAfterMs = Long.MAX_VALUE
                 startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
                 validationJob?.cancel()
@@ -134,7 +133,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     .remove(KEY_CONFIG)
                     .apply()
                 hadGoodHandshake = false
-                reconnectSignalSent = false
                 pathAdaptJob?.cancel()
                 lastNetworkId = null
                 lastTransportFingerprint = null
@@ -163,7 +161,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     .getString(KEY_CONFIG, null)
                 if (savedConfig != null) {
                     hadGoodHandshake = false
-                    reconnectSignalSent = false
                     startForeground(NOTIFICATION_ID, buildNotification("Restoring secure tunnel…"))
                     scope.launch {
                         try {
@@ -209,7 +206,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         validationJob?.cancel()
         stopStatsPolling()
         hadGoodHandshake = false
-        reconnectSignalSent = false
         runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
         vpnStatePrefs().edit().remove(KEY_CONFIG).apply()
         broadcastState(
@@ -243,17 +239,20 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 )
             }
             else -> {
-                // Soft path adapt intentionally cycles DOWN→UP with the same
-                // peer config. Do not escalate that bounce into a full reconnect.
-                if (softAdapting) return
                 stopStatsPolling()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                val intendedConnected = vpnStatePrefs()
-                    .getString(KEY_CONFIG, null) != null
-                broadcastState(false, null)
-                if (intendedConnected) {
-                    signalReconnectNeeded()
+                // GoBackend's DOWN path calls stopSelf(), which briefly drops the
+                // system VPN icon. If the user still wants a session, keep the
+                // saved config and let START_STICKY / Always-on restore it —
+                // never ask the UI to delete the peer or show a full disconnect.
+                if (sessionIntended()) {
+                    Log.w(
+                        TAG,
+                        "Tunnel went DOWN while session intended; preserving config for restore"
+                    )
+                    return
                 }
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                broadcastState(false, null)
             }
         }
     }
@@ -290,7 +289,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         // unprotected window. Recover only via explicit tunnel failure paths.
         if (handshakeMs > 0L && handshakeAge <= HANDSHAKE_HEALTHY_MS) {
             hadGoodHandshake = true
-            reconnectSignalSent = false
         }
         sendBroadcast(
             Intent(ACTION_STATS).setPackage(packageName)
@@ -298,12 +296,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 .putExtra(EXTRA_TX_BYTES, stats.totalTx())
                 .putExtra(EXTRA_HANDSHAKE_MS, handshakeMs)
         )
-    }
-
-    private fun signalReconnectNeeded() {
-        if (reconnectSignalSent) return
-        reconnectSignalSent = true
-        sendBroadcast(Intent(ACTION_RECONNECT_NEEDED).setPackage(packageName))
     }
 
     private fun friendlyError(e: Exception): String {
@@ -423,6 +415,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      * Watch the *underlay* network only (NOT_VPN). registerDefaultNetworkCallback
      * is unsafe here: when the tunnel comes up Android reports the VPN as the
      * new default network, which used to soft-bounce the tunnel in a loop.
+     *
+     * Path changes must NOT call backend.setState(DOWN): GoBackend's DOWN path
+     * stopSelf()s the VpnService and drops the status-bar VPN icon. Bind the
+     * still-UP tunnel to the new underlay instead.
      */
     private fun startNetworkWatch() {
         if (watchingNetworks) return
@@ -441,6 +437,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
             override fun onLost(network: Network) {
                 Log.i(TAG, "Underlay network lost netId=${network.networkHandle}")
+                if (!sessionIntended()) return
+                if (System.currentTimeMillis() < tunnelStableAfterMs) return
+                // Old path gone — bind to whatever underlay remains; never tear down.
+                val underlay = bestUnderlayNetwork() ?: return
+                onUnderlayNetworkChanged(underlay.first, "failover", underlay.second)
             }
         }
         val request = NetworkRequest.Builder()
@@ -508,8 +509,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         reason: String,
         caps: NetworkCapabilities? = null
     ) {
-        val intended = vpnStatePrefs().getString(KEY_CONFIG, null) != null
-        if (!intended) {
+        if (!sessionIntended()) {
             captureCurrentNetworkFingerprint()
             return
         }
@@ -518,7 +518,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             Log.i(TAG, "Ignoring underlay $reason during post-connect grace")
             return
         }
-        if (softAdapting || transitionJob?.isActive == true || disconnectJob?.isActive == true) {
+        if (transitionJob?.isActive == true || disconnectJob?.isActive == true) {
             return
         }
         val cm = connectivityManager()
@@ -532,7 +532,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val transportChanged =
             lastTransportFingerprint != null && lastTransportFingerprint != fingerprint
         if (!networkChanged && !transportChanged) {
-            // First observation after grace: seed baselines without bouncing.
+            // First observation after grace: seed baselines without adapting.
             if (lastNetworkId == null) {
                 lastNetworkId = netId
                 lastTransportFingerprint = fingerprint
@@ -543,12 +543,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         lastTransportFingerprint = fingerprint
         Log.i(
             TAG,
-            "Underlay path change ($reason): netId=$netId transport=$fingerprint — soft-adapting"
+            "Underlay path change ($reason): netId=$netId transport=$fingerprint — rebinding"
         )
-        scheduleSoftPathAdapt()
+        scheduleSoftPathAdapt(network)
     }
 
-    private fun scheduleSoftPathAdapt() {
+    private fun scheduleSoftPathAdapt(network: Network) {
         val now = System.currentTimeMillis()
         if (now - lastPathAdaptAtMs < PATH_ADAPT_DEBOUNCE_MS) {
             Log.i(TAG, "Skipping soft path adapt (debounce)")
@@ -557,51 +557,47 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         pathAdaptJob?.cancel()
         pathAdaptJob = scope.launch {
             delay(PATH_ADAPT_SETTLE_MS)
-            softAdaptTunnelForNewPath()
+            softAdaptTunnelForNewPath(network)
         }
     }
 
-    private suspend fun softAdaptTunnelForNewPath() {
-        val configText = vpnStatePrefs().getString(KEY_CONFIG, null) ?: return
+    /**
+     * Keep the WireGuard tunnel and VpnService UP. Only tell Android which
+     * underlay to use so UDP can roam. Never DOWN — that drops the VPN icon.
+     */
+    private suspend fun softAdaptTunnelForNewPath(network: Network) {
+        if (!sessionIntended()) return
         if (disconnectJob?.isActive == true) return
         if (System.currentTimeMillis() < tunnelStableAfterMs) return
         lastPathAdaptAtMs = System.currentTimeMillis()
-        // Extend grace so the bounce itself does not re-enter adapt.
         tunnelStableAfterMs = lastPathAdaptAtMs + PATH_ADAPT_GRACE_MS
-        softAdapting = true
-        Log.i(TAG, "Soft path adapt: bouncing WireGuard with same peer config")
-        try {
+        Log.i(TAG, "Soft path adapt: binding VpnService to new underlay (no tunnel bounce)")
+        val bound = runCatching {
+            setUnderlyingNetworks(arrayOf(network))
+            true
+        }.getOrElse { e ->
+            Log.w(TAG, "setUnderlyingNetworks(specific) failed; falling back to default", e)
             runCatching {
-                val parsed = Config.parse(
-                    ByteArrayInputStream(configText.toByteArray(Charsets.UTF_8))
-                )
-                backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
-                delay(250)
-                val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
-                if (state != Tunnel.State.UP) {
-                    throw IllegalStateException("Soft path adapt did not reach UP")
-                }
-                ServiceCompat.startForeground(
-                    this@VeritasVpnService,
-                    NOTIFICATION_ID,
-                    buildNotification("Connected · adapted to new network"),
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                )
-                // Keep UI on "connected" — never advertise a disconnect for soft adapt.
-                broadcastState(true, null)
-                startStatsPolling()
-                startBackgroundEgressValidation()
-                captureCurrentNetworkFingerprint()
-            }.onFailure { e ->
-                // Do not open a reconnect storm from a soft-adapt glitch; one
-                // explicit reconnect signal is enough and is gated by reconnectSignalSent.
-                Log.e(TAG, "Soft path adapt failed; requesting single full reconnect", e)
-                softAdapting = false
-                signalReconnectNeeded()
+                setUnderlyingNetworks(null)
+                true
+            }.getOrElse { e2 ->
+                Log.e(TAG, "Could not rebind VPN underlay; leaving tunnel UP", e2)
+                false
             }
-        } finally {
-            softAdapting = false
         }
+        ServiceCompat.startForeground(
+            this@VeritasVpnService,
+            NOTIFICATION_ID,
+            buildNotification(
+                if (bound) "Connected · adapted to new network"
+                else "Connected · waiting for network"
+            ),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        )
+        // Stay "connected" in the UI — path adapt is not a disconnect.
+        broadcastState(true, null)
+        startBackgroundEgressValidation()
+        captureCurrentNetworkFingerprint()
     }
 
     private fun vpnStatePrefs() = SecurePrefs.open(this, PREFS_NAME)
