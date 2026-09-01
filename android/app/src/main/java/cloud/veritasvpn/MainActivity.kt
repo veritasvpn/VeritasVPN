@@ -57,7 +57,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 private const val BILLING_CACHE_PREFS = "veritas_billing_cache"
-private val RECONNECT_BACKOFF_MS = longArrayOf(2_000L, 5_000L, 15_000L, 30_000L)
 
 private fun billingCacheKey(accountId: String, field: String): String =
     "billing_" + accountId + "_" + field
