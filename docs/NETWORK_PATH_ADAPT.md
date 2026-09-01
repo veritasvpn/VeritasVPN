@@ -18,12 +18,13 @@ interface is actually gone.
 
 ## Android (`VeritasVpnService`)
 
-1. `ConnectivityManager.registerDefaultNetworkCallback` watches the default network.
-2. On network id / transport change while a saved config exists, debounce (~750 ms settle, 4 s debounce).
-3. Soft bounce: `DOWN` → `UP` with the **same** WireGuard config (`softAdapting` suppresses the normal “reconnect needed” broadcast).
-4. Full `ACTION_RECONNECT_NEEDED` still fires only for real tunnel failures.
+1. Register a `NetworkRequest` with `INTERNET` + **`NOT_VPN`** (never `registerDefaultNetworkCallback` — VPN bring-up looks like a new default network and caused a connect/disconnect loop in 0.2.21).
+2. Fingerprint underlay transports only (wifi/cell/eth/bt) — never `TRANSPORT_VPN`.
+3. After each successful UP, ignore underlay callbacks for **`PATH_ADAPT_GRACE_MS` (10s)**.
+4. On a real underlay change: debounce, then soft bounce `DOWN→UP` with the same config (`softAdapting` suppresses reconnect broadcasts).
+5. Soft-adapt failures request at most one full reconnect (gated), not a storm.
 
-Shipped in **0.2.21+**.
+Shipped in **0.2.22+** (0.2.21 had the loop bug).
 
 ## Linux desktop (`refresh_endpoint_route`)
 

@@ -53,13 +53,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var pathAdaptJob: Job? = null
     private var lastPathAdaptAtMs = 0L
     @Volatile private var softAdapting = false
+    /** Ignore underlay callbacks until this uptime; VPN bring-up looks like a path change. */
+    @Volatile private var tunnelStableAfterMs = 0L
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        // Watch path changes even before the first connect so Always-on restore
-        // can soft-adapt when the phone moves between Wi-Fi and cellular.
-        startNetworkWatch()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -75,6 +74,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     .apply()
                 hadGoodHandshake = false
                 reconnectSignalSent = false
+                pathAdaptJob?.cancel()
+                softAdapting = false
+                tunnelStableAfterMs = Long.MAX_VALUE
                 startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
                 validationJob?.cancel()
                 val pendingDisconnect = disconnectJob?.takeIf { it.isActive }
@@ -108,6 +110,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         broadcastState(true, null)
                         startStatsPolling()
                         startBackgroundEgressValidation()
+                        // VPN bring-up changes the default network; wait before
+                        // treating underlay callbacks as real path changes.
+                        tunnelStableAfterMs = System.currentTimeMillis() + PATH_ADAPT_GRACE_MS
                         startNetworkWatch()
                         captureCurrentNetworkFingerprint()
                     } catch (e: CancellationException) {
@@ -175,6 +180,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                             broadcastState(true, null)
                             startStatsPolling()
                             startBackgroundEgressValidation()
+                            tunnelStableAfterMs = System.currentTimeMillis() + PATH_ADAPT_GRACE_MS
                             startNetworkWatch()
                             captureCurrentNetworkFingerprint()
                         } catch (e: Exception) {
@@ -413,41 +419,41 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun connectivityManager(): ConnectivityManager? =
         getSystemService(ConnectivityManager::class.java)
 
+    /**
+     * Watch the *underlay* network only (NOT_VPN). registerDefaultNetworkCallback
+     * is unsafe here: when the tunnel comes up Android reports the VPN as the
+     * new default network, which used to soft-bounce the tunnel in a loop.
+     */
     private fun startNetworkWatch() {
         if (watchingNetworks) return
         val cm = connectivityManager() ?: return
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                onUnderlyingNetworkChanged(network, "available")
+                onUnderlayNetworkChanged(network, "available")
             }
 
             override fun onCapabilitiesChanged(
                 network: Network,
                 networkCapabilities: NetworkCapabilities
             ) {
-                onUnderlyingNetworkChanged(network, "capabilities", networkCapabilities)
+                onUnderlayNetworkChanged(network, "capabilities", networkCapabilities)
             }
 
             override fun onLost(network: Network) {
-                // A replacement network usually arrives via onAvailable shortly after.
-                // Soft-adapt when that happens; do not peer-churn on transient loss.
-                Log.i(TAG, "Underlying network lost netId=${network.networkHandle}")
+                Log.i(TAG, "Underlay network lost netId=${network.networkHandle}")
             }
         }
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             .build()
         runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                cm.registerDefaultNetworkCallback(callback)
-            } else {
-                cm.registerNetworkCallback(request, callback)
-            }
+            cm.registerNetworkCallback(request, callback)
             networkCallback = callback
             watchingNetworks = true
             captureCurrentNetworkFingerprint()
         }.onFailure { e ->
-            Log.w(TAG, "Could not register network callback", e)
+            Log.w(TAG, "Could not register underlay network callback", e)
         }
     }
 
@@ -463,24 +469,41 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun transportFingerprint(caps: NetworkCapabilities?): String {
         if (caps == null) return "unknown"
+        // Never include TRANSPORT_VPN — VPN bring-up must not look like a path change.
         val transports = buildList {
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) add("wifi")
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) add("cell")
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) add("eth")
-            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) add("vpn")
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) add("bt")
         }
         return transports.joinToString("|").ifEmpty { "other" }
     }
 
-    private fun captureCurrentNetworkFingerprint() {
-        val cm = connectivityManager() ?: return
-        val active = cm.activeNetwork
-        lastNetworkId = active?.networkHandle?.toInt()
-        lastTransportFingerprint = transportFingerprint(cm.getNetworkCapabilities(active))
+    private fun bestUnderlayNetwork(): Pair<Network, NetworkCapabilities>? {
+        val cm = connectivityManager() ?: return null
+        for (network in cm.allNetworks) {
+            val caps = cm.getNetworkCapabilities(network) ?: continue
+            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
+            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) continue
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+            return network to caps
+        }
+        return null
     }
 
-    private fun onUnderlyingNetworkChanged(
+    private fun captureCurrentNetworkFingerprint() {
+        val underlay = bestUnderlayNetwork()
+        if (underlay == null) {
+            lastNetworkId = null
+            lastTransportFingerprint = null
+            return
+        }
+        val (network, caps) = underlay
+        lastNetworkId = network.networkHandle.toInt()
+        lastTransportFingerprint = transportFingerprint(caps)
+    }
+
+    private fun onUnderlayNetworkChanged(
         network: Network,
         reason: String,
         caps: NetworkCapabilities? = null
@@ -490,28 +513,37 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             captureCurrentNetworkFingerprint()
             return
         }
-        val cm = connectivityManager()
-        val resolvedCaps = caps ?: cm?.getNetworkCapabilities(network)
-        // Ignore capability updates that only describe our own VPN transport.
-        if (resolvedCaps != null &&
-            resolvedCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-            !resolvedCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
-            !resolvedCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
-            !resolvedCaps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-        ) {
+        // Still bringing the tunnel up / just came up — ignore VPN-induced flaps.
+        if (System.currentTimeMillis() < tunnelStableAfterMs) {
+            Log.i(TAG, "Ignoring underlay $reason during post-connect grace")
             return
         }
+        if (softAdapting || transitionJob?.isActive == true || disconnectJob?.isActive == true) {
+            return
+        }
+        val cm = connectivityManager()
+        val resolvedCaps = caps ?: cm?.getNetworkCapabilities(network) ?: return
+        if (!resolvedCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) return
+        if (resolvedCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
+
         val fingerprint = transportFingerprint(resolvedCaps)
         val netId = network.networkHandle.toInt()
         val networkChanged = lastNetworkId != null && lastNetworkId != netId
         val transportChanged =
             lastTransportFingerprint != null && lastTransportFingerprint != fingerprint
+        if (!networkChanged && !transportChanged) {
+            // First observation after grace: seed baselines without bouncing.
+            if (lastNetworkId == null) {
+                lastNetworkId = netId
+                lastTransportFingerprint = fingerprint
+            }
+            return
+        }
         lastNetworkId = netId
         lastTransportFingerprint = fingerprint
-        if (!networkChanged && !transportChanged) return
         Log.i(
             TAG,
-            "Path change ($reason): netId=$netId transport=$fingerprint — soft-adapting tunnel"
+            "Underlay path change ($reason): netId=$netId transport=$fingerprint — soft-adapting"
         )
         scheduleSoftPathAdapt()
     }
@@ -532,9 +564,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private suspend fun softAdaptTunnelForNewPath() {
         val configText = vpnStatePrefs().getString(KEY_CONFIG, null) ?: return
         if (disconnectJob?.isActive == true) return
+        if (System.currentTimeMillis() < tunnelStableAfterMs) return
         lastPathAdaptAtMs = System.currentTimeMillis()
-        hadGoodHandshake = false
-        reconnectSignalSent = false
+        // Extend grace so the bounce itself does not re-enter adapt.
+        tunnelStableAfterMs = lastPathAdaptAtMs + PATH_ADAPT_GRACE_MS
         softAdapting = true
         Log.i(TAG, "Soft path adapt: bouncing WireGuard with same peer config")
         try {
@@ -542,10 +575,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 val parsed = Config.parse(
                     ByteArrayInputStream(configText.toByteArray(Charsets.UTF_8))
                 )
-                // Same-config DOWN→UP rebinds sockets to the new underlay without
-                // deleting the server peer or asking the user to reconnect.
                 backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
-                delay(200)
+                delay(250)
                 val state = backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
                 if (state != Tunnel.State.UP) {
                     throw IllegalStateException("Soft path adapt did not reach UP")
@@ -553,14 +584,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 ServiceCompat.startForeground(
                     this@VeritasVpnService,
                     NOTIFICATION_ID,
-                    buildNotification("Connected · adapting to new network…"),
+                    buildNotification("Connected · adapted to new network"),
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 )
+                // Keep UI on "connected" — never advertise a disconnect for soft adapt.
                 broadcastState(true, null)
                 startStatsPolling()
                 startBackgroundEgressValidation()
+                captureCurrentNetworkFingerprint()
             }.onFailure { e ->
-                Log.e(TAG, "Soft path adapt failed; requesting full reconnect", e)
+                // Do not open a reconnect storm from a soft-adapt glitch; one
+                // explicit reconnect signal is enough and is gated by reconnectSignalSent.
+                Log.e(TAG, "Soft path adapt failed; requesting single full reconnect", e)
+                softAdapting = false
                 signalReconnectNeeded()
             }
         } finally {
@@ -592,6 +628,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         private const val HANDSHAKE_HEALTHY_MS = 180_000L
         private const val PATH_ADAPT_DEBOUNCE_MS = 4_000L
         private const val PATH_ADAPT_SETTLE_MS = 750L
+        private const val PATH_ADAPT_GRACE_MS = 10_000L
         private val EGRESS_ENDPOINTS = listOf(
             "https://api.ipify.org",
             "https://ifconfig.me/ip",
