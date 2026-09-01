@@ -1,36 +1,18 @@
 # Network path adapt (Wi‑Fi ↔ cellular / gateway change)
 
-## Problem
+## Product rule (Android)
 
-When a device stays “VPN connected” but the underlay changes (Wi‑Fi A → Wi‑Fi B,
-Wi‑Fi → cellular, LAN → WAN), WireGuard’s UDP sockets and/or the desktop
-endpoint host route can stay bound to the **old** path. Browsing dies until the
-user manually disconnects and reconnects.
+After the user taps **Connect now**, the session must stay up until they tap
+**Disconnect** (or the system revokes VPN permission). The app must **not**
+auto-disconnect, delete the peer, or flip the UI to “Connecting…” on underlay
+flaps, sticky service restarts, or transient tunnel DOWN events.
 
-## Product rule
+## Android (`VeritasVpnService` / `MainActivity`) — 0.2.25+
 
-While the user intends to stay connected, clients must **soft-adapt** to underlay
-changes automatically. Soft-adapt must **not** delete/recreate the server peer
-and must **not** show a second permission dialog.
-
-**Android status-bar VPN icon:** must stay visible for the whole intended session.
-It may disappear only after the user taps **Disconnect** (or the system revokes
-VPN permission). Network switches must not tear down `VpnService`.
-
-Hard reconnect (new peer / full bring-up) remains the fallback when the tunnel
-interface is actually gone *and* sticky restore cannot bring it back — not for
-routine underlay changes.
-
-## Android (`VeritasVpnService`)
-
-1. Register a `NetworkRequest` with `INTERNET` + **`NOT_VPN`** (never `registerDefaultNetworkCallback` — VPN bring-up looks like a new default network and caused a connect/disconnect loop in 0.2.21).
-2. Fingerprint underlay transports only (wifi/cell/eth/bt) — never `TRANSPORT_VPN`.
-3. After each successful UP, ignore underlay callbacks for **`PATH_ADAPT_GRACE_MS` (10s)**.
-4. On a real **transport** change (wifi↔cell only — not Network-object churn on the same Wi‑Fi): debounce, then call **`VpnService.setUnderlyingNetworks(null)`** so Android picks the default underlay dynamically. **Never** pin to a specific `Network` (that makes the system tear the VPN down when the Network object is later replaced — connect loop in 0.2.23). **Never** `backend.setState(DOWN)` for path adapt — GoBackend’s DOWN path `stopSelf()`s the service and drops the VPN icon.
-5. On underlay `onLost`, clear the underlay pin with `setUnderlyingNetworks(null)`; leave the tunnel up.
-6. Unexpected tunnel DOWN while a saved config remains: preserve config and let `START_STICKY` / Always-on restore — do **not** broadcast a UI disconnect that deletes the peer.
-
-Shipped keep-alive dynamic rebind in **0.2.24+** (0.2.23 pinned a Network and looped; 0.2.22 bounced DOWN→UP).
+1. **No underlay NetworkCallback path-adapt.** WireGuard `PersistentKeepalive = 25` handles roaming. Previous path-adapt (DOWN→UP, then pinned `setUnderlyingNetworks`) caused connect loops.
+2. On connect/restore: `setUnderlyingNetworks(null)` once (dynamic underlay only).
+3. While `KEY_CONFIG` is saved (session intended): never clear it except **Disconnect** / `onRevoke`. Unexpected DOWN → keep UI connected + sticky/`START_STICKY` restore loop.
+4. MainActivity ignores unintended `ACTION_STATE` disconnect broadcasts after a session is established. No automatic peer-delete reconnect.
 
 ## Linux desktop (`refresh_endpoint_route`)
 
@@ -46,8 +28,7 @@ No WireGuard host route; TCP to the proxy reopens on the new path. No change req
 
 ## Manual smoke
 
-1. Connect on Wi‑Fi (same LAN as the node is fine).
-2. Switch to cellular or another Wi‑Fi **without** opening the app’s Disconnect.
-3. The Android status-bar VPN key/icon must **never** disappear during the switch.
-4. Within a few seconds, browsing should recover with the app still showing connected.
-5. Only after tapping **Disconnect** should the VPN icon go away.
+1. Connect on Wi‑Fi.
+2. Leave the session alone for several minutes — UI must stay Connected; VPN icon must stay.
+3. Switch Wi‑Fi ↔ cellular without tapping Disconnect — stay Connected (browsing may pause briefly while WireGuard roams).
+4. Only **Disconnect** clears the VPN icon / session.

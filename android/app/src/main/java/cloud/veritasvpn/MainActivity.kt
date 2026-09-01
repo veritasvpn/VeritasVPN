@@ -382,19 +382,19 @@ class MainActivity : ComponentActivity() {
                 var pendingNotificationReconnect by remember { mutableStateOf(false) }
 
                 fun markReconnectNeeded() {
-                    if (!userWantsConnected || !hadEstablishedSession || billingStatus?.isPremium != true) {
+                    // Product rule: after Connect, never auto-tear the session.
+                    if (!userWantsConnected || !hadEstablishedSession) {
                         if (!hadEstablishedSession) userWantsConnected = false
                         reconnecting = false
                         hardReconnectRequested = false
                         return
                     }
-                    if (reconnecting) {
-                        reconnectAttempt =
-                            (reconnectAttempt + 1).coerceAtMost(RECONNECT_BACKOFF_MS.lastIndex)
-                    }
-                    reconnecting = true
-                    hardReconnectRequested = true
-                    statusMsg = "Reconnecting…"
+                    Log.i("VeritasVPN", "Ignoring auto-reconnect; session stays intended")
+                    reconnecting = false
+                    hardReconnectRequested = false
+                    connected = true
+                    connecting = false
+                    statusMsg = null
                 }
 
                 val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -453,67 +453,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                fun scheduleReconnect() {
-                    if (!userWantsConnected || !hadEstablishedSession) return
-                    if (billingStatus?.isPremium != true) return
-                    if (reconnectJob?.isActive == true) return
-                    if (connecting && !reconnecting) return
-
-                    reconnectJob = scope.launch {
-                        reconnecting = true
-                        statusMsg = "Reconnecting…"
-                        val delayMs = RECONNECT_BACKOFF_MS[
-                            reconnectAttempt.coerceIn(0, RECONNECT_BACKOFF_MS.lastIndex)
-                        ]
-                        delay(delayMs)
-                        if (!userWantsConnected || !hadEstablishedSession || billingStatus?.isPremium != true) {
-                            reconnecting = false
-                            return@launch
-                        }
-
-                        val oldPeer = currentPeerId ?: VpnSettings.currentPeerId(context)
-                        currentPeerId = null
-                        VpnSettings.setCurrentPeerId(context, null)
-                        runCatching {
-                            context.startService(
-                                Intent(context, VeritasVpnService::class.java).apply {
-                                    action = VeritasVpnService.ACTION_DISCONNECT
-                                }
-                            )
-                        }
-                        connected = false
-                        rxBytes = 0
-                        txBytes = 0
-                        handshakeMs = 0
-                        dnsBlockedCount = null
-                        if (oldPeer != null) {
-                            peerCleanupJob = launch(Dispatchers.IO) {
-                                runCatching {
-                                    AuthenticatedApi.execute(authRepo, { token ->
-                                        ApiClient.delete("/api/v1/wg/peers/$oldPeer", token)
-                                    }) { it.close() }
-                                }
-                            }
-                            peerCleanupJob?.join()
-                        }
-
-                        if (!userWantsConnected) {
-                            reconnecting = false
-                            return@launch
-                        }
-                        connecting = true
-                        statusMsg = "Reconnecting…"
-                        VpnService.prepare(context)?.let {
-                            connecting = false
-                            reconnecting = false
-                            userWantsConnected = false
-                            statusMsg = "VPN permission required to reconnect."
-                            return@launch
-                        }
-                        startVpnAfterPermissions(isReconnect = true)
-                    }
-                }
-
                 val vpnPermissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.StartActivityForResult()
                 ) { result ->
@@ -536,11 +475,12 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(connecting) {
                     if (connecting) {
-                        // The service has a bounded validation/recovery window;
-                        // clean up the server peer if Android never reports a result.
+                        // First-connect only. Never timeout-disconnect an established session.
                         kotlinx.coroutines.delay(25_000)
-                        if (connecting) {
-                            val timedOutPeerId = peerIdForDisconnect()
+                        if (connecting && !hadEstablishedSession) {
+                            connecting = false
+                            userWantsConnected = false
+                            statusMsg = "Connection timed out. Check your network and try again."
                             runCatching {
                                 context.startService(
                                     Intent(context, VeritasVpnService::class.java).apply {
@@ -548,7 +488,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 )
                             }
-                            if (timedOutPeerId != null) {
+                            peerIdForDisconnect()?.let { timedOutPeerId ->
                                 peerCleanupJob = scope.launch(Dispatchers.IO) {
                                     runCatching {
                                         AuthenticatedApi.execute(authRepo, { token ->
@@ -557,14 +497,11 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
+                        } else if (connecting && hadEstablishedSession) {
                             connecting = false
-                            if (userWantsConnected && hadEstablishedSession && billingStatus?.isPremium == true) {
-                                markReconnectNeeded()
-                            } else {
-                                reconnecting = false
-                                userWantsConnected = false
-                                statusMsg = "Connection timed out. Check your network and try again."
-                            }
+                            reconnecting = false
+                            connected = true
+                            statusMsg = null
                         }
                     }
                 }
@@ -582,31 +519,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Hard reconnects only (connect timeout / explicit failure) — not
-                // transient underlay flaps, which must wait for sticky restore.
-                LaunchedEffect(hardReconnectRequested, reconnecting, connecting, reconnectAttempt, userWantsConnected) {
-                    if (hardReconnectRequested && reconnecting && !connecting &&
-                        userWantsConnected && reconnectJob?.isActive != true
-                    ) {
-                        hardReconnectRequested = false
-                        scheduleReconnect()
-                    }
-                }
-
-                // If sticky restore never comes back, fall back to a full reconnect
-                // after a grace window — without immediately deleting the peer.
-                LaunchedEffect(reconnecting, connected, connecting, userWantsConnected) {
-                    if (!reconnecting || connected || connecting || !userWantsConnected) return@LaunchedEffect
-                    if (!hadEstablishedSession || billingStatus?.isPremium != true) return@LaunchedEffect
-                    if (hardReconnectRequested) return@LaunchedEffect
-                    delay(12_000)
-                    if (reconnecting && !connected && !connecting && userWantsConnected &&
-                        !hardReconnectRequested && reconnectJob?.isActive != true
-                    ) {
-                        scheduleReconnect()
-                    }
-                }
-
                 DisposableEffect(context) {
                     val receiver = object : BroadcastReceiver() {
                         override fun onReceive(context: Context?, intent: Intent?) {
@@ -614,9 +526,10 @@ class MainActivity : ComponentActivity() {
                                 VeritasVpnService.ACTION_STATE -> {
                                     val nowConnected =
                                         intent.getBooleanExtra(VeritasVpnService.EXTRA_CONNECTED, false)
-                                    connected = nowConnected
-                                    connecting = false
+                                    val error = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
                                     if (nowConnected) {
+                                        connected = true
+                                        connecting = false
                                         reconnecting = false
                                         hardReconnectRequested = false
                                         reconnectAttempt = 0
@@ -630,50 +543,30 @@ class MainActivity : ComponentActivity() {
                                         excludeLan = appliedExcludeLan
                                         bypassAppsText = appliedBypassAppsText
                                         statusMsg = null
+                                    } else if (error != null && error.contains("revoked", ignoreCase = true)) {
+                                        connected = false
+                                        connecting = false
+                                        reconnecting = false
+                                        userWantsConnected = false
+                                        hadEstablishedSession = false
+                                        statusMsg = error
+                                        peerIdForDisconnect()
+                                    } else if (userWantsConnected && hadEstablishedSession) {
+                                        // Ignore unintended disconnects — stay connected in UI.
+                                        connected = true
+                                        connecting = false
+                                        reconnecting = false
+                                        hardReconnectRequested = false
+                                        statusMsg = null
                                     } else {
+                                        connected = false
+                                        connecting = false
+                                        reconnecting = false
                                         rxBytes = 0
                                         txBytes = 0
                                         handshakeMs = 0
                                         dnsBlockedCount = null
-                                        val error = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
-                                        if (error != null) {
-                                            val failedPeerId = peerIdForDisconnect()
-                                            if (failedPeerId != null) {
-                                                peerCleanupJob = scope.launch(Dispatchers.IO) {
-                                                    runCatching {
-                                                        AuthenticatedApi.execute(authRepo, { token ->
-                                                            ApiClient.delete(
-                                                                "/api/v1/wg/peers/$failedPeerId", token
-                                                            )
-                                                        }) { it.close() }
-                                                    }
-                                                }
-                                            }
-                                            val revoked = error.contains("revoked", ignoreCase = true)
-                                            if (userWantsConnected && !revoked && hadEstablishedSession &&
-                                                billingStatus?.isPremium == true
-                                            ) {
-                                                markReconnectNeeded()
-                                            } else {
-                                                if (revoked || !hadEstablishedSession) {
-                                                    userWantsConnected = false
-                                                }
-                                                reconnecting = false
-                                                statusMsg = error
-                                            }
-                                        } else if (userWantsConnected && hadEstablishedSession &&
-                                            billingStatus?.isPremium == true
-                                        ) {
-                                            // Transient tunnel drop (underlay flap / sticky
-                                            // service restart). Keep the peer and wait for
-                                            // VeritasVpnService to restore from saved config.
-                                            // scheduleReconnect() deletes the peer and was
-                                            // causing a connect → drop → connecting loop.
-                                            reconnecting = true
-                                            statusMsg = "Reconnecting…"
-                                        } else {
-                                            statusMsg = null
-                                        }
+                                        statusMsg = error
                                     }
                                 }
                                 VeritasVpnService.ACTION_STATS -> {
@@ -682,12 +575,11 @@ class MainActivity : ComponentActivity() {
                                     handshakeMs = intent.getLongExtra(VeritasVpnService.EXTRA_HANDSHAKE_MS, 0L)
                                 }
                                 VeritasVpnService.ACTION_RECONNECT_NEEDED -> {
-                                    if (userWantsConnected && hadEstablishedSession &&
-                                        billingStatus?.isPremium == true
-                                    ) {
-                                        // Prefer sticky restore over peer-delete reconnect.
-                                        reconnecting = true
-                                        statusMsg = "Reconnecting…"
+                                    if (userWantsConnected && hadEstablishedSession) {
+                                        connected = true
+                                        connecting = false
+                                        reconnecting = false
+                                        statusMsg = null
                                     }
                                 }
                             }
@@ -933,7 +825,7 @@ class MainActivity : ComponentActivity() {
                 } else {
                     DashboardScreen(
                         connected = connected,
-                        connecting = connecting || reconnecting,
+                        connecting = connecting,
                         onConnect = { requestConnect() },
                         onDisconnect = {
                             userWantsConnected = false

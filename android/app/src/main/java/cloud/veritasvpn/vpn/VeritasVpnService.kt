@@ -6,11 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
-import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -45,14 +40,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var statsJob: Job? = null
     private var validationGeneration = 0L
     private var hadGoodHandshake = false
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private var watchingNetworks = false
-    private var lastNetworkId: Int? = null
-    private var lastTransportFingerprint: String? = null
-    private var pathAdaptJob: Job? = null
-    private var lastPathAdaptAtMs = 0L
-    /** Ignore underlay callbacks until this uptime; VPN bring-up looks like a path change. */
-    @Volatile private var tunnelStableAfterMs = 0L
     /** True while the user intends to stay connected (saved config present). */
     private fun sessionIntended(): Boolean =
         vpnStatePrefs().getString(KEY_CONFIG, null) != null
@@ -74,8 +61,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     .putString(KEY_CONFIG, config)
                     .apply()
                 hadGoodHandshake = false
-                pathAdaptJob?.cancel()
-                tunnelStableAfterMs = Long.MAX_VALUE
                 startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
                 validationJob?.cancel()
                 val pendingDisconnect = disconnectJob?.takeIf { it.isActive }
@@ -106,29 +91,56 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                             buildNotification("Connected · checking route…"),
                             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                         )
+                        // Dynamic underlay only — never pin a Network object.
+                        runCatching { setUnderlyingNetworks(null) }
                         broadcastState(true, null)
                         startStatsPolling()
                         startBackgroundEgressValidation()
-                        // Prefer dynamic underlay selection. Pinning to a Network
-                        // object makes Android tear the VPN down when that object
-                        // is later replaced (common Wi‑Fi Network churn).
-                        runCatching { setUnderlyingNetworks(null) }
-                        // VPN bring-up changes the default network; wait before
-                        // treating underlay callbacks as real path changes.
-                        tunnelStableAfterMs = System.currentTimeMillis() + PATH_ADAPT_GRACE_MS
-                        startNetworkWatch()
-                        captureCurrentNetworkFingerprint()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "Connect failed", e)
                         stopStatsPolling()
+                        // Keep KEY_CONFIG so sticky/Always-on can retry. Only the
+                        // user's Disconnect clears the intended session.
                         runCatching {
                             backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
                         }
-                        broadcastState(false, friendlyError(e))
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf()
+                        if (sessionIntended()) {
+                            ServiceCompat.startForeground(
+                                this@VeritasVpnService,
+                                NOTIFICATION_ID,
+                                buildNotification("Connected · recovering…"),
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                            )
+                            // Stay connected in the UI; retry bring-up shortly.
+                            broadcastState(true, null)
+                            delay(2_000)
+                            if (sessionIntended() && disconnectJob?.isActive != true) {
+                                runCatching {
+                                    val retry = Config.parse(
+                                        ByteArrayInputStream(config.toByteArray(Charsets.UTF_8))
+                                    )
+                                    backend.setState(this@VeritasVpnService, Tunnel.State.UP, retry)
+                                    runCatching { setUnderlyingNetworks(null) }
+                                    startStatsPolling()
+                                    startBackgroundEgressValidation()
+                                    ServiceCompat.startForeground(
+                                        this@VeritasVpnService,
+                                        NOTIFICATION_ID,
+                                        buildNotification("Connected · checking route…"),
+                                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                                    )
+                                    broadcastState(true, null)
+                                }.onFailure { retryError ->
+                                    Log.e(TAG, "Connect retry failed; keeping session intended", retryError)
+                                }
+                            }
+                        } else {
+                            broadcastState(false, friendlyError(e))
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopSelf()
+                        }
                     }
                 }
             }
@@ -137,9 +149,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     .remove(KEY_CONFIG)
                     .apply()
                 hadGoodHandshake = false
-                pathAdaptJob?.cancel()
-                lastNetworkId = null
-                lastTransportFingerprint = null
+                restoreJob?.cancel()
                 transitionJob?.cancel()
                 disconnectJob?.cancel()
                 disconnectJob = scope.launch {
@@ -161,47 +171,44 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             else -> {
                 // Android may restart an Always-on VPN service without the original Intent.
                 // Keep the last approved configuration so the tunnel can be restored.
-                val savedConfig = vpnStatePrefs()
-                    .getString(KEY_CONFIG, null)
-                if (savedConfig != null) {
-                    hadGoodHandshake = false
-                    startForeground(NOTIFICATION_ID, buildNotification("Restoring secure tunnel…"))
-                    scope.launch {
-                        try {
-                            val parsed = Config.parse(
-                                ByteArrayInputStream(savedConfig.toByteArray(Charsets.UTF_8))
-                            )
-                            backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
-                            ServiceCompat.startForeground(
-                                this@VeritasVpnService,
-                                NOTIFICATION_ID,
-                                buildNotification("Connected · checking route…"),
-                                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                            )
-                            broadcastState(true, null)
-                            startStatsPolling()
-                            startBackgroundEgressValidation()
-                            tunnelStableAfterMs = System.currentTimeMillis() + PATH_ADAPT_GRACE_MS
-                            startNetworkWatch()
-                            captureCurrentNetworkFingerprint()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Automatic VPN restore failed", e)
-                            stopStatsPolling()
-                            runCatching {
-                                backend.setState(this@VeritasVpnService, Tunnel.State.DOWN, null)
-                            }
-                            broadcastState(
-                                false,
-                                "VPN restore failed. Tap Connect now to reconnect."
-                            )
-                            stopForeground(STOP_FOREGROUND_REMOVE)
-                            stopSelf()
-                        }
-                    }
-                }
+                restoreSavedSessionIfNeeded()
             }
         }
         return START_STICKY
+    }
+
+    private var restoreJob: Job? = null
+
+    private fun restoreSavedSessionIfNeeded() {
+        val savedConfig = vpnStatePrefs().getString(KEY_CONFIG, null) ?: return
+        if (restoreJob?.isActive == true || disconnectJob?.isActive == true) return
+        hadGoodHandshake = false
+        startForeground(NOTIFICATION_ID, buildNotification("Restoring secure tunnel…"))
+        restoreJob = scope.launch {
+            while (sessionIntended() && disconnectJob?.isActive != true) {
+                try {
+                    val parsed = Config.parse(
+                        ByteArrayInputStream(savedConfig.toByteArray(Charsets.UTF_8))
+                    )
+                    backend.setState(this@VeritasVpnService, Tunnel.State.UP, parsed)
+                    runCatching { setUnderlyingNetworks(null) }
+                    ServiceCompat.startForeground(
+                        this@VeritasVpnService,
+                        NOTIFICATION_ID,
+                        buildNotification("Connected · checking route…"),
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                    )
+                    broadcastState(true, null)
+                    startStatsPolling()
+                    startBackgroundEgressValidation()
+                    return@launch
+                } catch (e: Exception) {
+                    Log.e(TAG, "Automatic VPN restore failed; retrying", e)
+                    broadcastState(true, null)
+                    delay(3_000)
+                }
+            }
+        }
     }
 
     override fun onRevoke() {
@@ -222,10 +229,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     override fun onDestroy() {
-        stopNetworkWatch()
-        pathAdaptJob?.cancel()
         stopStatsPolling()
-        runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
+        // Do not turn the tunnel DOWN here when a session is still intended —
+        // START_STICKY / Always-on will restart and restore from KEY_CONFIG.
+        if (!sessionIntended()) {
+            runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
+        }
         scope.cancel()
         super.onDestroy()
     }
@@ -244,15 +253,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             else -> {
                 stopStatsPolling()
-                // GoBackend's DOWN path calls stopSelf(), which briefly drops the
-                // system VPN icon. If the user still wants a session, keep the
-                // saved config and let START_STICKY / Always-on restore it —
-                // never ask the UI to delete the peer or show a full disconnect.
+                // Product rule: never treat an unintended DOWN as Disconnect.
+                // Keep KEY_CONFIG and tell the UI we are still connected while
+                // sticky restore brings the tunnel back.
                 if (sessionIntended()) {
-                    Log.w(
-                        TAG,
-                        "Tunnel went DOWN while session intended; preserving config for restore"
-                    )
+                    Log.w(TAG, "Tunnel DOWN while session intended; UI stays connected")
+                    broadcastState(true, null)
                     return
                 }
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -411,197 +417,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-
-    private fun connectivityManager(): ConnectivityManager? =
-        getSystemService(ConnectivityManager::class.java)
-
-    /**
-     * Watch the *underlay* network only (NOT_VPN). registerDefaultNetworkCallback
-     * is unsafe here: when the tunnel comes up Android reports the VPN as the
-     * new default network, which used to soft-bounce the tunnel in a loop.
-     *
-     * Path changes must NOT call backend.setState(DOWN): GoBackend's DOWN path
-     * stopSelf()s the VpnService and drops the status-bar VPN icon. Bind the
-     * still-UP tunnel to the new underlay instead.
-     */
-    private fun startNetworkWatch() {
-        if (watchingNetworks) return
-        val cm = connectivityManager() ?: return
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                onUnderlayNetworkChanged(network, "available")
-            }
-
-            override fun onCapabilitiesChanged(
-                network: Network,
-                networkCapabilities: NetworkCapabilities
-            ) {
-                onUnderlayNetworkChanged(network, "capabilities", networkCapabilities)
-            }
-
-            override fun onLost(network: Network) {
-                Log.i(TAG, "Underlay network lost netId=${network.networkHandle}")
-                if (!sessionIntended()) return
-                if (System.currentTimeMillis() < tunnelStableAfterMs) return
-                // Never pin to a replacement Network — that makes Android tear the
-                // VPN down when the Network object is later replaced. Clear the
-                // pin so the system picks the current default underlay dynamically.
-                val lostId = network.networkHandle.toInt()
-                if (lastNetworkId != null && lastNetworkId != lostId) return
-                scheduleSoftPathAdapt("failover")
-            }
-        }
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-            .build()
-        runCatching {
-            cm.registerNetworkCallback(request, callback)
-            networkCallback = callback
-            watchingNetworks = true
-            captureCurrentNetworkFingerprint()
-        }.onFailure { e ->
-            Log.w(TAG, "Could not register underlay network callback", e)
-        }
-    }
-
-    private fun stopNetworkWatch() {
-        val cm = connectivityManager()
-        val callback = networkCallback
-        if (cm != null && callback != null) {
-            runCatching { cm.unregisterNetworkCallback(callback) }
-        }
-        networkCallback = null
-        watchingNetworks = false
-    }
-
-    private fun transportFingerprint(caps: NetworkCapabilities?): String {
-        if (caps == null) return "unknown"
-        // Never include TRANSPORT_VPN — VPN bring-up must not look like a path change.
-        val transports = buildList {
-            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) add("wifi")
-            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) add("cell")
-            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) add("eth")
-            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) add("bt")
-        }
-        return transports.joinToString("|").ifEmpty { "other" }
-    }
-
-    private fun bestUnderlayNetwork(): Pair<Network, NetworkCapabilities>? {
-        val cm = connectivityManager() ?: return null
-        for (network in cm.allNetworks) {
-            val caps = cm.getNetworkCapabilities(network) ?: continue
-            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
-            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) continue
-            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
-            return network to caps
-        }
-        return null
-    }
-
-    private fun captureCurrentNetworkFingerprint() {
-        val underlay = bestUnderlayNetwork()
-        if (underlay == null) {
-            lastNetworkId = null
-            lastTransportFingerprint = null
-            return
-        }
-        val (network, caps) = underlay
-        lastNetworkId = network.networkHandle.toInt()
-        lastTransportFingerprint = transportFingerprint(caps)
-    }
-
-    private fun onUnderlayNetworkChanged(
-        network: Network,
-        reason: String,
-        caps: NetworkCapabilities? = null
-    ) {
-        if (!sessionIntended()) {
-            captureCurrentNetworkFingerprint()
-            return
-        }
-        // Still bringing the tunnel up / just came up — ignore VPN-induced flaps.
-        if (System.currentTimeMillis() < tunnelStableAfterMs) {
-            Log.i(TAG, "Ignoring underlay $reason during post-connect grace")
-            return
-        }
-        if (transitionJob?.isActive == true || disconnectJob?.isActive == true) {
-            return
-        }
-        val cm = connectivityManager()
-        val resolvedCaps = caps ?: cm?.getNetworkCapabilities(network) ?: return
-        if (!resolvedCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) return
-        if (resolvedCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
-
-        val fingerprint = transportFingerprint(resolvedCaps)
-        val netId = network.networkHandle.toInt()
-        // Track Network object identity for bookkeeping, but ONLY adapt when the
-        // transport type changes (wifi↔cell). Android often replaces Network
-        // objects on the same Wi‑Fi; treating that as a path change and pinning
-        // setUnderlyingNetworks(thatNetwork) makes the system tear the VPN down
-        // when the old Network is later lost — a connect/disconnect loop.
-        if (lastTransportFingerprint == null || lastNetworkId == null) {
-            lastNetworkId = netId
-            lastTransportFingerprint = fingerprint
-            return
-        }
-        lastNetworkId = netId
-        if (lastTransportFingerprint == fingerprint) {
-            return
-        }
-        lastTransportFingerprint = fingerprint
-        Log.i(
-            TAG,
-            "Underlay transport change ($reason): netId=$netId transport=$fingerprint — refreshing default underlay"
-        )
-        scheduleSoftPathAdapt(reason)
-    }
-
-    private fun scheduleSoftPathAdapt(reason: String) {
-        val now = System.currentTimeMillis()
-        if (now - lastPathAdaptAtMs < PATH_ADAPT_DEBOUNCE_MS) {
-            Log.i(TAG, "Skipping soft path adapt (debounce) reason=$reason")
-            return
-        }
-        pathAdaptJob?.cancel()
-        pathAdaptJob = scope.launch {
-            delay(PATH_ADAPT_SETTLE_MS)
-            softAdaptTunnelForNewPath(reason)
-        }
-    }
-
-    /**
-     * Keep the WireGuard tunnel and VpnService UP. Refresh dynamic underlay
-     * selection with setUnderlyingNetworks(null). Never pin to a specific
-     * Network and never DOWN — both drop the status-bar VPN icon / session.
-     */
-    private suspend fun softAdaptTunnelForNewPath(reason: String) {
-        if (!sessionIntended()) return
-        if (disconnectJob?.isActive == true) return
-        if (System.currentTimeMillis() < tunnelStableAfterMs) return
-        lastPathAdaptAtMs = System.currentTimeMillis()
-        tunnelStableAfterMs = lastPathAdaptAtMs + PATH_ADAPT_GRACE_MS
-        Log.i(TAG, "Soft path adapt ($reason): setUnderlyingNetworks(null) — keep tunnel UP")
-        val refreshed = runCatching {
-            setUnderlyingNetworks(null)
-            true
-        }.getOrElse { e ->
-            Log.e(TAG, "Could not refresh VPN underlay; leaving tunnel UP", e)
-            false
-        }
-        if (refreshed) {
-            ServiceCompat.startForeground(
-                this@VeritasVpnService,
-                NOTIFICATION_ID,
-                buildNotification("Connected · adapted to new network"),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        }
-        // Stay "connected" in the UI — path adapt is not a disconnect.
-        broadcastState(true, null)
-        captureCurrentNetworkFingerprint()
-    }
-
     private fun vpnStatePrefs() = SecurePrefs.open(this, PREFS_NAME)
 
     companion object {
@@ -624,9 +439,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val KEY_CONFIG = "last_approved_config"
         private const val TAG = "VeritasVpnService"
         private const val HANDSHAKE_HEALTHY_MS = 180_000L
-        private const val PATH_ADAPT_DEBOUNCE_MS = 4_000L
-        private const val PATH_ADAPT_SETTLE_MS = 750L
-        private const val PATH_ADAPT_GRACE_MS = 10_000L
         private val EGRESS_ENDPOINTS = listOf(
             "https://api.ipify.org",
             "https://ifconfig.me/ip",
