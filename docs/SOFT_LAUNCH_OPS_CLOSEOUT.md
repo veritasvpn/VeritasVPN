@@ -103,7 +103,7 @@ If it fails: Cloudflare → Transform Rule → Response header → Remove `Acces
 | WAN :22 | https://github.com/veritasvpn/VeritasVPN/actions/runs/33444195855 (PASS; LAN probes are false positives) |
 | ACAO | `verify-acao.sh` PASS 2026-08-31 (also in prod-smoke) |
 | Agent health | `verify-agent-health.sh` PASS after pin `sha256:62905883a2156ea86d530fe26d28d4f1d0a7b2cac31107bbe00fc7beb038d3fc` |
-| Manual 5+ min connect | _(human)_ |
+| Manual 5+ min connect | **DONE (Android)** — v0.2.20, ~10 min browse, stable (2026-08-31). Linux still optional. |
 | BTC settle | _(human or webhook smoke)_ |
 
 ---

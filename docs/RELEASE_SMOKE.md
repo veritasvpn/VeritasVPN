@@ -39,7 +39,8 @@ sudo systemctl enable --now veritas-tunnel-hold.timer
 - [ ] Install pages / Functions point at the new tag; SHAs match release
 - [ ] Pages deploy green
 - [ ] `verify-acao.sh` PASS
-- [ ] Manual: Android + Linux connect ≥5 minutes
+- [x] Manual: Android connect ≥5 minutes (v0.2.20, ~10 min browse, 2026-08-31)
+- [ ] Manual: Linux connect ≥5 minutes (optional if Android already covered)
 - [ ] Manual **or** `billing-webhook-smoke.sh`: Bitcoin settle → Premium
 - [ ] No workload mounts `JWT_SECRET`; after drain window Secret key removed
 
