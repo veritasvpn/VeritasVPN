@@ -564,7 +564,7 @@ input::placeholder { color: var(--paper-dim); }
 .blueprint-main {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 16px 28px;
+  padding: 32px 16px 28px;
   width: 100%;
   max-width: 480px;
   margin: 0 auto;
@@ -895,7 +895,7 @@ input::placeholder { color: var(--paper-dim); }
 
 .blueprint-status h2 {
   margin: 14px 0 0;
-  font-family: var(--display);
+  font-family: var(--font);
   font-size: 29px;
   font-weight: 800;
   line-height: 1.15;
@@ -904,6 +904,7 @@ input::placeholder { color: var(--paper-dim); }
 }
 
 .blueprint-status h2.connected-title {
+  font-family: var(--font);
   font-size: 22px;
   font-weight: 700;
 }
@@ -968,6 +969,7 @@ input::placeholder { color: var(--paper-dim); }
 
 .blueprint-disconnect {
   width: 100%;
+  margin-top: 24px;
   min-height: 52px;
   border: 0;
   border-radius: 26px;
@@ -1046,7 +1048,7 @@ input::placeholder { color: var(--paper-dim); }
 
 .live-stats {
   width: 100%;
-  margin-top: 16px;
+  margin-top: 14px;
   padding: 14px;
   border: 1px solid var(--line-strong);
   border-radius: 16px;
@@ -1064,8 +1066,8 @@ input::placeholder { color: var(--paper-dim); }
 }
 
 .live-stats-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  display: flex;
+  justify-content: space-between;
   gap: 8px;
 }
 
@@ -1074,6 +1076,7 @@ input::placeholder { color: var(--paper-dim); }
   gap: 2px;
   justify-items: center;
   text-align: center;
+  flex: 1;
 }
 
 .live-stats-row strong {

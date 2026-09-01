@@ -1,6 +1,5 @@
 import { useState, useEffect, FormEvent, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { fetch } from "@tauri-apps/plugin-http";
 import {
   getStoredUser,
   initializeSecureAuth,
@@ -81,11 +80,6 @@ const RECONNECT_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000];
 const LS_AUTO_RECONNECT = "veritas_auto_reconnect";
 const LS_EXCLUDE_LAN = "veritas_exclude_lan";
 const LS_STEALTH = "veritas_stealth_mode";
-const EGRESS_ENDPOINTS = [
-  "https://api.ipify.org",
-  "https://ifconfig.me/ip",
-  "https://icanhazip.com",
-];
 
 /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
 const EXCLUDE_LAN_ALLOWED_IPS = [
@@ -232,7 +226,7 @@ function formatBytes(bytes: number): string {
 }
 
 function formatHandshakeAge(lastHandshakeSec: number): string {
-  if (!lastHandshakeSec || lastHandshakeSec <= 0) return "never";
+  if (!lastHandshakeSec || lastHandshakeSec <= 0) return "—";
   const ageSec = Math.max(0, Math.floor(Date.now() / 1000 - lastHandshakeSec));
   if (ageSec < 60) return `${ageSec}s ago`;
   if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`;
@@ -731,7 +725,6 @@ function App() {
   const [peerId, setPeerId] = useState("");
   const [statusMsg, setStatusMsg] = useState("");
   const [connecting, setConnecting] = useState(false);
-  const [egressIp, setEgressIp] = useState("");
   const [subscriptionActive, setSubscriptionActive] = useState(false);
   const [subscriptionChecked, setSubscriptionChecked] = useState(false);
   const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
@@ -755,7 +748,6 @@ function App() {
     return enabled && isLinuxDesktop();
   });
   const [linuxDesktop] = useState(() => isLinuxDesktop());
-  const [activeTransport, setActiveTransport] = useState<"direct" | "stealth" | "">("");
   const [reconnectToApply, setReconnectToApply] = useState(false);
   const [statusSticky, setStatusSticky] = useState(false);
   const [wgStats, setWgStats] = useState<WgTransferStats | null>(null);
@@ -952,7 +944,6 @@ function App() {
       setConnected(false);
       setTunnelMode("");
       setPeerId("");
-      setEgressIp("");
       setStatusMsg("Connection timed out. Check your network and try again.");
     }, CONNECT_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
@@ -1156,21 +1147,6 @@ function App() {
     }
   }, [billingBusy, refreshBillingStatus, expireAndReturnToSignIn]);
 
-  const fetchEgressIp = useCallback(async () => {
-    for (const endpoint of EGRESS_ENDPOINTS) {
-      try {
-        const response = await fetch(endpoint, { method: "GET" });
-        const text = (await response.text()).trim();
-        if (response.ok && text) {
-          setEgressIp(text);
-          return;
-        }
-      } catch {
-        // try next endpoint
-      }
-    }
-  }, []);
-
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current !== null) {
       window.clearTimeout(reconnectTimerRef.current);
@@ -1220,7 +1196,6 @@ function App() {
 
     const wantedStealth = stealthModeRef.current && linuxDesktop;
     showStatus(opts?.isReconnect ? "Reconnecting…" : "", false);
-    setEgressIp("");
     setConnecting(true);
     connectPeerRef.current = "";
 
@@ -1302,13 +1277,11 @@ function App() {
       setConnected(true);
       setTunnelMode("wireguard");
       setPeerId(peer.peer_id);
-      setActiveTransport(useStealth ? "stealth" : "direct");
       setReconnectToApply(false);
       setStatusSticky(false);
       setStatusMsg("");
       setWgStats(null);
       setDnsBlockedCount(null);
-      void fetchEgressIp();
       return true;
     } catch (err) {
       connectPeerRef.current = "";
@@ -1325,7 +1298,7 @@ function App() {
     } finally {
       setConnecting(false);
     }
-  }, [user, fetchEgressIp, deletePeer, linuxDesktop, showStatus, expireAndReturnToSignIn]);
+  }, [user, deletePeer, linuxDesktop, showStatus, expireAndReturnToSignIn]);
 
   const handleConnect = useCallback(async () => {
     userDisconnectedRef.current = false;
@@ -1347,10 +1320,8 @@ function App() {
       setConnected(false);
       setTunnelMode("");
       setPeerId("");
-      setEgressIp("");
       setWgStats(null);
       setDnsBlockedCount(null);
-      setActiveTransport("");
       setReconnectToApply(false);
       hadGoodHandshakeRef.current = false;
       hadInterfaceUpRef.current = false;
@@ -1405,9 +1376,7 @@ function App() {
       setConnected(false);
       setTunnelMode("");
       setPeerId("");
-      setEgressIp("");
       setWgStats(null);
-      setActiveTransport("");
       hadGoodHandshakeRef.current = false;
       hadInterfaceUpRef.current = false;
       if (oldPeer) await deletePeer(oldPeer);
@@ -1990,14 +1959,6 @@ function App() {
                   <div className="blueprint-secured">
                     {reconnecting && !connected ? "RECONNECTING…" : "CONNECTION SECURED"}
                   </div>
-                  {connected && activeTransport && (
-                    <div
-                      className={`transport-badge ${activeTransport === "stealth" ? "stealth" : "direct"}`}
-                      aria-label="Transport mode"
-                    >
-                      {activeTransport === "stealth" ? "Stealth TLS" : "Direct UDP"}
-                    </div>
-                  )}
                   <h2 className="connected-title">{reconnecting && !connected ? "Reconnecting…" : "You're protected"}</h2>
                   {reconnecting && !connected && (
                     <p>Restoring your encrypted WireGuard tunnel.</p>
@@ -2022,16 +1983,10 @@ function App() {
                       </div>
                       {dnsBlockedCount !== null && (
                         <div className="live-stats-dns">
-                          <span>DNS threats blocked</span>
+                          <span>DNS blocked</span>
                           <strong>{dnsBlockedCount}</strong>
                         </div>
                       )}
-                    </div>
-                  )}
-                  {connected && egressIp && (
-                    <div className="protected-meta">
-                      <i />
-                      {`Connected · ${egressIp}`}
                     </div>
                   )}
                 </>

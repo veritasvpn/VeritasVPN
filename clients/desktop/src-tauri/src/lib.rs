@@ -238,11 +238,30 @@ fn wireguard_stats() -> WgTransferStats {
 }
 
 #[cfg(target_os = "linux")]
+fn linux_iface_sysfs_stats(iface: &str) -> (bool, u64, u64) {
+    let base = format!("/sys/class/net/{iface}");
+    let oper = fs::read_to_string(format!("{base}/operstate"))
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let up = oper == "up" || Path::new(&base).exists();
+    let rx = fs::read_to_string(format!("{base}/statistics/rx_bytes"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    let tx = fs::read_to_string(format!("{base}/statistics/tx_bytes"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    (up, rx, tx)
+}
+
+#[cfg(target_os = "linux")]
 fn wireguard_stats_linux() -> WgTransferStats {
     let iface = iface_path()
         .ok()
         .and_then(|p| fs::read_to_string(p).ok())
-        .unwrap_or_else(|| "wg0".into())
+        .unwrap_or_else(|| "veritas0".into())
         .trim()
         .to_string();
     if iface.is_empty() {
@@ -253,23 +272,28 @@ fn wireguard_stats_linux() -> WgTransferStats {
             interface_up: false,
         };
     }
+
+    let (sys_up, sys_rx, sys_tx) = linux_iface_sysfs_stats(&iface);
+
     let output = Command::new("wg")
         .args(["show", &iface, "dump"])
         .output();
     let Ok(out) = output else {
+        // Unprivileged `wg` often fails on the root-only UAPI socket; still
+        // report interface + byte counters from sysfs so LIVE STATS is useful.
         return WgTransferStats {
-            rx_bytes: 0,
-            tx_bytes: 0,
+            rx_bytes: sys_rx,
+            tx_bytes: sys_tx,
             last_handshake_sec: 0,
-            interface_up: false,
+            interface_up: sys_up,
         };
     };
     if !out.status.success() {
         return WgTransferStats {
-            rx_bytes: 0,
-            tx_bytes: 0,
+            rx_bytes: sys_rx,
+            tx_bytes: sys_tx,
             last_handshake_sec: 0,
-            interface_up: false,
+            interface_up: sys_up,
         };
     }
     let text = String::from_utf8_lossy(&out.stdout);
@@ -291,10 +315,10 @@ fn wireguard_stats_linux() -> WgTransferStats {
         }
     }
     WgTransferStats {
-        rx_bytes: rx,
-        tx_bytes: tx,
+        rx_bytes: if rx > 0 { rx } else { sys_rx },
+        tx_bytes: if tx > 0 { tx } else { sys_tx },
         last_handshake_sec: handshake,
-        interface_up: up && text.lines().count() > 1,
+        interface_up: (up && text.lines().count() > 1) || sys_up,
     }
 }
 
@@ -1263,6 +1287,20 @@ if [[ -z "$IFACE" ]]; then
   exit 1
 fi
 echo "$IFACE_NAME" > "$IFACE_FILE"
+
+# Desktop UI polls `wg show` unprivileged. wireguard-go's UAPI socket is
+# root-only by default, which made LIVE STATS show 0 B / Handshake never.
+DESKTOP_USER="${{SUDO_USER:-}}"
+if [[ -z "$DESKTOP_USER" && -n "${{PKEXEC_UID:-}}" ]]; then
+  DESKTOP_USER="$(getent passwd "$PKEXEC_UID" | cut -d: -f1 || true)"
+fi
+if [[ -z "$DESKTOP_USER" ]]; then
+  DESKTOP_USER="$(stat -c '%U' "$(dirname "$IFACE_FILE")" 2>/dev/null || true)"
+fi
+if [[ -n "$DESKTOP_USER" && -S "/var/run/wireguard/${{IFACE}}.sock" ]]; then
+  chown "$DESKTOP_USER:" "/var/run/wireguard/${{IFACE}}.sock" 2>/dev/null || true
+  chmod 600 "/var/run/wireguard/${{IFACE}}.sock" 2>/dev/null || true
+fi
 
 # Configure WireGuard via UAPI
 python3 - "$IFACE" "$UAPI" <<'PY'
