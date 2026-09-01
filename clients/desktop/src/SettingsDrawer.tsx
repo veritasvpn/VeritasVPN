@@ -7,14 +7,13 @@ export type SettingsDrawerProps = {
   subscriptionActive: boolean;
   linuxDesktop: boolean;
   autoReconnect: boolean;
-  excludeLan: boolean;
   stealthMode: boolean;
   onOpenPlans: () => void;
   onOpenNetworkMap: () => void;
   onOpenDevices: () => void;
   onOpenPortForwards: () => void;
+  onOpenTunnelSettings: () => void;
   onToggleAutoReconnect: () => void;
-  onToggleExcludeLan: () => void;
   onToggleStealthMode: () => void;
   onSignOutEverywhere: () => void;
   onRequestSignOut: () => void;
@@ -30,14 +29,13 @@ export function SettingsDrawer({
   subscriptionActive,
   linuxDesktop,
   autoReconnect,
-  excludeLan,
   stealthMode,
   onOpenPlans,
   onOpenNetworkMap,
   onOpenDevices,
   onOpenPortForwards,
+  onOpenTunnelSettings,
   onToggleAutoReconnect,
-  onToggleExcludeLan,
   onToggleStealthMode,
   onSignOutEverywhere,
   onRequestSignOut,
@@ -133,33 +131,35 @@ export function SettingsDrawer({
             aria-label="Close settings"
             onClick={onClose}
           >
-            ×
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M6 6l12 12M18 6L6 18" />
+            </svg>
           </button>
         </header>
 
         <div className="settings-drawer-body">
           <section className="settings-drawer-section" aria-label="Account and tools">
             <p className="settings-drawer-label">Account &amp; tools</p>
-            <button type="button" onClick={onOpenPlans}>
+            <button type="button" className="settings-nav-item" onClick={onOpenPlans}>
               {subscriptionActive ? "Premium" : "Plans"}
             </button>
-            <button type="button" onClick={onOpenNetworkMap}>Network map</button>
-            <button type="button" onClick={onOpenDevices}>Devices</button>
-            <button type="button" onClick={onOpenPortForwards}>Port forwarding</button>
+            <button type="button" className="settings-nav-item" onClick={onOpenNetworkMap}>Network map</button>
+            <button type="button" className="settings-nav-item" onClick={onOpenDevices}>Devices</button>
+            <button type="button" className="settings-nav-item" onClick={onOpenPortForwards}>Port forwarding</button>
           </section>
 
           <section className="settings-drawer-section" aria-label="Connection">
             <p className="settings-drawer-label">Connection</p>
-            <button type="button" className="menu-toggle" onClick={onToggleAutoReconnect}>
-              <span>Auto-reconnect</span>
-              <b className={autoReconnect ? "on" : ""}>{autoReconnect ? "On" : "Off"}</b>
+            <button type="button" className="settings-nav-item" onClick={onOpenTunnelSettings}>
+              <span className="settings-nav-label">Split tunnel</span>
+              <span className="settings-nav-note">Exclude LAN · reconnect to apply</span>
             </button>
-            <button type="button" className="menu-toggle" onClick={onToggleExcludeLan}>
+            <button type="button" className="menu-toggle" onClick={onToggleAutoReconnect}>
               <span>
-                Exclude LAN
-                <span className="menu-note">Reconnect to apply</span>
+                Auto-reconnect
+                <span className="menu-note">Restore tunnel if link drops</span>
               </span>
-              <b className={excludeLan ? "on" : ""}>{excludeLan ? "On" : "Off"}</b>
+              <b className={autoReconnect ? "on" : ""}>{autoReconnect ? "On" : "Off"}</b>
             </button>
             {linuxDesktop && (
               <button
@@ -169,7 +169,7 @@ export function SettingsDrawer({
               >
                 <span>
                   Stealth mode
-                  <span className="menu-note">TLS wrap · reconnect</span>
+                  <span className="menu-note">TLS wrap · reconnect to apply</span>
                 </span>
                 <b className={stealthMode ? "on" : ""}>{stealthMode ? "On" : "Off"}</b>
               </button>
@@ -188,5 +188,67 @@ export function SettingsDrawer({
         </div>
       </aside>
     </div>
+  );
+}
+
+export function TunnelSettingsScreen({
+  excludeLan,
+  showReconnectBanner,
+  onExcludeLanChange,
+  onBack,
+}: {
+  excludeLan: boolean;
+  showReconnectBanner: boolean;
+  onExcludeLanChange: (next: boolean) => void;
+  onBack: () => void;
+}) {
+  return (
+    <section className="tunnel-settings" aria-label="Split tunnel">
+      <header className="tunnel-settings-head">
+        <button type="button" className="tunnel-back" onClick={onBack} aria-label="Back">
+          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+        <div>
+          <p className="tunnel-eyebrow">TUNNEL</p>
+          <h2>Split tunnel</h2>
+        </div>
+      </header>
+
+      {showReconnectBanner && (
+        <div className="tunnel-reconnect-banner" role="status">
+          Reconnect to apply
+        </div>
+      )}
+
+      <p className="tunnel-section-label">ROUTING</p>
+
+      <button
+        type="button"
+        className={`tunnel-toggle-card${!excludeLan ? " is-on" : ""}`}
+        onClick={() => onExcludeLanChange(false)}
+        aria-pressed={!excludeLan}
+      >
+        <div>
+          <strong>Full tunnel</strong>
+          <span>Send all traffic through the VPN (AllowedIPs from server, typically 0.0.0.0/0).</span>
+        </div>
+        <i className={!excludeLan ? "on" : ""} aria-hidden="true" />
+      </button>
+
+      <button
+        type="button"
+        className={`tunnel-toggle-card${excludeLan ? " is-on" : ""}`}
+        onClick={() => onExcludeLanChange(true)}
+        aria-pressed={excludeLan}
+      >
+        <div>
+          <strong>Exclude private LAN</strong>
+          <span>Replace 0.0.0.0/0 with public prefixes that omit RFC1918 (10/8, 172.16/12, 192.168/16) so local network traffic stays off the VPN.</span>
+        </div>
+        <i className={excludeLan ? "on" : ""} aria-hidden="true" />
+      </button>
+    </section>
   );
 }

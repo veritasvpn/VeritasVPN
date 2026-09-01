@@ -10,7 +10,6 @@ import {
   signOut as doSignOut,
   resetPassword,
   resendVerification,
-  downloadAccountFile,
   validateSignupPassword,
   passwordStrengthScore,
   VerificationRequiredError,
@@ -27,7 +26,7 @@ import {
 } from "./billing";
 import { AUTH_API } from "./config";
 import { obtainTurnstileToken } from "./turnstile";
-import { SettingsDrawer } from "./SettingsDrawer";
+import { SettingsDrawer, TunnelSettingsScreen } from "./SettingsDrawer";
 import veritasMark from "./assets/veritas-mark.png";
 import "./App.css";
 
@@ -297,18 +296,26 @@ function PrivacyScene({ encrypted }: { encrypted: boolean }) {
 }
 
 function PasswordStrength({ password }: { password: string }) {
-  const score = passwordStrengthScore(password);
   if (!password) return null;
-  const labels = ["Weak", "Fair", "Good", "Strong", "Excellent"];
-  const label = labels[Math.min(score, labels.length) - 1] || "Weak";
+  const score = passwordStrengthScore(password);
+  const label = score === 4 ? "Strong" : score === 3 ? "Good" : score === 2 ? "Fair" : "Weak";
+  const tone = score === 4 ? "strong" : score === 3 ? "good" : score === 2 ? "fair" : "weak";
   return (
-    <div className="password-strength" aria-live="polite">
-      <div className="password-strength-bars">
-        {[1, 2, 3, 4, 5].map((level) => (
-          <span key={level} className={score >= level ? "on" : ""} />
-        ))}
+    <div className={`password-strength score-${tone}`} aria-live="polite">
+      <div className="password-strength-head">
+        <span>Password strength</span>
+        <strong>{label}</strong>
       </div>
-      <span>{label}</span>
+      <div
+        className="password-strength-track"
+        role="progressbar"
+        aria-valuenow={score}
+        aria-valuemin={0}
+        aria-valuemax={4}
+      >
+        <i style={{ width: `${(score / 4) * 100}%` }} />
+      </div>
+      <p className="password-strength-hint">10+ characters · uppercase · lowercase · number</p>
     </div>
   );
 }
@@ -741,6 +748,7 @@ function App() {
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showDevices, setShowDevices] = useState(false);
   const [showPortForwards, setShowPortForwards] = useState(false);
+  const [showTunnelSettings, setShowTunnelSettings] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState(() => readLocalFlag(LS_AUTO_RECONNECT, "1"));
   const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
   const [stealthMode, setStealthMode] = useState(() => {
@@ -1082,6 +1090,7 @@ function App() {
     setShowPlans(false);
     setShowDevices(false);
     setShowPortForwards(false);
+    setShowTunnelSettings(false);
   }, []);
 
   const openPlans = useCallback(() => {
@@ -1089,6 +1098,7 @@ function App() {
     setShowPlans(true);
     setShowDevices(false);
     setShowPortForwards(false);
+    setShowTunnelSettings(false);
     setShowCancelConfirmation(false);
     setBillingError("");
     refreshBillingStatus().catch((err) => setBillingError(err instanceof Error ? err.message : "Could not load your subscription."));
@@ -1531,6 +1541,7 @@ function App() {
     setShowPortForwards(false);
     setShowPlans(false);
     setShowNetworkMap(false);
+    setShowTunnelSettings(false);
     void loadDevices();
   }, [loadDevices]);
 
@@ -1540,8 +1551,25 @@ function App() {
     setShowDevices(false);
     setShowPlans(false);
     setShowNetworkMap(false);
+    setShowTunnelSettings(false);
     void loadPortForwards();
   }, [loadPortForwards]);
+
+  const openTunnelSettings = useCallback(() => {
+    setShowSettings(false);
+    setShowTunnelSettings(true);
+    setShowPlans(false);
+    setShowDevices(false);
+    setShowPortForwards(false);
+    setShowNetworkMap(false);
+  }, []);
+
+  const setExcludeLanValue = useCallback((next: boolean) => {
+    if (excludeLan === next) return;
+    writeLocalFlag(LS_EXCLUDE_LAN, next);
+    setExcludeLan(next);
+    setReconnectToApply(true);
+  }, [excludeLan]);
 
   const createPortForward = useCallback(async (input: {
     peerId: string;
@@ -1639,15 +1667,6 @@ function App() {
     });
   }, []);
 
-  const toggleExcludeLan = useCallback(() => {
-    setExcludeLan((prev) => {
-      const next = !prev;
-      writeLocalFlag(LS_EXCLUDE_LAN, next);
-      return next;
-    });
-    setReconnectToApply(true);
-  }, []);
-
   const toggleStealthMode = useCallback(() => {
     if (!linuxDesktop) return;
     setStealthMode((prev) => {
@@ -1665,6 +1684,7 @@ function App() {
     setShowPlans(false);
     setShowDevices(false);
     setShowPortForwards(false);
+    setShowTunnelSettings(false);
     setCheckoutUrl(null);
     userDisconnectedRef.current = true;
     clearReconnectTimer();
@@ -1712,19 +1732,19 @@ function App() {
         <div className="app auth-screen">
           <div className="brand">
             <img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" />
-            <h1>Veritas<span>VPN</span></h1>
+            <h1>VeritasVPN</h1>
           </div>
           <div className="auth-card">
             <h2>Verify your email</h2>
             <p className="auth-subcopy">
               Confirm your account creation by clicking the verification link we sent to <strong>{pendingVerificationEmail}</strong>.
             </p>
-            {notice && <div className="notice">{notice}</div>}
-            {error && <div className="error">{error}</div>}
-            <button type="button" className="btn-primary" disabled={resendLoading} onClick={() => handleResendVerification(pendingVerificationEmail)}>
+            {notice && <p className="notice-text">{notice}</p>}
+            {error && <p className="error-text">{error}</p>}
+            <button type="button" className="btn-primary btn-primary--rect" disabled={resendLoading} onClick={() => handleResendVerification(pendingVerificationEmail)}>
               {resendLoading ? "Sending verification email…" : "Resend verification email"}
             </button>
-            <button type="button" className="auth-switch-link" onClick={() => { setPendingVerificationEmail(null); setError(""); setNotice(""); switchMode("signin"); }}>← Back to sign in</button>
+            <button type="button" className="auth-switch-link" onClick={() => { setPendingVerificationEmail(null); setError(""); setNotice(""); switchMode("signin"); }}>Back to sign in</button>
           </div>
         </div>
       );
@@ -1734,7 +1754,7 @@ function App() {
         <div className="app auth-screen">
           <div className="brand">
             <img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" />
-            <h1>Veritas<span>VPN</span></h1>
+            <h1>VeritasVPN</h1>
           </div>
           <div className="auth-card">
             <h2>Reset your password</h2>
@@ -1745,9 +1765,9 @@ function App() {
                   ? "Check your inbox for a secure reset link."
                   : "Enter your email and we'll send you a secure reset link."}
             </p>
-            {error && <div className="error">{error}</div>}
+            {error && <p className="error-text">{error}</p>}
             <input type="email" placeholder="Email" value={email} onChange={(e) => { setEmail(e.target.value); setError(""); setResetSent(false); }} autoComplete="email" />
-            <button type="button" className="btn-primary" disabled={loading || resetCooldown > 0} onClick={handleResetPassword}>
+            <button type="button" className="btn-primary btn-primary--rect" disabled={loading || resetCooldown > 0} onClick={handleResetPassword}>
               {loading ? "Sending…" : resetCooldown > 0 ? `Try again in ${resetCooldown} s` : "Send reset link"}
             </button>
             <button type="button" className="auth-switch-link" onClick={() => { setForgotPassword(false); setError(""); setResetSent(false); }}>Back to sign in</button>
@@ -1760,7 +1780,7 @@ function App() {
       <div className="app auth-screen">
         <div className="brand">
           <img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" />
-          <h1>Veritas<span>VPN</span></h1>
+          <h1>VeritasVPN</h1>
           <p>The truth about online privacy</p>
         </div>
         {!showingNewId && (
@@ -1770,8 +1790,8 @@ function App() {
           </div>
         )}
         <form className="auth-card" onSubmit={handleAuth}>
-          {notice && <div className="notice">{notice}</div>}
-          {error && <div className="error">{error}</div>}
+          {notice && <p className="notice-text">{notice}</p>}
+          {error && <p className="error-text">{error}</p>}
           {verificationResendEmail && (
             <button type="button" className="btn-outline" disabled={resendLoading} onClick={() => handleResendVerification()}>
               {resendLoading ? "Sending verification email…" : "Resend verification email"}
@@ -1787,10 +1807,9 @@ function App() {
               </div>
               {accountIdCopied && <p className="auth-hint success">Copied to clipboard</p>}
               <div className="account-warning">
-                <strong>Save this ID now</strong>
-                <span>Store it in a password manager or another secure place. If you lose it, the account cannot be recovered.</span>
+                <span className="account-warning-icon" aria-hidden="true">⚠</span>
+                <span>Save this ID in a password manager or another secure place now. If you lose it, the account and its access cannot be recovered.</span>
               </div>
-              <button type="button" className="btn-primary" onClick={() => downloadAccountFile().catch(() => undefined)}>Download account file</button>
               <button type="button" className="btn-primary" onClick={() => setNewAccountId("")}>Continue</button>
             </>
           ) : method === "email" ? (
@@ -1818,9 +1837,8 @@ function App() {
             </>
           ) : mode === "signin" ? (
             <>
-              <p className="auth-hint">Anonymous Account ID only — email accounts must use password.</p>
-              <input type="text" placeholder="Anonymous Account ID" value={accountId} onChange={(e) => setAccountId(e.target.value)} required autoComplete="off" spellCheck={false} />
-              <button type="submit" disabled={loading} className="btn-primary">{loading ? "Please wait…" : "Sign in with Account ID"}</button>
+              <input type="text" placeholder="Account ID" value={accountId} onChange={(e) => setAccountId(e.target.value)} required autoComplete="off" spellCheck={false} aria-label="Account ID" />
+              <button type="submit" disabled={loading} className="btn-primary">{loading ? "Please wait…" : "Sign in"}</button>
             </>
           ) : (
             <>
@@ -1833,7 +1851,7 @@ function App() {
           <button type="button" className="auth-switch-link" onClick={() => switchMethod(method === "email" ? "accountId" : "email")}>
             {method === "email"
               ? mode === "signin" ? "Sign in with Account ID instead" : "Skip email — create anonymous account"
-              : mode === "signin" ? "Sign in with email instead" : "Use email instead"}
+              : "Use email instead"}
           </button>
         )}
       </div>
@@ -1852,7 +1870,7 @@ function App() {
     <div className="app app-dashboard">
       <header className="app-header blueprint-header">
         <img className="brand-logo" src={veritasMark} alt="VeritasVPN" />
-        {!showPlans && !showDevices && !showPortForwards && (
+        {!showPlans && !showDevices && !showPortForwards && !showTunnelSettings && (
           <button
             ref={settingsCogRef}
             className="blueprint-cog"
@@ -1883,6 +1901,13 @@ function App() {
             onCancelClick={() => setShowCancelConfirmation(true)}
             onCancelConfirm={() => cancelSubscription()}
             onCancelDismiss={() => setShowCancelConfirmation(false)}
+          />
+        ) : showTunnelSettings ? (
+          <TunnelSettingsScreen
+            excludeLan={excludeLan}
+            showReconnectBanner={reconnectToApply && (connected || reconnecting)}
+            onExcludeLanChange={setExcludeLanValue}
+            onBack={() => setShowTunnelSettings(false)}
           />
         ) : showDevices ? (
           <DevicesScreen
@@ -2018,14 +2043,13 @@ function App() {
         subscriptionActive={subscriptionActive}
         linuxDesktop={linuxDesktop}
         autoReconnect={autoReconnect}
-        excludeLan={excludeLan}
         stealthMode={stealthMode}
         onOpenPlans={openPlans}
         onOpenNetworkMap={openNetworkMap}
         onOpenDevices={openDevices}
         onOpenPortForwards={openPortForwards}
+        onOpenTunnelSettings={openTunnelSettings}
         onToggleAutoReconnect={toggleAutoReconnect}
-        onToggleExcludeLan={toggleExcludeLan}
         onToggleStealthMode={toggleStealthMode}
         onSignOutEverywhere={handleSignOutEverywhere}
         onRequestSignOut={requestSignOut}
