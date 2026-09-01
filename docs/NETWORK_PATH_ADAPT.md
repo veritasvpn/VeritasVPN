@@ -7,7 +7,9 @@ After the user taps **Connect now**, the session must stay up until they tap
 auto-disconnect, delete the peer, or flip the UI to “Connecting…” on underlay
 flaps, sticky service restarts, or transient tunnel DOWN events.
 
-## Android (`VeritasVpnService` / `MainActivity`) — 0.2.25+
+## Android (`VeritasVpnService` / `MainActivity`) — 0.2.26+
+
+**2-minute loop note:** WireGuard rekeys around 120s. Older builds treated handshake age > 120s as stale and called reconnect (or soft-adapted DOWN→UP). Never reconnect on handshake age; the Handshake “2m ago” UI label alone is not a failure.
 
 1. **No underlay NetworkCallback path-adapt.** WireGuard `PersistentKeepalive = 25` handles roaming. Previous path-adapt (DOWN→UP, then pinned `setUnderlyingNetworks`) caused connect loops.
 2. On connect/restore: `setUnderlyingNetworks(null)` once (dynamic underlay only).

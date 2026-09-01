@@ -1,5 +1,5 @@
 const DEB_URL =
-  "https://github.com/veritasvpn/VeritasVPN/releases/download/v0.2.22/veritasvpn-linux.deb";
+  "https://github.com/veritasvpn/VeritasVPN/releases/download/v0.2.26/veritasvpn-linux.deb";
 
 export async function onRequestGet() {
   const upstream = await fetch(DEB_URL, {

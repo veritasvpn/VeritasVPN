@@ -39,7 +39,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var validationJob: Job? = null
     private var statsJob: Job? = null
     private var validationGeneration = 0L
-    private var hadGoodHandshake = false
     /** True while the user intends to stay connected (saved config present). */
     private fun sessionIntended(): Boolean =
         vpnStatePrefs().getString(KEY_CONFIG, null) != null
@@ -60,7 +59,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 vpnStatePrefs().edit()
                     .putString(KEY_CONFIG, config)
                     .apply()
-                hadGoodHandshake = false
                 startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
                 validationJob?.cancel()
                 val pendingDisconnect = disconnectJob?.takeIf { it.isActive }
@@ -148,7 +146,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 vpnStatePrefs().edit()
                     .remove(KEY_CONFIG)
                     .apply()
-                hadGoodHandshake = false
                 restoreJob?.cancel()
                 transitionJob?.cancel()
                 disconnectJob?.cancel()
@@ -182,7 +179,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun restoreSavedSessionIfNeeded() {
         val savedConfig = vpnStatePrefs().getString(KEY_CONFIG, null) ?: return
         if (restoreJob?.isActive == true || disconnectJob?.isActive == true) return
-        hadGoodHandshake = false
         startForeground(NOTIFICATION_ID, buildNotification("Restoring secure tunnel…"))
         restoreJob = scope.launch {
             while (sessionIntended() && disconnectJob?.isActive != true) {
@@ -216,7 +212,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         validationGeneration++
         validationJob?.cancel()
         stopStatsPolling()
-        hadGoodHandshake = false
         runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
         vpnStatePrefs().edit().remove(KEY_CONFIG).apply()
         broadcastState(
@@ -291,15 +286,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 handshakeMs = peer.latestHandshakeEpochMillis
             }
         }
-        val now = System.currentTimeMillis()
-        val handshakeAge = if (handshakeMs > 0L) (now - handshakeMs).coerceAtLeast(0L) else Long.MAX_VALUE
-        // Track that we have seen a healthy handshake, but do NOT tear down the
-        // VpnService when WireGuard's natural ~2 minute rekey makes the age climb.
-        // Full reconnects drop Android's status-bar VPN icon and open a brief
-        // unprotected window. Recover only via explicit tunnel failure paths.
-        if (handshakeMs > 0L && handshakeAge <= HANDSHAKE_HEALTHY_MS) {
-            hadGoodHandshake = true
-        }
+        // Handshake age climbing toward ~2m is WireGuard's normal rekey window.
+        // Never reconnect / tear down based on handshake age — that caused the
+        // classic connect loop (HANDSHAKE_STALE_MS=120s in older builds).
         sendBroadcast(
             Intent(ACTION_STATS).setPackage(packageName)
                 .putExtra(EXTRA_RX_BYTES, stats.totalRx())
@@ -438,7 +427,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val PREFS_NAME = "veritas_vpn_state"
         const val KEY_CONFIG = "last_approved_config"
         private const val TAG = "VeritasVpnService"
-        private const val HANDSHAKE_HEALTHY_MS = 180_000L
         private val EGRESS_ENDPOINTS = listOf(
             "https://api.ipify.org",
             "https://ifconfig.me/ip",
