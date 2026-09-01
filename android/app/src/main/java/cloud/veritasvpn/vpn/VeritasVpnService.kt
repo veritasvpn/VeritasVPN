@@ -109,6 +109,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         broadcastState(true, null)
                         startStatsPolling()
                         startBackgroundEgressValidation()
+                        // Prefer dynamic underlay selection. Pinning to a Network
+                        // object makes Android tear the VPN down when that object
+                        // is later replaced (common Wi‑Fi Network churn).
+                        runCatching { setUnderlyingNetworks(null) }
                         // VPN bring-up changes the default network; wait before
                         // treating underlay callbacks as real path changes.
                         tunnelStableAfterMs = System.currentTimeMillis() + PATH_ADAPT_GRACE_MS
@@ -439,9 +443,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 Log.i(TAG, "Underlay network lost netId=${network.networkHandle}")
                 if (!sessionIntended()) return
                 if (System.currentTimeMillis() < tunnelStableAfterMs) return
-                // Old path gone — bind to whatever underlay remains; never tear down.
-                val underlay = bestUnderlayNetwork() ?: return
-                onUnderlayNetworkChanged(underlay.first, "failover", underlay.second)
+                // Never pin to a replacement Network — that makes Android tear the
+                // VPN down when the Network object is later replaced. Clear the
+                // pin so the system picks the current default underlay dynamically.
+                val lostId = network.networkHandle.toInt()
+                if (lastNetworkId != null && lastNetworkId != lostId) return
+                scheduleSoftPathAdapt("failover")
             }
         }
         val request = NetworkRequest.Builder()
@@ -528,75 +535,70 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
         val fingerprint = transportFingerprint(resolvedCaps)
         val netId = network.networkHandle.toInt()
-        val networkChanged = lastNetworkId != null && lastNetworkId != netId
-        val transportChanged =
-            lastTransportFingerprint != null && lastTransportFingerprint != fingerprint
-        if (!networkChanged && !transportChanged) {
-            // First observation after grace: seed baselines without adapting.
-            if (lastNetworkId == null) {
-                lastNetworkId = netId
-                lastTransportFingerprint = fingerprint
-            }
+        // Track Network object identity for bookkeeping, but ONLY adapt when the
+        // transport type changes (wifi↔cell). Android often replaces Network
+        // objects on the same Wi‑Fi; treating that as a path change and pinning
+        // setUnderlyingNetworks(thatNetwork) makes the system tear the VPN down
+        // when the old Network is later lost — a connect/disconnect loop.
+        if (lastTransportFingerprint == null || lastNetworkId == null) {
+            lastNetworkId = netId
+            lastTransportFingerprint = fingerprint
             return
         }
         lastNetworkId = netId
+        if (lastTransportFingerprint == fingerprint) {
+            return
+        }
         lastTransportFingerprint = fingerprint
         Log.i(
             TAG,
-            "Underlay path change ($reason): netId=$netId transport=$fingerprint — rebinding"
+            "Underlay transport change ($reason): netId=$netId transport=$fingerprint — refreshing default underlay"
         )
-        scheduleSoftPathAdapt(network)
+        scheduleSoftPathAdapt(reason)
     }
 
-    private fun scheduleSoftPathAdapt(network: Network) {
+    private fun scheduleSoftPathAdapt(reason: String) {
         val now = System.currentTimeMillis()
         if (now - lastPathAdaptAtMs < PATH_ADAPT_DEBOUNCE_MS) {
-            Log.i(TAG, "Skipping soft path adapt (debounce)")
+            Log.i(TAG, "Skipping soft path adapt (debounce) reason=$reason")
             return
         }
         pathAdaptJob?.cancel()
         pathAdaptJob = scope.launch {
             delay(PATH_ADAPT_SETTLE_MS)
-            softAdaptTunnelForNewPath(network)
+            softAdaptTunnelForNewPath(reason)
         }
     }
 
     /**
-     * Keep the WireGuard tunnel and VpnService UP. Only tell Android which
-     * underlay to use so UDP can roam. Never DOWN — that drops the VPN icon.
+     * Keep the WireGuard tunnel and VpnService UP. Refresh dynamic underlay
+     * selection with setUnderlyingNetworks(null). Never pin to a specific
+     * Network and never DOWN — both drop the status-bar VPN icon / session.
      */
-    private suspend fun softAdaptTunnelForNewPath(network: Network) {
+    private suspend fun softAdaptTunnelForNewPath(reason: String) {
         if (!sessionIntended()) return
         if (disconnectJob?.isActive == true) return
         if (System.currentTimeMillis() < tunnelStableAfterMs) return
         lastPathAdaptAtMs = System.currentTimeMillis()
         tunnelStableAfterMs = lastPathAdaptAtMs + PATH_ADAPT_GRACE_MS
-        Log.i(TAG, "Soft path adapt: binding VpnService to new underlay (no tunnel bounce)")
-        val bound = runCatching {
-            setUnderlyingNetworks(arrayOf(network))
+        Log.i(TAG, "Soft path adapt ($reason): setUnderlyingNetworks(null) — keep tunnel UP")
+        val refreshed = runCatching {
+            setUnderlyingNetworks(null)
             true
         }.getOrElse { e ->
-            Log.w(TAG, "setUnderlyingNetworks(specific) failed; falling back to default", e)
-            runCatching {
-                setUnderlyingNetworks(null)
-                true
-            }.getOrElse { e2 ->
-                Log.e(TAG, "Could not rebind VPN underlay; leaving tunnel UP", e2)
-                false
-            }
+            Log.e(TAG, "Could not refresh VPN underlay; leaving tunnel UP", e)
+            false
         }
-        ServiceCompat.startForeground(
-            this@VeritasVpnService,
-            NOTIFICATION_ID,
-            buildNotification(
-                if (bound) "Connected · adapted to new network"
-                else "Connected · waiting for network"
-            ),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        )
+        if (refreshed) {
+            ServiceCompat.startForeground(
+                this@VeritasVpnService,
+                NOTIFICATION_ID,
+                buildNotification("Connected · adapted to new network"),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        }
         // Stay "connected" in the UI — path adapt is not a disconnect.
         broadcastState(true, null)
-        startBackgroundEgressValidation()
         captureCurrentNetworkFingerprint()
     }
 

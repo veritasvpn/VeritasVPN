@@ -26,11 +26,11 @@ routine underlay changes.
 1. Register a `NetworkRequest` with `INTERNET` + **`NOT_VPN`** (never `registerDefaultNetworkCallback` — VPN bring-up looks like a new default network and caused a connect/disconnect loop in 0.2.21).
 2. Fingerprint underlay transports only (wifi/cell/eth/bt) — never `TRANSPORT_VPN`.
 3. After each successful UP, ignore underlay callbacks for **`PATH_ADAPT_GRACE_MS` (10s)**.
-4. On a real underlay change: debounce, then call **`VpnService.setUnderlyingNetworks(...)`** on the still-UP tunnel. **Never** `backend.setState(DOWN)` for path adapt — GoBackend’s DOWN path `stopSelf()`s the service and drops the VPN icon (0.2.21–0.2.22 soft bounce).
-5. On underlay `onLost`, failover-bind to the next best underlay; leave the tunnel up.
+4. On a real **transport** change (wifi↔cell only — not Network-object churn on the same Wi‑Fi): debounce, then call **`VpnService.setUnderlyingNetworks(null)`** so Android picks the default underlay dynamically. **Never** pin to a specific `Network` (that makes the system tear the VPN down when the Network object is later replaced — connect loop in 0.2.23). **Never** `backend.setState(DOWN)` for path adapt — GoBackend’s DOWN path `stopSelf()`s the service and drops the VPN icon.
+5. On underlay `onLost`, clear the underlay pin with `setUnderlyingNetworks(null)`; leave the tunnel up.
 6. Unexpected tunnel DOWN while a saved config remains: preserve config and let `START_STICKY` / Always-on restore — do **not** broadcast a UI disconnect that deletes the peer.
 
-Shipped keep-alive rebind in **0.2.23+** (0.2.22 still bounced DOWN→UP).
+Shipped keep-alive dynamic rebind in **0.2.24+** (0.2.23 pinned a Network and looped; 0.2.22 bounced DOWN→UP).
 
 ## Linux desktop (`refresh_endpoint_route`)
 

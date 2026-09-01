@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
                 var userWantsConnected by remember { mutableStateOf(false) }
                 var hadEstablishedSession by remember { mutableStateOf(false) }
                 var reconnectAttempt by remember { mutableStateOf(0) }
+                var hardReconnectRequested by remember { mutableStateOf(false) }
                 var statusMsg by remember { mutableStateOf<String?>(null) }
                 var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
@@ -166,6 +167,7 @@ class MainActivity : ComponentActivity() {
                     reconnectJob?.cancel()
                     reconnectJob = null
                     reconnecting = false
+                    hardReconnectRequested = false
                     reconnectAttempt = 0
                 }
 
@@ -383,6 +385,7 @@ class MainActivity : ComponentActivity() {
                     if (!userWantsConnected || !hadEstablishedSession || billingStatus?.isPremium != true) {
                         if (!hadEstablishedSession) userWantsConnected = false
                         reconnecting = false
+                        hardReconnectRequested = false
                         return
                     }
                     if (reconnecting) {
@@ -390,6 +393,7 @@ class MainActivity : ComponentActivity() {
                             (reconnectAttempt + 1).coerceAtMost(RECONNECT_BACKOFF_MS.lastIndex)
                     }
                     reconnecting = true
+                    hardReconnectRequested = true
                     statusMsg = "Reconnecting…"
                 }
 
@@ -578,9 +582,27 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // After a connect timeout while the user still wants a tunnel, retry.
-                LaunchedEffect(reconnecting, connecting, reconnectAttempt, userWantsConnected) {
-                    if (reconnecting && !connecting && userWantsConnected && reconnectJob?.isActive != true) {
+                // Hard reconnects only (connect timeout / explicit failure) — not
+                // transient underlay flaps, which must wait for sticky restore.
+                LaunchedEffect(hardReconnectRequested, reconnecting, connecting, reconnectAttempt, userWantsConnected) {
+                    if (hardReconnectRequested && reconnecting && !connecting &&
+                        userWantsConnected && reconnectJob?.isActive != true
+                    ) {
+                        hardReconnectRequested = false
+                        scheduleReconnect()
+                    }
+                }
+
+                // If sticky restore never comes back, fall back to a full reconnect
+                // after a grace window — without immediately deleting the peer.
+                LaunchedEffect(reconnecting, connected, connecting, userWantsConnected) {
+                    if (!reconnecting || connected || connecting || !userWantsConnected) return@LaunchedEffect
+                    if (!hadEstablishedSession || billingStatus?.isPremium != true) return@LaunchedEffect
+                    if (hardReconnectRequested) return@LaunchedEffect
+                    delay(12_000)
+                    if (reconnecting && !connected && !connecting && userWantsConnected &&
+                        !hardReconnectRequested && reconnectJob?.isActive != true
+                    ) {
                         scheduleReconnect()
                     }
                 }
@@ -596,6 +618,7 @@ class MainActivity : ComponentActivity() {
                                     connecting = false
                                     if (nowConnected) {
                                         reconnecting = false
+                                        hardReconnectRequested = false
                                         reconnectAttempt = 0
                                         reconnectJob?.cancel()
                                         reconnectJob = null
@@ -641,9 +664,13 @@ class MainActivity : ComponentActivity() {
                                         } else if (userWantsConnected && hadEstablishedSession &&
                                             billingStatus?.isPremium == true
                                         ) {
+                                            // Transient tunnel drop (underlay flap / sticky
+                                            // service restart). Keep the peer and wait for
+                                            // VeritasVpnService to restore from saved config.
+                                            // scheduleReconnect() deletes the peer and was
+                                            // causing a connect → drop → connecting loop.
                                             reconnecting = true
                                             statusMsg = "Reconnecting…"
-                                            scheduleReconnect()
                                         } else {
                                             statusMsg = null
                                         }
@@ -658,9 +685,9 @@ class MainActivity : ComponentActivity() {
                                     if (userWantsConnected && hadEstablishedSession &&
                                         billingStatus?.isPremium == true
                                     ) {
+                                        // Prefer sticky restore over peer-delete reconnect.
                                         reconnecting = true
                                         statusMsg = "Reconnecting…"
-                                        scheduleReconnect()
                                     }
                                 }
                             }
