@@ -316,6 +316,206 @@ fn disconnect_wireguard(app: AppHandle) -> ConnectResult {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct RouteRefreshResult {
+    pub refreshed: bool,
+    pub gateway: String,
+    pub message: String,
+}
+
+/// Soft path adapt for Linux: when the underlay default gateway changes
+/// (Wi-Fi↔Wi-Fi, Ethernet↔Wi-Fi, LAN→WAN), refresh the pinned endpoint host
+/// route without tearing down the tunnel or recreating the peer.
+#[tauri::command]
+fn refresh_endpoint_route() -> RouteRefreshResult {
+    #[cfg(target_os = "linux")]
+    {
+        return refresh_endpoint_route_linux();
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        RouteRefreshResult {
+            refreshed: false,
+            gateway: String::new(),
+            message: "endpoint route refresh is Linux-only in this build".into(),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn refresh_endpoint_route_linux() -> RouteRefreshResult {
+    let iface_file = match iface_path() {
+        Ok(p) => p,
+        Err(e) => {
+            return RouteRefreshResult {
+                refreshed: false,
+                gateway: String::new(),
+                message: e,
+            };
+        }
+    };
+    let meta_file = PathBuf::from(format!("{}.meta", iface_file.display()));
+    if !meta_file.exists() {
+        return RouteRefreshResult {
+            refreshed: false,
+            gateway: String::new(),
+            message: "not connected".into(),
+        };
+    }
+    let meta = fs::read_to_string(&meta_file).unwrap_or_default();
+    let mut endpoint_ip = String::new();
+    let mut old_gw = String::new();
+    let mut iface = String::new();
+    for line in meta.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            match k.trim() {
+                "endpoint_ip" => endpoint_ip = v.trim().to_string(),
+                "gateway" => old_gw = v.trim().to_string(),
+                "iface" => iface = v.trim().to_string(),
+                _ => {}
+            }
+        }
+    }
+    if endpoint_ip.is_empty() || endpoint_ip == "127.0.0.1" {
+        return RouteRefreshResult {
+            refreshed: false,
+            gateway: old_gw,
+            message: "no endpoint host route to refresh".into(),
+        };
+    }
+
+    // Prefer a unicast underlay default (skip blackhole kill-switch + tunnel).
+    let detect = Command::new("bash")
+        .arg("-c")
+        .arg(format!(
+            r#"
+set -e
+IFACE='{iface}'
+# Unicast default via underlay (exclude blackhole + tunnel iface).
+GW="$(ip -4 route show default | awk -v iface="$IFACE" '
+  /blackhole/ {{ next }}
+  /via/ {{
+    for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
+    if (d == "" || d != iface) {{ print $3; exit }}
+  }}
+')"
+GW_IF="$(ip -4 route show default | awk -v iface="$IFACE" '
+  /blackhole/ {{ next }}
+  /via/ {{
+    for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
+    if (d == "" || d != iface) {{ print d; exit }}
+  }}
+')"
+# Fallback: route to a public IP excluding the tunnel interface.
+if [[ -z "$GW" ]]; then
+  LINE="$(ip -4 route get 1.1.1.1 2>/dev/null | head -1 || true)"
+  if [[ "$LINE" != *"dev $IFACE"* ]]; then
+    GW="$(awk '{{for(i=1;i<=NF;i++) if($i=="via"){{print $(i+1); exit}}}}' <<<"$LINE")"
+    GW_IF="$(awk '{{for(i=1;i<=NF;i++) if($i=="dev"){{print $(i+1); exit}}}}' <<<"$LINE")"
+  fi
+fi
+printf '%s %s\n' "$GW" "$GW_IF"
+"#,
+            iface = iface.replace('\'', "'\\''")
+        ))
+        .output();
+    let Ok(out) = detect else {
+        return RouteRefreshResult {
+            refreshed: false,
+            gateway: old_gw,
+            message: "could not detect underlay gateway".into(),
+        };
+    };
+    let detected = String::from_utf8_lossy(&out.stdout);
+    let mut parts = detected.split_whitespace();
+    let new_gw = parts.next().unwrap_or("").to_string();
+    let new_gw_if = parts.next().unwrap_or("").to_string();
+    if new_gw.is_empty() {
+        return RouteRefreshResult {
+            refreshed: false,
+            gateway: old_gw,
+            message: "underlay gateway not ready yet".into(),
+        };
+    }
+    if new_gw == old_gw {
+        return RouteRefreshResult {
+            refreshed: false,
+            gateway: old_gw,
+            message: "gateway unchanged".into(),
+        };
+    }
+
+    let dir = match state_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            return RouteRefreshResult {
+                refreshed: false,
+                gateway: old_gw,
+                message: e,
+            };
+        }
+    };
+    let script_path = dir.join("refresh-route.sh");
+    let script = format!(
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+ENDPOINT_IP='{endpoint}'
+NEW_GW='{gw}'
+NEW_GW_IF='{gw_if}'
+META_FILE='{meta}'
+IFACE='{iface}'
+# Replace the pinned endpoint host route for the new underlay.
+ip route del "$ENDPOINT_IP" 2>/dev/null || true
+if [[ -n "$NEW_GW_IF" ]]; then
+  ip route replace "$ENDPOINT_IP" via "$NEW_GW" dev "$NEW_GW_IF"
+else
+  ip route replace "$ENDPOINT_IP" via "$NEW_GW"
+fi
+# Keep meta in sync so the next change detects correctly.
+if [[ -f "$META_FILE" ]]; then
+  tmp="$(mktemp)"
+  awk -v gw="$NEW_GW" -v gif="$NEW_GW_IF" '
+    BEGIN {{ updated_gw=0; updated_gif=0 }}
+    /^gateway=/ {{ print "gateway=" gw; updated_gw=1; next }}
+    /^gw_if=/ {{ print "gw_if=" gif; updated_gif=1; next }}
+    {{ print }}
+    END {{
+      if (!updated_gw) print "gateway=" gw
+      if (!updated_gif && gif != "") print "gw_if=" gif
+    }}
+  ' "$META_FILE" > "$tmp"
+  mv "$tmp" "$META_FILE"
+fi
+echo "ok refreshed endpoint=$ENDPOINT_IP via=$NEW_GW dev=$NEW_GW_IF iface=$IFACE"
+"#,
+        endpoint = endpoint_ip.replace('\'', "'\\''"),
+        gw = new_gw.replace('\'', "'\\''"),
+        gw_if = new_gw_if.replace('\'', "'\\''"),
+        meta = meta_file.display().to_string().replace('\'', "'\\''"),
+        iface = iface.replace('\'', "'\\''"),
+    );
+    if let Err(e) = fs::write(&script_path, script) {
+        return RouteRefreshResult {
+            refreshed: false,
+            gateway: old_gw,
+            message: format!("write refresh script: {e}"),
+        };
+    }
+    let _ = Command::new("chmod").args(["0700", &script_path.to_string_lossy()]).status();
+    match run_elevated(&script_path) {
+        Ok(()) => RouteRefreshResult {
+            refreshed: true,
+            gateway: new_gw.clone(),
+            message: format!("endpoint route moved {old_gw} → {new_gw}"),
+        },
+        Err(e) => RouteRefreshResult {
+            refreshed: false,
+            gateway: old_gw,
+            message: e,
+        },
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn bring_up_wireguard(app: &AppHandle, config: &WgTunnelConfig) -> Result<String, String> {
     if !config.stealth_endpoint.trim().is_empty() {
@@ -1197,10 +1397,9 @@ fi
 
 # Install passwordless sudo so future connects/disconnects skip pkexec prompts
 SUDOERS_FILE="/etc/sudoers.d/veritasvpn-{user}"
-if [ ! -f "$SUDOERS_FILE" ]; then
-  echo "{user} ALL=(root) NOPASSWD: {home}/.veritasvpn/bringup.sh, {home}/.veritasvpn/teardown.sh" > "$SUDOERS_FILE" 2>/dev/null || true
-  chmod 0440 "$SUDOERS_FILE" 2>/dev/null || true
-fi
+# Keep passwordless helpers current (includes path-adapt refresh-route.sh).
+echo "{user} ALL=(root) NOPASSWD: {home}/.veritasvpn/bringup.sh, {home}/.veritasvpn/teardown.sh, {home}/.veritasvpn/refresh-route.sh" > "$SUDOERS_FILE" 2>/dev/null || true
+chmod 0440 "$SUDOERS_FILE" 2>/dev/null || true
 
 echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}} gw=$GW"
 "#,
@@ -1684,7 +1883,8 @@ pub fn run() {
             generate_wg_keys,
             connect_wireguard,
             disconnect_wireguard,
-            wireguard_stats
+            wireguard_stats,
+            refresh_endpoint_route
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

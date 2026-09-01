@@ -104,6 +104,7 @@ If it fails: Cloudflare → Transform Rule → Response header → Remove `Acces
 | ACAO | `verify-acao.sh` PASS 2026-08-31 (also in prod-smoke) |
 | Agent health | `verify-agent-health.sh` PASS after pin `sha256:62905883a2156ea86d530fe26d28d4f1d0a7b2cac31107bbe00fc7beb038d3fc` |
 | Manual 5+ min connect | **DONE (Android)** — v0.2.20, ~10 min browse, stable (2026-08-31). Linux still optional. |
+| Network path adapt (Wi‑Fi↔cell) | **IN TREE** — Android soft tunnel bounce + Linux endpoint route refresh (`docs/NETWORK_PATH_ADAPT.md`); ship in **0.2.21** |
 | BTC settle | _(human or webhook smoke)_ |
 
 ---
