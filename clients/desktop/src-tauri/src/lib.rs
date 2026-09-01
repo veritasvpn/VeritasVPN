@@ -1037,13 +1037,35 @@ fn bring_up_wireguard_linux_full(app: &AppHandle, config: &WgTunnelConfig) -> Re
     }
     uapi.push('\n');
 
+    // Kernel `wg setconf` wants base64 keys (same form the API returns).
+    let allowed_joined = allowed
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut wg_conf = format!(
+        "[Interface]\nPrivateKey = {}\n\n[Peer]\nPublicKey = {}\nEndpoint = {}\nPersistentKeepalive = 25\nAllowedIPs = {allowed_joined}\n",
+        config.private_key.trim(),
+        config.server_public_key.trim(),
+        endpoint
+    );
+    if !config.preshared_key.trim().is_empty() {
+        wg_conf.push_str(&format!(
+            "PresharedKey = {}\n",
+            config.preshared_key.trim()
+        ));
+    }
+
     let uapi_path = dir.join("uapi.txt");
+    let wg_conf_path = dir.join("wg.conf");
     let script_path = dir.join("bringup.sh");
     let iface_file = iface_path()?;
     let pid_file = pid_path()?;
     let stealth_pid = stealth_pid_path()?;
 
     fs::write(&uapi_path, &uapi).map_err(|e| format!("write uapi: {e}"))?;
+    fs::write(&wg_conf_path, &wg_conf).map_err(|e| format!("write wg.conf: {e}"))?;
     fs::write(
         conf_path()?,
         format!(
@@ -1057,6 +1079,7 @@ fn bring_up_wireguard_linux_full(app: &AppHandle, config: &WgTunnelConfig) -> Re
     let script = build_bringup_script_linux(
         &wg_go,
         &uapi_path,
+        &wg_conf_path,
         &iface_file,
         &pid_file,
         &address,
@@ -1095,6 +1118,7 @@ fn bring_up_wireguard_linux_full(app: &AppHandle, config: &WgTunnelConfig) -> Re
 fn build_bringup_script_linux(
     wg_go: &Path,
     uapi_path: &Path,
+    wg_conf_path: &Path,
     iface_file: &Path,
     pid_file: &Path,
     address: &str,
@@ -1110,6 +1134,7 @@ fn build_bringup_script_linux(
 set -uo pipefail
 WG_GO='{wg_go}'
 UAPI='{uapi}'
+WG_CONF='{wg_conf}'
 IFACE_FILE='{iface_file}'
 PID_FILE='{pid_file}'
 STEALTH_PID_FILE='{stealth_pid}'
@@ -1125,6 +1150,8 @@ IFACE_NAME="veritas0"
 ENDPOINT_PORT="${{ENDPOINT##*:}}"
 KILLSWITCH_TABLE="veritasvpn_killswitch"
 KILLSWITCH_CHAIN="VERITASVPN_KILLSWITCH"
+IFACE=""
+ENGINE=""
 
 cleanup_killswitch() {{
   if command -v nft >/dev/null 2>&1; then
@@ -1266,44 +1293,60 @@ if [[ -n "$STEALTH_REMOTE" ]]; then
   fi
 fi
 
-# Start userspace WireGuard
-"$WG_GO" "$IFACE_NAME" >/tmp/veritas-wg-go.log 2>&1 &
-echo $! > "$PID_FILE"
-sleep 0.5
-
-# Wait for socket
-for _ in $(seq 1 40); do
-  for sock in /var/run/wireguard/*.sock; do
-    [[ -e "$sock" ]] || continue
-    IFACE="$(basename "$sock" .sock)"
-    break 2
+# Start WireGuard: prefer in-kernel (stable under pkexec). wireguard-go's
+# self-daemonize can drop the UAPI socket before we configure it, which
+# produced FileNotFoundError + "Cannot find device veritas0" for users.
+ip link delete "$IFACE_NAME" 2>/dev/null || true
+if command -v wg >/dev/null 2>&1 && ip link add "$IFACE_NAME" type wireguard 2>/tmp/veritas-wg-kernel.log; then
+  ENGINE=kernel
+  IFACE="$IFACE_NAME"
+  if ! wg setconf "$IFACE_NAME" "$WG_CONF" 2>>/tmp/veritas-wg-kernel.log; then
+    ip link delete "$IFACE_NAME" 2>/dev/null || true
+    echo "failed to configure kernel WireGuard" >&2
+    cat /tmp/veritas-wg-kernel.log >&2 || true
+    [[ -f "$STEALTH_PID_FILE" ]] && kill "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+    exit 1
+  fi
+else
+  ENGINE=userspace
+  : > /tmp/veritas-wg-go.log
+  # -f keeps the process in the foreground so nohup owns a stable PID/socket.
+  nohup "$WG_GO" -f "$IFACE_NAME" >>/tmp/veritas-wg-go.log 2>&1 &
+  echo $! > "$PID_FILE"
+  sleep 0.3
+  for _ in $(seq 1 50); do
+    if [[ -S "/var/run/wireguard/${{IFACE_NAME}}.sock" ]]; then
+      IFACE="$IFACE_NAME"
+      break
+    fi
+    if [[ -f "$PID_FILE" ]] && ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
   done
-  sleep 0.1
-done
-if [[ -z "$IFACE" ]]; then
-  echo "failed to start WireGuard engine" >&2
-  cat /tmp/veritas-wg-go.log >&2 || true
-  [[ -f "$STEALTH_PID_FILE" ]] && kill "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
-  exit 1
-fi
-echo "$IFACE_NAME" > "$IFACE_FILE"
+  if [[ -z "$IFACE" ]]; then
+    echo "failed to start WireGuard engine" >&2
+    cat /tmp/veritas-wg-go.log >&2 || true
+    cat /tmp/veritas-wg-kernel.log >&2 || true
+    [[ -f "$STEALTH_PID_FILE" ]] && kill "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+    exit 1
+  fi
 
-# Desktop UI polls `wg show` unprivileged. wireguard-go's UAPI socket is
-# root-only by default, which made LIVE STATS show 0 B / Handshake never.
-DESKTOP_USER="${{SUDO_USER:-}}"
-if [[ -z "$DESKTOP_USER" && -n "${{PKEXEC_UID:-}}" ]]; then
-  DESKTOP_USER="$(getent passwd "$PKEXEC_UID" | cut -d: -f1 || true)"
-fi
-if [[ -z "$DESKTOP_USER" ]]; then
-  DESKTOP_USER="$(stat -c '%U' "$(dirname "$IFACE_FILE")" 2>/dev/null || true)"
-fi
-if [[ -n "$DESKTOP_USER" && -S "/var/run/wireguard/${{IFACE}}.sock" ]]; then
-  chown "$DESKTOP_USER:" "/var/run/wireguard/${{IFACE}}.sock" 2>/dev/null || true
-  chmod 600 "/var/run/wireguard/${{IFACE}}.sock" 2>/dev/null || true
-fi
+  # Desktop UI polls `wg show` unprivileged. wireguard-go's UAPI socket is
+  # root-only by default, which made LIVE STATS show 0 B / Handshake never.
+  DESKTOP_USER="${{SUDO_USER:-}}"
+  if [[ -z "$DESKTOP_USER" && -n "${{PKEXEC_UID:-}}" ]]; then
+    DESKTOP_USER="$(getent passwd "$PKEXEC_UID" | cut -d: -f1 || true)"
+  fi
+  if [[ -z "$DESKTOP_USER" ]]; then
+    DESKTOP_USER="$(stat -c '%U' "$(dirname "$IFACE_FILE")" 2>/dev/null || true)"
+  fi
+  if [[ -n "$DESKTOP_USER" && -S "/var/run/wireguard/${{IFACE}}.sock" ]]; then
+    chown "$DESKTOP_USER:" "/var/run/wireguard/${{IFACE}}.sock" 2>/dev/null || true
+    chmod 600 "/var/run/wireguard/${{IFACE}}.sock" 2>/dev/null || true
+  fi
 
-# Configure WireGuard via UAPI
-python3 - "$IFACE" "$UAPI" <<'PY'
+  if ! python3 - "$IFACE" "$UAPI" <<'PY'
 import socket, sys, pathlib
 iface, uapi = sys.argv[1], sys.argv[2]
 sock_path = f"/var/run/wireguard/{{iface}}.sock"
@@ -1318,6 +1361,16 @@ if "errno=0" not in resp:
     sys.stderr.write(resp + "\n")
     sys.exit(1)
 PY
+  then
+    echo "failed to configure userspace WireGuard" >&2
+    kill "$(cat "$PID_FILE")" 2>/dev/null || true
+    [[ -f "$STEALTH_PID_FILE" ]] && kill "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+    rm -f "$PID_FILE" "$IFACE_FILE" /var/run/wireguard/*.sock
+    ip link delete "$IFACE_NAME" 2>/dev/null || true
+    exit 1
+  fi
+fi
+echo "$IFACE_NAME" > "$IFACE_FILE"
 
 ip addr add "$ADDR" dev "$IFACE_NAME"
 ip link set "$IFACE_NAME" up
@@ -1331,6 +1384,7 @@ if ! ping -c 3 -W 1 10.0.0.1 >/tmp/veritas-wg-handshake.log 2>&1; then
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   kill "$(cat "$PID_FILE")" 2>/dev/null || true
   [[ -f "$STEALTH_PID_FILE" ]] && kill "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+  ip link delete "$IFACE_NAME" 2>/dev/null || true
   rm -f "$PID_FILE" "$STEALTH_PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
   echo "WireGuard handshake with the VPN server failed; normal internet was left unchanged" >&2
   exit 1
@@ -1394,6 +1448,7 @@ if ! install_killswitch; then
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
   [[ -f "$STEALTH_PID_FILE" ]] && kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+  ip link delete "$IFACE_NAME" 2>/dev/null || true
   rm -f "$PID_FILE" "$STEALTH_PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
   echo "Could not install the firewall kill switch; install nftables or iptables and try again. Normal internet was left unchanged" >&2
   exit 1
@@ -1408,8 +1463,8 @@ elif command -v resolvectl >/dev/null 2>&1; then
 fi
 
 # Persist state for teardown
-printf 'endpoint_ip=%s\ngateway=%s\niface=%s\ngw_if=%s\nstealth_remote=%s\n' \
-  "$ROUTE_IP" "$GW" "$IFACE_NAME" "$GW_IF" "$STEALTH_REMOTE" > "$META_FILE"
+printf 'endpoint_ip=%s\ngateway=%s\niface=%s\ngw_if=%s\nstealth_remote=%s\nengine=%s\n' \
+  "$ROUTE_IP" "$GW" "$IFACE_NAME" "$GW_IF" "$STEALTH_REMOTE" "$ENGINE" > "$META_FILE"
 
 # Verify internet connectivity through the tunnel
 if ! curl -4 -fsS --connect-timeout 5 --max-time 12 https://api.ipify.org \
@@ -1428,6 +1483,7 @@ if ! curl -4 -fsS --connect-timeout 5 --max-time 12 https://api.ipify.org \
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
   [[ -f "$STEALTH_PID_FILE" ]] && kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+  ip link delete "$IFACE_NAME" 2>/dev/null || true
   rm -f "$PID_FILE" "$STEALTH_PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
   echo "VPN internet egress validation failed; normal internet was restored" >&2
   exit 1
@@ -1439,10 +1495,11 @@ SUDOERS_FILE="/etc/sudoers.d/veritasvpn-{user}"
 echo "{user} ALL=(root) NOPASSWD: {home}/.veritasvpn/bringup.sh, {home}/.veritasvpn/teardown.sh, {home}/.veritasvpn/refresh-route.sh" > "$SUDOERS_FILE" 2>/dev/null || true
 chmod 0440 "$SUDOERS_FILE" 2>/dev/null || true
 
-echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}} gw=$GW"
+echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}} gw=$GW engine=$ENGINE"
 "#,
         wg_go = wg_go.display(),
         uapi = uapi_path.display(),
+        wg_conf = wg_conf_path.display(),
         iface_file = iface_file.display(),
         pid_file = pid_file.display(),
         stealth_pid = stealth_pid.display(),
@@ -1662,6 +1719,7 @@ if [[ -n "$IFACE" ]]; then
   ip route del 0.0.0.0/1 dev "$IFACE" 2>/dev/null || true
   ip route del 128.0.0.0/1 dev "$IFACE" 2>/dev/null || true
   ip link set "$IFACE" down 2>/dev/null || true
+  ip link delete "$IFACE" 2>/dev/null || true
 fi
 ip route del 0.0.0.0/1 2>/dev/null || true
 ip route del 128.0.0.0/1 2>/dev/null || true
