@@ -47,9 +47,11 @@ spec:
                   key: REDIS_PASSWORD
           # Official redis args do not expand $(REDIS_PASSWORD); use the shell so
           # requirepass matches the same secret clients already use in REDIS_URL.
+          # maxmemory sits below the 256Mi container limit so allkeys-lru can evict
+          # before the kube OOM killer (unlimited maxmemory=0 would grow until kill).
           command: ["sh", "-c"]
           args:
-            - exec redis-server --appendonly no --maxmemory-policy allkeys-lru --requirepass "$REDIS_PASSWORD"
+            - exec redis-server --appendonly no --maxmemory 192mb --maxmemory-policy allkeys-lru --requirepass "$REDIS_PASSWORD"
           ports:
             - containerPort: 6379
           readinessProbe:
