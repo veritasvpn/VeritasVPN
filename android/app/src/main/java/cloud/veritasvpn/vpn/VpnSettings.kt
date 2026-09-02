@@ -15,6 +15,7 @@ object VpnSettings {
     private const val KEY_EXCLUDE_LAN = "exclude_lan"
     private const val KEY_BYPASS_APPS = "bypass_apps"
     private const val KEY_CURRENT_PEER_ID = "current_peer_id"
+    private const val KEY_DEVICE_ID = "device_id"
 
     /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
     val EXCLUDE_LAN_ALLOWED_IPS: List<String> = listOf(
@@ -84,6 +85,16 @@ object VpnSettings {
             if (peerId.isNullOrBlank()) remove(KEY_CURRENT_PEER_ID)
             else putString(KEY_CURRENT_PEER_ID, peerId)
         }.apply()
+    }
+
+    /** Stable install UUID used as WireGuard peer device_id (multi-device Premium). */
+    fun deviceId(context: Context): String {
+        val prefs = prefs(context)
+        val existing = prefs.getString(KEY_DEVICE_ID, null)?.trim().orEmpty()
+        if (existing.isNotEmpty()) return existing
+        val created = java.util.UUID.randomUUID().toString()
+        prefs.edit().putString(KEY_DEVICE_ID, created).apply()
+        return created
     }
 
     /**

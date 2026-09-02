@@ -184,33 +184,66 @@ func (p *Postgres) IsActiveIPAssigned(ctx context.Context, serverID, assignedIP 
 	return assigned, nil
 }
 
+func (p *Postgres) GetActivePeerByAccountDevice(ctx context.Context, accountID, deviceID string) (*model.Peer, error) {
+	query := `SELECT id, account_id, server_id, device_id, pubkey, preshared_key,
+	           allowed_ips, assigned_ip, status, created_at, expires_at
+	           FROM peers
+	           WHERE account_id = $1 AND device_id = $2
+	             AND status IN ('pending', 'active')
+	           LIMIT 1`
+
+	peer := &model.Peer{}
+	err := p.pool.QueryRow(ctx, query, accountID, deviceID).Scan(
+		&peer.ID, &peer.AccountID, &peer.ServerID, &peer.DeviceID, &peer.Pubkey,
+		&peer.PresharedKey, &peer.AllowedIPs, &peer.AssignedIP,
+		&peer.Status, &peer.CreatedAt, &peer.ExpiresAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get active peer by account device: %w", err)
+	}
+	return peer, nil
+}
+
 func (p *Postgres) CreatePeer(ctx context.Context, peer *model.Peer) error {
-	query := `INSERT INTO peers (account_id, server_id, pubkey, preshared_key,
+	query := `INSERT INTO peers (account_id, server_id, device_id, pubkey, preshared_key,
 	           allowed_ips, assigned_ip, status, expires_at)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	           ON CONFLICT (account_id, server_id) DO UPDATE SET
-	               pubkey = EXCLUDED.pubkey,
-	               preshared_key = EXCLUDED.preshared_key,
-	               allowed_ips = EXCLUDED.allowed_ips,
-	               assigned_ip = EXCLUDED.assigned_ip,
-	               status = 'pending',
-	               expires_at = EXCLUDED.expires_at
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	           RETURNING id, created_at`
 
 	return p.pool.QueryRow(ctx, query,
-		peer.AccountID, peer.ServerID, peer.Pubkey, peer.PresharedKey,
+		peer.AccountID, peer.ServerID, peer.DeviceID, peer.Pubkey, peer.PresharedKey,
 		peer.AllowedIPs, peer.AssignedIP, peer.Status, peer.ExpiresAt,
 	).Scan(&peer.ID, &peer.CreatedAt)
 }
 
+// UpdatePeerIdentity replaces the WireGuard identity/server assignment for an
+// existing device peer row and resets status to pending for agent apply.
+func (p *Postgres) UpdatePeerIdentity(ctx context.Context, peer *model.Peer) error {
+	query := `UPDATE peers SET
+	               server_id = $2,
+	               pubkey = $3,
+	               preshared_key = $4,
+	               allowed_ips = $5,
+	               assigned_ip = $6,
+	               status = 'pending',
+	               expires_at = $7
+	           WHERE id = $1 AND account_id = $8 AND status IN ('pending', 'active')
+	           RETURNING created_at`
+	return p.pool.QueryRow(ctx, query,
+		peer.ID, peer.ServerID, peer.Pubkey, peer.PresharedKey,
+		peer.AllowedIPs, peer.AssignedIP, peer.ExpiresAt,
+		peer.AccountID,
+	).Scan(&peer.CreatedAt)
+}
+
 func (p *Postgres) GetPeer(ctx context.Context, peerID, accountID string) (*model.Peer, error) {
-	query := `SELECT id, account_id, server_id, pubkey, preshared_key,
+	query := `SELECT id, account_id, server_id, device_id, pubkey, preshared_key,
 	           allowed_ips, assigned_ip, status, created_at, expires_at
 	           FROM peers WHERE id = $1 AND account_id = $2 AND status != 'removed'`
 
 	peer := &model.Peer{}
 	err := p.pool.QueryRow(ctx, query, peerID, accountID).Scan(
-		&peer.ID, &peer.AccountID, &peer.ServerID, &peer.Pubkey,
+		&peer.ID, &peer.AccountID, &peer.ServerID, &peer.DeviceID, &peer.Pubkey,
 		&peer.PresharedKey, &peer.AllowedIPs, &peer.AssignedIP,
 		&peer.Status, &peer.CreatedAt, &peer.ExpiresAt,
 	)
@@ -221,7 +254,7 @@ func (p *Postgres) GetPeer(ctx context.Context, peerID, accountID string) (*mode
 }
 
 func (p *Postgres) ListPeersByAccount(ctx context.Context, accountID string) ([]model.Peer, error) {
-	query := `SELECT id, account_id, server_id, pubkey, preshared_key,
+	query := `SELECT id, account_id, server_id, device_id, pubkey, preshared_key,
 	           allowed_ips, assigned_ip, status, created_at, expires_at
 	           FROM peers WHERE account_id = $1 AND status != 'removed'
 	           ORDER BY created_at DESC`
@@ -234,26 +267,26 @@ func (p *Postgres) ListPeersByAccount(ctx context.Context, accountID string) ([]
 
 	var peers []model.Peer
 	for rows.Next() {
-		var p model.Peer
+		var peer model.Peer
 		if err := rows.Scan(
-			&p.ID, &p.AccountID, &p.ServerID, &p.Pubkey, &p.PresharedKey,
-			&p.AllowedIPs, &p.AssignedIP, &p.Status, &p.CreatedAt, &p.ExpiresAt,
+			&peer.ID, &peer.AccountID, &peer.ServerID, &peer.DeviceID, &peer.Pubkey, &peer.PresharedKey,
+			&peer.AllowedIPs, &peer.AssignedIP, &peer.Status, &peer.CreatedAt, &peer.ExpiresAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan peer: %w", err)
 		}
-		peers = append(peers, p)
+		peers = append(peers, peer)
 	}
 	return peers, rows.Err()
 }
 
 func (p *Postgres) GetPeerForServer(ctx context.Context, peerID, serverID string) (*model.Peer, error) {
-	query := `SELECT id, account_id, server_id, pubkey, preshared_key,
+	query := `SELECT id, account_id, server_id, device_id, pubkey, preshared_key,
 	           allowed_ips, assigned_ip, status, created_at, expires_at
 	           FROM peers WHERE id = $1 AND server_id = $2
 	             AND status IN ('pending', 'active')`
 	peer := &model.Peer{}
 	err := p.pool.QueryRow(ctx, query, peerID, serverID).Scan(
-		&peer.ID, &peer.AccountID, &peer.ServerID, &peer.Pubkey,
+		&peer.ID, &peer.AccountID, &peer.ServerID, &peer.DeviceID, &peer.Pubkey,
 		&peer.PresharedKey, &peer.AllowedIPs, &peer.AssignedIP,
 		&peer.Status, &peer.CreatedAt, &peer.ExpiresAt,
 	)
@@ -274,7 +307,7 @@ func (p *Postgres) MarkPeerRemovedForServer(ctx context.Context, peerID, serverI
 }
 
 func (p *Postgres) ListPeersByServer(ctx context.Context, serverID string) ([]model.Peer, error) {
-	query := `SELECT id, account_id, server_id, pubkey, preshared_key,
+	query := `SELECT id, account_id, server_id, device_id, pubkey, preshared_key,
 	           allowed_ips, assigned_ip, status, created_at, expires_at
 	           FROM peers WHERE server_id = $1 AND status IN ('pending', 'active')
 	           ORDER BY created_at ASC`
@@ -287,14 +320,14 @@ func (p *Postgres) ListPeersByServer(ctx context.Context, serverID string) ([]mo
 
 	var peers []model.Peer
 	for rows.Next() {
-		var p model.Peer
+		var peer model.Peer
 		if err := rows.Scan(
-			&p.ID, &p.AccountID, &p.ServerID, &p.Pubkey, &p.PresharedKey,
-			&p.AllowedIPs, &p.AssignedIP, &p.Status, &p.CreatedAt, &p.ExpiresAt,
+			&peer.ID, &peer.AccountID, &peer.ServerID, &peer.DeviceID, &peer.Pubkey, &peer.PresharedKey,
+			&peer.AllowedIPs, &peer.AssignedIP, &peer.Status, &peer.CreatedAt, &peer.ExpiresAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan peer: %w", err)
 		}
-		peers = append(peers, p)
+		peers = append(peers, peer)
 	}
 	return peers, rows.Err()
 }

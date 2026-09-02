@@ -24,6 +24,7 @@ type Peer struct {
 	ID           string     `db:"id"`
 	AccountID    string     `db:"account_id"`
 	ServerID     string     `db:"server_id"`
+	DeviceID     string     `db:"device_id"`
 	Pubkey       string     `db:"pubkey"`
 	PresharedKey *string    `db:"preshared_key"`
 	AllowedIPs   []string   `db:"allowed_ips"`

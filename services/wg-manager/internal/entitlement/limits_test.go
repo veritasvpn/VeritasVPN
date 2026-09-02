@@ -29,6 +29,14 @@ func TestCheckCreatePeerRequiresPaidSubscription(t *testing.T) {
 	}
 }
 
+// Reconnect of an existing device must pass currentPeerCount-1 so a Premium
+// account already at 5 devices can still rotate that device's pubkey.
+func TestCheckCreatePeerReconnectAtCap(t *testing.T) {
+	if err := CheckCreatePeer(TierPremium, 4, "", nil); err != nil {
+		t.Fatalf("reconnect at cap (5 existing -> count 4): %v", err)
+	}
+}
+
 func TestPremiumIgnoresLegacyFreeRegionList(t *testing.T) {
 	allowed := []string{"local"}
 	if err := CheckCreatePeer(TierPremium, 0, "eu-west", allowed); err != nil {

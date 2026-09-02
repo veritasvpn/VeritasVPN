@@ -257,6 +257,34 @@ fn linux_iface_sysfs_stats(iface: &str) -> (bool, u64, u64) {
 }
 
 #[cfg(target_os = "linux")]
+fn ensure_linux_stats_script() -> Result<PathBuf, String> {
+    let dir = state_dir()?;
+    let script_path = dir.join("stats.sh");
+    let iface_file = iface_path()?;
+    let script = format!(
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+IFACE_FILE='{iface_file}'
+IFACE="$(cat "$IFACE_FILE" 2>/dev/null || true)"
+IFACE="${{IFACE:-veritas0}}"
+exec wg show "$IFACE" dump
+"#,
+        iface_file = iface_file.display()
+    );
+    fs::write(&script_path, &script).map_err(|e| format!("write stats script: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .map_err(|e| format!("stats script meta: {e}"))?
+            .permissions();
+        perms.set_mode(0o755);
+        let _ = fs::set_permissions(&script_path, perms);
+    }
+    Ok(script_path)
+}
+
+#[cfg(target_os = "linux")]
 fn wireguard_stats_linux() -> WgTransferStats {
     let iface = iface_path()
         .ok()
@@ -275,10 +303,26 @@ fn wireguard_stats_linux() -> WgTransferStats {
 
     let (sys_up, sys_rx, sys_tx) = linux_iface_sysfs_stats(&iface);
 
-    let output = Command::new("wg")
-        .args(["show", &iface, "dump"])
-        .output();
-    let Ok(out) = output else {
+    // Prefer passwordless sudo via stats.sh (kernel WG UAPI is root-only).
+    let privileged_dump = ensure_linux_stats_script().ok().and_then(|script| {
+        Command::new("sudo")
+            .args(["-n", "bash", &script.to_string_lossy()])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    });
+
+    let dump_text = privileged_dump.or_else(|| {
+        Command::new("wg")
+            .args(["show", &iface, "dump"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    });
+
+    let Some(text) = dump_text else {
         // Unprivileged `wg` often fails on the root-only UAPI socket; still
         // report interface + byte counters from sysfs so LIVE STATS is useful.
         return WgTransferStats {
@@ -288,20 +332,13 @@ fn wireguard_stats_linux() -> WgTransferStats {
             interface_up: sys_up,
         };
     };
-    if !out.status.success() {
-        return WgTransferStats {
-            rx_bytes: sys_rx,
-            tx_bytes: sys_tx,
-            last_handshake_sec: 0,
-            interface_up: sys_up,
-        };
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
+
     // dump: iface line then peer lines with last_handshake rx_bytes tx_bytes
     let mut rx = 0u64;
     let mut tx = 0u64;
     let mut handshake = 0i64;
     let mut up = false;
+    let line_count = text.lines().count();
     for (i, line) in text.lines().enumerate() {
         let cols: Vec<&str> = line.split('\t').collect();
         if i == 0 {
@@ -318,7 +355,7 @@ fn wireguard_stats_linux() -> WgTransferStats {
         rx_bytes: if rx > 0 { rx } else { sys_rx },
         tx_bytes: if tx > 0 { tx } else { sys_tx },
         last_handshake_sec: handshake,
-        interface_up: (up && text.lines().count() > 1) || sys_up,
+        interface_up: (up && line_count > 1) || sys_up,
     }
 }
 
@@ -1491,8 +1528,8 @@ fi
 
 # Install passwordless sudo so future connects/disconnects skip pkexec prompts
 SUDOERS_FILE="/etc/sudoers.d/veritasvpn-{user}"
-# Keep passwordless helpers current (includes path-adapt refresh-route.sh).
-echo "{user} ALL=(root) NOPASSWD: {home}/.veritasvpn/bringup.sh, {home}/.veritasvpn/teardown.sh, {home}/.veritasvpn/refresh-route.sh" > "$SUDOERS_FILE" 2>/dev/null || true
+# Keep passwordless helpers current (includes path-adapt refresh-route.sh + stats.sh).
+echo "{user} ALL=(root) NOPASSWD: {home}/.veritasvpn/bringup.sh, {home}/.veritasvpn/teardown.sh, {home}/.veritasvpn/refresh-route.sh, {home}/.veritasvpn/stats.sh" > "$SUDOERS_FILE" 2>/dev/null || true
 chmod 0440 "$SUDOERS_FILE" 2>/dev/null || true
 
 echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}} gw=$GW engine=$ENGINE"

@@ -952,16 +952,19 @@ class MainActivity : ComponentActivity() {
         setStatus(if (isReconnect) "Reconnecting…" else "Connecting...")
         scope.launch {
             try {
-                // Do not create a replacement peer until the previous DELETE has
-                // completed; the API upserts by account/server and an old
-                // asynchronous cleanup could otherwise remove the new peer.
+                // Wait for prior DELETE so we do not race ourselves; server upserts
+                // by (account_id, device_id) so other installs stay untouched.
                 peerCleanupJob?.join()
                 val (keyPair, peer) = withContext(Dispatchers.IO) {
                     val generated = KeyPair()
+                    val deviceId = VpnSettings.deviceId(context)
                     val createdPeer = AuthenticatedApi.execute(authRepo, { token ->
                         ApiClient.post(
                             "/api/v1/wg/peers",
-                            mapOf("public_key" to generated.publicKey.toBase64()),
+                            mapOf(
+                                "public_key" to generated.publicKey.toBase64(),
+                                "device_id" to deviceId,
+                            ),
                             token
                         )
                     }) { res ->

@@ -397,6 +397,7 @@ func (h *HTTPHandler) handlePeerApplied(w http.ResponseWriter, r *http.Request) 
 
 type createPeerRequest struct {
 	PublicKey string `json:"public_key"`
+	DeviceID  string `json:"device_id"`
 	Region    string `json:"region"`
 }
 
@@ -418,7 +419,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "public_key is required"})
 			return
 		}
-		cfg, err := h.svc.CreatePeer(r.Context(), accountID, tier, req.PublicKey, req.Region, clientIPFromRequest(r))
+		cfg, err := h.svc.CreatePeer(r.Context(), accountID, tier, req.PublicKey, req.DeviceID, req.Region, clientIPFromRequest(r))
 		if err != nil {
 			var planErr *entitlement.PlanError
 			if errors.As(err, &planErr) {
@@ -446,6 +447,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			"allowed_ips":          cfg.ClientAllowedIPs,
 			"client_allowed_ips":   cfg.ClientAllowedIPs,
 			"persistent_keepalive": cfg.PersistentKeepaliveSec,
+			"device_id":            cfg.DeviceID,
 		})
 	case http.MethodGet:
 		peers, err := h.svc.ListPeers(r.Context(), accountID)
@@ -463,6 +465,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 				"id":                p.ID,
 				"account_id":        p.AccountID,
 				"server_id":         p.ServerID,
+				"device_id":         p.DeviceID,
 				"pubkey":            p.Pubkey,
 				"allowed_ips":       p.AllowedIPs,
 				"assigned_ip":       p.AssignedIP,

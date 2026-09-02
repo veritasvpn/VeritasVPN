@@ -34,6 +34,7 @@ type PeerConfig struct {
 	AllowedIPs             []string // server-side peer AllowedIPs (client /32)
 	ClientAllowedIPs       []string // client tunnel AllowedIPs (full tunnel)
 	PersistentKeepaliveSec int
+	DeviceID               string
 }
 
 type Service struct {
@@ -299,14 +300,38 @@ func (s *Service) DNSBlockedCount(ctx context.Context, assignedIP string) uint64
 	return n
 }
 
-func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, preferredRegion, clientIP string) (*PeerConfig, error) {
+func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, deviceID, preferredRegion, clientIP string) (*PeerConfig, error) {
 	tier = s.resolveTier(accountID, tier)
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		// Legacy clients without a stable install id always insert a new row so
+		// they cannot collide on the old UNIQUE(account_id, server_id) path.
+		anon, err := generateAnonDeviceID()
+		if err != nil {
+			return nil, err
+		}
+		deviceID = anon
+	}
 
 	existing, err := s.postgres.ListPeersByAccount(ctx, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("list peers for entitlement: %w", err)
 	}
-	if err := entitlement.CheckCreatePeer(tier, len(existing), preferredRegion, s.freeRegions); err != nil {
+
+	var replacedPeer *model.Peer
+	for i := range existing {
+		if existing[i].DeviceID == deviceID {
+			old := existing[i]
+			replacedPeer = &old
+			break
+		}
+	}
+
+	countForLimit := len(existing)
+	if replacedPeer != nil {
+		countForLimit = len(existing) - 1
+	}
+	if err := entitlement.CheckCreatePeer(tier, countForLimit, preferredRegion, s.freeRegions); err != nil {
 		return nil, err
 	}
 
@@ -318,51 +343,53 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 		return nil, err
 	}
 
-	// A reconnect for the same account/server replaces the previous WireGuard
-	// identity. Preserve it long enough to remove it from the agent after the
-	// database upsert, otherwise wg0 accumulates stale public keys and /32s.
-	var replacedPeer *model.Peer
-	for i := range existing {
-		if existing[i].ServerID == srv.ID {
-			old := existing[i]
-			replacedPeer = &old
-			break
-		}
-	}
-
-	// Redis is an allocation accelerator, not the source of truth. Its bitmap
-	// can be lost, so always reconcile each candidate with PostgreSQL. Used
-	// candidates deliberately remain marked in Redis, rebuilding the bitmap as
-	// allocations are attempted after a cache reset.
+	// Prefer reusing the prior tunnel IP when reconnecting to the same server so
+	// Redis bitmaps and client configs stay stable across reconnects.
 	var assignedIP string
-	for attempts := 0; attempts < 254; attempts++ {
-		candidate, err := s.redis.AllocateIP(ctx, srv.ID, srv.WGSubnet)
-		if err != nil {
-			return nil, fmt.Errorf("allocate ip: %w", err)
-		}
-		used, err := s.postgres.IsActiveIPAssigned(ctx, srv.ID, candidate)
-		if err != nil {
-			_ = s.redis.ReleaseIP(ctx, srv.ID, candidate)
-			return nil, err
-		}
-		if !used {
-			assignedIP = candidate
-			break
-		}
+	if replacedPeer != nil && replacedPeer.ServerID == srv.ID && replacedPeer.AssignedIP != "" {
+		assignedIP = stripCIDR(replacedPeer.AssignedIP)
 	}
 	if assignedIP == "" {
-		return nil, fmt.Errorf("no available IPs in subnet %s", srv.WGSubnet)
+		// Redis is an allocation accelerator, not the source of truth. Its bitmap
+		// can be lost, so always reconcile each candidate with PostgreSQL. Used
+		// candidates deliberately remain marked in Redis, rebuilding the bitmap as
+		// allocations are attempted after a cache reset.
+		for attempts := 0; attempts < 254; attempts++ {
+			candidate, err := s.redis.AllocateIP(ctx, srv.ID, srv.WGSubnet)
+			if err != nil {
+				return nil, fmt.Errorf("allocate ip: %w", err)
+			}
+			used, err := s.postgres.IsActiveIPAssigned(ctx, srv.ID, candidate)
+			if err != nil {
+				_ = s.redis.ReleaseIP(ctx, srv.ID, candidate)
+				return nil, err
+			}
+			// Replacing this device's own row frees its IP for reuse.
+			if used && replacedPeer != nil && replacedPeer.ServerID == srv.ID && stripCIDR(replacedPeer.AssignedIP) == candidate {
+				used = false
+			}
+			if !used {
+				assignedIP = candidate
+				break
+			}
+		}
+		if assignedIP == "" {
+			return nil, fmt.Errorf("no available IPs in subnet %s", srv.WGSubnet)
+		}
 	}
 
 	psk, err := generatePSK()
 	if err != nil {
-		_ = s.redis.ReleaseIP(ctx, srv.ID, assignedIP)
+		if replacedPeer == nil || stripCIDR(replacedPeer.AssignedIP) != assignedIP {
+			_ = s.redis.ReleaseIP(ctx, srv.ID, assignedIP)
+		}
 		return nil, err
 	}
 
 	peer := &model.Peer{
 		AccountID:    accountID,
 		ServerID:     srv.ID,
+		DeviceID:     deviceID,
 		Pubkey:       publicKey,
 		PresharedKey: &psk,
 		AllowedIPs:   []string{assignedIP},
@@ -371,9 +398,19 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 		CreatedAt:    time.Now(),
 	}
 
-	if err := s.postgres.CreatePeer(ctx, peer); err != nil {
-		_ = s.redis.ReleaseIP(ctx, srv.ID, assignedIP)
-		return nil, fmt.Errorf("create peer: %w", err)
+	if replacedPeer != nil {
+		peer.ID = replacedPeer.ID
+		if err := s.postgres.UpdatePeerIdentity(ctx, peer); err != nil {
+			if stripCIDR(replacedPeer.AssignedIP) != assignedIP {
+				_ = s.redis.ReleaseIP(ctx, srv.ID, assignedIP)
+			}
+			return nil, fmt.Errorf("update peer: %w", err)
+		}
+	} else {
+		if err := s.postgres.CreatePeer(ctx, peer); err != nil {
+			_ = s.redis.ReleaseIP(ctx, srv.ID, assignedIP)
+			return nil, fmt.Errorf("create peer: %w", err)
+		}
 	}
 
 	endpoint := s.ClientEndpoint(srv, clientIP)
@@ -385,14 +422,19 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 	// This synchronous acknowledgement also makes rapid reconnects deterministic.
 	syncCtx, syncCancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer syncCancel()
-	if replacedPeer != nil && replacedPeer.Pubkey != peer.Pubkey {
-		if err := s.communicator.PushPeerRemoved(syncCtx, serverID, replacedPeer); err != nil {
-			_ = s.postgres.DeletePeer(context.Background(), peer.ID, accountID)
-			_ = s.redis.ReleaseIP(context.Background(), serverID, assignedIP)
-			return nil, fmt.Errorf("remove existing WireGuard peer: %w", err)
+	if replacedPeer != nil {
+		oldServerID := replacedPeer.ServerID
+		if replacedPeer.Pubkey != peer.Pubkey || oldServerID != serverID {
+			if err := s.communicator.PushPeerRemoved(syncCtx, oldServerID, replacedPeer); err != nil {
+				_ = s.postgres.DeletePeer(context.Background(), peer.ID, accountID)
+				if stripCIDR(replacedPeer.AssignedIP) != assignedIP || oldServerID != serverID {
+					_ = s.redis.ReleaseIP(context.Background(), serverID, assignedIP)
+				}
+				return nil, fmt.Errorf("remove existing WireGuard peer: %w", err)
+			}
 		}
-		if replacedPeer.AssignedIP != assignedIP {
-			_ = s.redis.ReleaseIP(syncCtx, serverID, replacedPeer.AssignedIP)
+		if stripCIDR(replacedPeer.AssignedIP) != assignedIP || oldServerID != serverID {
+			_ = s.redis.ReleaseIP(syncCtx, oldServerID, replacedPeer.AssignedIP)
 		}
 	}
 	if err := s.communicator.PushPeerAdded(syncCtx, serverID, peer); err != nil {
@@ -410,6 +452,7 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 	s.log.Info("peer created",
 		"peer_id", peer.ID,
 		"account_id", accountID,
+		"device_id", deviceID,
 		"server_id", srv.ID,
 		"assigned_ip", assignedIP,
 		"client_ip", clientIP,
@@ -419,6 +462,7 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 	s.publishEvent("peer.created", map[string]interface{}{
 		"peer_id":         peer.ID,
 		"account_id":      accountID,
+		"device_id":       deviceID,
 		"server_id":       srv.ID,
 		"assigned_ip":     assignedIP,
 		"server_endpoint": endpoint,
@@ -442,7 +486,17 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, pr
 		// tunnel instead of bypassing it on dual-stack access networks.
 		ClientAllowedIPs:       []string{"0.0.0.0/0", "::/0"},
 		PersistentKeepaliveSec: 25,
+		DeviceID:               deviceID,
 	}, nil
+}
+
+func stripCIDR(ip string) string {
+	for i := 0; i < len(ip); i++ {
+		if ip[i] == '/' {
+			return ip[:i]
+		}
+	}
+	return ip
 }
 
 func (s *Service) waitForPeerActive(ctx context.Context, peerID, accountID string) error {

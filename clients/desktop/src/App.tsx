@@ -79,6 +79,26 @@ const RECONNECT_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000];
 const LS_AUTO_RECONNECT = "veritas_auto_reconnect";
 const LS_EXCLUDE_LAN = "veritas_exclude_lan";
 const LS_STEALTH = "veritas_stealth_mode";
+const LS_DEVICE_ID = "veritas_device_id";
+
+function getOrCreateDeviceId(): string {
+  try {
+    const existing = localStorage.getItem(LS_DEVICE_ID)?.trim();
+    if (existing) return existing;
+    const created =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(LS_DEVICE_ID, created);
+    return created;
+  } catch {
+    // localStorage unavailable: still send a UUID-shaped id for this process so the
+    // server does not mint a fresh anon-* peer on every connect attempt.
+    return typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
 
 /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
 const EXCLUDE_LAN_ALLOWED_IPS = [
@@ -1241,10 +1261,11 @@ function App() {
       if (!available) throw new Error("WireGuard is unavailable in this build.");
 
       const keys = await invoke<KeyPair>("generate_wg_keys");
+      const deviceId = getOrCreateDeviceId();
       const res = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ public_key: keys.public_key }),
+        body: JSON.stringify({ public_key: keys.public_key, device_id: deviceId }),
       });
       const peer = (await res.json()) as PeerResponse & { code?: string };
       if (!res.ok) {
@@ -1458,8 +1479,17 @@ function App() {
         // interface_up; tearing down for that alone drops the session briefly.
         const down = hadInterfaceUpRef.current && !stats.interface_up;
 
+        // Dead tunnel with kill switch still installed: interface stays up but
+        // the peer was replaced/removed (e.g. old multi-device upsert) or the
+        // handshake never recovers. Tear down + reconnect so clearnet is not
+        // blackholed.
+        const handshakeDead =
+          hadGoodHandshakeRef.current &&
+          stats.interface_up &&
+          (stats.last_handshake_sec <= 0 || handshakeAge > HANDSHAKE_HEALTHY_SEC);
+
         if (
-          down &&
+          (down || handshakeDead) &&
           autoReconnectRef.current &&
           !userDisconnectedRef.current &&
           subscriptionActiveRef.current &&
