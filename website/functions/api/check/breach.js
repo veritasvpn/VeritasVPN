@@ -3,6 +3,7 @@ import {
   rateLimit,
   clientIP,
   verifyTurnstile,
+  rejectForeignOrigin,
 } from "../../_lib/security.js";
 
 function flattenBreaches(data) {
@@ -27,6 +28,9 @@ function flattenBreaches(data) {
  * Same-origin only; Turnstile + rate limit required.
  */
 export async function onRequestPost(context) {
+  const foreign = rejectForeignOrigin(context.request);
+  if (foreign) return foreign;
+
   const limited = await rateLimit(context.request, {
     bucket: "check-breach",
     limit: 10,

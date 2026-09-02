@@ -44,6 +44,22 @@ export function clientIP(request) {
 }
 
 /**
+ * Reject browser cross-origin calls. Requests with no Origin (same-origin
+ * navigations, curl, server-to-server) are allowed; mismatched Origin → 403.
+ */
+export function rejectForeignOrigin(request) {
+  const origin = (request.headers.get("Origin") || "").trim();
+  if (!origin) return null;
+  try {
+    const reqOrigin = new URL(request.url).origin;
+    if (origin === reqOrigin) return null;
+  } catch {
+    /* fall through */
+  }
+  return jsonResponse({ error: "Cross-origin requests are not allowed" }, 403);
+}
+
+/**
  * Sliding-window rate limit using the Cache API (best-effort per isolate).
  * @returns {Promise<Response|null>} 429 response or null if allowed
  */
@@ -81,17 +97,18 @@ export async function rateLimit(request, { bucket, limit = 30, windowSec = 60 } 
 }
 
 export async function verifyTurnstile(env, token, remoteIP) {
-  const secret = (env && env.TURNSTILE_SECRET_KEY) || "";
-  if (!secret) {
-    // Fail closed when secret is expected in production Pages.
-    if (env && env.ENVIRONMENT === "production") {
-      return { ok: false, error: "Verification unavailable" };
-    }
-    return { ok: true };
-  }
   const trimmed = String(token || "").trim();
   if (!trimmed) {
     return { ok: false, error: "Verification required" };
+  }
+  const secret = (env && env.TURNSTILE_SECRET_KEY) || "";
+  if (!secret) {
+    // Fail closed when secret is expected in production Pages.
+    if (env && (env.ENVIRONMENT === "production" || env.CF_PAGES === "1")) {
+      return { ok: false, error: "Verification unavailable" };
+    }
+    // Local/dev without a secret: require a non-empty token only.
+    return { ok: true };
   }
   const form = new URLSearchParams();
   form.set("secret", secret);

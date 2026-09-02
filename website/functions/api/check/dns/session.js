@@ -1,4 +1,4 @@
-import { jsonResponse, rateLimit } from "../../../_lib/security.js";
+import { jsonResponse, rateLimit, rejectForeignOrigin } from "../../../_lib/security.js";
 
 function randomToken(bytes = 8) {
   const arr = new Uint8Array(bytes);
@@ -11,6 +11,9 @@ function randomToken(bytes = 8) {
  * Same-origin only; rate-limited.
  */
 export async function onRequestPost(context) {
+  const foreign = rejectForeignOrigin(context.request);
+  if (foreign) return foreign;
+
   const limited = await rateLimit(context.request, {
     bucket: "check-dns-session",
     limit: 20,

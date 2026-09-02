@@ -1,6 +1,14 @@
-import { jsonResponse, rateLimit, clientIP } from "../../_lib/security.js";
+import {
+  jsonResponse,
+  rateLimit,
+  clientIP,
+  rejectForeignOrigin,
+} from "../../_lib/security.js";
 
 export async function onRequestGet(context) {
+  const foreign = rejectForeignOrigin(context.request);
+  if (foreign) return foreign;
+
   const limited = await rateLimit(context.request, {
     bucket: "check-ip",
     limit: 60,
