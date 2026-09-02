@@ -16,20 +16,21 @@
 
 .legal-meta {
   color: var(--text-muted, #94a3b8);
-  font-size: 0.9rem;
+  font-size: var(--text-meta);
   margin-bottom: 2rem;
 }
 
 .legal-page h2 {
-  font-size: 1.25rem;
+  font-size: 1.4rem;
   margin: 2rem 0 0.75rem;
 }
 
 .legal-page p,
 .legal-page li {
   color: var(--text-secondary, #cbd5e1);
-  line-height: 1.7;
-  margin-bottom: 0.85rem;
+  font-size: 1.05rem;
+  line-height: 1.75;
+  margin-bottom: 0.9rem;
 }
 
 .legal-page ul {
@@ -47,7 +48,7 @@
   padding: 1rem 1.25rem;
   border-radius: 8px;
   margin: 1.5rem 0 2rem;
-  font-size: 0.9rem;
+  font-size: 1.05rem;
 }
 
 .contact-block {

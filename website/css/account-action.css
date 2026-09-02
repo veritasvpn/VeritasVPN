@@ -7,23 +7,23 @@ body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;back
 .card-centered{text-align:center;padding:42px}
 .logo{width:78px}
 .status{font-family:"Space Grotesk",sans-serif;color:#09c7f5;font-size:30px;margin:22px 0 12px}
-.message{min-height:22px;margin:16px 0 0;text-align:center;color:#ff8c9c;font-size:14px}
+.message{min-height:22px;margin:16px 0 0;text-align:center;color:#ff8c9c;font-size:16px}
 .message-copy{color:#a9b9cc;line-height:1.6;margin:0}
 .message.ok{color:#48e6b0}
 .actions{display:grid;gap:12px;margin-top:25px}
-.actions button,.actions a{border:0;border-radius:12px;padding:14px 18px;font-weight:750;font-size:15px}
+.actions button,.actions a{border:0;border-radius:12px;padding:14px 18px;font-weight:750;font-size:16px}
 .actions button{background:linear-gradient(105deg,#09c7f5,#0756d9);color:#fff;cursor:pointer}
 .actions a{color:#09c7f5;text-decoration:none;border:1px solid #09c7f555}
-.actions input{padding:14px;border-radius:12px;border:1px solid #28415e;background:#020814;color:#fff;font-size:15px}
+.actions input{padding:14px;border-radius:12px;border:1px solid #28415e;background:#020814;color:#fff;font-size:16px}
 #resend{display:none}
 #resend.is-visible{display:grid}
-.brand{text-align:center;margin-bottom:30px}.brand img{display:block;width:82px;height:auto;max-width:100%;margin:0 auto;object-fit:contain}.brand h1{font-size:25px;margin:14px 0 6px}.brand p{color:#56e7ff;margin:0;font-size:14px}
+.brand{text-align:center;margin-bottom:30px}.brand img{display:block;width:82px;height:auto;max-width:100%;margin:0 auto;object-fit:contain}.brand h1{font-size:25px;margin:14px 0 6px}.brand p{color:#56e7ff;margin:0;font-size:16px}
 h2{margin:0 0 10px;font-size:24px}.intro{color:#a9b9cc;line-height:1.55;margin:0 0 24px}
-label{display:block;color:#a9b9cc;font-size:13px;font-weight:600;margin-bottom:8px}
+label{display:block;color:#a9b9cc;font-size:16px;font-weight:600;margin-bottom:8px}
 .password-wrap{position:relative}.password-wrap input{padding-right:52px}
 .password-wrap input{width:100%;padding:14px 52px 14px 15px;border-radius:12px;border:1px solid #28415e;background:#020814;color:#fff;font-size:16px;outline:none}
 .password-wrap input:focus{border-color:#09c7f5;box-shadow:0 0 0 3px #09c7f526}
 .toggle{position:absolute;right:7px;top:7px;width:40px;height:40px;border:0;border-radius:9px;background:transparent;color:#8da5bd;font-size:20px;cursor:pointer}.toggle:hover{color:#56e7ff;background:#10223a}
-.requirements{display:grid;gap:7px;margin:14px 0 22px;color:#7188a2;font-size:13px}.requirements span{transition:color .2s}.requirements span.ok{color:#48e6b0}
+.requirements{display:grid;gap:7px;margin:14px 0 22px;color:#7188a2;font-size:16px}.requirements span{transition:color .2s}.requirements span.ok{color:#48e6b0}
 button.submit{width:100%;padding:14px 18px;border:0;border-radius:12px;background:linear-gradient(105deg,#09c7f5,#0756d9);color:#fff;font-size:16px;font-weight:600;cursor:pointer}button.submit:hover{filter:brightness(1.08)}button:disabled{opacity:.55;cursor:not-allowed;filter:none}
-.back{display:block;margin-top:20px;text-align:center;color:#56e7ff;text-decoration:none;font-size:14px}.back:hover{text-decoration:underline}
+.back{display:block;margin-top:20px;text-align:center;color:#56e7ff;text-decoration:none;font-size:16px}.back:hover{text-decoration:underline}

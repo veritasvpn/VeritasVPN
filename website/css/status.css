@@ -1,10 +1,10 @@
 .status-card{width:min(760px,100%)}
 .status-list{display:grid;gap:12px;margin-top:26px;text-align:left}
 .status-row{display:flex;justify-content:space-between;gap:18px;align-items:center;padding:15px 17px;border:1px solid #203852;border-radius:13px;background:#020814}
-.status-row strong{font-size:15px}.status-row span{font-size:13px;color:#a9b9cc}
+.status-row strong{font-size:16px}.status-row span{font-size:15px;color:#a9b9cc}
 .status-indicator{display:inline-flex;align-items:center;gap:8px}.status-indicator::before{content:"";width:9px;height:9px;border-radius:50%;background:#7188a2;box-shadow:0 0 12px currentColor}
 .status-indicator.is-up{color:#48e6b0}.status-indicator.is-up::before{background:#48e6b0}
 .status-indicator.is-down{color:#ff8c9c}.status-indicator.is-down::before{background:#ff8c9c}
 .status-indicator.is-degraded{color:#ffd166}.status-indicator.is-degraded::before{background:#ffd166}
-.status-timestamp{margin-top:18px;color:#7188a2;font-size:12px}
+.status-timestamp{margin-top:18px;color:#7188a2;font-size:14px}
 @media(max-width:560px){.status-row{align-items:flex-start;flex-direction:column;gap:7px}}
