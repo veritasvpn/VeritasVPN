@@ -54,12 +54,17 @@ export function renderIpMap(container, data = {}, opts = {}) {
   }
   container.replaceChildren();
 
-  // Leaflet default icon paths resolve relative to the CSS location.
-  const Icon = window.L.Icon.Default;
-  Icon.mergeOptions({
+  // Prefer L.icon() over Icon.Default — Default prepends imagePath onto
+  // absolute URLs and breaks self-hosted marker assets.
+  const markerIcon = window.L.icon({
     iconUrl: "/assets/leaflet/images/marker-icon.png",
     iconRetinaUrl: "/assets/leaflet/images/marker-icon-2x.png",
     shadowUrl: "/assets/leaflet/images/marker-shadow.png",
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    tooltipAnchor: [16, -28],
+    shadowSize: [41, 41],
   });
 
   const map = window.L.map(container, {
@@ -75,7 +80,7 @@ export function renderIpMap(container, data = {}, opts = {}) {
   }).addTo(map);
 
   const label = buildLabel(data);
-  window.L.marker([lat, lng]).addTo(map).bindPopup(label);
+  window.L.marker([lat, lng], { icon: markerIcon }).addTo(map).bindPopup(label);
 
   // Ensure correct sizing after becoming visible.
   window.setTimeout(() => map.invalidateSize(), 0);
