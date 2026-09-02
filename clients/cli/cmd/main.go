@@ -213,9 +213,10 @@ func cmdConnect() {
 	if len(allowed) == 0 {
 		allowed = []string{"0.0.0.0/0"}
 	}
-	dns := result.DNSServer
+	dns := strings.TrimSpace(result.DNSServer)
 	if dns == "" {
-		dns = "1.1.1.1"
+		fmt.Fprintln(os.Stderr, "connect failed: server did not provide dns_server (refusing public DNS fallback)")
+		os.Exit(1)
 	}
 
 	pskLine := ""

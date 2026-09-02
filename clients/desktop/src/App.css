@@ -1296,6 +1296,51 @@ input::placeholder { color: var(--paper-dim); }
   font-weight: 700;
 }
 
+.live-stats-dns-status {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--paper-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.live-stats-dns-status strong {
+  color: var(--paper);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-dns-status {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--paper-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.settings-dns-status strong {
+  color: var(--paper);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-dns-status .settings-dns-explainer {
+  color: var(--paper-dim);
+}
+
+.settings-dns-status.is-idle strong {
+  color: var(--paper-muted);
+}
+
 /* Devices */
 .devices-screen { display: grid; gap: 16px; }
 .devices-screen .plans-head { width: 100%; }

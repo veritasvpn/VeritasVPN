@@ -24,6 +24,9 @@ fun TunnelSettingsScreen(
     excludeLan: Boolean,
     bypassAppsText: String,
     showReconnectBanner: Boolean,
+    connected: Boolean = false,
+    dnsGateway: String? = null,
+    dnsBlockedThisSession: Long? = null,
     onExcludeLanChange: (Boolean) -> Unit,
     onBypassAppsChange: (String) -> Unit,
     onBack: () -> Unit
@@ -66,6 +69,48 @@ fun TunnelSettingsScreen(
                     fontSize = 14.sp
                 )
             }
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        Text("PROTECTED DNS", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Spacer(Modifier.height(8.dp))
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .border(1.dp, LineStrong, RoundedCornerShape(14.dp))
+                .background(CardElevated, RoundedCornerShape(14.dp))
+                .padding(14.dp)
+        ) {
+            Text(
+                if (connected) "Protected DNS on" else "Protected DNS",
+                color = Paper,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (connected) {
+                    buildString {
+                        append(if (!dnsGateway.isNullOrBlank()) "Gateway $dnsGateway" else "Tunnel gateway")
+                        if (dnsBlockedThisSession != null) {
+                            append(" · $dnsBlockedThisSession blocked this session")
+                        }
+                    }
+                } else {
+                    "Always on while connected — malware/phishing filtering through the tunnel DNS gateway."
+                },
+                color = PaperMuted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Lookups use DNS-over-HTTPS upstreams. Apps that speak their own DoH may bypass this gateway.",
+                color = PaperDim,
+                fontSize = 12.sp,
+                lineHeight = 16.sp
+            )
         }
 
         Spacer(Modifier.height(18.dp))

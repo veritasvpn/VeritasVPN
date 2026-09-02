@@ -435,6 +435,7 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		}
 		if stripCIDR(replacedPeer.AssignedIP) != assignedIP || oldServerID != serverID {
 			_ = s.redis.ReleaseIP(syncCtx, oldServerID, replacedPeer.AssignedIP)
+			_ = s.redis.ClearDNSBlockedCount(syncCtx, replacedPeer.AssignedIP)
 		}
 	}
 	if err := s.communicator.PushPeerAdded(syncCtx, serverID, peer); err != nil {
@@ -562,6 +563,7 @@ func (s *Service) DeletePeer(ctx context.Context, peerID, accountID string) erro
 	}
 
 	_ = s.redis.ReleaseIP(ctx, peer.ServerID, peer.AssignedIP)
+	_ = s.redis.ClearDNSBlockedCount(ctx, peer.AssignedIP)
 
 	s.log.Info("peer deleted", "peer_id", peerID, "account_id", accountID)
 
@@ -597,6 +599,7 @@ func (s *Service) ExpirePeer(ctx context.Context, serverID, peerID string) error
 	}
 	if changed {
 		_ = s.redis.ReleaseIP(ctx, serverID, peer.AssignedIP)
+		_ = s.redis.ClearDNSBlockedCount(ctx, peer.AssignedIP)
 		s.publishEvent("peer.expired", map[string]interface{}{
 			"peer_id": peerID, "account_id": peer.AccountID, "server_id": serverID,
 		})

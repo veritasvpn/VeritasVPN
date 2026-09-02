@@ -8,6 +8,9 @@ export type SettingsDrawerProps = {
   linuxDesktop: boolean;
   autoReconnect: boolean;
   stealthMode: boolean;
+  connected: boolean;
+  dnsGateway: string | null;
+  dnsBlockedThisSession: number | null;
   onOpenPlans: () => void;
   onOpenNetworkMap: () => void;
   onOpenDevices: () => void;
@@ -30,6 +33,9 @@ export function SettingsDrawer({
   linuxDesktop,
   autoReconnect,
   stealthMode,
+  connected,
+  dnsGateway,
+  dnsBlockedThisSession,
   onOpenPlans,
   onOpenNetworkMap,
   onOpenDevices,
@@ -150,6 +156,23 @@ export function SettingsDrawer({
 
           <section className="settings-drawer-section" aria-label="Connection">
             <p className="settings-drawer-label">Connection</p>
+            {connected ? (
+              <div className="settings-dns-status" role="status">
+                <strong>Protected DNS on</strong>
+                <span>
+                  {dnsGateway ? `Gateway ${dnsGateway}` : "Tunnel gateway"}
+                  {dnsBlockedThisSession !== null ? ` · ${dnsBlockedThisSession} blocked this session` : ""}
+                </span>
+                <span className="settings-dns-explainer">
+                  Malware and phishing hostnames return NXDOMAIN. Lookups use DNS-over-HTTPS upstreams. Apps that speak their own DoH may bypass this gateway.
+                </span>
+              </div>
+            ) : (
+              <div className="settings-dns-status is-idle" role="status">
+                <strong>Protected DNS</strong>
+                <span>Always on while connected — malware/phishing filtering through the tunnel DNS gateway.</span>
+              </div>
+            )}
             <button type="button" className="settings-nav-item" onClick={onOpenTunnelSettings}>
               <span className="settings-nav-label">Split tunnel</span>
               <span className="settings-nav-note">Exclude LAN · reconnect to apply</span>

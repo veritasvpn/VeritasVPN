@@ -134,6 +134,8 @@ class MainActivity : ComponentActivity() {
                 var txBytes by remember { mutableStateOf(0L) }
                 var handshakeMs by remember { mutableStateOf(0L) }
                 var dnsBlockedCount by remember { mutableStateOf<Long?>(null) }
+                var dnsBlockedBaseline by remember { mutableStateOf<Long?>(null) }
+                var dnsGateway by remember { mutableStateOf<String?>(null) }
                 var excludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
                 var bypassAppsText by remember {
                     mutableStateOf(VpnSettings.bypassApps(context).joinToString("\n"))
@@ -161,6 +163,8 @@ class MainActivity : ComponentActivity() {
                     txBytes = 0
                     handshakeMs = 0
                     dnsBlockedCount = null
+                    dnsBlockedBaseline = null
+                    dnsGateway = null
                 }
 
                 fun cancelReconnect() {
@@ -436,7 +440,11 @@ class MainActivity : ComponentActivity() {
                             setConnecting = { connecting = it },
                             isReconnect = isReconnect,
                             onFailure = { markReconnectNeeded() },
-                            onSessionExpired = { handleSessionExpired() }
+                            onSessionExpired = { handleSessionExpired() },
+                            onDnsGateway = {
+                                dnsGateway = it
+                                dnsBlockedBaseline = null
+                            }
                         )
                     }
                 }
@@ -473,7 +481,11 @@ class MainActivity : ComponentActivity() {
                             setConnecting = { connecting = it },
                             isReconnect = isReconnect,
                             onFailure = { markReconnectNeeded() },
-                            onSessionExpired = { handleSessionExpired() }
+                            onSessionExpired = { handleSessionExpired() },
+                            onDnsGateway = {
+                                dnsGateway = it
+                                dnsBlockedBaseline = null
+                            }
                         )
                     }
                 }
@@ -591,6 +603,8 @@ class MainActivity : ComponentActivity() {
                                         txBytes = 0
                                         handshakeMs = 0
                                         dnsBlockedCount = null
+                                        dnsBlockedBaseline = null
+                                        dnsGateway = null
                                         statusMsg = error
                                     }
                                 }
@@ -626,6 +640,7 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(connected, user?.accountId) {
                     if (!connected || user == null) {
                         dnsBlockedCount = null
+                        dnsBlockedBaseline = null
                         return@LaunchedEffect
                     }
                     while (isActive && connected) {
@@ -644,7 +659,10 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }.onSuccess { count ->
-                                if (count != null) dnsBlockedCount = count
+                                if (count != null) {
+                                    if (dnsBlockedBaseline == null) dnsBlockedBaseline = count
+                                    dnsBlockedCount = count
+                                }
                             }.onFailure {
                                 if (it is SessionExpiredException) handleSessionExpired()
                             }
@@ -701,6 +719,11 @@ class MainActivity : ComponentActivity() {
                         excludeLan = excludeLan,
                         bypassAppsText = bypassAppsText,
                         showReconnectBanner = connected && tunnelSettingsDirty,
+                        connected = connected,
+                        dnsGateway = dnsGateway,
+                        dnsBlockedThisSession = if (dnsBlockedCount != null && dnsBlockedBaseline != null) {
+                            (dnsBlockedCount!! - dnsBlockedBaseline!!).coerceAtLeast(0)
+                        } else null,
                         onExcludeLanChange = {
                             excludeLan = it
                             VpnSettings.setExcludeLan(context, it)
@@ -910,7 +933,9 @@ class MainActivity : ComponentActivity() {
                         rxBytes = rxBytes,
                         txBytes = txBytes,
                         handshakeMs = handshakeMs,
-                        dnsBlockedCount = dnsBlockedCount
+                        dnsBlockedCount = dnsBlockedCount,
+                        dnsBlockedBaseline = dnsBlockedBaseline,
+                        dnsGateway = dnsGateway
                     )
                 }
             }
@@ -964,6 +989,7 @@ class MainActivity : ComponentActivity() {
         isReconnect: Boolean = false,
         onFailure: (() -> Unit)? = null,
         onSessionExpired: (() -> Unit)? = null,
+        onDnsGateway: ((String) -> Unit)? = null,
     ) {
         if (currentPeerId != null) return
         setStatus(if (isReconnect) "Reconnecting…" else "Connecting...")
@@ -1002,6 +1028,7 @@ class MainActivity : ComponentActivity() {
                 }
                 currentPeerId = peer.peerId
                 VpnSettings.setCurrentPeerId(context, peer.peerId)
+                peer.dnsServer?.trim()?.takeIf { it.isNotEmpty() }?.let { onDnsGateway?.invoke(it) }
                 context.startForegroundService(intent)
             } catch (e: Exception) {
                 if (e is SessionExpiredException) {
@@ -1017,7 +1044,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun buildWireGuardConfig(context: Context, peer: PeerResponse, keyPair: KeyPair): String {
-        val dns = peer.dnsServer ?: "1.1.1.1"
+        val dns = peer.dnsServer?.trim().orEmpty()
+        require(dns.isNotEmpty()) {
+            "Server did not provide a DNS gateway; connect aborted to avoid unfiltered public DNS."
+        }
         val serverAllowed = peer.clientAllowedIps ?: peer.allowedIps ?: listOf("0.0.0.0/0", "::/0")
         val allowed = VpnSettings.resolveAllowedIps(context, serverAllowed).joinToString(",")
         val bypassApps = VpnSettings.bypassApps(context)

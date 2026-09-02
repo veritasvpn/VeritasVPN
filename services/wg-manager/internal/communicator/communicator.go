@@ -38,7 +38,11 @@ func (c *Communicator) PushPeerAdded(ctx context.Context, serverID string, peer 
 }
 
 func (c *Communicator) PushPeerRemoved(ctx context.Context, serverID string, peer *model.Peer) error {
-	return c.pushWithBackoff(ctx, serverID, "REMOVE", peer.ID, peer.Pubkey, "", nil)
+	ips := peer.AllowedIPs
+	if len(ips) == 0 && peer.AssignedIP != "" {
+		ips = []string{peer.AssignedIP}
+	}
+	return c.pushWithBackoff(ctx, serverID, "REMOVE", peer.ID, peer.Pubkey, "", ips)
 }
 
 // PublishUpdate fans an SSE payload once (no retries). Returns whether any

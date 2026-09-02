@@ -51,24 +51,30 @@ func (m *Manager) AddPeer(peerID, pubkey, psk string, allowedIPs []string) error
 	return nil
 }
 
-func (m *Manager) RemovePeer(pubkey string) error {
+// RemovePeer removes a peer from the kernel and local map.
+// It returns the peer's AllowedIPs (if known) so callers can clear
+// DNS block counters tied to those tunnel addresses.
+func (m *Manager) RemovePeer(pubkey string) (allowedIPs []string, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if cfg := m.peers[pubkey]; cfg != nil {
+		allowedIPs = append([]string(nil), cfg.AllowedIPs...)
+	}
 	kernelPeers, err := m.wg.ListPeers()
 	if err != nil {
-		return fmt.Errorf("list peers before remove %s: %w", pubkey, err)
+		return allowedIPs, fmt.Errorf("list peers before remove %s: %w", pubkey, err)
 	}
 	for _, p := range kernelPeers {
 		if p.PublicKey == pubkey {
 			if err := m.wg.RemovePeer(pubkey); err != nil {
-				return fmt.Errorf("peer remove %s: %w", pubkey, err)
+				return allowedIPs, fmt.Errorf("peer remove %s: %w", pubkey, err)
 			}
 			break
 		}
 	}
 	delete(m.peers, pubkey)
 	delete(m.lastStaleReport, pubkey)
-	return nil
+	return allowedIPs, nil
 }
 
 func (m *Manager) SyncPeers(desired []PeerConfig) error {

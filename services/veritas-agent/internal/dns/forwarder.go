@@ -111,6 +111,27 @@ func (f *Forwarder) BlockedCounts() map[string]uint64 {
 	return out
 }
 
+// ClearBlockedForCIDRs drops in-memory blocked counts for tunnel addresses
+// (bare IPs or CIDRs such as 10.0.0.5/32) so heartbeats stop advertising
+// stale counters after a peer is removed.
+func (f *Forwarder) ClearBlockedForCIDRs(cidrs []string) {
+	if f == nil || len(cidrs) == 0 {
+		return
+	}
+	f.blockedMu.Lock()
+	defer f.blockedMu.Unlock()
+	for _, cidr := range cidrs {
+		ip := cidr
+		if i := strings.IndexByte(ip, '/'); i >= 0 {
+			ip = ip[:i]
+		}
+		if ip == "" {
+			continue
+		}
+		delete(f.blockedByClient, ip)
+	}
+}
+
 func (f *Forwarder) Start(ctx context.Context) error {
 	udpAddr, err := net.ResolveUDPAddr("udp", f.listenAddr)
 	if err != nil {

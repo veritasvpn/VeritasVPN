@@ -600,10 +600,12 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 				a.logger.Warn("stale peer reconciliation failed", zap.String("peer_id", stale.PeerID), zap.Error(err))
 				continue
 			}
-			if err := a.peerManager.RemovePeer(stale.PublicKey); err != nil {
+			if allowedIPs, err := a.peerManager.RemovePeer(stale.PublicKey); err != nil {
 				a.metrics.PeerExpiryFailures.Inc()
 				a.logger.Warn("stale peer local removal failed", zap.String("peer_id", stale.PeerID), zap.Error(err))
 				continue
+			} else if a.dnsForwarder != nil {
+				a.dnsForwarder.ClearBlockedForCIDRs(allowedIPs)
 			}
 			a.logger.Info("stale peer expired", zap.String("peer_id", stale.PeerID))
 		}
@@ -715,10 +717,17 @@ func (a *Agent) handlePeerUpdate(update *PeerUpdate) {
 				zap.String("peer_id", update.PeerID), zap.Error(err))
 		}
 	case "REMOVE":
-		if err := a.peerManager.RemovePeer(update.PublicKey); err != nil {
+		allowedIPs, err := a.peerManager.RemovePeer(update.PublicKey)
+		if err != nil {
 			a.logger.Error("Failed to remove peer",
 				zap.String("peer_id", update.PeerID), zap.Error(err))
 			return
+		}
+		if a.dnsForwarder != nil {
+			if len(allowedIPs) == 0 {
+				allowedIPs = update.AllowedIPs
+			}
+			a.dnsForwarder.ClearBlockedForCIDRs(allowedIPs)
 		}
 		a.logger.Info("Peer removed", zap.String("peer_id", update.PeerID))
 	case "PORT_FORWARD_ADD":

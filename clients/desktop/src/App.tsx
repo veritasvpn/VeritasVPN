@@ -780,6 +780,8 @@ function App() {
   const [statusSticky, setStatusSticky] = useState(false);
   const [wgStats, setWgStats] = useState<WgTransferStats | null>(null);
   const [dnsBlockedCount, setDnsBlockedCount] = useState<number | null>(null);
+  const [dnsBlockedBaseline, setDnsBlockedBaseline] = useState<number | null>(null);
+  const [dnsGateway, setDnsGateway] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [peers, setPeers] = useState<PeerInfo[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
@@ -1283,11 +1285,15 @@ function App() {
       if (wantedStealth && !useStealth) {
         throw new Error("Stealth is not available on the VPN node yet. Turn Stealth off or try again later.");
       }
+      const gatewayDns = (peer.dns_server || "").trim();
+      if (!gatewayDns) {
+        throw new Error("Server did not provide a DNS gateway; connect aborted to avoid unfiltered public DNS.");
+      }
       const result = await invoke<ConnectResult>("connect_wireguard", {
         config: {
           private_key: keys.private_key,
           address: peer.assigned_ip,
-          dns: peer.dns_server || "10.0.0.1",
+          dns: gatewayDns,
           server_public_key: peer.server_public_key,
           endpoint: peer.server_endpoint,
           allowed_ips: allowed,
@@ -1313,6 +1319,8 @@ function App() {
       setStatusMsg("");
       setWgStats(null);
       setDnsBlockedCount(null);
+      setDnsBlockedBaseline(null);
+      setDnsGateway(gatewayDns);
       return true;
     } catch (err) {
       connectPeerRef.current = "";
@@ -1353,6 +1361,8 @@ function App() {
       setPeerId("");
       setWgStats(null);
       setDnsBlockedCount(null);
+      setDnsBlockedBaseline(null);
+      setDnsGateway(null);
       setReconnectToApply(false);
       hadGoodHandshakeRef.current = false;
       hadInterfaceUpRef.current = false;
@@ -1441,6 +1451,8 @@ function App() {
       if (!reconnecting) {
         setWgStats(null);
         setDnsBlockedCount(null);
+        setDnsBlockedBaseline(null);
+        setDnsGateway(null);
       }
       return;
     }
@@ -1519,6 +1531,7 @@ function App() {
   useEffect(() => {
     if (!connected || !peerId) {
       setDnsBlockedCount(null);
+      setDnsBlockedBaseline(null);
       return;
     }
     let cancelled = false;
@@ -1531,6 +1544,7 @@ function App() {
         const match = data.peers.find((p) => p.id === peerIdRef.current);
         if (match && typeof match.dns_blocked_count === "number") {
           setDnsBlockedCount(match.dns_blocked_count);
+          setDnsBlockedBaseline((prev) => (prev === null ? match.dns_blocked_count! : prev));
         }
       } catch (err) {
         if (err instanceof SessionExpiredError) expireAndReturnToSignIn();
@@ -1543,6 +1557,11 @@ function App() {
       window.clearInterval(timer);
     };
   }, [connected, peerId, expireAndReturnToSignIn]);
+
+  const dnsBlockedThisSession =
+    dnsBlockedCount !== null && dnsBlockedBaseline !== null
+      ? Math.max(0, dnsBlockedCount - dnsBlockedBaseline)
+      : null;
 
   const loadPortForwards = useCallback(async () => {
     setPortForwardsLoading(true);
@@ -2040,10 +2059,16 @@ function App() {
                         <div><strong>{formatBytes(wgStats.tx_bytes)}</strong><span>Upload</span></div>
                         <div><strong>{formatHandshakeAge(wgStats.last_handshake_sec)}</strong><span>Handshake</span></div>
                       </div>
-                      {dnsBlockedCount !== null && (
+                      {dnsBlockedThisSession !== null && (
                         <div className="live-stats-dns">
-                          <span>DNS blocked</span>
-                          <strong>{dnsBlockedCount}</strong>
+                          <span>DNS blocked this session</span>
+                          <strong>{dnsBlockedThisSession}</strong>
+                        </div>
+                      )}
+                      {connected && dnsGateway && (
+                        <div className="live-stats-dns-status" role="status">
+                          <strong>Protected DNS on</strong>
+                          <span>Gateway {dnsGateway} · malware/phishing blocks via DoH upstreams. Apps with their own DoH may bypass.</span>
                         </div>
                       )}
                     </div>
@@ -2078,6 +2103,9 @@ function App() {
         linuxDesktop={linuxDesktop}
         autoReconnect={autoReconnect}
         stealthMode={stealthMode}
+        connected={connected}
+        dnsGateway={dnsGateway}
+        dnsBlockedThisSession={dnsBlockedThisSession}
         onOpenPlans={openPlans}
         onOpenNetworkMap={openNetworkMap}
         onOpenDevices={openDevices}

@@ -1,13 +1,13 @@
 # Features shipped (source of truth)
 
-Last updated: 2026-08-27
+Last updated: 2026-09-02
 
 ## Core VPN
 - WireGuard on Linux desktop, Android, CLI; Chrome HTTP proxy extension
 - Advertised UDP endpoint often public **443** (router → host **51820**)
 - Optional **Stealth** (Linux desktop): WireGuard over TLS/WebSocket (`wstunnel`) on TCP **443**
 - Premium **port forwarding** (max 2): public IP:port → peer; recommended **40000–49999**
-- Private DNS gateway with DoH + malware/phishing blocklist; aggregate blocked counts only
+- Always-on private DNS gateway (while connected) with DoH upstreams + malware/phishing blocklist; Prometheus has no query names; UI blocked counts are per tunnel IP / session delta
 - Per-device bandwidth cap (~150 Mbps)
 - 5 devices; Premium gate via BTCPay (Bitcoin)
 

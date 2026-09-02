@@ -79,9 +79,9 @@ func Up(ifaceName, confPath string) (*Tunnel, error) {
 		uapi.WriteString(fmt.Sprintf("allowed_ip=%s\n", strings.TrimSpace(ip)))
 	}
 
-	dns := cfg.DNS
+	dns := strings.TrimSpace(cfg.DNS)
 	if dns == "" {
-		dns = "1.1.1.1"
+		return nil, fmt.Errorf("tunnel config missing DNS (refusing public DNS fallback)")
 	}
 	uapi.WriteString(fmt.Sprintf("dns=%s\n\n", dns))
 

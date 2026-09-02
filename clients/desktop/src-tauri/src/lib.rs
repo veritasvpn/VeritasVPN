@@ -1497,15 +1497,15 @@ if [[ -w /etc/resolv.conf ]]; then
   echo "nameserver $DNS" > /etc/resolv.conf
 elif command -v resolvectl >/dev/null 2>&1; then
   resolvectl dns "$GW_IF" "$DNS" 2>/dev/null || true
+  resolvectl flush-caches 2>/dev/null || true
 fi
 
 # Persist state for teardown
 printf 'endpoint_ip=%s\ngateway=%s\niface=%s\ngw_if=%s\nstealth_remote=%s\nengine=%s\n' \
   "$ROUTE_IP" "$GW" "$IFACE_NAME" "$GW_IF" "$STEALTH_REMOTE" "$ENGINE" > "$META_FILE"
 
-# Verify internet connectivity through the tunnel
-if ! curl -4 -fsS --connect-timeout 5 --max-time 12 https://api.ipify.org \
-     >/tmp/veritas-wg-egress.log 2>/tmp/veritas-wg-egress-error.log; then
+restore_after_validation_fail() {
+  local msg="$1"
   cleanup_killswitch
   ip route del 0.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
   ip route del 128.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
@@ -1516,14 +1516,42 @@ if ! curl -4 -fsS --connect-timeout 5 --max-time 12 https://api.ipify.org \
   if [[ -f "$DNS_BACKUP" ]]; then
     cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
   fi
+  if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
+    resolvectl revert "$GW_IF" 2>/dev/null || true
+  fi
   rm -f "$DNS_BACKUP"
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
   [[ -f "$STEALTH_PID_FILE" ]] && kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
   ip link delete "$IFACE_NAME" 2>/dev/null || true
   rm -f "$PID_FILE" "$STEALTH_PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
-  echo "VPN internet egress validation failed; normal internet was restored" >&2
+  echo "$msg" >&2
   exit 1
+}
+
+# Do not report Connected unless tunnel DNS filtering and HTTPS egress both work.
+DNS_OK=0
+for _ in $(seq 1 20); do
+  # Built-in agent test domain must NXDOMAIN through the protected gateway.
+  if command -v dig >/dev/null 2>&1; then
+    STATUS="$(dig +time=1 +tries=1 @"$DNS" dns-protection-test.veritasvpn.invalid A 2>/dev/null | awk '/status:/{print $6}' | tr -d ',')"
+    if [[ "$STATUS" == "NXDOMAIN" ]]; then
+      DNS_OK=1
+      break
+    fi
+  elif getent hosts api.ipify.org >/tmp/veritas-wg-dns.log 2>/tmp/veritas-wg-dns-error.log; then
+    DNS_OK=1
+    break
+  fi
+  sleep 0.25
+done
+if [[ "$DNS_OK" -ne 1 ]]; then
+  restore_after_validation_fail "VPN DNS validation failed; normal internet was restored"
+fi
+
+if ! curl -4 -fsS --connect-timeout 5 --max-time 12 https://api.ipify.org \
+     >/tmp/veritas-wg-egress.log 2>/tmp/veritas-wg-egress-error.log; then
+  restore_after_validation_fail "VPN internet egress validation failed; normal internet was restored"
 fi
 
 # Install passwordless sudo so future connects/disconnects skip pkexec prompts

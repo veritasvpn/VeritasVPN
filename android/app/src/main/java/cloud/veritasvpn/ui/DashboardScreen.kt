@@ -56,7 +56,9 @@ fun DashboardScreen(
     rxBytes: Long = 0,
     txBytes: Long = 0,
     handshakeMs: Long = 0,
-    dnsBlockedCount: Long? = null
+    dnsBlockedCount: Long? = null,
+    dnsBlockedBaseline: Long? = null,
+    dnsGateway: String? = null
 ) {
     var showSignOutConfirmation by remember { mutableStateOf(false) }
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
@@ -209,7 +211,10 @@ fun DashboardScreen(
                     rxBytes = rxBytes,
                     txBytes = txBytes,
                     handshakeMs = handshakeMs,
-                    dnsBlockedCount = dnsBlockedCount
+                    dnsBlockedThisSession = if (dnsBlockedCount != null && dnsBlockedBaseline != null) {
+                        (dnsBlockedCount - dnsBlockedBaseline).coerceAtLeast(0)
+                    } else null,
+                    dnsGateway = dnsGateway
                 )
             }
 
@@ -254,7 +259,8 @@ private fun LiveTransferStats(
     rxBytes: Long,
     txBytes: Long,
     handshakeMs: Long,
-    dnsBlockedCount: Long?
+    dnsBlockedThisSession: Long?,
+    dnsGateway: String?
 ) {
     Column(
         Modifier
@@ -271,7 +277,7 @@ private fun LiveTransferStats(
             StatCell(label = "Upload", value = formatBytes(txBytes))
             StatCell(label = "Handshake", value = formatHandshakeAge(handshakeMs))
         }
-        if (dnsBlockedCount != null) {
+        if (dnsBlockedThisSession != null) {
             Spacer(Modifier.height(12.dp))
             HorizontalDivider(color = Line)
             Spacer(Modifier.height(10.dp))
@@ -280,15 +286,29 @@ private fun LiveTransferStats(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("DNS blocked", color = PaperMuted, fontSize = 13.sp)
+                Text("DNS blocked this session", color = PaperMuted, fontSize = 13.sp)
                 Text(
-                    dnsBlockedCount.toString(),
+                    dnsBlockedThisSession.toString(),
                     color = Paper,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
         }
+        Spacer(Modifier.height(12.dp))
+        HorizontalDivider(color = Line)
+        Spacer(Modifier.height(10.dp))
+        Text("Protected DNS on", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            buildString {
+                append(if (!dnsGateway.isNullOrBlank()) "Gateway $dnsGateway" else "Tunnel gateway")
+                append(" · malware/phishing blocks via DoH upstreams. Apps with their own DoH may bypass.")
+            },
+            color = PaperDim,
+            fontSize = 12.sp,
+            lineHeight = 16.sp
+        )
     }
 }
 

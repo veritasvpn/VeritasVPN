@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -73,6 +74,10 @@ func dnsBlockedKey(assignedIP string) string {
 	return fmt.Sprintf("wg:dns_blocked:%s", ip)
 }
 
+// dnsBlockedCountTTL expires orphaned counters if peer cleanup misses a key
+// (e.g. crash between ReleaseIP and Clear). Heartbeats refresh active keys.
+const dnsBlockedCountTTL = 2 * time.Hour
+
 // SetDNSBlockedCounts stores absolute per-client blocked counts from an agent heartbeat.
 func (r *Redis) SetDNSBlockedCounts(ctx context.Context, counts map[string]uint64) error {
 	if len(counts) == 0 {
@@ -83,7 +88,7 @@ func (r *Redis) SetDNSBlockedCounts(ctx context.Context, counts map[string]uint6
 		if ip == "" {
 			continue
 		}
-		pipe.Set(ctx, dnsBlockedKey(ip), n, 0)
+		pipe.Set(ctx, dnsBlockedKey(ip), n, dnsBlockedCountTTL)
 	}
 	_, err := pipe.Exec(ctx)
 	return err
@@ -96,4 +101,13 @@ func (r *Redis) GetDNSBlockedCount(ctx context.Context, assignedIP string) (uint
 		return 0, nil
 	}
 	return val, err
+}
+
+// ClearDNSBlockedCount removes the blocked-query counter for a released tunnel IP
+// so a later peer reusing the address does not inherit stale UI counts.
+func (r *Redis) ClearDNSBlockedCount(ctx context.Context, assignedIP string) error {
+	if assignedIP == "" {
+		return nil
+	}
+	return r.client.Del(ctx, dnsBlockedKey(assignedIP)).Err()
 }

@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS servers (
     capacity    INTEGER NOT NULL DEFAULT 100,
     load_factor REAL NOT NULL DEFAULT 0.0,
     wg_subnet   TEXT NOT NULL,
-    dns_server  TEXT NOT NULL DEFAULT '1.1.1.1',
+    dns_server  TEXT NOT NULL DEFAULT '10.0.0.1',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
