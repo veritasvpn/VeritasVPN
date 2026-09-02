@@ -1,7 +1,17 @@
 /* Privacy check tools — extends marketing tokens */
 
+/* Check pages omit main.js; keep the fixed nav opaque so content never
+   reads through it while scrolling. */
+body:has(.check-page) .navbar {
+  background: rgba(7, 17, 15, 0.92);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom-color: var(--line);
+}
+
 .check-page {
-  padding: 48px 0 96px;
+  /* Clear the fixed navbar so links like "All checks" stay clickable. */
+  padding: calc(var(--nav-h) + 28px) 0 96px;
   min-height: 70vh;
 }
 
@@ -226,6 +236,9 @@
 }
 
 .check-map {
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
   width: 100%;
   height: 280px;
   border: 1px solid var(--line);
@@ -261,7 +274,7 @@
 }
 
 @media (max-width: 640px) {
-  .check-page { padding: 32px 0 72px; }
+  .check-page { padding: calc(var(--nav-h) + 20px) 0 72px; }
   .check-panel { padding: 16px; }
   .check-map { height: 220px; }
 }
