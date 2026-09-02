@@ -27,9 +27,31 @@ git_working_tree_clean() {
   test -z "$status"
 }
 
+# kustomize is local-only, but the k3s-wrapped kubectl still probes
+# /etc/rancher/k3s/config.yaml (root-only) and warns on every call.
+# Keep real errors; drop that known noise. Do not redirect check()'s stdout.
+kustomize_renders() {
+  local path="$1"
+  local err
+  set +e
+  err="$(kubectl kustomize "$path" 2>&1 >/dev/null)"
+  local rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$err" >&2
+    return "$rc"
+  fi
+  local filtered
+  filtered="$(printf '%s\n' "$err" | grep -vF 'open /etc/rancher/k3s/config.yaml: permission denied' || true)"
+  if [ -n "$filtered" ]; then
+    printf '%s\n' "$filtered" >&2
+  fi
+  return 0
+}
+
 check "git working tree is clean" git_working_tree_clean
-check "production kustomization renders" kubectl kustomize deploy/k8s/overlays/k3s >/dev/null
-check "monitoring kustomization renders" kubectl kustomize deploy/k8s/monitoring >/dev/null
+check "production kustomization renders" kustomize_renders deploy/k8s/overlays/k3s
+check "monitoring kustomization renders" kustomize_renders deploy/k8s/monitoring
 check "backup metrics directory is readable" test -r /var/lib/veritasvpn/metrics
 check "backup metrics are scrapeable" test "$(curl -fsS --max-time 5 http://127.0.0.1:9100/metrics | grep -c '^veritas_backup_last_success_timestamp ' || true)" -ge 1
 check "node exporter textfile collector is healthy" test "$(curl -fsS --max-time 5 http://127.0.0.1:9100/metrics | awk '/^node_textfile_scrape_error / {print $2; found=1} END {if (!found) print 1}')" = 0
