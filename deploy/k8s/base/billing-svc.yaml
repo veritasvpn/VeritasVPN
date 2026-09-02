@@ -48,8 +48,7 @@ spec:
                   key: DB_PASSWORD
             - name: DATABASE_URL
               value: "postgres://veritas:$(DB_PASSWORD)@postgres:5432/veritas?sslmode=prefer"
-            - name: NATS_URL
-              value: "nats://$(NATS_USER):$(NATS_PASSWORD)@nats:4222"
+            # Password/user vars must precede NATS_URL — k8s only expands $(VAR) from earlier env entries.
             - name: NATS_USER
               valueFrom:
                 secretKeyRef:
@@ -60,6 +59,8 @@ spec:
                 secretKeyRef:
                   name: veritas-secrets
                   key: NATS_PASSWORD
+            - name: NATS_URL
+              value: "nats://$(NATS_USER):$(NATS_PASSWORD)@nats:4222"
             - name: JWT_ED25519_PUBLIC_KEYS
               valueFrom:
                 secretKeyRef:
@@ -75,13 +76,14 @@ spec:
                 configMapKeyRef:
                   name: veritas-config
                   key: JWT_AUDIENCE
-            - name: REDIS_URL
-              value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
+            # REDIS_PASSWORD must precede REDIS_URL — k8s only expands $(VAR) from earlier env entries.
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: veritas-secrets
                   key: REDIS_PASSWORD
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
             - name: AGENT_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:

@@ -33,12 +33,23 @@ spec:
       containers:
         - name: redis
           image: redis@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: REDIS_PASSWORD
+            # redis-cli reads this for probe AUTH without putting the password on argv.
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: REDIS_PASSWORD
+          # Official redis args do not expand $(REDIS_PASSWORD); use the shell so
+          # requirepass matches the same secret clients already use in REDIS_URL.
+          command: ["sh", "-c"]
           args:
-            - redis-server
-            - --appendonly
-            - "no"
-            - --maxmemory-policy
-            - allkeys-lru
+            - exec redis-server --appendonly no --maxmemory-policy allkeys-lru --requirepass "$REDIS_PASSWORD"
           ports:
             - containerPort: 6379
           readinessProbe:
