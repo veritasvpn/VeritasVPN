@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VPN Leak Test — VeritasVPN</title>
+  <meta name="description" content="Free VPN leak test from VeritasVPN. Check public IP, WebRTC, and IPv6 exposure for this browser session.">
+  <link rel="canonical" href="https://veritasvpn.cloud/check/vpn.html">
+  <link rel="stylesheet" href="/css/style-typography1.css">
+  <link rel="stylesheet" href="/css/check.css">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/check/">Check</a></li>
+        <li><a href="/downloads.html">Download</a></li>
+      </ul>
+      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+    </div>
+  </nav>
+
+  <main id="main" class="check-page">
+    <div class="container">
+      <a class="check-back" href="/check/">← All checks</a>
+      <header class="check-hero">
+        <span class="section-kicker">VPN leak test</span>
+        <h1>Is this session leaking outside the tunnel?</h1>
+        <p>Combines public IP, WebRTC candidates, and IPv6. Useful before and after connecting a VPN. This page cannot see your Veritas tunnel state directly — compare results yourself.</p>
+      </header>
+
+      <section class="check-panel">
+        <h2>Leak scorecard</h2>
+        <p class="check-note">WebRTC may reveal local or public addresses even when you expect only a VPN exit.</p>
+        <div class="check-actions">
+          <button type="button" class="btn btn-primary" id="runCheck">Run VPN leak test</button>
+        </div>
+        <div class="check-status" id="status" data-state="">Ready</div>
+        <ul class="check-result-list" id="results"></ul>
+      </section>
+
+      <aside class="check-cta">
+        <h2>Want a full-device tunnel, not only browser tricks?</h2>
+        <p>VeritasVPN for Android and Linux uses WireGuard with kill-switch style protections on Linux and Always-on VPN guidance on Android.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="/downloads.html">Download</a>
+          <a class="btn btn-outline" href="/check/dns.html">DNS leak test</a>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/privacy.html">Privacy</a> · <a href="/check/">Privacy check</a></p>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module">
+    import {
+      setStatus,
+      clearResults,
+      addResult,
+      getPublicIp,
+      detectWebRtcIPs,
+      detectIPv6,
+      isPrivateIP,
+    } from "/js/check-common.js";
+
+    const status = document.getElementById("status");
+    const results = document.getElementById("results");
+    const btn = document.getElementById("runCheck");
+
+    async function run() {
+      btn.disabled = true;
+      clearResults(results);
+      setStatus(status, "running", "Collecting IP, WebRTC, and IPv6 signals…");
+      try {
+        const [ipInfo, rtcIps, v6] = await Promise.all([
+          getPublicIp(),
+          detectWebRtcIPs(),
+          detectIPv6(),
+        ]);
+        addResult(results, "Public IPv4/IPv6 (HTTPS)", ipInfo.ip);
+        addResult(results, "Network hint", ipInfo.asOrganization || ipInfo.country);
+        addResult(
+          results,
+          "WebRTC candidates",
+          rtcIps.length ? rtcIps.join(", ") : "None detected (blocked or unsupported)"
+        );
+        addResult(results, "IPv6 via api64.ipify", v6 || "No IPv6 address detected");
+
+        const publicRtc = rtcIps.filter((ip) => !isPrivateIP(ip));
+        const warnings = [];
+        if (publicRtc.length) {
+          warnings.push("WebRTC exposed at least one non-private address");
+        }
+        if (v6 && ipInfo.ip && v6 !== ipInfo.ip) {
+          warnings.push("IPv6 path differs from the primary HTTPS IP");
+        }
+        if (warnings.length) {
+          addResult(results, "Findings", warnings.join(" · "));
+          setStatus(status, "warn", "Possible leak signals in this browser session.");
+        } else {
+          addResult(results, "Findings", "No obvious WebRTC/IPv6 mismatch in this quick check");
+          setStatus(status, "ok", "Basic leak signals look quiet for this session.");
+        }
+      } catch (err) {
+        setStatus(status, "bad", err.message || "VPN leak test failed");
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener("click", () => void run());
+  </script>
+</body>
+</html>

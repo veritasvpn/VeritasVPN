@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IP Address Check — Am I leaking my IP? — VeritasVPN</title>
+  <meta name="description" content="Free IP leak check from VeritasVPN. See the public IP address this browser connection presents.">
+  <link rel="canonical" href="https://veritasvpn.cloud/check/ip.html">
+  <link rel="stylesheet" href="/css/style-typography1.css">
+  <link rel="stylesheet" href="/css/check.css">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/check/">Check</a></li>
+        <li><a href="/downloads.html">Download</a></li>
+        <li><a href="/account/">Account</a></li>
+      </ul>
+      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+    </div>
+  </nav>
+
+  <main id="main" class="check-page">
+    <div class="container">
+      <a class="check-back" href="/check/">← All checks</a>
+      <header class="check-hero">
+        <span class="section-kicker">IP check</span>
+        <h1>Am I leaking my IP?</h1>
+        <p>This is the public address our edge sees for this browser request. Sites and networks you visit can see a similar address unless you route traffic through a VPN.</p>
+      </header>
+
+      <section class="check-panel">
+        <h2>Your public IP</h2>
+        <p class="check-note">No account needed. We do not keep this result as a profile.</p>
+        <div class="check-actions">
+          <button type="button" class="btn btn-primary" id="runCheck">Check IP</button>
+        </div>
+        <div class="check-status" id="status" data-state="">Ready</div>
+        <ul class="check-result-list" id="results"></ul>
+      </section>
+
+      <aside class="check-cta">
+        <h2>Hide this address behind VeritasVPN</h2>
+        <p>Linux and Android clients create a WireGuard tunnel to our Paraguay node so destinations see the VPN exit instead of your home or mobile address.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="/downloads.html">Download</a>
+          <a class="btn btn-outline" href="/check/vpn.html">Run VPN leak test</a>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/privacy.html">Privacy</a> · <a href="/check/">Privacy check</a></p>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module">
+    import { setStatus, clearResults, addResult, getPublicIp } from "/js/check-common.js";
+
+    const status = document.getElementById("status");
+    const results = document.getElementById("results");
+    const btn = document.getElementById("runCheck");
+
+    async function run() {
+      btn.disabled = true;
+      clearResults(results);
+      setStatus(status, "running", "Checking…");
+      try {
+        const data = await getPublicIp();
+        addResult(results, "Public IP", data.ip);
+        addResult(results, "Country", data.country);
+        addResult(results, "Network / ASN hint", data.asOrganization);
+        addResult(results, "City", data.city);
+        addResult(results, "Region", data.region);
+        addResult(results, "Edge colo", data.colo);
+        addResult(results, "Checked at", data.checkedAt);
+        setStatus(status, "ok", "This is the address visible on this request.");
+      } catch (err) {
+        setStatus(status, "bad", err.message || "Check failed");
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener("click", () => void run());
+    void run();
+  </script>
+</body>
+</html>

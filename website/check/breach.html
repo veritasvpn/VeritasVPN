@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Email Breach Check — VeritasVPN</title>
+  <meta name="description" content="Check whether an email appears in public breach corpora. VeritasVPN does not store the address you enter.">
+  <link rel="canonical" href="https://veritasvpn.cloud/check/breach.html">
+  <link rel="stylesheet" href="/css/style-typography1.css">
+  <link rel="stylesheet" href="/css/check.css">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/check/">Check</a></li>
+        <li><a href="/privacy.html">Privacy</a></li>
+        <li><a href="/downloads.html">Download</a></li>
+      </ul>
+      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+    </div>
+  </nav>
+
+  <main id="main" class="check-page">
+    <div class="container">
+      <a class="check-back" href="/check/">← All checks</a>
+      <header class="check-hero">
+        <span class="section-kicker">Breach check</span>
+        <h1>Is my email in a data breach?</h1>
+        <p>We proxy a public breach corpus check and do not store the email you submit. Results can be incomplete and are not a password audit.</p>
+      </header>
+
+      <section class="check-panel">
+        <h2>Check an email</h2>
+        <p class="check-note">Uses XposedOrNot. Prefer an address you are comfortable typing. Anonymous Veritas accounts do not require email.</p>
+        <form class="check-breach-form" id="breachForm">
+          <input id="email" name="email" type="email" autocomplete="email" required placeholder="you@example.com" aria-label="Email address">
+          <button type="submit" class="btn btn-primary" id="runCheck">Check breaches</button>
+        </form>
+        <div class="check-status" id="status" data-state="">Ready</div>
+        <ul class="check-result-list" id="results"></ul>
+      </section>
+
+      <aside class="check-cta">
+        <h2>Breaches happen. Network exposure is separate.</h2>
+        <p>Even with a clean inbox history, your ISP can still see DNS and your IP on an unprotected path. VeritasVPN protects the connection; use unique passwords and a password manager too.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+          <a class="btn btn-outline" href="/check/ip.html">Check IP</a>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/privacy.html">Privacy</a> · <a href="/check/">Privacy check</a></p>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module">
+    import { setStatus, clearResults, addResult, fetchJson } from "/js/check-common.js";
+
+    const status = document.getElementById("status");
+    const results = document.getElementById("results");
+    const form = document.getElementById("breachForm");
+    const btn = document.getElementById("runCheck");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const email = document.getElementById("email").value.trim();
+      btn.disabled = true;
+      clearResults(results);
+      setStatus(status, "running", "Checking public breach corpora…");
+      try {
+        const data = await fetchJson("/api/check/breach", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        addResult(results, "Appears breached", data.breached ? "Yes" : "No matches found");
+        addResult(results, "Breach count", data.breachCount);
+        if (data.breaches && data.breaches.length) {
+          addResult(results, "Named sources", data.breaches.join(", "));
+        }
+        addResult(results, "Notice", data.notice);
+        setStatus(
+          status,
+          data.breached ? "warn" : "ok",
+          data.breached
+            ? "This address appears in at least one public corpus."
+            : "No match in the checked corpus."
+        );
+      } catch (err) {
+        setStatus(status, "bad", err.message || "Breach check failed");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

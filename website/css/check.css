@@ -1,0 +1,215 @@
+/* Privacy check tools — extends marketing tokens */
+
+.check-page {
+  padding: 48px 0 96px;
+  min-height: 70vh;
+}
+
+.check-hero {
+  max-width: 720px;
+  margin: 0 auto 40px;
+  text-align: left;
+}
+
+.check-hero .section-kicker {
+  display: inline-block;
+  margin-bottom: 10px;
+  color: var(--cyan);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.check-hero h1 {
+  margin: 0 0 12px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  line-height: 1.15;
+  color: var(--paper);
+}
+
+.check-hero p {
+  margin: 0;
+  color: var(--paper-muted);
+  font-size: 1.05rem;
+  line-height: 1.55;
+}
+
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  margin: 28px 0 40px;
+}
+
+.check-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(15, 21, 32, 0.95), rgba(11, 16, 24, 0.9));
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.check-card:hover {
+  border-color: rgba(0, 210, 255, 0.45);
+  transform: translateY(-2px);
+}
+
+.check-card strong {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.1rem;
+  color: var(--paper);
+}
+
+.check-card span {
+  color: var(--paper-dim);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.check-panel {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  padding: 22px;
+  margin-bottom: 20px;
+}
+
+.check-panel h2 {
+  margin: 0 0 8px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.25rem;
+  color: var(--paper);
+}
+
+.check-panel .check-note {
+  margin: 0 0 18px;
+  color: var(--paper-dim);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.check-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: var(--paper-muted);
+  font-size: 0.92rem;
+}
+
+.check-status[data-state="running"] { color: var(--cyan); }
+.check-status[data-state="ok"] { color: #7dffb3; }
+.check-status[data-state="warn"] { color: #ffcc66; }
+.check-status[data-state="bad"] { color: #ff8f8f; }
+
+.check-result-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.check-result-list li {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(5, 7, 10, 0.35);
+}
+
+.check-result-list .label {
+  color: var(--paper-dim);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.check-result-list .value {
+  color: var(--paper);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.98rem;
+  word-break: break-all;
+}
+
+.check-cta {
+  margin-top: 28px;
+  padding: 22px;
+  border-radius: 16px;
+  border: 1px solid rgba(0, 210, 255, 0.28);
+  background:
+    radial-gradient(600px 180px at 10% 0%, rgba(0, 210, 255, 0.12), transparent),
+    var(--panel);
+}
+
+.check-cta h2 {
+  margin: 0 0 8px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.35rem;
+  color: var(--paper);
+}
+
+.check-cta p {
+  margin: 0 0 16px;
+  color: var(--paper-muted);
+  line-height: 1.5;
+}
+
+.check-cta .cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.check-back {
+  display: inline-block;
+  margin-bottom: 18px;
+  color: var(--cyan);
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+.check-back:hover { text-decoration: underline; }
+
+.check-breach-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.check-breach-form input {
+  flex: 1 1 240px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 1rem;
+}
+
+.check-breach-form input:focus {
+  outline: 2px solid rgba(0, 210, 255, 0.35);
+  outline-offset: 1px;
+}
+
+@media (max-width: 640px) {
+  .check-page { padding: 32px 0 72px; }
+  .check-panel { padding: 16px; }
+}

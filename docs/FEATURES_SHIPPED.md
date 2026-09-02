@@ -21,6 +21,7 @@ Last updated: 2026-09-02
 - Anonymous Account ID + email accounts
 - Account dashboard: subscription, devices, port forwards, downloads, security
 - FAQ documents kill switch, split tunnel, port forwarding, stealth
+- Free website privacy checks at `/check/` (IP, DNS leak, VPN leak, browser reveal, breach, report)
 
 ## Not shipped
 - Multi-hop / multi-region (needs more nodes)

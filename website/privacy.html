@@ -14,6 +14,7 @@
       <a href="/" class="logo">Veritas<span>VPN</span></a>
       <div class="nav-links">
         <a href="/#product">Product</a>
+        <a href="/check/">Check</a>
         <a href="/#pricing">Pricing</a>
         <a href="/downloads.html">Download</a>
         <a href="/account/">Account</a>
@@ -24,7 +25,7 @@
   <main class="legal-page">
     <div class="container">
       <h1>Privacy Policy</h1>
-      <p class="legal-meta">Effective: 2026-07-28 · Last updated: 2026-07-28</p>
+      <p class="legal-meta">Effective: 2026-07-28 · Last updated: 2026-09-02</p>
 
       <div class="legal-notice">
         This policy describes our current early-stage practices for veritasvpn.cloud.
@@ -59,6 +60,19 @@
         <li><strong>Website:</strong> standard reverse-proxy / Cloudflare access logs (IP, user-agent, URL, status) that may be retained by our edge provider for a limited time</li>
       </ul>
       <p>Premium port-forward mappings and stealth connection metadata may be stored as operational records (not browsing content).</p>
+
+      <h2>3a. Free privacy check tools</h2>
+      <p>
+        The <a href="/check/">/check</a> tools help visitors see what this browser session exposes before installing VeritasVPN.
+        They do not require an account.
+      </p>
+      <ul>
+        <li><strong>IP check:</strong> our Cloudflare Pages Function returns the request IP and coarse edge metadata (country/ASN/colo). We do not keep these results as a user profile.</li>
+        <li><strong>DNS leak test:</strong> the browser resolves short-lived unique hostnames through edns.ip-api.com so recursive resolvers become visible. VeritasVPN does not operate that DNS authority in this version and does not store your DNS query names from the test.</li>
+        <li><strong>VPN leak / browser reveal:</strong> mostly runs in your browser (WebRTC, IPv6, user agent, timezone, etc.).</li>
+        <li><strong>Breach check:</strong> the email you type is sent to our edge Function and forwarded to XposedOrNot for a corpus lookup. VeritasVPN does not store the email. Public breach data can be incomplete.</li>
+      </ul>
+      <p>Cloudflare may retain standard edge access logs for the website for a limited time, as with other pages.</p>
 
       <h2>4. Cookies and similar tech</h2>
       <p>

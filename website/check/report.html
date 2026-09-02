@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connection Privacy Report — VeritasVPN</title>
+  <meta name="description" content="Run IP, DNS, VPN leak, and browser checks together for a plain-language connection report.">
+  <link rel="canonical" href="https://veritasvpn.cloud/check/report.html">
+  <link rel="stylesheet" href="/css/style-typography1.css">
+  <link rel="stylesheet" href="/css/check.css">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/check/">Check</a></li>
+        <li><a href="/downloads.html">Download</a></li>
+      </ul>
+      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+    </div>
+  </nav>
+
+  <main id="main" class="check-page">
+    <div class="container">
+      <a class="check-back" href="/check/">← All checks</a>
+      <header class="check-hero">
+        <span class="section-kicker">Full report</span>
+        <h1>How private is my connection?</h1>
+        <p>Runs the core checks for this browser session and summarizes what stands out. Not a guarantee — a practical exposure snapshot.</p>
+      </header>
+
+      <section class="check-panel">
+        <h2>Session report</h2>
+        <p class="check-note">Includes IP, DNS resolver probe, WebRTC/IPv6, and browser basics.</p>
+        <div class="check-actions">
+          <button type="button" class="btn btn-primary" id="runCheck">Run full report</button>
+        </div>
+        <div class="check-status" id="status" data-state="">Ready</div>
+        <ul class="check-result-list" id="results"></ul>
+      </section>
+
+      <aside class="check-cta">
+        <h2>Turn this into a protected path</h2>
+        <p>Install VeritasVPN, connect, then re-run this report. On Android and Linux you should see the Paraguay exit IP and can re-check DNS after Protected DNS is active.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+          <a class="btn btn-outline" href="/#pricing">Premium</a>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/privacy.html">Privacy</a> · <a href="/check/">Privacy check</a></p>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module">
+    import {
+      setStatus,
+      clearResults,
+      addResult,
+      getPublicIp,
+      detectWebRtcIPs,
+      detectIPv6,
+      collectBrowserFacts,
+      fetchJson,
+      isPrivateIP,
+    } from "/js/check-common.js";
+
+    const status = document.getElementById("status");
+    const results = document.getElementById("results");
+    const btn = document.getElementById("runCheck");
+
+    async function probeDns() {
+      try {
+        const session = await fetchJson("/api/check/dns/session", { method: "POST" });
+        const baseUrl = session.probeUrl || "https://edns.ip-api.com/json";
+        const count = session.probes || 6;
+        const ips = new Set();
+        for (let i = 0; i < count; i += 1) {
+          try {
+            const url = `${baseUrl}?_=${Date.now()}-${i}`;
+            const res = await fetch(url, { cache: "no-store", mode: "cors", redirect: "follow" });
+            if (!res.ok) continue;
+            const ans = await res.json();
+            if (ans && ans.dns && ans.dns.ip) ips.add(ans.dns.ip);
+          } catch {
+            /* continue */
+          }
+        }
+        return [...ips];
+      } catch {
+        return [];
+      }
+    }
+
+    async function run() {
+      btn.disabled = true;
+      clearResults(results);
+      setStatus(status, "running", "Running IP, DNS, VPN, and browser checks…");
+      try {
+        const [ipInfo, rtcIps, v6, dnsIps] = await Promise.all([
+          getPublicIp(),
+          detectWebRtcIPs(),
+          detectIPv6(),
+          probeDns(),
+        ]);
+        const facts = collectBrowserFacts();
+        const publicRtc = rtcIps.filter((ip) => !isPrivateIP(ip));
+        const findings = [];
+        if (dnsIps.length) findings.push(`DNS resolvers visible: ${dnsIps.join(", ")}`);
+        else findings.push("DNS resolver probe returned no identities (may be blocked)");
+        if (publicRtc.length) findings.push(`WebRTC public candidates: ${publicRtc.join(", ")}`);
+        if (v6) findings.push(`IPv6 observed: ${v6}`);
+
+        addResult(results, "Public IP", ipInfo.ip);
+        addResult(results, "Network hint", ipInfo.asOrganization || ipInfo.country || "—");
+        addResult(results, "DNS resolvers", dnsIps.length ? dnsIps.join(", ") : "None detected");
+        addResult(results, "WebRTC", rtcIps.length ? rtcIps.join(", ") : "None detected");
+        addResult(results, "IPv6", v6 || "None detected");
+        addResult(results, "Timezone", facts.timezone);
+        addResult(results, "Language", facts.language);
+        addResult(results, "Platform", facts.platform);
+        addResult(results, "Summary", findings.join(" · "));
+
+        const warn = Boolean(dnsIps.length || publicRtc.length);
+        setStatus(
+          status,
+          warn ? "warn" : "ok",
+          warn
+            ? "This session shows network or DNS signals worth protecting."
+            : "Quick checks look quiet. Re-run after connecting a VPN to compare."
+        );
+      } catch (err) {
+        setStatus(status, "bad", err.message || "Report failed");
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener("click", () => void run());
+  </script>
+</body>
+</html>

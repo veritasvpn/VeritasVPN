@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>What Does My Browser Reveal? — VeritasVPN</title>
+  <meta name="description" content="See language, timezone, screen, platform, and other signals this browser exposes to websites.">
+  <link rel="canonical" href="https://veritasvpn.cloud/check/browser.html">
+  <link rel="stylesheet" href="/css/style-typography1.css">
+  <link rel="stylesheet" href="/css/check.css">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/check/">Check</a></li>
+        <li><a href="/downloads.html">Download</a></li>
+      </ul>
+      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+    </div>
+  </nav>
+
+  <main id="main" class="check-page">
+    <div class="container">
+      <a class="check-back" href="/check/">← All checks</a>
+      <header class="check-hero">
+        <span class="section-kicker">Browser privacy</span>
+        <h1>What does my browser reveal?</h1>
+        <p>Websites can read many details without asking. This is an educational snapshot — not a scare score and not a full fingerprinting lab.</p>
+      </header>
+
+      <section class="check-panel">
+        <h2>Browser signals</h2>
+        <p class="check-note">Collected locally in your browser. Nothing here is uploaded unless you choose another tool that needs a server.</p>
+        <div class="check-actions">
+          <button type="button" class="btn btn-primary" id="runCheck">Reveal browser details</button>
+        </div>
+        <div class="check-status" id="status" data-state="">Ready</div>
+        <ul class="check-result-list" id="results"></ul>
+      </section>
+
+      <aside class="check-cta">
+        <h2>A VPN does not make a browser anonymous</h2>
+        <p>VeritasVPN protects the network path and DNS for WireGuard clients. Browser fingerprinting is a separate surface — use both defenses when privacy matters.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+          <a class="btn btn-outline" href="/check/report.html">Full report</a>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/privacy.html">Privacy</a> · <a href="/check/">Privacy check</a></p>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module">
+    import { setStatus, clearResults, addResult, collectBrowserFacts } from "/js/check-common.js";
+
+    const status = document.getElementById("status");
+    const results = document.getElementById("results");
+    const btn = document.getElementById("runCheck");
+
+    function run() {
+      clearResults(results);
+      const facts = collectBrowserFacts();
+      addResult(results, "User agent", facts.userAgent);
+      addResult(results, "Language", facts.language);
+      addResult(results, "Languages", facts.languages);
+      addResult(results, "Platform", facts.platform);
+      addResult(results, "Timezone", facts.timezone);
+      addResult(results, "Timezone offset (min)", facts.timezoneOffsetMin);
+      addResult(results, "Screen", facts.screen);
+      addResult(results, "Viewport", facts.viewport);
+      addResult(results, "CPU cores (reported)", facts.hardwareConcurrency);
+      addResult(results, "Device memory (reported)", facts.deviceMemory);
+      addResult(results, "Touch points", facts.touchPoints);
+      addResult(results, "Cookies enabled", facts.cookieEnabled);
+      addResult(results, "Do Not Track", facts.doNotTrack || "unset");
+      addResult(results, "Network info API", facts.connection || "unavailable");
+      setStatus(status, "ok", "Local browser snapshot ready.");
+    }
+
+    btn.addEventListener("click", run);
+    run();
+  </script>
+</body>
+</html>

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DNS Leak Test — VeritasVPN</title>
+  <meta name="description" content="Free DNS leak test from VeritasVPN. See which DNS resolvers handle lookups for this browser session.">
+  <link rel="canonical" href="https://veritasvpn.cloud/check/dns.html">
+  <link rel="stylesheet" href="/css/style-typography1.css">
+  <link rel="stylesheet" href="/css/check.css">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/check/">Check</a></li>
+        <li><a href="/#dns">DNS</a></li>
+        <li><a href="/downloads.html">Download</a></li>
+      </ul>
+      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+    </div>
+  </nav>
+
+  <main id="main" class="check-page">
+    <div class="container">
+      <a class="check-back" href="/check/">← All checks</a>
+      <header class="check-hero">
+        <span class="section-kicker">DNS leak test</span>
+        <h1>Which DNS resolvers see your lookups?</h1>
+        <p>Without a VPN, DNS often goes to your ISP. That can reveal the sites you resolve even when the page content is HTTPS. This test detects resolvers used for this browser session.</p>
+      </header>
+
+      <section class="check-panel">
+        <h2>DNS resolvers</h2>
+        <p class="check-note">This version uses short-lived unique hostnames via edns.ip-api.com to correlate recursive resolvers. VeritasVPN does not store your query names. See the Privacy Policy.</p>
+        <div class="check-actions">
+          <button type="button" class="btn btn-primary" id="runCheck">Run DNS leak test</button>
+        </div>
+        <div class="check-status" id="status" data-state="">Ready</div>
+        <ul class="check-result-list" id="results"></ul>
+      </section>
+
+      <aside class="check-cta">
+        <h2>Your ISP can see DNS. Veritas Protected DNS does not leave that path open the same way.</h2>
+        <p>While connected, Android and Linux peers resolve through our in-tunnel gateway over DNS-over-HTTPS, with malware and phishing blocks. Apps that speak their own DoH may still bypass.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+          <a class="btn btn-outline" href="/#dns">How Protected DNS works</a>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/privacy.html">Privacy</a> · <a href="/check/">Privacy check</a></p>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module">
+    import { setStatus, clearResults, addResult, fetchJson } from "/js/check-common.js";
+
+    const status = document.getElementById("status");
+    const results = document.getElementById("results");
+    const btn = document.getElementById("runCheck");
+
+    async function probeOnce(baseUrl, n) {
+      const ctrl = new AbortController();
+      const timer = window.setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const url = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}_=${Date.now()}-${n}`;
+        const res = await fetch(url, {
+          signal: ctrl.signal,
+          cache: "no-store",
+          mode: "cors",
+          redirect: "follow",
+        });
+        window.clearTimeout(timer);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch {
+        window.clearTimeout(timer);
+        return null;
+      }
+    }
+
+    async function run() {
+      btn.disabled = true;
+      clearResults(results);
+      setStatus(status, "running", "Creating session and probing resolvers…");
+      try {
+        const session = await fetchJson("/api/check/dns/session", { method: "POST" });
+        const count = session.probes || 6;
+        const baseUrl = session.probeUrl || "https://edns.ip-api.com/json";
+        const answers = [];
+        for (let i = 0; i < count; i += 1) {
+          answers.push(await probeOnce(baseUrl, i));
+        }
+        const resolverMap = new Map();
+        for (const ans of answers) {
+          const dns = ans && ans.dns;
+          const ip = dns && dns.ip;
+          if (!ip) continue;
+          const geo = dns.geo || "";
+          if (!resolverMap.has(ip)) {
+            resolverMap.set(ip, { ip, geo, hits: 0 });
+          }
+          resolverMap.get(ip).hits += 1;
+        }
+        const resolvers = [...resolverMap.values()].sort((a, b) => b.hits - a.hits);
+        if (!resolvers.length) {
+          setStatus(
+            status,
+            "warn",
+            "No resolver identities returned. Ad blockers or strict DNS settings may have blocked the probe."
+          );
+          addResult(results, "Session", session.sessionId);
+          addResult(results, "Notice", session.notice || "");
+          return;
+        }
+        resolvers.forEach((r, idx) => {
+          addResult(
+            results,
+            `Resolver ${idx + 1}`,
+            `${r.ip}${r.geo ? ` (${r.geo})` : ""} · seen ${r.hits}×`
+          );
+        });
+        addResult(results, "Session", session.sessionId);
+        addResult(results, "Method", session.notice || session.provider);
+        setStatus(
+          status,
+          "warn",
+          "Resolvers were detected for this session. If you expected only a VPN DNS path, you may be leaking DNS."
+        );
+      } catch (err) {
+        setStatus(status, "bad", err.message || "DNS leak test failed");
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener("click", () => void run());
+  </script>
+</body>
+</html>
