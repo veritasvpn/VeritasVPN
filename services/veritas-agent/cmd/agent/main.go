@@ -120,7 +120,7 @@ func (c *httpAgentClient) RegisterServer(ctx context.Context, req *RegisterServe
 
 	if resp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("register returned %d: %s", resp.StatusCode, string(data))
+		return nil, &httpStatusError{Code: resp.StatusCode, Body: string(data)}
 	}
 
 	var r RegisterServerResponse
@@ -298,8 +298,11 @@ type AgentConfig struct {
 	DNSBlocklistRefresh   time.Duration
 	DNSBlocklistStateFile string
 	BandwidthLimitMbps    int
-	PeerNoHandshakeGrace  time.Duration
-	PeerStaleAfter        time.Duration
+	PeerNoHandshakeGrace     time.Duration
+	PeerStaleAfter           time.Duration
+	RegisterRetryInitial     time.Duration
+	RegisterRetryMaxInterval time.Duration
+	RegisterRetryTimeout     time.Duration
 }
 
 func LoadAgentConfig() *AgentConfig {
@@ -331,6 +334,11 @@ func LoadAgentConfig() *AgentConfig {
 		// PEER_STALE_AFTER: keep peers through sleep/Wi-Fi blips so reconnects stay sticky
 		// and the bandwidth reconciler does not churn add/remove/stale on short gaps.
 		PeerStaleAfter: durationOrDefault("PEER_STALE_AFTER", 30*time.Minute),
+		// Boot can race wg-manager; retry registration instead of CrashLoopBackOff.
+		RegisterRetryInitial:     durationOrDefault("REGISTER_RETRY_INITIAL", time.Second),
+		RegisterRetryMaxInterval: durationOrDefault("REGISTER_RETRY_MAX_INTERVAL", 15*time.Second),
+		// 0 = retry until the process is signaled. Default covers slow cluster boots.
+		RegisterRetryTimeout: durationOrDefault("REGISTER_RETRY_TIMEOUT", 15*time.Minute),
 	}
 }
 
@@ -419,9 +427,17 @@ func (a *Agent) Run() error {
 		return fmt.Errorf("firewall setup: %w", err)
 	}
 
+	// Serve /metrics before registration so startupProbe stays healthy while we
+	// wait for wg-manager during cluster boot races.
+	go func() {
+		if err := a.metrics.Start(); err != nil {
+			a.logger.Error("Metrics server error", zap.Error(err))
+		}
+	}()
+
 	a.managerClient = NewAgentClient(a.cfg.ManagerEndpoint, a.cfg.AuthToken)
 
-	resp, err := a.registerWithManager(ctx)
+	resp, err := a.registerWithManagerRetry(ctx)
 	if err != nil {
 		return fmt.Errorf("register with manager: %w", err)
 	}
@@ -436,12 +452,6 @@ func (a *Agent) Run() error {
 
 	a.logger.Info("Registered with wg-manager",
 		zap.String("server_id", resp.ServerID))
-
-	go func() {
-		if err := a.metrics.Start(); err != nil {
-			a.logger.Error("Metrics server error", zap.Error(err))
-		}
-	}()
 
 	go a.heartbeatLoop(ctx)
 
