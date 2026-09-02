@@ -196,6 +196,18 @@ func (s *AuthService) DeleteAccount(ctx context.Context, accountID string) error
 	return nil
 }
 
+// ConfirmPassword verifies the account's password for sensitive actions (delete, logout-all).
+func (s *AuthService) ConfirmPassword(ctx context.Context, accountID, password string) error {
+	acc, err := s.db.GetAccountByID(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("account not found")
+	}
+	if acc.PasswordHash == nil || !libcrypto.CheckPassword(password, *acc.PasswordHash) {
+		return fmt.Errorf("incorrect password")
+	}
+	return nil
+}
+
 // LogoutAllSessions revokes every refresh token for the account and blacklists
 // the caller's current access token so it cannot be reused until it expires.
 func (s *AuthService) LogoutAllSessions(ctx context.Context, accountID, accessToken string) error {
@@ -358,7 +370,7 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, emailAddr string
 	)
 
 	if s.email != nil {
-		resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.cfg.PublicBaseURL, token)
+		resetURL := fmt.Sprintf("%s/reset-password#token=%s", s.cfg.PublicBaseURL, token)
 		if err := s.email.Send(ctx, email.SendRequest{
 			From:    "VeritasVPN <noreply@veritasvpn.cloud>",
 			To:      emailAddr,

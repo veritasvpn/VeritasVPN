@@ -133,20 +133,26 @@ spec:
             # not ~5m, to cut add/remove/stale churn vs the bandwidth reconciler.
             - name: PEER_STALE_AFTER
               value: "30m"
-            # hostNetwork + in-cluster scrape require a non-loopback bind.
-            # WAN/LAN exposure is blocked by deploy/node/veritas-firewall.sh.
+            # Prefer loopback. hostNetwork probes use host:127.0.0.1 below.
+            # Prefer ClusterIP scrape (headless service) over NodePort; if a
+            # non-loopback bind is ever required, block WAN/LAN via host firewall
+            # (deploy/node/veritas-firewall.sh) rather than exposing NodePort.
             - name: METRICS_BIND
-              value: "0.0.0.0"
+              value: "127.0.0.1"
             - name: METRICS_PORT
               value: "9090"
+            - name: AGENT_TOKEN_FILE
+              value: "/var/lib/veritasvpn/agent/token"
           ports:
             - containerPort: 9090
               name: metrics
           startupProbe:
             # Live agent image serves Prometheus on /metrics; /healthz lands with newer builds.
+            # hostNetwork + loopback bind: probe localhost on the node.
             httpGet:
               path: /metrics
               port: metrics
+              host: 127.0.0.1
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 12
@@ -154,6 +160,7 @@ spec:
             httpGet:
               path: /metrics
               port: metrics
+              host: 127.0.0.1
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
@@ -161,6 +168,7 @@ spec:
             httpGet:
               path: /metrics
               port: metrics
+              host: 127.0.0.1
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
@@ -170,6 +178,8 @@ spec:
               readOnly: true
             - name: dns-state
               mountPath: /var/lib/veritasvpn/dns
+            - name: agent-state
+              mountPath: /var/lib/veritasvpn/agent
           resources:
             requests:
               cpu: 50m
@@ -185,4 +195,8 @@ spec:
         - name: dns-state
           hostPath:
             path: /var/lib/veritasvpn/dns
+            type: DirectoryOrCreate
+        - name: agent-state
+          hostPath:
+            path: /var/lib/veritasvpn/agent
             type: DirectoryOrCreate

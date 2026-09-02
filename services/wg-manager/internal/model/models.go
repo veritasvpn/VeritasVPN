@@ -3,21 +3,23 @@ package model
 import "time"
 
 type Server struct {
-	ID         string    `db:"id"`
-	Hostname   string    `db:"hostname"`
-	Region     string    `db:"region"`
-	City       string    `db:"city"`
-	Country    string    `db:"country"`
-	PublicIP   string    `db:"public_ip"`
-	WGPort     int32     `db:"wg_port"`
-	PublicKey  string    `db:"public_key"`
-	Status     string    `db:"status"`
-	Capacity   int32     `db:"capacity"`
-	LoadFactor float64   `db:"load_factor"`
-	WGSubnet   string    `db:"wg_subnet"`
-	DNSServer  string    `db:"dns_server"`
-	CreatedAt  time.Time `db:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at"`
+	ID                 string     `db:"id"`
+	Hostname           string     `db:"hostname"`
+	Region             string     `db:"region"`
+	City               string     `db:"city"`
+	Country            string     `db:"country"`
+	PublicIP           string     `db:"public_ip"`
+	WGPort             int32      `db:"wg_port"`
+	PublicKey          string     `db:"public_key"`
+	Status             string     `db:"status"`
+	Capacity           int32      `db:"capacity"`
+	LoadFactor         float64    `db:"load_factor"`
+	WGSubnet           string     `db:"wg_subnet"`
+	DNSServer          string     `db:"dns_server"`
+	AgentTokenHash     string     `db:"agent_token_hash"`
+	AgentTokenIssuedAt *time.Time `db:"agent_token_issued_at"`
+	CreatedAt          time.Time  `db:"created_at"`
+	UpdatedAt          time.Time  `db:"updated_at"`
 }
 
 type Peer struct {

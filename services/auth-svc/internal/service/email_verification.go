@@ -85,7 +85,7 @@ func (s *AuthService) RegisterPendingEmail(ctx context.Context, emailAddr, passw
 func stringPtr(value string) *string { return &value }
 
 func (s *AuthService) sendVerificationEmail(ctx context.Context, emailAddr, token string) error {
-	verifyURL := fmt.Sprintf("%s/verify-email.html?token=%s", strings.TrimRight(s.cfg.PublicBaseURL, "/"), url.QueryEscape(token))
+	verifyURL := fmt.Sprintf("%s/verify-email.html#token=%s", strings.TrimRight(s.cfg.PublicBaseURL, "/"), url.QueryEscape(token))
 	return s.email.Send(ctx, email.SendRequest{From: "VeritasVPN <noreply@veritasvpn.cloud>", To: emailAddr,
 		Subject: "Verify your VeritasVPN email", HTML: verificationEmailHTML(verifyURL)})
 }

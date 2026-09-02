@@ -10,6 +10,7 @@ import {
   startPremiumCheckout,
   cancelSubscription,
 } from '/js/billing.js?v=6';
+import { TURNSTILE_SITE_KEY } from '/js/config.js';
 
 const content = document.getElementById('accountContent');
 const shell = document.getElementById('accountShell');
@@ -33,16 +34,40 @@ async function authApiFetch(url, options = {}) {
   return data;
 }
 
-async function deleteCurrentAccount() {
-  await authApiFetch("https://api.veritasvpn.cloud/api/v1/auth/account", { method: "DELETE" });
+function shortId(id) {
+  if (!id) return '—';
+  return id.length <= 10 ? id : id.slice(0, 8) + '…';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function deleteCurrentAccount({ password, turnstileToken } = {}) {
+  const body = {};
+  if (password) body.password = password;
+  if (turnstileToken) body.turnstile_token = turnstileToken;
+  await authApiFetch("https://api.veritasvpn.cloud/api/v1/auth/account", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   await signOutHandler();
 }
 
-async function logoutAllSessions() {
+async function logoutAllSessions({ password, turnstileToken } = {}) {
+  const body = {};
+  if (password) body.password = password;
+  if (turnstileToken) body.turnstile_token = turnstileToken;
   await authApiFetch("https://api.veritasvpn.cloud/api/v1/auth/logout-all", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: "{}",
+    body: JSON.stringify(body),
   });
   await signOutHandler();
 }
@@ -85,9 +110,53 @@ async function deletePortForward(id) {
   });
 }
 
-function shortId(id) {
-  if (!id) return '—';
-  return id.length <= 10 ? id : id.slice(0, 8) + '…';
+async function confirmSensitiveAction(label) {
+  const user = auth.currentUser;
+  if (user?.email) {
+    const password = window.prompt(`${label}\nEnter your password to confirm:`) || '';
+    if (!password) throw new Error('Password required.');
+    return { password, turnstileToken: '' };
+  }
+  if (!TURNSTILE_SITE_KEY) {
+    throw new Error('Verification is required but Turnstile is not configured.');
+  }
+  return new Promise((resolve, reject) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.72);display:grid;place-items:center;z-index:9999;padding:24px;';
+    overlay.innerHTML = `<div style="background:#12141c;border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:24px;max-width:360px;width:100%;color:#e8e8ef;font-family:inherit;">
+      <p style="margin:0 0 16px;">${escapeHtml(label)}</p>
+      <p style="margin:0 0 12px;color:#9aa0b4;font-size:14px;">Complete the check to continue.</p>
+      <div id="accountConfirmTurnstile"></div>
+      <button type="button" data-cancel style="margin-top:16px;" class="btn btn-outline">Cancel</button>
+    </div>`;
+    document.body.appendChild(overlay);
+    const cleanup = () => overlay.remove();
+    overlay.querySelector('[data-cancel]')?.addEventListener('click', () => {
+      cleanup();
+      reject(new Error('Cancelled.'));
+    });
+    const script = document.createElement('script');
+    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+    script.onload = () => {
+      window.turnstile.render('#accountConfirmTurnstile', {
+        sitekey: TURNSTILE_SITE_KEY,
+        theme: 'dark',
+        callback: (token) => {
+          cleanup();
+          resolve({ password: '', turnstileToken: token });
+        },
+        'error-callback': () => {
+          cleanup();
+          reject(new Error('Verification failed.'));
+        },
+      });
+    };
+    script.onerror = () => {
+      cleanup();
+      reject(new Error('Could not load verification.'));
+    };
+    document.head.appendChild(script);
+  });
 }
 
 let peersCache = [];
@@ -126,7 +195,7 @@ function showFlash(message, type = 'ok') {
 
 function renderFlash() {
   if (!flash) return '';
-  return `<div class="account-flash ${flash.type}">${flash.message}</div>`;
+  return `<div class="account-flash ${escapeHtml(flash.type)}">${escapeHtml(flash.message)}</div>`;
 }
 
 function planName(status) {
@@ -299,11 +368,11 @@ function renderAccount(user) {
       <div class="account-card">
         ${!isAnonymous ? `
         <p class="plan-card-meta">Email</p>
-        <div class="plan-card-title" style="font-size:18px;">${user.email}</div>
+        <div class="plan-card-title" style="font-size:18px;">${escapeHtml(user.email)}</div>
         ` : ''}
         <p class="plan-card-meta" style="${isAnonymous ? '' : 'margin-top:12px;'}">Account ID</p>
         <code style="font-size:12px;color:var(--text-muted);word-break:break-all;">${
-          user.account_id || '—'
+          escapeHtml(user.account_id || '—')
         }</code>
         <div class="account-actions">
           ${!isAnonymous ? '<button type="button" class="btn btn-outline" data-action="reset-password">Send password reset email</button>' : ''}
@@ -343,11 +412,11 @@ function renderDevices() {
       <div class="account-card" style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;">
           <div>
-            <strong>Device ${short}</strong>
-            <p class="plan-card-meta" style="margin:6px 0 0;">IP ${ip} · ${status}${created ? ' · ' + created : ''}</p>
-            <p class="plan-card-meta" style="margin:4px 0 0;">DNS threats blocked: ${blocked}</p>
+            <strong>Device ${escapeHtml(short)}</strong>
+            <p class="plan-card-meta" style="margin:6px 0 0;">IP ${escapeHtml(ip)} · ${escapeHtml(status)}${created ? ' · ' + escapeHtml(created) : ''}</p>
+            <p class="plan-card-meta" style="margin:4px 0 0;">DNS threats blocked: ${escapeHtml(blocked)}</p>
           </div>
-          <button type="button" class="btn btn-outline btn-sm" data-action="revoke-peer" data-peer-id="${id}">Revoke</button>
+          <button type="button" class="btn btn-outline btn-sm" data-action="revoke-peer" data-peer-id="${escapeHtml(id)}">Revoke</button>
         </div>
       </div>`;
   }).join('');
@@ -372,7 +441,7 @@ function renderPortForwards() {
   const isPremium = !!billingStatus?.is_premium;
   const peerOptions = peersCache.map((p) => {
     const id = p.id || p.peer_id || '';
-    return `<option value="${id}">${shortId(id)} · ${p.assigned_ip || '—'}</option>`;
+    return `<option value="${escapeHtml(id)}">${escapeHtml(shortId(id))} · ${escapeHtml(p.assigned_ip || '—')}</option>`;
   }).join('');
   const rows = portForwardsCache.map((pf) => {
     const id = pf.id || '';
@@ -385,10 +454,10 @@ function renderPortForwards() {
       <div class="account-card" style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;">
           <div>
-            <strong class="pf-endpoint">${endpoint}</strong>
-            <p class="plan-card-meta" style="margin:6px 0 0;">→ peer ${peer} · ${proto} · internal ${internal} · ${status}</p>
+            <strong class="pf-endpoint">${escapeHtml(endpoint)}</strong>
+            <p class="plan-card-meta" style="margin:6px 0 0;">→ peer ${escapeHtml(peer)} · ${escapeHtml(proto)} · internal ${escapeHtml(internal)} · ${escapeHtml(status)}</p>
           </div>
-          <button type="button" class="btn btn-outline btn-sm" data-action="delete-port-forward" data-pf-id="${id}">Delete</button>
+          <button type="button" class="btn btn-outline btn-sm" data-action="delete-port-forward" data-pf-id="${escapeHtml(id)}">Delete</button>
         </div>
       </div>`;
   }).join('');
@@ -404,7 +473,7 @@ function renderPortForwards() {
         <button type="button" class="btn btn-outline btn-sm" data-action="refresh-port-forwards">Refresh</button>
       </div>
       <div class="account-card" style="margin-bottom:16px;">
-        <p class="pf-help">Premium only. Traffic arrives on the node public IP (not Cloudflare HTTP). Open matching ports on your router toward the VPN node. Recommended external ports: <strong>40000–49999</strong>.</p>
+        <p class="pf-help">Premium only. Traffic arrives on the node public IP (not Cloudflare HTTP). Open matching ports on your router toward the VPN node. External ports must be <strong>40000–49999</strong>.</p>
       </div>
       ${!isPremium ? '<div class="account-card"><p>Port forwarding requires VeritasVPN Premium. <a href="#/subscription">Upgrade →</a></p></div>' : ''}
       ${!portForwardsLoaded ? '<p class="account-loading">Loading port forwards…</p>' : ''}
@@ -431,7 +500,7 @@ function renderPortForwards() {
             </div>
             <div class="pf-form-row">
               <label for="pf-external">External port</label>
-              <input id="pf-external" name="external_port" type="number" min="1" max="65535" placeholder="40000–49999" required>
+              <input id="pf-external" name="external_port" type="number" min="40000" max="49999" placeholder="40000–49999" required>
             </div>
           </div>
           <div class="pf-form-row">
@@ -571,18 +640,19 @@ async function onAction(action, btn) {
       return;
     }
     if (action === 'delete-account') {
-      const confirmed = confirm('Delete your account permanently? This cannot be undone.');
-      if (!confirmed) return;
+      if (!confirm('Delete your account permanently? This cannot be undone.')) return;
+      const { password, turnstileToken } = await confirmSensitiveAction('Confirm account deletion');
       btn.disabled = true;
       btn.textContent = 'Deleting account…';
-      await deleteCurrentAccount();
+      await deleteCurrentAccount({ password, turnstileToken });
       window.location.replace('/?account_deleted=1');
       return;
     }
     if (action === 'logout-all') {
       if (!confirm('Sign out of VeritasVPN on all devices and browsers?')) return;
+      const { password, turnstileToken } = await confirmSensitiveAction('Confirm sign-out everywhere');
       btn.disabled = true;
-      await logoutAllSessions();
+      await logoutAllSessions({ password, turnstileToken });
       window.location.href = '/';
       return;
     }
@@ -652,6 +722,12 @@ content.addEventListener('submit', async (e) => {
       render();
       return;
     }
+    const portNum = Number(externalPort);
+    if (!Number.isInteger(portNum) || portNum < 40000 || portNum > 49999) {
+      showFlash('External port must be between 40000 and 49999.', 'error');
+      render();
+      return;
+    }
     if (submitBtn) {
       submitBtn.disabled = true;
       submitBtn.textContent = 'Creating…';
@@ -682,8 +758,14 @@ signOutBtn?.addEventListener('click', async () => {
 
 signOutAllBtn?.addEventListener('click', async () => {
   if (!confirm('Sign out of VeritasVPN on all devices and browsers?')) return;
-  await logoutAllSessions();
-  window.location.href = '/';
+  try {
+    const { password, turnstileToken } = await confirmSensitiveAction('Confirm sign-out everywhere');
+    await logoutAllSessions({ password, turnstileToken });
+    window.location.href = '/';
+  } catch (err) {
+    showFlash(err.message || 'Could not sign out everywhere', 'error');
+    render();
+  }
 });
 
 mobileNavBtn?.addEventListener('click', () => {

@@ -35,14 +35,15 @@ func NewAuthInterceptor(log *logging.Logger, jwt *jwtlib.Manager, redis *reposit
 
 func (i *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		if err := i.authorize(ctx, info.FullMethod); err != nil {
+		newCtx, err := i.authorize(ctx, info.FullMethod)
+		if err != nil {
 			return nil, err
 		}
-		return handler(ctx, req)
+		return handler(newCtx, req)
 	}
 }
 
-func (i *AuthInterceptor) authorize(ctx context.Context, method string) error {
+func (i *AuthInterceptor) authorize(ctx context.Context, method string) (context.Context, error) {
 	methods := []string{
 		"/auth.v1.AuthService/Register",
 		"/auth.v1.AuthService/RefreshToken",
@@ -51,23 +52,23 @@ func (i *AuthInterceptor) authorize(ctx context.Context, method string) error {
 
 	for _, m := range methods {
 		if method == m {
-			return nil
+			return ctx, nil
 		}
 	}
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return status.Error(codes.Unauthenticated, "metadata is missing")
+		return nil, status.Error(codes.Unauthenticated, "metadata is missing")
 	}
 
 	values := md.Get("authorization")
 	if len(values) == 0 {
-		return status.Error(codes.Unauthenticated, "authorization token is missing")
+		return nil, status.Error(codes.Unauthenticated, "authorization token is missing")
 	}
 
 	token := strings.TrimPrefix(values[0], "Bearer ")
 	if token == values[0] {
-		return status.Error(codes.Unauthenticated, "malformed authorization header")
+		return nil, status.Error(codes.Unauthenticated, "malformed authorization header")
 	}
 
 	tokenHash := hashToken(token)
@@ -75,23 +76,21 @@ func (i *AuthInterceptor) authorize(ctx context.Context, method string) error {
 	blacklisted, err := i.redis.IsTokenBlacklisted(ctx, tokenHash)
 	if err != nil {
 		i.log.Error("failed to check token blacklist", zap.Error(err))
-		return status.Error(codes.Internal, "internal error")
+		return nil, status.Error(codes.Internal, "internal error")
 	}
 	if blacklisted {
-		return status.Error(codes.Unauthenticated, "token has been revoked")
+		return nil, status.Error(codes.Unauthenticated, "token has been revoked")
 	}
 
 	claims, err := i.jwt.ValidateAccessToken(token)
 	if err != nil {
-		return status.Error(codes.Unauthenticated, "invalid or expired token")
+		return nil, status.Error(codes.Unauthenticated, "invalid or expired token")
 	}
 
 	newCtx := context.WithValue(ctx, AccountIDKey, claims.AccountID)
 	newCtx = context.WithValue(newCtx, TierKey, claims.Tier)
 
-	_ = newCtx
-
-	return nil
+	return newCtx, nil
 }
 
 func hashToken(token string) string {

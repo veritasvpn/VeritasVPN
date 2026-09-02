@@ -25,10 +25,11 @@ type RegisterServerRequest struct {
 }
 
 type RegisterServerResponse struct {
-	ServerId  string `json:"server_id"`
-	WgSubnet  string `json:"wg_subnet"`
-	DnsServer string `json:"dns_server"`
-	Capacity  int32  `json:"capacity"`
+	ServerId   string `json:"server_id"`
+	WgSubnet   string `json:"wg_subnet"`
+	DnsServer  string `json:"dns_server"`
+	Capacity   int32  `json:"capacity"`
+	AgentToken string `json:"agent_token,omitempty"`
 }
 
 type HeartbeatRequest struct {
@@ -71,7 +72,7 @@ func (h *AgentHandler) RegisterServer(ctx context.Context, req *RegisterServerRe
 		return nil, status.Error(codes.InvalidArgument, "auth_token is required")
 	}
 
-	srv, err := h.svc.RegisterServer(ctx,
+	srv, agentToken, err := h.svc.RegisterServer(ctx,
 		req.Hostname,
 		req.PublicKey,
 		req.PublicIp,
@@ -87,10 +88,11 @@ func (h *AgentHandler) RegisterServer(ctx context.Context, req *RegisterServerRe
 	}
 
 	return &RegisterServerResponse{
-		ServerId:  srv.ID,
-		WgSubnet:  srv.WGSubnet,
-		DnsServer: srv.DNSServer,
-		Capacity:  srv.Capacity,
+		ServerId:   srv.ID,
+		WgSubnet:   srv.WGSubnet,
+		DnsServer:  srv.DNSServer,
+		Capacity:   srv.Capacity,
+		AgentToken: agentToken,
 	}, nil
 }
 

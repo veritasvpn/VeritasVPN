@@ -52,6 +52,7 @@
         <p class="check-note">Prefer an address you are comfortable typing. Anonymous Veritas accounts do not require email.</p>
         <form class="check-breach-form" id="breachForm">
           <input id="email" name="email" type="email" autocomplete="email" required placeholder="you@example.com" aria-label="Email address">
+          <div id="breachTurnstile" class="check-turnstile" hidden></div>
           <button type="submit" class="btn btn-primary" id="runCheck">Check breaches</button>
         </form>
         <div class="check-status" id="status" data-state="">Ready</div>

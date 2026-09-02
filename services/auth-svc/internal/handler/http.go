@@ -188,11 +188,16 @@ func (h *HTTPHandler) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email          string `json:"email"`
+		Password       string `json:"password"`
+		TurnstileToken string `json:"turnstile_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeHTTPError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
 		return
 	}
 
@@ -325,6 +330,30 @@ func (h *HTTPHandler) handleDeleteAccount(w http.ResponseWriter, r *http.Request
 	claims, err := h.service.ValidateToken(r.Context(), token)
 	if err != nil {
 		writeHTTPError(w, http.StatusUnauthorized, "invalid token")
+		return
+	}
+
+	var req struct {
+		Password       string `json:"password"`
+		TurnstileToken string `json:"turnstile_token"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	acc, err := h.service.GetAccount(r.Context(), claims.AccountID)
+	if err != nil {
+		writeHTTPError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	if acc.Email != nil && strings.TrimSpace(*acc.Email) != "" {
+		if strings.TrimSpace(req.Password) == "" {
+			writeHTTPError(w, http.StatusBadRequest, "password required to delete account")
+			return
+		}
+		if err := h.service.ConfirmPassword(r.Context(), claims.AccountID, req.Password); err != nil {
+			writeHTTPError(w, http.StatusUnauthorized, "incorrect password")
+			return
+		}
+	} else if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
 		return
 	}
 
@@ -475,6 +504,30 @@ func (h *HTTPHandler) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req struct {
+		Password       string `json:"password"`
+		TurnstileToken string `json:"turnstile_token"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	acc, err := h.service.GetAccount(r.Context(), claims.AccountID)
+	if err != nil {
+		writeHTTPError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	if acc.Email != nil && strings.TrimSpace(*acc.Email) != "" {
+		if strings.TrimSpace(req.Password) == "" {
+			writeHTTPError(w, http.StatusBadRequest, "password required to sign out all sessions")
+			return
+		}
+		if err := h.service.ConfirmPassword(r.Context(), claims.AccountID, req.Password); err != nil {
+			writeHTTPError(w, http.StatusUnauthorized, "incorrect password")
+			return
+		}
+	} else if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
+		return
+	}
+
 	if err := h.service.LogoutAllSessions(r.Context(), claims.AccountID, token); err != nil {
 		h.log.Error("logout-all failed", zap.String("account_hash", logging.HashIdentifier(claims.AccountID)), zap.Error(err))
 		writeHTTPError(w, http.StatusInternalServerError, "failed to logout all sessions")
@@ -496,10 +549,15 @@ func (h *HTTPHandler) handleSignInAccount(w http.ResponseWriter, r *http.Request
 	}
 
 	var req struct {
-		AccountID string `json:"account_id"`
+		AccountID      string `json:"account_id"`
+		TurnstileToken string `json:"turnstile_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeHTTPError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
 		return
 	}
 

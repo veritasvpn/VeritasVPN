@@ -123,7 +123,7 @@ func main() {
 	if err != nil {
 		log.Fatal("invalid JWT verifier configuration", "error", err)
 	}
-	httpHandler := handler.NewHTTPHandler(svc, sseHub, pool, svcMetrics, jwtManager, cfg.AgentAuthToken, log)
+	httpHandler := handler.NewHTTPHandler(svc, sseHub, pool, redisRepo, svcMetrics, jwtManager, log)
 	httpHandler.SetBrowserGateway(handler.BrowserGateway{
 		Scheme:           cfg.BrowserProxyScheme,
 		Host:             cfg.BrowserProxyHost,

@@ -23,9 +23,9 @@ spec:
   selector:
     app: registry
 ---
-# Host-local build/push endpoint. Bound only on loopback via hostPort so the
-# registry is never reachable from LAN/WAN. Prefer:
-#   docker tag ... localhost:31500/svc:tag && docker push localhost:31500/svc:tag
+# Host-local build/push endpoint. Prefer ClusterIP + kubectl port-forward.
+# NodePort 31500 MUST remain firewalled from LAN/WAN (nftables drop on non-loopback).
+# On the node: docker tag ... localhost:31500/svc:tag && docker push localhost:31500/svc:tag
 apiVersion: v1
 kind: Service
 metadata:

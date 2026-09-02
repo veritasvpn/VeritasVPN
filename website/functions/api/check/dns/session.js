@@ -1,19 +1,4 @@
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-      ...cors,
-    },
-  });
-}
+import { jsonResponse, rateLimit } from "../../../_lib/security.js";
 
 function randomToken(bytes = 8) {
   const arr = new Uint8Array(bytes);
@@ -23,13 +8,19 @@ function randomToken(bytes = 8) {
 
 /**
  * DNS leak sessions for the browser probe.
- * The browser repeatedly fetches https://edns.ip-api.com/json (following
- * redirects to unique hostnames) so recursive resolvers become visible.
+ * Same-origin only; rate-limited.
  */
-export async function onRequestPost() {
+export async function onRequestPost(context) {
+  const limited = await rateLimit(context.request, {
+    bucket: "check-dns-session",
+    limit: 20,
+    windowSec: 60,
+  });
+  if (limited) return limited;
+
   const id = randomToken(8);
   const probes = 6;
-  return json({
+  return jsonResponse({
     sessionId: id,
     probes,
     probeUrl: "https://edns.ip-api.com/json",
@@ -42,13 +33,15 @@ export async function onRequestPost() {
 
 export function onRequest(context) {
   if (context.request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: cors });
+    return new Response(null, {
+      status: 204,
+      headers: { Allow: "POST", "Cache-Control": "no-store" },
+    });
   }
   if (context.request.method === "POST") {
     return onRequestPost(context);
   }
-  return new Response("Method Not Allowed", {
-    status: 405,
-    headers: { Allow: "POST, OPTIONS", ...cors },
+  return jsonResponse({ error: "Method Not Allowed" }, 405, {
+    Allow: "POST",
   });
 }

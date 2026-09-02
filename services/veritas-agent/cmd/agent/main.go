@@ -41,10 +41,11 @@ type RegisterServerRequest struct {
 }
 
 type RegisterServerResponse struct {
-	ServerID  string `json:"server_id"`
-	WGSubnet  string `json:"wg_subnet"`
-	DNSServer string `json:"dns_server"`
-	Capacity  int32  `json:"capacity"`
+	ServerID   string `json:"server_id"`
+	WGSubnet   string `json:"wg_subnet"`
+	DNSServer  string `json:"dns_server"`
+	Capacity   int32  `json:"capacity"`
+	AgentToken string `json:"agent_token,omitempty"`
 }
 
 type HeartbeatRequest struct {
@@ -91,6 +92,10 @@ func NewAgentClient(endpoint, authToken string) *httpAgentClient {
 			Timeout: 10 * time.Second,
 		},
 	}
+}
+
+func (c *httpAgentClient) SetAuthToken(token string) {
+	c.authToken = token
 }
 
 func (c *httpAgentClient) streamClient() *http.Client {
@@ -279,7 +284,9 @@ func urlQueryEscape(s string) string {
 
 type AgentConfig struct {
 	AuthToken   string
-	WGInterface string
+	// AgentTokenFile stores the per-server token returned once at register.
+	AgentTokenFile string
+	WGInterface    string
 	// WGPort is the local listener; WGPublicPort is advertised to clients.
 	// They differ when the router forwards public UDP 443 to Dell UDP 51820.
 	WGPort                int
@@ -313,13 +320,14 @@ func LoadAgentConfig() *AgentConfig {
 
 	return &AgentConfig{
 		AuthToken:             os.Getenv("AGENT_AUTH_TOKEN"),
+		AgentTokenFile:        envOrDefault("AGENT_TOKEN_FILE", "/var/lib/veritasvpn/agent/token"),
 		WGInterface:           envOrDefault("WG_INTERFACE", "wg0"),
 		WGPort:                port,
 		WGPublicPort:          publicPort,
 		WGSubnet:              os.Getenv("WG_SUBNET"),
 		ManagerEndpoint:       envOrDefault("MANAGER_ENDPOINT", "http://wg-manager:8080"),
 		MetricsPort:           envOrDefault("METRICS_PORT", "9090"),
-		MetricsBind:           envOrDefault("METRICS_BIND", "0.0.0.0"),
+		MetricsBind:           envOrDefault("METRICS_BIND", "127.0.0.1"),
 		ServerHostname:        envOrDefault("SERVER_HOSTNAME", hostname),
 		ServerRegion:          os.Getenv("SERVER_REGION"),
 		ServerCity:            os.Getenv("SERVER_CITY"),
@@ -371,8 +379,10 @@ type Agent struct {
 	metrics       *metrics.Metrics
 	managerClient AgentManagerClient
 	serverID      string
-	publicKey     string
-	startTime     time.Time
+	// agentToken is the per-server Bearer used after register (not the bootstrap secret).
+	agentToken string
+	publicKey  string
+	startTime  time.Time
 	prevRXBytes   int64
 	prevTXBytes   int64
 }
@@ -442,6 +452,22 @@ func (a *Agent) Run() error {
 		return fmt.Errorf("register with manager: %w", err)
 	}
 	a.serverID = resp.ServerID
+	if resp.AgentToken != "" {
+		if err := a.persistAgentToken(resp.AgentToken); err != nil {
+			a.logger.Warn("failed to persist agent token", zap.Error(err))
+		}
+		a.agentToken = resp.AgentToken
+		if c, ok := a.managerClient.(*httpAgentClient); ok {
+			c.SetAuthToken(resp.AgentToken)
+		}
+	} else if tok := a.loadPersistedAgentToken(); tok != "" {
+		a.agentToken = tok
+		if c, ok := a.managerClient.(*httpAgentClient); ok {
+			c.SetAuthToken(tok)
+		}
+	} else {
+		a.agentToken = a.cfg.AuthToken
+	}
 	if resp.WGSubnet != "" {
 		a.cfg.WGSubnet = resp.WGSubnet
 		addr := strings.Replace(resp.WGSubnet, ".0/24", ".1/24", 1)
@@ -563,10 +589,42 @@ func (a *Agent) registerWithManager(ctx context.Context) (*RegisterServerRespons
 		Region:    a.cfg.ServerRegion,
 		City:      a.cfg.ServerCity,
 		Country:   a.cfg.ServerCountry,
+		// Bootstrap always uses the global AGENT_AUTH_TOKEN; per-server token
+		// is minted by wg-manager and returned once in the response.
 		AuthToken: a.cfg.AuthToken,
 	}
 
 	return a.managerClient.RegisterServer(ctx, req)
+}
+
+func (a *Agent) persistAgentToken(token string) error {
+	path := a.cfg.AgentTokenFile
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(token), 0600)
+}
+
+func (a *Agent) loadPersistedAgentToken() string {
+	path := a.cfg.AgentTokenFile
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func (a *Agent) operationalAuthToken() string {
+	if a.agentToken != "" {
+		return a.agentToken
+	}
+	return a.cfg.AuthToken
 }
 
 func (a *Agent) heartbeatLoop(ctx context.Context) {
@@ -593,7 +651,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		a.metrics.OrphanPeerCount.Set(float64(remainingOrphans))
 		for _, stale := range a.peerManager.StalePeers(now, a.cfg.PeerNoHandshakeGrace, a.cfg.PeerStaleAfter) {
 			expireCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			err := a.managerClient.ReportPeerExpired(expireCtx, a.serverID, stale.PeerID, a.cfg.AuthToken)
+			err := a.managerClient.ReportPeerExpired(expireCtx, a.serverID, stale.PeerID, a.operationalAuthToken())
 			cancel()
 			if err != nil {
 				a.metrics.PeerExpiryFailures.Inc()
@@ -660,7 +718,7 @@ func (a *Agent) streamLoop(ctx context.Context) {
 		}
 
 		a.logger.Info("Connecting to peer update stream")
-		updates, errs := a.managerClient.StreamPeerUpdates(ctx, a.serverID, a.cfg.AuthToken)
+		updates, errs := a.managerClient.StreamPeerUpdates(ctx, a.serverID, a.operationalAuthToken())
 		a.metrics.PeerStreamConnected.Set(1)
 
 		for {
@@ -712,7 +770,7 @@ func (a *Agent) handlePeerUpdate(update *PeerUpdate) {
 		a.logger.Info("Peer added", zap.String("peer_id", update.PeerID))
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := a.managerClient.ReportPeerApplied(ctx, a.serverID, update.PeerID, a.cfg.AuthToken); err != nil {
+		if err := a.managerClient.ReportPeerApplied(ctx, a.serverID, update.PeerID, a.operationalAuthToken()); err != nil {
 			a.logger.Warn("Failed to report peer applied",
 				zap.String("peer_id", update.PeerID), zap.Error(err))
 		}

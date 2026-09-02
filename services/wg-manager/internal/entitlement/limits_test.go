@@ -73,13 +73,22 @@ func TestValidateExternalPort(t *testing.T) {
 	if err := ValidateExternalPort(40000); err != nil {
 		t.Fatal(err)
 	}
+	if err := ValidateExternalPort(49999); err != nil {
+		t.Fatal(err)
+	}
 	if err := ValidateExternalPort(51820); err == nil {
-		t.Fatal("expected reserved")
+		t.Fatal("expected out of range")
 	}
 	if err := ValidateExternalPort(20050); err == nil {
-		t.Fatal("expected reserved range")
+		t.Fatal("expected out of range")
 	}
 	if err := ValidateExternalPort(80); err == nil {
-		t.Fatal("expected reserved")
+		t.Fatal("expected out of range")
+	}
+	if err := ValidateExternalPort(39999); err == nil {
+		t.Fatal("expected out of range")
+	}
+	if err := ValidateExternalPort(50000); err == nil {
+		t.Fatal("expected out of range")
 	}
 }

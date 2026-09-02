@@ -12,37 +12,60 @@ export const SESSION_EXPIRED_EVENT = 'veritas-session-expired';
 let currentUser = null;
 let listeners = [];
 let authReady = false;
+/** Access JWT kept in memory only (not localStorage). */
+let memoryAccessToken = null;
 
 export function isLoggedIn() {
   return Boolean(getAccessToken());
 }
 
 function getAccessToken() {
-  return localStorage.getItem(STORAGE_KEYS.accessToken);
+  return memoryAccessToken || sessionStorage.getItem(STORAGE_KEYS.accessToken);
 }
 
 function getRefreshToken() {
-  return localStorage.getItem(STORAGE_KEYS.refreshToken);
+  return sessionStorage.getItem(STORAGE_KEYS.refreshToken);
 }
 
 function setSession(user, accessToken, refreshToken) {
-  localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
-  localStorage.setItem(STORAGE_KEYS.accessToken, accessToken);
-  localStorage.setItem(STORAGE_KEYS.refreshToken, refreshToken);
+  localStorage.removeItem(STORAGE_KEYS.accessToken);
+  localStorage.removeItem(STORAGE_KEYS.refreshToken);
+  localStorage.removeItem(STORAGE_KEYS.user);
+  sessionStorage.removeItem(STORAGE_KEYS.accessToken);
+  memoryAccessToken = accessToken || null;
+  if (refreshToken) sessionStorage.setItem(STORAGE_KEYS.refreshToken, refreshToken);
+  else sessionStorage.removeItem(STORAGE_KEYS.refreshToken);
+  if (user) sessionStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
+  else sessionStorage.removeItem(STORAGE_KEYS.user);
   currentUser = user;
 }
 
 function clearSession() {
+  memoryAccessToken = null;
   localStorage.removeItem(STORAGE_KEYS.user);
   localStorage.removeItem(STORAGE_KEYS.accessToken);
   localStorage.removeItem(STORAGE_KEYS.refreshToken);
+  sessionStorage.removeItem(STORAGE_KEYS.user);
+  sessionStorage.removeItem(STORAGE_KEYS.accessToken);
+  sessionStorage.removeItem(STORAGE_KEYS.refreshToken);
   currentUser = null;
 }
 
 function restoreSession() {
-  const raw = localStorage.getItem(STORAGE_KEYS.user);
+  const raw =
+    sessionStorage.getItem(STORAGE_KEYS.user) ||
+    localStorage.getItem(STORAGE_KEYS.user);
   if (!raw) return null;
   try {
+    const legacyAccess = localStorage.getItem(STORAGE_KEYS.accessToken);
+    const legacyRefresh =
+      localStorage.getItem(STORAGE_KEYS.refreshToken) ||
+      sessionStorage.getItem(STORAGE_KEYS.refreshToken);
+    if (legacyAccess || localStorage.getItem(STORAGE_KEYS.refreshToken)) {
+      const user = JSON.parse(raw);
+      setSession(user, legacyAccess, legacyRefresh);
+      return user;
+    }
     return JSON.parse(raw);
   } catch {
     return null;
@@ -278,10 +301,12 @@ async function registerAnonymous(turnstileToken) {
   return api('/api/v1/auth/register-anonymous', { method: 'POST', body: JSON.stringify(body) });
 }
 
-async function signInWithAccount(accountId) {
+async function signInWithAccount(accountId, turnstileToken) {
+  const body = { account_id: accountId };
+  if (turnstileToken) body.turnstile_token = turnstileToken;
   return api('/api/v1/auth/signin-account', {
     method: 'POST',
-    body: JSON.stringify({ account_id: accountId }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -403,7 +428,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   }
 
   function syncTurnstileForMode() {
-    if (mode === 'signup' || mode === 'anon-signup') {
+    if (mode === 'signup' || mode === 'anon-signup' || mode === 'signin' || mode === 'anon-signin') {
       showTurnstileWidget();
     } else {
       clearTurnstileWidget();
@@ -810,10 +835,14 @@ function renderUser(user) {
         setError('Enter your account ID.');
         return;
       }
+      if (!turnstileToken) {
+        setError('Complete the verification check before continuing.');
+        return;
+      }
       setBusy(true);
       try {
         pendingDashboardRedirect = redirectAfterAuth && shouldRedirectToDashboardAfterAuth();
-        const data = await signInWithAccount(accountId);
+        const data = await signInWithAccount(accountId, turnstileToken);
         const user = { account_id: data.account_id, is_anonymous: true };
         setSession(user, data.access_token, data.refresh_token);
         currentUser = user;
@@ -821,6 +850,7 @@ function renderUser(user) {
       } catch (err) {
         pendingDashboardRedirect = false;
         setError(mapAuthError(err.message));
+        resetTurnstileWidget();
       } finally {
         setBusy(false);
       }
@@ -833,7 +863,7 @@ function renderUser(user) {
       setError('Email and password are required.');
       return;
     }
-    if (mode === 'signup' && !turnstileToken) {
+    if ((mode === 'signup' || mode === 'signin') && !turnstileToken) {
       setError('Complete the verification check before continuing.');
       return;
     }
@@ -842,7 +872,7 @@ function renderUser(user) {
       pendingDashboardRedirect = redirectAfterAuth && shouldRedirectToDashboardAfterAuth();
       const endpoint = mode === 'signin' ? '/api/v1/auth/signin' : '/api/v1/auth/register';
       const payload = { email, password };
-      if (mode === 'signup' && turnstileToken) {
+      if (turnstileToken) {
         payload.turnstile_token = turnstileToken;
       }
       const data = await api(endpoint, {
@@ -866,7 +896,7 @@ function renderUser(user) {
       } else {
         setError(mapped);
       }
-      if (mode === 'signup') resetTurnstileWidget();
+      resetTurnstileWidget();
     } finally {
       setBusy(false);
     }

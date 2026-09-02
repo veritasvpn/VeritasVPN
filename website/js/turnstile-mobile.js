@@ -8,8 +8,7 @@ function requestedReturnOrigin() {
     if (['https://veritasvpn.cloud', 'https://www.veritasvpn.cloud', 'tauri://localhost', 'https://tauri.localhost', 'http://tauri.localhost'].includes(origin)) {
       return origin;
     }
-    const parsed = new URL(origin);
-    if (parsed.protocol === 'chrome-extension:' && /^[a-p]{32}$/.test(parsed.hostname)) return origin;
+    // Extension origins must be pinned explicitly — do not allow any chrome-extension host.
   } catch (_) {}
   return null;
 }

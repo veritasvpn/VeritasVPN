@@ -3,6 +3,14 @@ const statusEl = document.getElementById('status');
 const messageEl = document.getElementById('message');
 const resend = document.getElementById('resend');
 
+function tokenFromLocation() {
+  const hash = (location.hash || '').replace(/^#/, '');
+  if (hash.startsWith('token=')) return decodeURIComponent(hash.slice('token='.length));
+  const fromHash = new URLSearchParams(hash).get('token');
+  if (fromHash) return fromHash;
+  return new URLSearchParams(location.search).get('token') || '';
+}
+
 function failed() {
   statusEl.textContent = 'This link is invalid or expired';
   messageEl.textContent = 'Enter your email below and we will send a fresh single-use verification link.';
@@ -10,7 +18,7 @@ function failed() {
 }
 
 async function verify() {
-  const token = new URLSearchParams(location.search).get('token');
+  const token = tokenFromLocation();
   if (!token) {
     failed();
     return;

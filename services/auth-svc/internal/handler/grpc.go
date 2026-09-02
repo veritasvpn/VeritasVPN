@@ -6,6 +6,7 @@ import (
 
 	"github.com/veritasvpn/lib/logging"
 	authv1 "github.com/veritasvpn/api/gen/auth/v1"
+	"github.com/veritasvpn/services/auth-svc/internal/middleware"
 	"github.com/veritasvpn/services/auth-svc/internal/service"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -65,7 +66,15 @@ func (h *AuthHandler) ValidateToken(ctx context.Context, req *authv1.ValidateTok
 }
 
 func (h *AuthHandler) GetAccount(ctx context.Context, req *authv1.GetAccountRequest) (*authv1.GetAccountResponse, error) {
-	acc, err := h.service.GetAccount(ctx, req.AccountId)
+	accountID, err := middleware.AccountIDFromContext(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+	if req.AccountId != "" && req.AccountId != accountID {
+		return nil, status.Error(codes.PermissionDenied, "permission denied")
+	}
+
+	acc, err := h.service.GetAccount(ctx, accountID)
 	if err != nil {
 		h.log.Error("get account failed", zap.Error(err))
 		return nil, status.Error(codes.NotFound, "account not found")
@@ -86,7 +95,15 @@ func (h *AuthHandler) GetAccount(ctx context.Context, req *authv1.GetAccountRequ
 }
 
 func (h *AuthHandler) DeleteAccount(ctx context.Context, req *authv1.DeleteAccountRequest) (*authv1.DeleteAccountResponse, error) {
-	if err := h.service.DeleteAccount(ctx, req.AccountId); err != nil {
+	accountID, err := middleware.AccountIDFromContext(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+	if req.AccountId != "" && req.AccountId != accountID {
+		return nil, status.Error(codes.PermissionDenied, "permission denied")
+	}
+
+	if err := h.service.DeleteAccount(ctx, accountID); err != nil {
 		h.log.Error("delete account failed", zap.Error(err))
 		return nil, status.Error(codes.Internal, "failed to delete account")
 	}

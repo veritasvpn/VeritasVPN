@@ -16,7 +16,7 @@ const (
 
 	// PremiumMaxPortForwards is the max concurrent active/pending port forwards.
 	PremiumMaxPortForwards = 2
-	// RecommendedExternalPortMin/Max are suggested to clients in API errors.
+	// RecommendedExternalPortMin/Max are the enforced external port range.
 	RecommendedExternalPortMin = 40000
 	RecommendedExternalPortMax = 49999
 )
@@ -171,13 +171,13 @@ func IsReservedExternalPort(port int) bool {
 }
 
 // ValidateExternalPort checks range and reserved ports. On failure the message
-// recommends the 40000-49999 range.
+// requires the 40000-49999 range.
 func ValidateExternalPort(port int) error {
-	if port < 1024 || port > 65535 {
+	if port < RecommendedExternalPortMin || port > RecommendedExternalPortMax {
 		return &PlanError{
 			Code: "invalid_external_port",
 			Message: fmt.Sprintf(
-				"external_port must be between 1024 and 65535 (recommended %d-%d)",
+				"external_port must be between %d and %d",
 				RecommendedExternalPortMin, RecommendedExternalPortMax,
 			),
 		}

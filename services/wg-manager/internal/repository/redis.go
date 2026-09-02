@@ -25,6 +25,14 @@ func (r *Redis) Client() *redis.Client {
 	return r.client
 }
 
+// IsTokenBlacklisted reports whether an access-token hash was revoked (logout).
+// Key format matches auth-svc / billing-svc: blacklist:{sha256hex}.
+func (r *Redis) IsTokenBlacklisted(ctx context.Context, tokenHash string) (bool, error) {
+	key := fmt.Sprintf("blacklist:%s", tokenHash)
+	exists, err := r.client.Exists(ctx, key).Result()
+	return exists > 0, err
+}
+
 func (r *Redis) AllocateIP(ctx context.Context, serverID, subnet string) (string, error) {
 	bitmapKey := fmt.Sprintf("ip_pool:%s:bitmap", serverID)
 

@@ -116,6 +116,34 @@ spec:
         - port: 8222
           protocol: TCP
 ---
+# auth-svc gRPC (HTTP port + 1000) is intentionally not published via Service.
+# deny-all-ingress already blocks it; allow only in-cluster callers that need it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-auth-grpc-internal
+  namespace: veritas
+spec:
+  podSelector:
+    matchLabels:
+      app: auth-svc
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: wg-manager
+        - podSelector:
+            matchLabels:
+              app: billing-svc
+        - podSelector:
+            matchLabels:
+              app: nginx
+      ports:
+        - port: 9080
+          protocol: TCP
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

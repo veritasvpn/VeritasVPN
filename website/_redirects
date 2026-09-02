@@ -1,5 +1,9 @@
 /index.html  /  301
 /downloads-v2.html  /downloads.html  301
 /install/windows-v2.html  /install/windows.html  301
+/account/index-v2.html  /account/  301
+/install-staging/*  /install/:splat  301
+/install-staging  /install/  301
+/js-v2/*  /js/:splat  301
 /check  /check/  301
 https://www.veritasvpn.cloud/*  https://veritasvpn.cloud/:splat  301

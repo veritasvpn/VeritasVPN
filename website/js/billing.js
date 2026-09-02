@@ -47,7 +47,7 @@ export async function startPremiumCheckout(paymentMethod = 'btcpay', planId = 'p
   if (!allowed) {
     throw new Error('No checkout URL returned');
   }
-  window.open(checkoutUrl, '_blank');
+  window.open(checkoutUrl, '_blank', 'noopener,noreferrer');
 }
 
 export async function cancelSubscription() {

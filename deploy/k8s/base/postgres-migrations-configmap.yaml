@@ -154,3 +154,7 @@ data:
     ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_payment_method_check;
     ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_payment_method_check
         CHECK (payment_method IN ('stripe', 'btcpay', 'none'));
+
+  008_wg_agent_token.sql: |
+    ALTER TABLE servers ADD COLUMN IF NOT EXISTS agent_token_hash TEXT;
+    ALTER TABLE servers ADD COLUMN IF NOT EXISTS agent_token_issued_at TIMESTAMPTZ;

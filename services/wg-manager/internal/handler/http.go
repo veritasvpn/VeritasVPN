@@ -13,9 +13,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	jwtlib "github.com/veritasvpn/lib/jwt"
 	"github.com/veritasvpn/lib/logging"
+	"github.com/veritasvpn/lib/tokenhash"
 	"github.com/veritasvpn/services/wg-manager/internal/entitlement"
 	"github.com/veritasvpn/services/wg-manager/internal/hub"
 	"github.com/veritasvpn/services/wg-manager/internal/metrics"
+	"github.com/veritasvpn/services/wg-manager/internal/repository"
 	"github.com/veritasvpn/services/wg-manager/internal/service"
 )
 
@@ -23,9 +25,9 @@ type HTTPHandler struct {
 	svc            *service.Service
 	hub            *hub.Hub
 	pool           *pgxpool.Pool
+	redis          *repository.Redis
 	metrics        *metrics.Metrics
 	jwtManager     *jwtlib.Manager
-	authToken      string
 	log            *logging.Logger
 	browserGateway BrowserGateway
 }
@@ -37,14 +39,14 @@ type BrowserGateway struct {
 	ExpectedEgressIP string `json:"expected_egress_ip"`
 }
 
-func NewHTTPHandler(svc *service.Service, h *hub.Hub, pool *pgxpool.Pool, m *metrics.Metrics, jwtManager *jwtlib.Manager, authToken string, log *logging.Logger) *HTTPHandler {
+func NewHTTPHandler(svc *service.Service, h *hub.Hub, pool *pgxpool.Pool, redis *repository.Redis, m *metrics.Metrics, jwtManager *jwtlib.Manager, log *logging.Logger) *HTTPHandler {
 	return &HTTPHandler{
 		svc:        svc,
 		hub:        h,
 		pool:       pool,
+		redis:      redis,
 		metrics:    m,
 		jwtManager: jwtManager,
-		authToken:  authToken,
 		log:        log,
 	}
 }
@@ -171,7 +173,7 @@ func (h *HTTPHandler) handleAgentRegister(w http.ResponseWriter, r *http.Request
 		req.Country = "XX"
 	}
 
-	srv, err := h.svc.RegisterServer(r.Context(), req.Hostname, req.PublicKey, req.PublicIP, req.WGPort, req.Region, req.City, req.Country, req.AuthToken)
+	srv, agentToken, err := h.svc.RegisterServer(r.Context(), req.Hostname, req.PublicKey, req.PublicIP, req.WGPort, req.Region, req.City, req.Country, req.AuthToken)
 	if err != nil {
 		h.log.Error("agent register failed", "error", err)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
@@ -179,10 +181,11 @@ func (h *HTTPHandler) handleAgentRegister(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"server_id":  srv.ID,
-		"wg_subnet":  srv.WGSubnet,
-		"dns_server": srv.DNSServer,
-		"capacity":   srv.Capacity,
+		"server_id":   srv.ID,
+		"wg_subnet":   srv.WGSubnet,
+		"dns_server":  srv.DNSServer,
+		"capacity":    srv.Capacity,
+		"agent_token": agentToken,
 	})
 }
 
@@ -201,12 +204,6 @@ func (h *HTTPHandler) handleAgentHeartbeat(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	token := extractBearer(r)
-	if token == "" || token != h.authToken {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
-
 	var req heartbeatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -214,6 +211,10 @@ func (h *HTTPHandler) handleAgentHeartbeat(w http.ResponseWriter, r *http.Reques
 	}
 	if req.ServerID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server_id is required"})
+		return
+	}
+	if err := h.requireServerAgentToken(r, req.ServerID); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 
@@ -230,15 +231,13 @@ func (h *HTTPHandler) handlePeerStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := extractBearer(r)
-	if token == "" || token != h.authToken {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
-
 	serverID := r.URL.Query().Get("server_id")
 	if serverID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server_id is required"})
+		return
+	}
+	if err := h.requireServerAgentToken(r, serverID); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 
@@ -344,10 +343,6 @@ func (h *HTTPHandler) handlePeerExpired(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if token := extractBearer(r); token == "" || token != h.authToken {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
 	var req peerAppliedRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -355,6 +350,10 @@ func (h *HTTPHandler) handlePeerExpired(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.PeerID == "" || req.ServerID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer_id and server_id are required"})
+		return
+	}
+	if err := h.requireServerAgentToken(r, req.ServerID); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 	if err := h.svc.ExpirePeer(r.Context(), req.ServerID, req.PeerID); err != nil {
@@ -371,23 +370,21 @@ func (h *HTTPHandler) handlePeerApplied(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	token := extractBearer(r)
-	if token == "" || token != h.authToken {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return
-	}
-
 	var req peerAppliedRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	if req.PeerID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer_id is required"})
+	if req.PeerID == "" || req.ServerID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer_id and server_id are required"})
+		return
+	}
+	if err := h.requireServerAgentToken(r, req.ServerID); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 
-	if err := h.svc.MarkPeerActive(r.Context(), req.PeerID); err != nil {
+	if err := h.svc.MarkPeerActive(r.Context(), req.PeerID, req.ServerID); err != nil {
 		h.log.Warn("mark peer active failed", "peer_id", req.PeerID, "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -684,7 +681,26 @@ func (h *HTTPHandler) accountFromRequest(r *http.Request) (accountID, tier strin
 	if err != nil {
 		return "", "", errUnauthorized("invalid token")
 	}
+	if h.redis != nil {
+		blacklisted, blErr := h.redis.IsTokenBlacklisted(r.Context(), tokenhash.Hash(tokenStr))
+		if blErr != nil {
+			return "", "", errUnauthorized("token check failed")
+		}
+		if blacklisted {
+			return "", "", errUnauthorized("token revoked")
+		}
+	}
 	return c.AccountID, entitlement.NormalizeTier(c.Tier), nil
+}
+
+// requireServerAgentToken verifies the Bearer token matches the per-server agent
+// token hash for serverID (constant-time). Rejects missing/cross-server tokens.
+func (h *HTTPHandler) requireServerAgentToken(r *http.Request, serverID string) error {
+	token := extractBearer(r)
+	if token == "" || serverID == "" {
+		return errUnauthorized("unauthorized")
+	}
+	return h.svc.VerifyAgentToken(r.Context(), serverID, token)
 }
 
 type unauthorizedError struct{ msg string }
@@ -702,14 +718,10 @@ func extractBearer(r *http.Request) string {
 }
 
 func clientIPFromRequest(r *http.Request) string {
-	for _, h := range []string{"CF-Connecting-IP", "True-Client-IP", "X-Real-IP"} {
-		if v := strings.TrimSpace(r.Header.Get(h)); v != "" {
-			return stripHostPort(v)
-		}
-	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return stripHostPort(strings.TrimSpace(parts[0]))
+	// Trust X-Real-IP only — nginx sets it from the Cloudflare tunnel hop.
+	// Do not read CF-Connecting-IP / X-Forwarded-For; clients can spoof them.
+	if value := strings.TrimSpace(strings.Split(r.Header.Get("X-Real-IP"), ",")[0]); value != "" {
+		return stripHostPort(value)
 	}
 	return stripHostPort(r.RemoteAddr)
 }

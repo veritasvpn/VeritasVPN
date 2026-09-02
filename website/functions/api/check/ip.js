@@ -1,32 +1,21 @@
-const cors = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-      ...cors,
-    },
-  });
-}
+import { jsonResponse, rateLimit, clientIP } from "../../_lib/security.js";
 
 export async function onRequestGet(context) {
+  const limited = await rateLimit(context.request, {
+    bucket: "check-ip",
+    limit: 60,
+    windowSec: 60,
+  });
+  if (limited) return limited;
+
   const req = context.request;
   const cf = req.cf || {};
-  const ip =
-    req.headers.get("cf-connecting-ip") ||
-    (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
-    "";
+  const ip = clientIP(req);
 
   const latitude = Number.parseFloat(cf.latitude);
   const longitude = Number.parseFloat(cf.longitude);
 
-  return json({
+  return jsonResponse({
     ip: ip || null,
     country: cf.country || null,
     colo: cf.colo || null,
@@ -44,13 +33,15 @@ export async function onRequestGet(context) {
 
 export function onRequest(context) {
   if (context.request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: cors });
+    return new Response(null, {
+      status: 204,
+      headers: { Allow: "GET, HEAD", "Cache-Control": "no-store" },
+    });
   }
   if (context.request.method === "GET" || context.request.method === "HEAD") {
     return onRequestGet(context);
   }
-  return new Response("Method Not Allowed", {
-    status: 405,
-    headers: { Allow: "GET, HEAD, OPTIONS", ...cors },
+  return jsonResponse({ error: "Method Not Allowed" }, 405, {
+    Allow: "GET, HEAD",
   });
 }

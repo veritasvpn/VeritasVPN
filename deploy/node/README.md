@@ -43,6 +43,11 @@ clients use WireGuard directly.
 - Agent runs `network_mode: host` with `NET_ADMIN`, talks to `MANAGER_ENDPOINT=http://127.0.0.1:8082`.
 - Peer provisioning: `POST /api/v1/wg/peers` (JWT) → SSE to agent → `wgctrl` AddPeer →
   `POST /api/v1/agents/peers/applied` marks peer `active`. Create responses include `preshared_key`.
+- Per-server agent tokens: register with global `AGENT_AUTH_TOKEN` once; wg-manager mints a
+  per-server token (returned once as `agent_token`) and stores only the hash. The agent
+  persists it to `/var/lib/veritasvpn/agent/token` and uses it as Bearer for heartbeat/SSE/applied/expired.
+  To rotate: delete the token file (or re-register the agent) so bootstrap re-mints; the previous
+  hash is replaced on successful register.
 - Do not put WireGuard on the Mac as the server; Mac is a client only.
 - Run only one agent (compose **or** a host binary). Two agents fight over `wg0` and `:9090`.
 

@@ -12,7 +12,7 @@ data:
   JWT_ISSUER: "https://api.veritasvpn.cloud"
   JWT_AUDIENCE: "veritasvpn-api"
   ACCESS_TOKEN_TTL: "1h"
-  REFRESH_TOKEN_TTL: "720h"
+  REFRESH_TOKEN_TTL: "168h"
 
   POSTGRES_DB: "veritas"
   POSTGRES_USER: "veritas"
@@ -50,7 +50,7 @@ data:
   WG_PORT: "51820"
   WG_PRIVATE_KEY_FILE: "/etc/wireguard/private.key"
 
-  ALLOW_MOCK_BTCPAY: "true"
+  ALLOW_MOCK_BTCPAY: "false"
   BITCOIN_READINESS_URL: ""
   BTCPAY_SERVER_URL: "http://btcpayserver-mainnet.btcpay-mainnet.svc.cluster.local:49392"
   BTCPAY_PUBLIC_URL: "https://btcpay-mainnet.veritasvpn.cloud"

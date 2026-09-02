@@ -70,13 +70,16 @@ func (p *Postgres) MarkDuplicateServersOffline(ctx context.Context, keepID, publ
 
 func (p *Postgres) RegisterServer(ctx context.Context, srv *model.Server) error {
 	query := `INSERT INTO servers (hostname, region, city, country, public_ip,
-	           wg_port, public_key, status, capacity, wg_subnet, dns_server)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	           wg_port, public_key, status, capacity, wg_subnet, dns_server,
+	           agent_token_hash, agent_token_issued_at)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	           ON CONFLICT (hostname) DO UPDATE SET
 	               public_ip = EXCLUDED.public_ip, wg_port = EXCLUDED.wg_port,
 	               public_key = EXCLUDED.public_key, status = EXCLUDED.status,
 	               capacity = EXCLUDED.capacity,
 	               region = EXCLUDED.region, city = EXCLUDED.city, country = EXCLUDED.country,
+	               agent_token_hash = EXCLUDED.agent_token_hash,
+	               agent_token_issued_at = EXCLUDED.agent_token_issued_at,
 	               updated_at = NOW()
 	           RETURNING id, wg_subnet, dns_server`
 
@@ -84,6 +87,7 @@ func (p *Postgres) RegisterServer(ctx context.Context, srv *model.Server) error 
 		srv.Hostname, srv.Region, srv.City, srv.Country,
 		srv.PublicIP, srv.WGPort, srv.PublicKey, srv.Status,
 		srv.Capacity, srv.WGSubnet, srv.DNSServer,
+		nullIfEmpty(srv.AgentTokenHash), srv.AgentTokenIssuedAt,
 	).Scan(&srv.ID, &srv.WGSubnet, &srv.DNSServer)
 }
 
@@ -98,15 +102,51 @@ func (p *Postgres) UpdateServerIdentity(ctx context.Context, srv *model.Server) 
 		  wg_port = $7,
 		  public_key = $8,
 		  status = $9,
+		  agent_token_hash = $10,
+		  agent_token_issued_at = $11,
 		  updated_at = NOW()
 		WHERE id = $1`,
 		srv.ID, srv.Hostname, srv.Region, srv.City, srv.Country,
 		srv.PublicIP, srv.WGPort, srv.PublicKey, srv.Status,
+		nullIfEmpty(srv.AgentTokenHash), srv.AgentTokenIssuedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("update server identity: %w", err)
 	}
 	return nil
+}
+
+func nullIfEmpty(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// GetServerAgentTokenHash returns the stored agent token hash for serverID.
+func (p *Postgres) GetServerAgentTokenHash(ctx context.Context, serverID string) (string, error) {
+	var hash *string
+	err := p.pool.QueryRow(ctx,
+		`SELECT agent_token_hash FROM servers WHERE id = $1`, serverID).Scan(&hash)
+	if err != nil {
+		return "", fmt.Errorf("get server agent token hash: %w", err)
+	}
+	if hash == nil {
+		return "", nil
+	}
+	return *hash, nil
+}
+
+// GetAccountSubscriptionTier returns accounts.subscription_tier for entitlement checks.
+func (p *Postgres) GetAccountSubscriptionTier(ctx context.Context, accountID string) (string, error) {
+	var tier string
+	err := p.pool.QueryRow(ctx,
+		`SELECT subscription_tier FROM accounts WHERE id = $1 AND account_status != 'deleted'`,
+		accountID).Scan(&tier)
+	if err != nil {
+		return "", fmt.Errorf("get account subscription tier: %w", err)
+	}
+	return tier, nil
 }
 
 func (p *Postgres) GetServer(ctx context.Context, id string) (*model.Server, error) {
@@ -337,6 +377,21 @@ func (p *Postgres) UpdatePeerStatus(ctx context.Context, peerID, status string) 
 		`UPDATE peers SET status = $2 WHERE id = $1`,
 		peerID, status)
 	return err
+}
+
+// UpdatePeerStatusForServer marks a peer active only when it belongs to serverID.
+func (p *Postgres) UpdatePeerStatusForServer(ctx context.Context, peerID, serverID, status string) error {
+	result, err := p.pool.Exec(ctx,
+		`UPDATE peers SET status = $3 WHERE id = $1 AND server_id = $2
+		  AND status IN ('pending', 'active')`,
+		peerID, serverID, status)
+	if err != nil {
+		return fmt.Errorf("update peer status for server: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("peer not found on server")
+	}
+	return nil
 }
 
 func (p *Postgres) DeletePeer(ctx context.Context, peerID, accountID string) error {

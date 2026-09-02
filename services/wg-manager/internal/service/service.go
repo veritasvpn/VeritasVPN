@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/nats-io/nats.go"
 	"github.com/veritasvpn/lib/logging"
+	"github.com/veritasvpn/lib/tokenhash"
 	"github.com/veritasvpn/services/wg-manager/internal/communicator"
 	"github.com/veritasvpn/services/wg-manager/internal/entitlement"
 	"github.com/veritasvpn/services/wg-manager/internal/model"
@@ -155,33 +159,67 @@ func (s *Service) useLANEndpoint(clientIP, publicIP string) bool {
 	return c4[0] == l4[0] && c4[1] == l4[1] && c4[2] == l4[2]
 }
 
-func (s *Service) resolveTier(accountID, jwtTier string) string {
-	jwtTier = entitlement.NormalizeTier(jwtTier)
-	if s.tierCache == nil {
-		return jwtTier
+func (s *Service) resolveTier(ctx context.Context, accountID, jwtTier string) string {
+	_ = jwtTier // JWT tier is advisory only; never trusted on cache miss.
+	if s.tierCache != nil {
+		if cachedTier, ok := s.tierCache.Lookup(accountID); ok {
+			return cachedTier
+		}
 	}
-	cachedTier, ok := s.tierCache.Lookup(accountID)
-	if !ok {
-		return jwtTier
-	}
-	if cachedTier != jwtTier {
-		s.log.Debug("tier resolved from billing cache",
-			"account_id", accountID,
-			"jwt_tier", jwtTier,
-			"cached_tier", cachedTier,
+	dbTier, err := s.postgres.GetAccountSubscriptionTier(ctx, accountID)
+	if err != nil {
+		s.log.Warn("tier lookup failed; failing closed to free",
+			"account_hash", logging.HashIdentifier(accountID),
+			"error", err,
 		)
+		return "free"
 	}
-	return cachedTier
+	return entitlement.NormalizeTier(dbTier)
 }
 
-func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publicIP string, wgPort int32, region, city, country, authToken string) (*model.Server, error) {
-	if authToken != s.authToken {
-		return nil, fmt.Errorf("invalid agent auth token")
+// mintAgentToken returns plaintext token and its storage hash.
+func mintAgentToken() (plaintext, hash string, err error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", "", fmt.Errorf("mint agent token: %w", err)
 	}
+	plaintext = hex.EncodeToString(buf)
+	return plaintext, tokenhash.Hash(plaintext), nil
+}
+
+// VerifyAgentToken checks Bearer against the per-server stored hash (constant-time).
+func (s *Service) VerifyAgentToken(ctx context.Context, serverID, token string) error {
+	if serverID == "" || token == "" {
+		return fmt.Errorf("unauthorized")
+	}
+	stored, err := s.postgres.GetServerAgentTokenHash(ctx, serverID)
+	if err != nil {
+		return fmt.Errorf("unauthorized")
+	}
+	if stored == "" {
+		return fmt.Errorf("unauthorized")
+	}
+	provided := tokenhash.Hash(token)
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(stored)) != 1 {
+		return fmt.Errorf("unauthorized")
+	}
+	return nil
+}
+
+func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publicIP string, wgPort int32, region, city, country, authToken string) (*model.Server, string, error) {
+	if authToken != s.authToken {
+		return nil, "", fmt.Errorf("invalid agent auth token")
+	}
+
+	plaintext, tokenHash, err := mintAgentToken()
+	if err != nil {
+		return nil, "", err
+	}
+	issuedAt := time.Now().UTC()
 
 	existing, err := s.postgres.GetServerByHostname(ctx, hostname)
 	if err != nil && !strings.Contains(err.Error(), "no rows") {
-		return nil, fmt.Errorf("lookup server: %w", err)
+		return nil, "", fmt.Errorf("lookup server: %w", err)
 	}
 
 	if existing != nil {
@@ -189,6 +227,8 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 		existing.WGPort = wgPort
 		existing.PublicKey = publicKey
 		existing.Status = "online"
+		existing.AgentTokenHash = tokenHash
+		existing.AgentTokenIssuedAt = &issuedAt
 		if region != "" {
 			existing.Region = region
 		}
@@ -199,7 +239,7 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 			existing.Country = country
 		}
 		if err := s.postgres.UpdateServerIdentity(ctx, existing); err != nil {
-			return nil, fmt.Errorf("update server: %w", err)
+			return nil, "", fmt.Errorf("update server: %w", err)
 		}
 		if err := s.postgres.MarkDuplicateServersOffline(ctx, existing.ID, publicIP, publicKey); err != nil {
 			s.log.Warn("failed to mark duplicate servers offline", "error", err)
@@ -209,32 +249,34 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 			"hostname", hostname,
 			"subnet", existing.WGSubnet,
 		)
-		return existing, nil
+		return existing, plaintext, nil
 	}
 
 	subnet, err := s.allocateSubnet(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	dnsServer := strings.Replace(subnet, ".0/24", ".1", 1)
 
 	srv := &model.Server{
-		Hostname:  hostname,
-		Region:    region,
-		City:      city,
-		Country:   country,
-		PublicIP:  publicIP,
-		WGPort:    wgPort,
-		PublicKey: publicKey,
-		Status:    "online",
-		Capacity:  100,
-		WGSubnet:  subnet,
-		DNSServer: dnsServer,
+		Hostname:           hostname,
+		Region:             region,
+		City:               city,
+		Country:            country,
+		PublicIP:           publicIP,
+		WGPort:             wgPort,
+		PublicKey:          publicKey,
+		Status:             "online",
+		Capacity:           100,
+		WGSubnet:           subnet,
+		DNSServer:          dnsServer,
+		AgentTokenHash:     tokenHash,
+		AgentTokenIssuedAt: &issuedAt,
 	}
 
 	if err := s.postgres.RegisterServer(ctx, srv); err != nil {
-		return nil, fmt.Errorf("register server: %w", err)
+		return nil, "", fmt.Errorf("register server: %w", err)
 	}
 	if err := s.postgres.MarkDuplicateServersOffline(ctx, srv.ID, publicIP, publicKey); err != nil {
 		s.log.Warn("failed to mark duplicate servers offline", "error", err)
@@ -255,7 +297,7 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 		"subnet":    subnet,
 	})
 
-	return srv, nil
+	return srv, plaintext, nil
 }
 
 func (s *Service) HandleHeartbeat(ctx context.Context, serverID string, peerCount int32, loadFactor float64, rxBytes, txBytes int64, dnsBlockedByIP map[string]uint64) error {
@@ -301,7 +343,7 @@ func (s *Service) DNSBlockedCount(ctx context.Context, assignedIP string) uint64
 }
 
 func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, deviceID, preferredRegion, clientIP string) (*PeerConfig, error) {
-	tier = s.resolveTier(accountID, tier)
+	tier = s.resolveTier(ctx, accountID, tier)
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" {
 		// Legacy clients without a stable install id always insert a new row so
@@ -451,8 +493,8 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 	}
 
 	s.log.Info("peer created",
-		"peer_id", peer.ID,
-		"account_id", accountID,
+		"peer_hash", logging.HashIdentifier(peer.ID),
+		"account_hash", logging.HashIdentifier(accountID),
 		"device_id", deviceID,
 		"server_id", srv.ID,
 		"assigned_ip", assignedIP,
@@ -461,8 +503,8 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 	)
 
 	s.publishEvent("peer.created", map[string]interface{}{
-		"peer_id":         peer.ID,
-		"account_id":      accountID,
+		"peer_hash":       logging.HashIdentifier(peer.ID),
+		"account_hash":    logging.HashIdentifier(accountID),
 		"device_id":       deviceID,
 		"server_id":       srv.ID,
 		"assigned_ip":     assignedIP,
@@ -536,14 +578,14 @@ func (s *Service) DeletePeer(ctx context.Context, peerID, accountID string) erro
 	// Soft-delete does not fire FK CASCADE; remove forwards explicitly and notify the agent.
 	forwards, err := s.postgres.ListPortForwardsByPeer(ctx, peerID)
 	if err != nil {
-		s.log.Warn("list port forwards before peer delete failed", "peer_id", peerID, "error", err)
+		s.log.Warn("list port forwards before peer delete failed", "peer_hash", logging.HashIdentifier(peerID), "error", err)
 	} else {
 		for i := range forwards {
 			pf := forwards[i]
 			s.communicator.PushPortForwardRemove(peer.ServerID, &pf)
 			if delErr := s.postgres.DeletePortForward(ctx, pf.ID, accountID); delErr != nil {
 				s.log.Warn("delete port forward on peer delete failed",
-					"forward_id", pf.ID, "peer_id", peerID, "error", delErr)
+					"forward_id", pf.ID, "peer_hash", logging.HashIdentifier(peerID), "error", delErr)
 			}
 		}
 	}
@@ -565,12 +607,12 @@ func (s *Service) DeletePeer(ctx context.Context, peerID, accountID string) erro
 	_ = s.redis.ReleaseIP(ctx, peer.ServerID, peer.AssignedIP)
 	_ = s.redis.ClearDNSBlockedCount(ctx, peer.AssignedIP)
 
-	s.log.Info("peer deleted", "peer_id", peerID, "account_id", accountID)
+	s.log.Info("peer deleted", "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
 
 	s.publishEvent("peer.deleted", map[string]interface{}{
-		"peer_id":    peerID,
-		"account_id": accountID,
-		"server_id":  peer.ServerID,
+		"peer_hash":    logging.HashIdentifier(peerID),
+		"account_hash": logging.HashIdentifier(accountID),
+		"server_id":    peer.ServerID,
 	})
 
 	return nil
@@ -601,7 +643,9 @@ func (s *Service) ExpirePeer(ctx context.Context, serverID, peerID string) error
 		_ = s.redis.ReleaseIP(ctx, serverID, peer.AssignedIP)
 		_ = s.redis.ClearDNSBlockedCount(ctx, peer.AssignedIP)
 		s.publishEvent("peer.expired", map[string]interface{}{
-			"peer_id": peerID, "account_id": peer.AccountID, "server_id": serverID,
+			"peer_hash":    logging.HashIdentifier(peerID),
+			"account_hash": logging.HashIdentifier(peer.AccountID),
+			"server_id":    serverID,
 		})
 	}
 	return nil
@@ -634,8 +678,8 @@ func (s *Service) ListPeersForServer(ctx context.Context, serverID string) ([]mo
 	return s.postgres.ListPeersByServer(ctx, serverID)
 }
 
-func (s *Service) MarkPeerActive(ctx context.Context, peerID string) error {
-	return s.postgres.UpdatePeerStatus(ctx, peerID, "active")
+func (s *Service) MarkPeerActive(ctx context.Context, peerID, serverID string) error {
+	return s.postgres.UpdatePeerStatusForServer(ctx, peerID, serverID, "active")
 }
 
 func (s *Service) ListServers(ctx context.Context) ([]model.Server, error) {
@@ -647,7 +691,7 @@ func (s *Service) ListServers(ctx context.Context) ([]model.Server, error) {
 }
 
 func (s *Service) CreatePortForward(ctx context.Context, accountID, tier, peerID, protocol string, externalPort, internalPort int) (*model.PortForward, error) {
-	tier = s.resolveTier(accountID, tier)
+	tier = s.resolveTier(ctx, accountID, tier)
 
 	proto, err := entitlement.NormalizeProtocol(protocol)
 	if err != nil {
@@ -727,8 +771,8 @@ func (s *Service) CreatePortForward(ctx context.Context, accountID, tier, peerID
 
 	s.log.Info("port forward created",
 		"forward_id", pf.ID,
-		"account_id", accountID,
-		"peer_id", peerID,
+		"account_hash", logging.HashIdentifier(accountID),
+		"peer_hash", logging.HashIdentifier(peerID),
 		"protocol", proto,
 		"external_port", externalPort,
 		"internal_port", internalPort,
@@ -736,8 +780,8 @@ func (s *Service) CreatePortForward(ctx context.Context, accountID, tier, peerID
 	)
 	s.publishEvent("port_forward.created", map[string]interface{}{
 		"forward_id":    pf.ID,
-		"account_id":    accountID,
-		"peer_id":       peerID,
+		"account_hash":  logging.HashIdentifier(accountID),
+		"peer_hash":     logging.HashIdentifier(peerID),
 		"server_id":     peer.ServerID,
 		"protocol":      proto,
 		"external_port": externalPort,
@@ -767,12 +811,12 @@ func (s *Service) DeletePortForward(ctx context.Context, id, accountID string) e
 
 	s.communicator.PushPortForwardRemove(pf.ServerID, pf)
 
-	s.log.Info("port forward deleted", "forward_id", id, "account_id", accountID)
+	s.log.Info("port forward deleted", "forward_id", id, "account_hash", logging.HashIdentifier(accountID))
 	s.publishEvent("port_forward.deleted", map[string]interface{}{
-		"forward_id": id,
-		"account_id": accountID,
-		"peer_id":    pf.PeerID,
-		"server_id":  pf.ServerID,
+		"forward_id":   id,
+		"account_hash": logging.HashIdentifier(accountID),
+		"peer_hash":    logging.HashIdentifier(pf.PeerID),
+		"server_id":    pf.ServerID,
 	})
 	return nil
 }

@@ -7,12 +7,66 @@ import {
   addResult,
   fetchJson,
 } from "/js/check-common.js";
+import { TURNSTILE_SITE_KEY } from "/js/config.js";
 
 const status = document.getElementById("status");
 const results = document.getElementById("results");
 const outcome = document.getElementById("outcome");
 const form = document.getElementById("breachForm");
 const btn = document.getElementById("runCheck");
+const turnstileEl = document.getElementById("breachTurnstile");
+
+let turnstileWidgetId = null;
+let turnstileToken = "";
+let turnstileScriptPromise = null;
+
+function loadTurnstile() {
+  if (window.turnstile) return Promise.resolve();
+  if (turnstileScriptPromise) return turnstileScriptPromise;
+  turnstileScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Could not load verification"));
+    document.head.appendChild(script);
+  });
+  return turnstileScriptPromise;
+}
+
+async function ensureTurnstile() {
+  if (!turnstileEl || !TURNSTILE_SITE_KEY) return;
+  await loadTurnstile();
+  turnstileEl.hidden = false;
+  if (turnstileWidgetId != null) return;
+  turnstileWidgetId = window.turnstile.render(turnstileEl, {
+    sitekey: TURNSTILE_SITE_KEY,
+    callback: (token) => {
+      turnstileToken = token;
+    },
+    "expired-callback": () => {
+      turnstileToken = "";
+    },
+    "error-callback": () => {
+      turnstileToken = "";
+    },
+  });
+}
+
+function resetTurnstile() {
+  turnstileToken = "";
+  if (turnstileWidgetId != null && window.turnstile) {
+    try {
+      window.turnstile.reset(turnstileWidgetId);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+void ensureTurnstile().catch(() => {
+  /* widget optional until submit */
+});
 
 form?.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -22,10 +76,14 @@ form?.addEventListener("submit", async (event) => {
   showResultSkeletons(results, 3);
   setStatus(status, "running", "Checking public breach corpora…");
   try {
+    await ensureTurnstile();
+    if (TURNSTILE_SITE_KEY && !turnstileToken) {
+      throw new Error("Complete the verification challenge, then try again.");
+    }
     const data = await fetchJson("/api/check/breach", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, turnstile_token: turnstileToken || undefined }),
     });
     clearResults(results);
     addResult(results, "Appears breached", data.breached ? "Yes" : "No matches found");
@@ -58,6 +116,7 @@ form?.addEventListener("submit", async (event) => {
       body: "The breach lookup failed, so we cannot say whether this address appears in public dumps right now. Retry in a moment.",
     });
   } finally {
+    resetTurnstile();
     setCheckBusy(btn, false);
   }
 });

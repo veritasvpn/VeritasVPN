@@ -35,9 +35,10 @@ type Metrics struct {
 }
 
 func New(port string) *Metrics {
-	// Default stays world-bind for hostNetwork agents; host firewall must
-	// drop unsolicited access on the uplink. Override with METRICS_BIND.
-	return NewWithBind(port, "0.0.0.0")
+	// Default loopback bind. hostNetwork agents should keep METRICS_BIND=127.0.0.1
+	// and probe via host:127.0.0.1; expose ClusterIP scrape only inside the cluster.
+	// If a non-loopback bind is required, block WAN/LAN with deploy/node/veritas-firewall.sh.
+	return NewWithBind(port, "127.0.0.1")
 }
 
 func NewWithBind(port, bind string) *Metrics {
