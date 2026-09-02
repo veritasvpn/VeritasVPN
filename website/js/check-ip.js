@@ -53,7 +53,7 @@ async function run() {
       state: "ok",
       title: "What this means",
       body: data.ip
-        ? `Sites and networks that see this connection can treat ${data.ip} as your public identity on the path. If you are not on a VPN, that is typically your home, mobile, or office address. Connect VeritasVPN and re-check — you should see the Paraguay exit instead.`
+        ? `Sites and networks that see this connection can treat ${data.ip} as the public address for this path. Off a VPN, that is usually an address your ISP (or mobile carrier) assigned to this connection—not your street address. Geo hints are city-level at best. Connect VeritasVPN and re-check — destinations should see the Paraguay exit IP instead.`
         : "We could not determine a public IP for this request. Try again, or check from another network.",
     });
 
