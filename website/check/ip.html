@@ -8,6 +8,7 @@
   <link rel="canonical" href="https://veritasvpn.cloud/check/ip.html">
   <link rel="stylesheet" href="/css/style-typography1.css">
   <link rel="stylesheet" href="/css/check.css">
+  <link rel="stylesheet" href="/assets/leaflet/leaflet.css">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
 </head>
 <body>
@@ -38,12 +39,17 @@
 
       <section class="check-panel">
         <h2>Your public IP</h2>
-        <p class="check-note">No account needed. We do not keep this result as a profile.</p>
+        <p class="check-note">No account needed. We do not keep this result as a profile. The map is approximate (city-level), not a street address.</p>
         <div class="check-actions">
           <button type="button" class="btn btn-primary" id="runCheck">Check IP</button>
         </div>
         <div class="check-status" id="status" data-state="">Ready</div>
         <ul class="check-result-list" id="results"></ul>
+        <div class="check-map-wrap">
+          <p class="check-map-label">Approximate IP location</p>
+          <div id="ipMap" class="check-map" hidden aria-label="Approximate IP location map"></div>
+          <p id="ipMapUnavailable" class="check-map-unavailable" role="status"></p>
+        </div>
       </section>
 
       <aside class="check-cta">
@@ -65,6 +71,7 @@
     </div>
   </footer>
 
+  <script src="/assets/leaflet/leaflet.js" defer></script>
   <script type="module" src="/js/check-ip.js"></script>
 </body>
 </html>

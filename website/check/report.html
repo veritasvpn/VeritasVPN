@@ -8,6 +8,7 @@
   <link rel="canonical" href="https://veritasvpn.cloud/check/report.html">
   <link rel="stylesheet" href="/css/style-typography1.css">
   <link rel="stylesheet" href="/css/check.css">
+  <link rel="stylesheet" href="/assets/leaflet/leaflet.css">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
 </head>
 <body>
@@ -37,12 +38,17 @@
 
       <section class="check-panel">
         <h2>Session report</h2>
-        <p class="check-note">Includes IP, DNS resolver probe, WebRTC/IPv6, and browser basics.</p>
+        <p class="check-note">Includes IP, DNS resolver probe, WebRTC/IPv6, browser basics, and an approximate IP map when coordinates are available.</p>
         <div class="check-actions">
           <button type="button" class="btn btn-primary" id="runCheck">Run full report</button>
         </div>
         <div class="check-status" id="status" data-state="">Ready</div>
         <ul class="check-result-list" id="results"></ul>
+        <div class="check-map-wrap">
+          <p class="check-map-label">Approximate IP location</p>
+          <div id="ipMap" class="check-map" hidden aria-label="Approximate IP location map"></div>
+          <p id="ipMapUnavailable" class="check-map-unavailable" role="status"></p>
+        </div>
       </section>
 
       <aside class="check-cta">
@@ -64,6 +70,7 @@
     </div>
   </footer>
 
+  <script src="/assets/leaflet/leaflet.js" defer></script>
   <script type="module" src="/js/check-report.js"></script>
 </body>
 </html>

@@ -67,7 +67,7 @@
         They do not require an account.
       </p>
       <ul>
-        <li><strong>IP check:</strong> our Cloudflare Pages Function returns the request IP and coarse edge metadata (country/ASN/colo). We do not keep these results as a user profile.</li>
+        <li><strong>IP check:</strong> our Cloudflare Pages Function returns the request IP and coarse edge metadata (country/ASN/colo, and latitude/longitude when available). When coordinates are present, the page loads OpenStreetMap tiles in your browser to show an approximate map. We do not keep these results as a user profile.</li>
         <li><strong>DNS leak test:</strong> the browser resolves short-lived unique hostnames through edns.ip-api.com so recursive resolvers become visible. VeritasVPN does not operate that DNS authority in this version and does not store your DNS query names from the test.</li>
         <li><strong>VPN leak / browser reveal:</strong> mostly runs in your browser (WebRTC, IPv6, user agent, timezone, etc.).</li>
         <li><strong>Breach check:</strong> the email you type is sent to our edge Function and forwarded to XposedOrNot for a corpus lookup. VeritasVPN does not store the email. Public breach data can be incomplete.</li>

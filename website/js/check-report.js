@@ -9,10 +9,29 @@ import {
   fetchJson,
   isPrivateIP,
 } from "/js/check-common.js";
+import { renderIpMap } from "/js/check-map.js";
 
 const status = document.getElementById("status");
 const results = document.getElementById("results");
 const btn = document.getElementById("runCheck");
+const mapEl = document.getElementById("ipMap");
+const mapUnavailable = document.getElementById("ipMapUnavailable");
+
+function waitForLeaflet(timeoutMs = 4000) {
+  if (typeof window.L !== "undefined") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const timer = window.setInterval(() => {
+      if (typeof window.L !== "undefined") {
+        window.clearInterval(timer);
+        resolve();
+      } else if (Date.now() - started > timeoutMs) {
+        window.clearInterval(timer);
+        reject(new Error("Map library failed to load"));
+      }
+    }, 50);
+  });
+}
 
 async function probeDns() {
   try {
@@ -67,6 +86,17 @@ async function run() {
     addResult(results, "Platform", facts.platform);
     addResult(results, "Summary", findings.join(" · "));
 
+    try {
+      await waitForLeaflet();
+      renderIpMap(mapEl, ipInfo, { unavailableEl: mapUnavailable });
+    } catch {
+      renderIpMap(mapEl, {}, { unavailableEl: mapUnavailable });
+      if (mapUnavailable) {
+        mapUnavailable.textContent = "Map library failed to load.";
+        mapUnavailable.classList.add("is-visible");
+      }
+    }
+
     const warn = Boolean(dnsIps.length || publicRtc.length);
     setStatus(
       status,
@@ -77,6 +107,7 @@ async function run() {
     );
   } catch (err) {
     setStatus(status, "bad", err.message || "Report failed");
+    renderIpMap(mapEl, {}, { unavailableEl: mapUnavailable });
   } finally {
     btn.disabled = false;
   }

@@ -6,7 +6,7 @@ Static pages under `website/check/` plus Cloudflare Pages Functions under
 | Path | Role |
 |------|------|
 | `/check/` | Hub |
-| `/check/ip.html` | Public IP via `/api/check/ip` |
+| `/check/ip.html` | Public IP via `/api/check/ip` + approximate OSM map |
 | `/check/dns.html` | DNS leak probe via session + edns.ip-api.com hostnames |
 | `/check/vpn.html` | IP + WebRTC + IPv6 |
 | `/check/browser.html` | Local browser signals |

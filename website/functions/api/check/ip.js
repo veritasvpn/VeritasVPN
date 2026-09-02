@@ -23,6 +23,9 @@ export async function onRequestGet(context) {
     (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
     "";
 
+  const latitude = Number.parseFloat(cf.latitude);
+  const longitude = Number.parseFloat(cf.longitude);
+
   return json({
     ip: ip || null,
     country: cf.country || null,
@@ -30,6 +33,8 @@ export async function onRequestGet(context) {
     asOrganization: cf.asOrganization || null,
     city: cf.city || null,
     region: cf.region || null,
+    latitude: Number.isFinite(latitude) ? latitude : null,
+    longitude: Number.isFinite(longitude) ? longitude : null,
     timezone: cf.timezone || null,
     httpProtocol: cf.httpProtocol || null,
     tlsVersion: cf.tlsVersion || null,
