@@ -1,6 +1,7 @@
 import {
   setStatus,
   setCheckBusy,
+  setOutcome,
   showResultSkeletons,
   clearResults,
   addResult,
@@ -15,6 +16,7 @@ import { renderIpMap } from "/js/check-map.js";
 
 const status = document.getElementById("status");
 const results = document.getElementById("results");
+const outcome = document.getElementById("outcome");
 const btn = document.getElementById("runCheck");
 const mapEl = document.getElementById("ipMap");
 const mapUnavailable = document.getElementById("ipMapUnavailable");
@@ -63,6 +65,7 @@ async function probeDns(onProgress) {
 async function run() {
   if (!btn) return;
   setCheckBusy(btn, true, "Running…");
+  setOutcome(outcome, null);
   showResultSkeletons(results, 6);
   setStatus(status, "running", "Starting full connection report…");
   try {
@@ -118,11 +121,23 @@ async function run() {
       warn ? "warn" : "ok",
       warn
         ? "This session shows network or DNS signals worth protecting."
-        : "Quick checks look quiet. Re-run after connecting a VPN to compare."
+        : "Quick checks look quiet for this session."
     );
+    setOutcome(outcome, {
+      state: warn ? "warn" : "ok",
+      title: "What this means",
+      body: warn
+        ? "Taken together, these signals show how this session can be placed (IP), which resolvers see your lookups (DNS), and whether the browser leaks extra addresses (WebRTC/IPv6). Connect VeritasVPN and re-run — you want the public IP to become the VPN exit and DNS to leave your ISP/public resolver path."
+        : "Nothing loud stood out in this quick pass. Re-run after connecting VeritasVPN to confirm the IP and DNS path actually change — that before/after comparison is the best proof the tunnel is doing its job.",
+    });
   } catch (err) {
     clearResults(results);
     setStatus(status, "bad", err.message || "Report failed");
+    setOutcome(outcome, {
+      state: "bad",
+      title: "What this means",
+      body: "The full report did not finish, so we cannot summarize this session’s exposure right now. Retry in a moment.",
+    });
     renderIpMap(mapEl, {}, { unavailableEl: mapUnavailable });
   } finally {
     setCheckBusy(btn, false);

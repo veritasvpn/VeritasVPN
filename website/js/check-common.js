@@ -117,6 +117,29 @@ export function clearResults(listEl) {
   listEl.replaceChildren();
 }
 
+/**
+ * Plain-language “what this means” block after a check finishes.
+ * @param {HTMLElement | null} el
+ * @param {{ title: string, body: string, state?: string } | null} outcome
+ */
+export function setOutcome(el, outcome) {
+  if (!el) return;
+  if (!outcome) {
+    el.hidden = true;
+    el.dataset.state = "";
+    el.replaceChildren();
+    return;
+  }
+  el.hidden = false;
+  el.dataset.state = outcome.state || "";
+  el.replaceChildren();
+  const title = document.createElement("h3");
+  title.textContent = outcome.title;
+  const body = document.createElement("p");
+  body.textContent = outcome.body;
+  el.append(title, body);
+}
+
 export function addResult(listEl, label, value) {
   if (!listEl) return;
   listEl.classList.remove("is-loading");

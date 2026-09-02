@@ -32,17 +32,29 @@
       <header class="check-hero">
         <span class="section-kicker">VPN leak test</span>
         <h1>Is this session leaking outside the tunnel?</h1>
-        <p>Combines public IP, WebRTC candidates, and IPv6. Useful before and after connecting a VPN. This page cannot see your Veritas tunnel state directly — compare results yourself.</p>
+        <p>A VPN only helps if traffic actually stays on the tunnel. This check looks for common ways browsers still expose a real-world address.</p>
       </header>
+
+      <aside class="check-explain" aria-label="About this check">
+        <div>
+          <h3>What this checks</h3>
+          <p>Your public HTTPS IP, WebRTC ICE candidates (which can reveal local or public addresses), and whether an IPv6 path appears via a separate lookup.</p>
+        </div>
+        <div>
+          <h3>Why it matters</h3>
+          <p>If you expect only a VPN exit but WebRTC or IPv6 still shows another address, sites can identify you anyway. Run this before and after connecting to compare.</p>
+        </div>
+      </aside>
 
       <section class="check-panel">
         <h2>Leak scorecard</h2>
-        <p class="check-note">WebRTC may reveal local or public addresses even when you expect only a VPN exit.</p>
+        <p class="check-note">This page cannot see your Veritas tunnel state directly — compare the addresses yourself.</p>
         <div class="check-actions">
           <button type="button" class="btn btn-primary" id="runCheck">Run VPN leak test</button>
         </div>
         <div class="check-status" id="status" data-state="">Ready</div>
         <ul class="check-result-list" id="results"></ul>
+        <div class="check-outcome" id="outcome" hidden></div>
       </section>
 
       <aside class="check-cta">

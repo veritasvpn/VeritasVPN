@@ -34,17 +34,29 @@
       <header class="check-hero">
         <span class="section-kicker">IP check</span>
         <h1>Am I leaking my IP?</h1>
-        <p>This is the public address our edge sees for this browser request. Sites and networks you visit can see a similar address unless you route traffic through a VPN.</p>
+        <p>Every site you visit can see a public IP for this connection. That address is often enough to guess your region and tie sessions together.</p>
       </header>
+
+      <aside class="check-explain" aria-label="About this check">
+        <div>
+          <h3>What this checks</h3>
+          <p>The public IP our edge sees for this browser request, plus coarse network hints (country, ASN, city when available) and an approximate map. It is not a street address.</p>
+        </div>
+        <div>
+          <h3>Why it matters</h3>
+          <p>Without a VPN, that IP is usually your home, mobile, or office path. Trackers, sites, and your ISP can correlate activity to it. A tunnel makes destinations see the VPN exit instead.</p>
+        </div>
+      </aside>
 
       <section class="check-panel">
         <h2>Your public IP</h2>
-        <p class="check-note">No account needed. We do not keep this result as a profile. The map is approximate (city-level), not a street address.</p>
+        <p class="check-note">No account needed. We do not keep this result as a profile.</p>
         <div class="check-actions">
           <button type="button" class="btn btn-primary" id="runCheck">Check IP</button>
         </div>
         <div class="check-status" id="status" data-state="">Ready</div>
         <ul class="check-result-list" id="results"></ul>
+        <div class="check-outcome" id="outcome" hidden></div>
         <div class="check-map-wrap">
           <p class="check-map-label">Approximate IP location</p>
           <div id="ipMap" class="check-map" hidden aria-label="Approximate IP location map"></div>

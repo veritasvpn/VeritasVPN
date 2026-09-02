@@ -1,6 +1,7 @@
 import {
   setStatus,
   setCheckBusy,
+  setOutcome,
   showResultSkeletons,
   clearResults,
   addResult,
@@ -10,6 +11,7 @@ import { renderIpMap } from "/js/check-map.js";
 
 const status = document.getElementById("status");
 const results = document.getElementById("results");
+const outcome = document.getElementById("outcome");
 const btn = document.getElementById("runCheck");
 const mapEl = document.getElementById("ipMap");
 const mapUnavailable = document.getElementById("ipMapUnavailable");
@@ -33,6 +35,7 @@ function waitForLeaflet(timeoutMs = 4000) {
 async function run() {
   if (!btn) return;
   setCheckBusy(btn, true, "Checking…");
+  setOutcome(outcome, null);
   showResultSkeletons(results, 5);
   setStatus(status, "running", "Looking up this connection’s public IP…");
   try {
@@ -45,24 +48,36 @@ async function run() {
     addResult(results, "Region", data.region);
     addResult(results, "Edge colo", data.colo);
     addResult(results, "Checked at", data.checkedAt);
-    setStatus(status, "ok", "This is the address visible on this request.");
+    setStatus(status, "ok", "Public IP retrieved for this request.");
+    setOutcome(outcome, {
+      state: "ok",
+      title: "What this means",
+      body: data.ip
+        ? `Sites and networks that see this connection can treat ${data.ip} as your public identity on the path. If you are not on a VPN, that is typically your home, mobile, or office address. Connect VeritasVPN and re-check — you should see the Paraguay exit instead.`
+        : "We could not determine a public IP for this request. Try again, or check from another network.",
+    });
 
     try {
       setStatus(status, "running", "Loading approximate location map…");
       await waitForLeaflet();
       renderIpMap(mapEl, data, { unavailableEl: mapUnavailable });
-      setStatus(status, "ok", "This is the address visible on this request.");
+      setStatus(status, "ok", "Public IP retrieved for this request.");
     } catch {
       renderIpMap(mapEl, {}, { unavailableEl: mapUnavailable });
       if (mapUnavailable) {
         mapUnavailable.textContent = "Map library failed to load.";
         mapUnavailable.classList.add("is-visible");
       }
-      setStatus(status, "ok", "This is the address visible on this request.");
+      setStatus(status, "ok", "Public IP retrieved for this request.");
     }
   } catch (err) {
     clearResults(results);
     setStatus(status, "bad", err.message || "Check failed");
+    setOutcome(outcome, {
+      state: "bad",
+      title: "What this means",
+      body: "The IP lookup failed, so we cannot show what this connection exposes right now. Retry in a moment.",
+    });
     renderIpMap(mapEl, {}, { unavailableEl: mapUnavailable });
   } finally {
     setCheckBusy(btn, false);

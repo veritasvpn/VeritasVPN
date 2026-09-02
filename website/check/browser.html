@@ -32,17 +32,29 @@
       <header class="check-hero">
         <span class="section-kicker">Browser privacy</span>
         <h1>What does my browser reveal?</h1>
-        <p>Websites can read many details without asking. This is an educational snapshot — not a scare score and not a full fingerprinting lab.</p>
+        <p>Even with a hidden IP, websites can still read many details from the browser itself. This is an educational snapshot, not a scare score.</p>
       </header>
+
+      <aside class="check-explain" aria-label="About this check">
+        <div>
+          <h3>What this checks</h3>
+          <p>Local signals this browser exposes in JavaScript: language, timezone, screen size, platform, hardware hints, and similar fields sites often use for fingerprinting.</p>
+        </div>
+        <div>
+          <h3>Why it matters</h3>
+          <p>A VPN protects the network path; it does not make the browser anonymous. These signals can still help sites recognize a returning device. Use both network and browser defenses when privacy matters.</p>
+        </div>
+      </aside>
 
       <section class="check-panel">
         <h2>Browser signals</h2>
-        <p class="check-note">Collected locally in your browser. Nothing here is uploaded unless you choose another tool that needs a server.</p>
+        <p class="check-note">Collected locally in your browser. Nothing here is uploaded by this page.</p>
         <div class="check-actions">
           <button type="button" class="btn btn-primary" id="runCheck">Reveal browser details</button>
         </div>
         <div class="check-status" id="status" data-state="">Ready</div>
         <ul class="check-result-list" id="results"></ul>
+        <div class="check-outcome" id="outcome" hidden></div>
       </section>
 
       <aside class="check-cta">

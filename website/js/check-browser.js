@@ -1,6 +1,7 @@
 import {
   setStatus,
   setCheckBusy,
+  setOutcome,
   showResultSkeletons,
   clearResults,
   addResult,
@@ -9,14 +10,15 @@ import {
 
 const status = document.getElementById("status");
 const results = document.getElementById("results");
+const outcome = document.getElementById("outcome");
 const btn = document.getElementById("runCheck");
 
 function run() {
   if (!btn) return;
   setCheckBusy(btn, true, "Reading…");
+  setOutcome(outcome, null);
   showResultSkeletons(results, 5);
   setStatus(status, "running", "Reading local browser signals…");
-  // Yield so the loading UI paints before we fill results.
   window.requestAnimationFrame(() => {
     window.setTimeout(() => {
       clearResults(results);
@@ -36,6 +38,11 @@ function run() {
       addResult(results, "Do Not Track", facts.doNotTrack || "unset");
       addResult(results, "Network info API", facts.connection || "unavailable");
       setStatus(status, "ok", "Local browser snapshot ready.");
+      setOutcome(outcome, {
+        state: "ok",
+        title: "What this means",
+        body: "Sites can read many of these fields without asking. Together they help fingerprint a browser even when your IP changes. A VPN hides the network path; it does not erase these signals. Reduce extensions/unique setups and use privacy-minded browser settings when that matters.",
+      });
       setCheckBusy(btn, false);
     }, 180);
   });

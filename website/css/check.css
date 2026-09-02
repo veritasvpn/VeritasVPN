@@ -298,6 +298,75 @@ body:has(.check-page) .navbar {
   gap: 10px;
 }
 
+.check-explain {
+  display: grid;
+  gap: 16px;
+  max-width: 820px;
+  margin: 0 0 28px;
+}
+
+@media (min-width: 720px) {
+  .check-explain {
+    grid-template-columns: 1fr 1fr;
+    gap: 20px 28px;
+  }
+}
+
+.check-explain h3 {
+  margin: 0 0 6px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cyan);
+}
+
+.check-explain p {
+  margin: 0;
+  color: var(--paper-muted);
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.check-outcome {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(5, 7, 10, 0.4);
+}
+
+.check-outcome[hidden] {
+  display: none !important;
+}
+
+.check-outcome[data-state="ok"] {
+  border-color: rgba(125, 255, 179, 0.35);
+}
+
+.check-outcome[data-state="warn"] {
+  border-color: rgba(255, 204, 102, 0.4);
+}
+
+.check-outcome[data-state="bad"] {
+  border-color: rgba(255, 143, 143, 0.4);
+}
+
+.check-outcome h3 {
+  margin: 0 0 6px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.9rem;
+  color: var(--paper);
+}
+
+.check-outcome p {
+  margin: 0;
+  color: var(--paper-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
 .check-back {
   display: inline-block;
   margin-bottom: 18px;

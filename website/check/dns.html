@@ -33,17 +33,29 @@
       <header class="check-hero">
         <span class="section-kicker">DNS leak test</span>
         <h1>Which DNS resolvers see your lookups?</h1>
-        <p>Without a VPN, DNS often goes to your ISP. That can reveal the sites you resolve even when the page content is HTTPS. This test detects resolvers used for this browser session.</p>
+        <p>Before a page loads, your device asks a DNS resolver for the site’s address. Whoever answers that query can learn which hostnames you visit.</p>
       </header>
+
+      <aside class="check-explain" aria-label="About this check">
+        <div>
+          <h3>What this checks</h3>
+          <p>Which recursive DNS resolvers handle lookups for this browser session, using short-lived probe hostnames. Veritas does not store your query names.</p>
+        </div>
+        <div>
+          <h3>Why it matters</h3>
+          <p>HTTPS hides page content, not the names you resolve. ISP or third-party DNS can still build a browsing map. On VeritasVPN, Protected DNS keeps resolution on the in-tunnel path instead.</p>
+        </div>
+      </aside>
 
       <section class="check-panel">
         <h2>DNS resolvers</h2>
-        <p class="check-note">This version uses short-lived unique hostnames via edns.ip-api.com to correlate recursive resolvers. VeritasVPN does not store your query names. See the Privacy Policy.</p>
+        <p class="check-note">Probe provider: edns.ip-api.com. See the Privacy Policy for details.</p>
         <div class="check-actions">
           <button type="button" class="btn btn-primary" id="runCheck">Run DNS leak test</button>
         </div>
         <div class="check-status" id="status" data-state="">Ready</div>
         <ul class="check-result-list" id="results"></ul>
+        <div class="check-outcome" id="outcome" hidden></div>
       </section>
 
       <aside class="check-cta">

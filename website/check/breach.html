@@ -33,18 +33,30 @@
       <header class="check-hero">
         <span class="section-kicker">Breach check</span>
         <h1>Is my email in a data breach?</h1>
-        <p>We proxy a public breach corpus check and do not store the email you submit. Results can be incomplete and are not a password audit.</p>
+        <p>Stolen databases often include emails and passwords. Knowing an address already appears in a public dump helps you act before someone else does.</p>
       </header>
+
+      <aside class="check-explain" aria-label="About this check">
+        <div>
+          <h3>What this checks</h3>
+          <p>Whether the email you enter appears in public breach corpora (via XposedOrNot). We proxy the lookup and do not store the address as a profile. Results can be incomplete.</p>
+        </div>
+        <div>
+          <h3>Why it matters</h3>
+          <p>A hit usually means that address — and often a password used with it — was exposed somewhere. Change reused passwords, enable 2FA, and treat a “clean” result as incomplete, not a full security audit.</p>
+        </div>
+      </aside>
 
       <section class="check-panel">
         <h2>Check an email</h2>
-        <p class="check-note">Uses XposedOrNot. Prefer an address you are comfortable typing. Anonymous Veritas accounts do not require email.</p>
+        <p class="check-note">Prefer an address you are comfortable typing. Anonymous Veritas accounts do not require email.</p>
         <form class="check-breach-form" id="breachForm">
           <input id="email" name="email" type="email" autocomplete="email" required placeholder="you@example.com" aria-label="Email address">
           <button type="submit" class="btn btn-primary" id="runCheck">Check breaches</button>
         </form>
         <div class="check-status" id="status" data-state="">Ready</div>
         <ul class="check-result-list" id="results"></ul>
+        <div class="check-outcome" id="outcome" hidden></div>
       </section>
 
       <aside class="check-cta">

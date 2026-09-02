@@ -1,6 +1,7 @@
 import {
   setStatus,
   setCheckBusy,
+  setOutcome,
   showResultSkeletons,
   clearResults,
   addResult,
@@ -9,6 +10,7 @@ import {
 
 const status = document.getElementById("status");
 const results = document.getElementById("results");
+const outcome = document.getElementById("outcome");
 const btn = document.getElementById("runCheck");
 
 async function probeOnce(baseUrl, n) {
@@ -34,6 +36,7 @@ async function probeOnce(baseUrl, n) {
 async function run() {
   if (!btn) return;
   setCheckBusy(btn, true, "Probing…");
+  setOutcome(outcome, null);
   showResultSkeletons(results, 6);
   setStatus(status, "running", "Creating DNS probe session…");
   try {
@@ -69,10 +72,15 @@ async function run() {
       setStatus(
         status,
         "warn",
-        "No resolver identities returned. Ad blockers or strict DNS settings may have blocked the probe."
+        "No resolver identities returned."
       );
       addResult(results, "Session", session.sessionId);
       addResult(results, "Notice", session.notice || "");
+      setOutcome(outcome, {
+        state: "warn",
+        title: "What this means",
+        body: "We could not identify which DNS resolvers answered. An ad blocker, strict DNS setting, or blocked probe host may have stopped the test — or your resolver path is hard to fingerprint. Try again after disabling blockers, or re-run while connected to VeritasVPN.",
+      });
       return;
     }
     resolvers.forEach((r, idx) => {
@@ -87,11 +95,21 @@ async function run() {
     setStatus(
       status,
       "warn",
-      "Resolvers were detected for this session. If you expected only a VPN DNS path, you may be leaking DNS."
+      "Resolver identities were detected for this session."
     );
+    setOutcome(outcome, {
+      state: "warn",
+      title: "What this means",
+      body: "These resolvers learn the hostnames this browser looks up. If you expected only Veritas Protected DNS, seeing ISP, Google, Cloudflare, or other third-party resolvers means DNS may be leaking outside the tunnel. Connect VeritasVPN and re-run — the list should change away from your normal ISP/public DNS path.",
+    });
   } catch (err) {
     clearResults(results);
     setStatus(status, "bad", err.message || "DNS leak test failed");
+    setOutcome(outcome, {
+      state: "bad",
+      title: "What this means",
+      body: "The DNS probe failed, so we cannot tell which resolvers see your lookups right now. Retry in a moment.",
+    });
   } finally {
     setCheckBusy(btn, false);
   }
