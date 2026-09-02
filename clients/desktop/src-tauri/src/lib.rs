@@ -1504,7 +1504,7 @@ fi
 printf 'endpoint_ip=%s\ngateway=%s\niface=%s\ngw_if=%s\nstealth_remote=%s\nengine=%s\n' \
   "$ROUTE_IP" "$GW" "$IFACE_NAME" "$GW_IF" "$STEALTH_REMOTE" "$ENGINE" > "$META_FILE"
 
-restore_after_validation_fail() {
+restore_after_validation_fail() {{
   local msg="$1"
   cleanup_killswitch
   ip route del 0.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
@@ -1527,14 +1527,14 @@ restore_after_validation_fail() {
   rm -f "$PID_FILE" "$STEALTH_PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
   echo "$msg" >&2
   exit 1
-}
+}}
 
 # Do not report Connected unless tunnel DNS filtering and HTTPS egress both work.
 DNS_OK=0
 for _ in $(seq 1 20); do
   # Built-in agent test domain must NXDOMAIN through the protected gateway.
   if command -v dig >/dev/null 2>&1; then
-    STATUS="$(dig +time=1 +tries=1 @"$DNS" dns-protection-test.veritasvpn.invalid A 2>/dev/null | awk '/status:/{print $6}' | tr -d ',')"
+    STATUS="$(dig +time=1 +tries=1 @"$DNS" dns-protection-test.veritasvpn.invalid A 2>/dev/null | awk '/status:/{{print $6}}' | tr -d ',')"
     if [[ "$STATUS" == "NXDOMAIN" ]]; then
       DNS_OK=1
       break
