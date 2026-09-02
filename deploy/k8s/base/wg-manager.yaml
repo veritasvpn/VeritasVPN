@@ -33,7 +33,7 @@ spec:
     spec:
       containers:
         - name: wg-manager
-          image: localhost:31500/wg-manager@sha256:ec33cc94485723b36eed42318a86650dbd4d28a04bd366fb2e73d49f0ff55e61
+          image: localhost:31500/wg-manager@sha256:2bc9f1737a2df429f7dc99c004426654c3a57450d37ebe52e0176e55bc1cac4b
           imagePullPolicy: Always
           ports:
             - containerPort: 8080

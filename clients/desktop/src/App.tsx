@@ -1357,20 +1357,24 @@ function App() {
       hadGoodHandshakeRef.current = false;
       hadInterfaceUpRef.current = false;
     };
+    const oldPeer = peerId;
     try {
+      let teardownFailedMsg = "";
       if (tunnelMode === "wireguard" || peerId) {
         const result = await invoke<ConnectResult>("disconnect_wireguard");
-        const oldPeer = peerId;
-        clearUi();
         if (!result.success) {
-          setStatusMsg(result.message || "Disconnect incomplete — approve the admin prompt, or run: sudo bash ~/.veritasvpn/teardown.sh");
-          return;
+          teardownFailedMsg =
+            result.message ||
+            "Disconnect incomplete — approve the admin prompt, or run: sudo bash ~/.veritasvpn/teardown.sh";
         }
-        if (oldPeer) await deletePeer(oldPeer);
       }
+      // Always revoke the server peer on intentional disconnect, even when local
+      // teardown fails — otherwise the kernel peer lingers until PEER_STALE_AFTER.
+      if (oldPeer) await deletePeer(oldPeer);
       clearUi();
-      setStatusMsg("");
+      setStatusMsg(teardownFailedMsg);
     } catch (err) {
+      if (oldPeer) await deletePeer(oldPeer);
       clearUi();
       setStatusMsg(err instanceof Error ? err.message : "Disconnect failed");
     }

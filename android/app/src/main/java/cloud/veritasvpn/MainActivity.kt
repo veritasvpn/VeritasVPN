@@ -171,22 +171,47 @@ class MainActivity : ComponentActivity() {
                     reconnectAttempt = 0
                 }
 
+                fun deletePeerBestEffort(peerId: String?) {
+                    if (peerId.isNullOrBlank()) return
+                    peerCleanupJob = scope.launch(Dispatchers.IO) {
+                        try {
+                            AuthenticatedApi.execute(authRepo, { token ->
+                                ApiClient.delete("/api/v1/wg/peers/$peerId", token)
+                            }) { it.close() }
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+
                 fun performLocalSignOut() {
                     userWantsConnected = false
                     hadEstablishedSession = false
                     cancelReconnect()
+                    val peerId = peerIdForDisconnect()
                     disconnectVpnService()
-                    peerIdForDisconnect()
-                    authRepo.signOut()
-                    billingStatus = null
-                    checkoutUrl = null
-                    billingError = null
-                    checkoutMethod = null
-                    showPlans = false
-                    showDevices = false
-                    showPortForwards = false
-                    showTunnelSettings = false
-                    user = null
+                    // Revoke server peer while auth is still available, then clear local session.
+                    scope.launch {
+                        try {
+                            if (!peerId.isNullOrBlank()) {
+                                withContext(Dispatchers.IO) {
+                                    AuthenticatedApi.execute(authRepo, { token ->
+                                        ApiClient.delete("/api/v1/wg/peers/$peerId", token)
+                                    }) { it.close() }
+                                }
+                            }
+                        } catch (_: Exception) {
+                        }
+                        authRepo.signOut()
+                        billingStatus = null
+                        checkoutUrl = null
+                        billingError = null
+                        checkoutMethod = null
+                        showPlans = false
+                        showDevices = false
+                        showPortForwards = false
+                        showTunnelSettings = false
+                        user = null
+                    }
                 }
 
                 fun handleSessionExpired() {
@@ -834,17 +859,7 @@ class MainActivity : ComponentActivity() {
                             statusMsg = null
                             val disconnectedPeerId = peerIdForDisconnect()
                             disconnectVpnService()
-                            peerCleanupJob = scope.launch(Dispatchers.IO) {
-                                try {
-                                    if (disconnectedPeerId != null) {
-                                        AuthenticatedApi.execute(authRepo, { token ->
-                                            ApiClient.delete(
-                                                "/api/v1/wg/peers/$disconnectedPeerId", token
-                                            )
-                                        }) { it.close() }
-                                    }
-                                } catch (_: Exception) {}
-                            }
+                            deletePeerBestEffort(disconnectedPeerId)
                         },
                         onSignOut = { performLocalSignOut() },
                         onSignOutEverywhere = {
@@ -852,6 +867,9 @@ class MainActivity : ComponentActivity() {
                                 userWantsConnected = false
                                 hadEstablishedSession = false
                                 cancelReconnect()
+                                val peerId = peerIdForDisconnect()
+                                deletePeerBestEffort(peerId)
+                                peerCleanupJob?.join()
                                 try {
                                     withContext(Dispatchers.IO) {
                                         authRepo.logoutAllSessions()
@@ -861,7 +879,6 @@ class MainActivity : ComponentActivity() {
                                     authRepo.signOut()
                                 }
                                 disconnectVpnService()
-                                peerIdForDisconnect()
                                 billingStatus = null
                                 showPlans = false
                                 showDevices = false

@@ -547,23 +547,21 @@ func (s *Service) DeletePeer(ctx context.Context, peerID, accountID string) erro
 		}
 	}
 
+	// Notify the agent before soft-deleting (same ordering as ExpirePeer) so a
+	// successful DELETE does not leave a kernel peer until PEER_STALE_AFTER.
+	// On push failure leave the peer active so stale GC can still expire it.
+	pushCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	err = s.communicator.PushPeerRemoved(pushCtx, peer.ServerID, peer)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("remove peer from agent: %w", err)
+	}
+
 	if err := s.postgres.DeletePeer(ctx, peerID, accountID); err != nil {
 		return fmt.Errorf("delete peer: %w", err)
 	}
 
 	_ = s.redis.ReleaseIP(ctx, peer.ServerID, peer.AssignedIP)
-
-	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := s.communicator.PushPeerRemoved(bgCtx, peer.ServerID, peer); err != nil {
-			s.log.Warn("agent notification failed for deleted peer",
-				"peer_id", peerID,
-				"server_id", peer.ServerID,
-				"error", err.Error(),
-			)
-		}
-	}()
 
 	s.log.Info("peer deleted", "peer_id", peerID, "account_id", accountID)
 
