@@ -1,5 +1,7 @@
 import {
   setStatus,
+  setCheckBusy,
+  showResultSkeletons,
   clearResults,
   addResult,
   getPublicIp,
@@ -33,13 +35,14 @@ function waitForLeaflet(timeoutMs = 4000) {
   });
 }
 
-async function probeDns() {
+async function probeDns(onProgress) {
   try {
     const session = await fetchJson("/api/check/dns/session", { method: "POST" });
     const baseUrl = session.probeUrl || "https://edns.ip-api.com/json";
     const count = session.probes || 6;
     const ips = new Set();
     for (let i = 0; i < count; i += 1) {
+      onProgress?.(i, count);
       try {
         const url = `${baseUrl}?_=${Date.now()}-${i}`;
         const res = await fetch(url, { cache: "no-store", mode: "cors", redirect: "follow" });
@@ -49,6 +52,7 @@ async function probeDns() {
       } catch {
         /* continue */
       }
+      onProgress?.(i + 1, count);
     }
     return [...ips];
   } catch {
@@ -58,16 +62,25 @@ async function probeDns() {
 
 async function run() {
   if (!btn) return;
-  btn.disabled = true;
-  clearResults(results);
-  setStatus(status, "running", "Running IP, DNS, VPN, and browser checks…");
+  setCheckBusy(btn, true, "Running…");
+  showResultSkeletons(results, 6);
+  setStatus(status, "running", "Starting full connection report…");
   try {
-    const [ipInfo, rtcIps, v6, dnsIps] = await Promise.all([
+    setStatus(status, "running", "Collecting IP, WebRTC, and IPv6…");
+    const [ipInfo, rtcIps, v6] = await Promise.all([
       getPublicIp(),
       detectWebRtcIPs(),
       detectIPv6(),
-      probeDns(),
     ]);
+
+    const dnsIps = await probeDns((done, total) => {
+      setStatus(status, "running", "Probing DNS resolvers…", {
+        progress: done,
+        total,
+      });
+    });
+
+    setStatus(status, "running", "Assembling report…");
     const facts = collectBrowserFacts();
     const publicRtc = rtcIps.filter((ip) => !isPrivateIP(ip));
     const findings = [];
@@ -76,6 +89,7 @@ async function run() {
     if (publicRtc.length) findings.push(`WebRTC public candidates: ${publicRtc.join(", ")}`);
     if (v6) findings.push(`IPv6 observed: ${v6}`);
 
+    clearResults(results);
     addResult(results, "Public IP", ipInfo.ip);
     addResult(results, "Network hint", ipInfo.asOrganization || ipInfo.country || "—");
     addResult(results, "DNS resolvers", dnsIps.length ? dnsIps.join(", ") : "None detected");
@@ -87,6 +101,7 @@ async function run() {
     addResult(results, "Summary", findings.join(" · "));
 
     try {
+      setStatus(status, "running", "Loading approximate location map…");
       await waitForLeaflet();
       renderIpMap(mapEl, ipInfo, { unavailableEl: mapUnavailable });
     } catch {
@@ -106,10 +121,11 @@ async function run() {
         : "Quick checks look quiet. Re-run after connecting a VPN to compare."
     );
   } catch (err) {
+    clearResults(results);
     setStatus(status, "bad", err.message || "Report failed");
     renderIpMap(mapEl, {}, { unavailableEl: mapUnavailable });
   } finally {
-    btn.disabled = false;
+    setCheckBusy(btn, false);
   }
 }
 

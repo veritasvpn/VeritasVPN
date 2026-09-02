@@ -1,17 +1,125 @@
 /* Shared helpers for /check tools */
 
-export function setStatus(el, state, text) {
+/**
+ * @param {HTMLElement | null} el
+ * @param {string} state
+ * @param {string} text
+ * @param {{ progress?: number, total?: number }} [opts]
+ */
+export function setStatus(el, state, text, opts = {}) {
   if (!el) return;
   el.dataset.state = state || "";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
+
+  if (state === "running") {
+    el.replaceChildren();
+    const wrap = document.createElement("div");
+    wrap.className = "check-loading";
+
+    const spinner = document.createElement("span");
+    spinner.className = "check-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+
+    const copy = document.createElement("div");
+    copy.className = "check-loading-copy";
+
+    const msg = document.createElement("span");
+    msg.className = "check-loading-text";
+    msg.textContent = text || "Working…";
+    copy.append(msg);
+
+    const total = Number(opts.total);
+    const progress = Number(opts.progress);
+    if (Number.isFinite(total) && total > 0 && Number.isFinite(progress)) {
+      const clamped = Math.max(0, Math.min(progress, total));
+      const meta = document.createElement("span");
+      meta.className = "check-loading-meta";
+      meta.textContent = `${clamped} of ${total}`;
+      copy.append(meta);
+
+      const bar = document.createElement("div");
+      bar.className = "check-progress";
+      bar.setAttribute("role", "progressbar");
+      bar.setAttribute("aria-valuemin", "0");
+      bar.setAttribute("aria-valuemax", String(total));
+      bar.setAttribute("aria-valuenow", String(clamped));
+      bar.setAttribute("aria-label", text || "Progress");
+      const fill = document.createElement("div");
+      fill.className = "check-progress-fill";
+      fill.style.width = `${(clamped / total) * 100}%`;
+      bar.append(fill);
+      wrap.append(spinner, copy, bar);
+    } else {
+      wrap.append(spinner, copy);
+    }
+
+    el.append(wrap);
+    return;
+  }
+
   el.textContent = text || "";
 }
 
+/**
+ * Toggle primary check button busy state with inline spinner.
+ * @param {HTMLButtonElement | null} btn
+ * @param {boolean} busy
+ * @param {string} [busyLabel]
+ */
+export function setCheckBusy(btn, busy, busyLabel = "Working…") {
+  if (!btn) return;
+  if (!btn.dataset.idleLabel) {
+    btn.dataset.idleLabel = btn.textContent.trim() || "Run check";
+  }
+  btn.disabled = Boolean(busy);
+  btn.setAttribute("aria-busy", busy ? "true" : "false");
+  btn.classList.toggle("is-busy", Boolean(busy));
+
+  if (busy) {
+    btn.replaceChildren();
+    const spinner = document.createElement("span");
+    spinner.className = "check-spinner check-spinner--btn";
+    spinner.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.textContent = busyLabel;
+    btn.append(spinner, label);
+  } else {
+    btn.textContent = btn.dataset.idleLabel;
+  }
+}
+
+/**
+ * Placeholder result rows while a check is in flight.
+ * @param {HTMLElement | null} listEl
+ * @param {number} [count]
+ */
+export function showResultSkeletons(listEl, count = 4) {
+  if (!listEl) return;
+  listEl.classList.add("is-loading");
+  listEl.replaceChildren();
+  for (let i = 0; i < count; i += 1) {
+    const li = document.createElement("li");
+    li.className = "check-skeleton";
+    li.setAttribute("aria-hidden", "true");
+    const lineSm = document.createElement("span");
+    lineSm.className = "check-skeleton-line check-skeleton-line--sm";
+    const line = document.createElement("span");
+    line.className = "check-skeleton-line";
+    li.append(lineSm, line);
+    listEl.append(li);
+  }
+}
+
 export function clearResults(listEl) {
-  if (listEl) listEl.innerHTML = "";
+  if (!listEl) return;
+  listEl.classList.remove("is-loading");
+  listEl.replaceChildren();
 }
 
 export function addResult(listEl, label, value) {
   if (!listEl) return;
+  listEl.classList.remove("is-loading");
   const li = document.createElement("li");
   const lab = document.createElement("span");
   lab.className = "label";

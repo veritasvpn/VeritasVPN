@@ -1,4 +1,11 @@
-import { setStatus, clearResults, addResult, getPublicIp } from "/js/check-common.js";
+import {
+  setStatus,
+  setCheckBusy,
+  showResultSkeletons,
+  clearResults,
+  addResult,
+  getPublicIp,
+} from "/js/check-common.js";
 import { renderIpMap } from "/js/check-map.js";
 
 const status = document.getElementById("status");
@@ -25,11 +32,12 @@ function waitForLeaflet(timeoutMs = 4000) {
 
 async function run() {
   if (!btn) return;
-  btn.disabled = true;
-  clearResults(results);
-  setStatus(status, "running", "Checking…");
+  setCheckBusy(btn, true, "Checking…");
+  showResultSkeletons(results, 5);
+  setStatus(status, "running", "Looking up this connection’s public IP…");
   try {
     const data = await getPublicIp();
+    clearResults(results);
     addResult(results, "Public IP", data.ip);
     addResult(results, "Country", data.country);
     addResult(results, "Network / ASN hint", data.asOrganization);
@@ -40,20 +48,24 @@ async function run() {
     setStatus(status, "ok", "This is the address visible on this request.");
 
     try {
+      setStatus(status, "running", "Loading approximate location map…");
       await waitForLeaflet();
       renderIpMap(mapEl, data, { unavailableEl: mapUnavailable });
+      setStatus(status, "ok", "This is the address visible on this request.");
     } catch {
       renderIpMap(mapEl, {}, { unavailableEl: mapUnavailable });
       if (mapUnavailable) {
         mapUnavailable.textContent = "Map library failed to load.";
         mapUnavailable.classList.add("is-visible");
       }
+      setStatus(status, "ok", "This is the address visible on this request.");
     }
   } catch (err) {
+    clearResults(results);
     setStatus(status, "bad", err.message || "Check failed");
     renderIpMap(mapEl, {}, { unavailableEl: mapUnavailable });
   } finally {
-    btn.disabled = false;
+    setCheckBusy(btn, false);
   }
 }
 

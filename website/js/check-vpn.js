@@ -1,5 +1,7 @@
 import {
   setStatus,
+  setCheckBusy,
+  showResultSkeletons,
   clearResults,
   addResult,
   getPublicIp,
@@ -14,8 +16,8 @@ const btn = document.getElementById("runCheck");
 
 async function run() {
   if (!btn) return;
-  btn.disabled = true;
-  clearResults(results);
+  setCheckBusy(btn, true, "Checking…");
+  showResultSkeletons(results, 4);
   setStatus(status, "running", "Collecting IP, WebRTC, and IPv6 signals…");
   try {
     const [ipInfo, rtcIps, v6] = await Promise.all([
@@ -23,6 +25,7 @@ async function run() {
       detectWebRtcIPs(),
       detectIPv6(),
     ]);
+    clearResults(results);
     addResult(results, "Public IPv4/IPv6 (HTTPS)", ipInfo.ip);
     addResult(results, "Network hint", ipInfo.asOrganization || ipInfo.country);
     addResult(
@@ -48,9 +51,10 @@ async function run() {
       setStatus(status, "ok", "Basic leak signals look quiet for this session.");
     }
   } catch (err) {
+    clearResults(results);
     setStatus(status, "bad", err.message || "VPN leak test failed");
   } finally {
-    btn.disabled = false;
+    setCheckBusy(btn, false);
   }
 }
 

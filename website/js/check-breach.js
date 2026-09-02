@@ -1,4 +1,11 @@
-import { setStatus, clearResults, addResult, fetchJson } from "/js/check-common.js";
+import {
+  setStatus,
+  setCheckBusy,
+  showResultSkeletons,
+  clearResults,
+  addResult,
+  fetchJson,
+} from "/js/check-common.js";
 
 const status = document.getElementById("status");
 const results = document.getElementById("results");
@@ -8,8 +15,8 @@ const btn = document.getElementById("runCheck");
 form?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const email = document.getElementById("email")?.value.trim() || "";
-  if (btn) btn.disabled = true;
-  clearResults(results);
+  setCheckBusy(btn, true, "Checking…");
+  showResultSkeletons(results, 3);
   setStatus(status, "running", "Checking public breach corpora…");
   try {
     const data = await fetchJson("/api/check/breach", {
@@ -17,6 +24,7 @@ form?.addEventListener("submit", async (event) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email }),
     });
+    clearResults(results);
     addResult(results, "Appears breached", data.breached ? "Yes" : "No matches found");
     addResult(results, "Breach count", data.breachCount);
     if (data.breaches && data.breaches.length) {
@@ -31,8 +39,9 @@ form?.addEventListener("submit", async (event) => {
         : "No match in the checked corpus."
     );
   } catch (err) {
+    clearResults(results);
     setStatus(status, "bad", err.message || "Breach check failed");
   } finally {
-    if (btn) btn.disabled = false;
+    setCheckBusy(btn, false);
   }
 });

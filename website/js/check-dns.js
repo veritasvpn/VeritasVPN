@@ -1,4 +1,11 @@
-import { setStatus, clearResults, addResult, fetchJson } from "/js/check-common.js";
+import {
+  setStatus,
+  setCheckBusy,
+  showResultSkeletons,
+  clearResults,
+  addResult,
+  fetchJson,
+} from "/js/check-common.js";
 
 const status = document.getElementById("status");
 const results = document.getElementById("results");
@@ -26,16 +33,24 @@ async function probeOnce(baseUrl, n) {
 
 async function run() {
   if (!btn) return;
-  btn.disabled = true;
-  clearResults(results);
-  setStatus(status, "running", "Creating session and probing resolvers…");
+  setCheckBusy(btn, true, "Probing…");
+  showResultSkeletons(results, 6);
+  setStatus(status, "running", "Creating DNS probe session…");
   try {
     const session = await fetchJson("/api/check/dns/session", { method: "POST" });
     const count = session.probes || 6;
     const baseUrl = session.probeUrl || "https://edns.ip-api.com/json";
     const answers = [];
     for (let i = 0; i < count; i += 1) {
+      setStatus(status, "running", "Probing recursive resolvers…", {
+        progress: i,
+        total: count,
+      });
       answers.push(await probeOnce(baseUrl, i));
+      setStatus(status, "running", "Probing recursive resolvers…", {
+        progress: i + 1,
+        total: count,
+      });
     }
     const resolverMap = new Map();
     for (const ans of answers) {
@@ -49,6 +64,7 @@ async function run() {
       resolverMap.get(ip).hits += 1;
     }
     const resolvers = [...resolverMap.values()].sort((a, b) => b.hits - a.hits);
+    clearResults(results);
     if (!resolvers.length) {
       setStatus(
         status,
@@ -74,9 +90,10 @@ async function run() {
       "Resolvers were detected for this session. If you expected only a VPN DNS path, you may be leaking DNS."
     );
   } catch (err) {
+    clearResults(results);
     setStatus(status, "bad", err.message || "DNS leak test failed");
   } finally {
-    btn.disabled = false;
+    setCheckBusy(btn, false);
   }
 }
 
