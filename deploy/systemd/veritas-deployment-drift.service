@@ -5,6 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=root
+# Repo is owned by jpg; running as root trips git safe.directory ("dubious
+# ownership") on every timer tick and previously masked that as a clean tree.
+User=jpg
+Group=jpg
+Environment=KUBECONFIG=/home/jpg/.kube/config
 WorkingDirectory=/home/jpg/VeritasVPN
 ExecStart=/home/jpg/VeritasVPN/deploy/verify/deployment-drift.sh

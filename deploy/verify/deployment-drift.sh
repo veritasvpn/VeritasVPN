@@ -18,7 +18,16 @@ check() {
   fi
 }
 
-check "git working tree is clean" test -z "$(git status --porcelain)"
+# Root (or any other uid) running against a jpg-owned checkout must not spam
+# "dubious ownership" / safe.directory into the journal, and must not treat a
+# failed git invocation as a clean tree (empty stdout + test -z → false OK).
+git_working_tree_clean() {
+  local status
+  status="$(git -c "safe.directory=$ROOT" status --porcelain 2>/dev/null)" || return 1
+  test -z "$status"
+}
+
+check "git working tree is clean" git_working_tree_clean
 check "production kustomization renders" kubectl kustomize deploy/k8s/overlays/k3s >/dev/null
 check "monitoring kustomization renders" kubectl kustomize deploy/k8s/monitoring >/dev/null
 check "backup metrics directory is readable" test -r /var/lib/veritasvpn/metrics
