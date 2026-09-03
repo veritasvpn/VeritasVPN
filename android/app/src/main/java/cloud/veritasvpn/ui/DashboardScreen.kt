@@ -303,7 +303,7 @@ private fun LiveTransferStats(
         Text(
             buildString {
                 append(if (!dnsGateway.isNullOrBlank()) "Gateway $dnsGateway" else "Tunnel gateway")
-                append(" · malware/phishing blocks via DoH upstreams. Apps with their own DoH may bypass.")
+                append(" · malware/phishing blocks via DoH upstreams. Well-known public DoH resolvers are blocked.")
             },
             color = PaperDim,
             fontSize = 12.sp,

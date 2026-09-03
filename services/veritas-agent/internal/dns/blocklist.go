@@ -60,6 +60,8 @@ func NewBlocklist(sourceList, statePath string, refreshEvery time.Duration, obse
 	if refreshEvery <= 0 {
 		refreshEvery = 6 * time.Hour
 	}
+	domains := make(map[string]struct{}, len(builtInDoHBypassDomains)+1)
+	addBuiltInProtectionDomains(domains)
 	return &Blocklist{
 		sources:      splitSources(sourceList),
 		statePath:    statePath,
@@ -67,7 +69,7 @@ func NewBlocklist(sourceList, statePath string, refreshEvery time.Duration, obse
 		client:       &http.Client{Timeout: blocklistFetchTimeout},
 		log:          log,
 		observer:     observer,
-		domains:      map[string]struct{}{ProtectedDNSTestDomain: struct{}{}},
+		domains:      domains,
 	}
 }
 
@@ -260,6 +262,7 @@ func (b *Blocklist) loadState() error {
 
 func addBuiltInProtectionDomains(domains map[string]struct{}) {
 	domains[ProtectedDNSTestDomain] = struct{}{}
+	addBuiltInDoHBypassDomains(domains)
 }
 
 func (b *Blocklist) writeState(domains map[string]struct{}, _ time.Time) error {

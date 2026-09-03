@@ -47,7 +47,7 @@
         <li>Destination IP/port pairs of your VPN sessions for later inspection</li>
         <li>Payload contents of WireGuard traffic</li>
       </ul>
-      <p>Our DNS-protection service is <strong>best-effort</strong> for WireGuard clients that use the in-tunnel resolver. It keeps aggregate operational counts such as total requests, blocked-request totals, resolver errors, and blocklist freshness. Prometheus metrics do not record query names. In-app “blocked” counters are keyed by the temporary WireGuard <strong>tunnel IP</strong> assigned to your peer—not your public WAN IP—and are cleared when that peer is removed. Upstream DNS-over-HTTPS resolvers (for example Cloudflare or Google) still see the hostnames we forward for non-blocked lookups. Apps or browsers that speak their own DNS-over-HTTPS may bypass Protected DNS.</p>
+      <p>Our DNS-protection service is <strong>best-effort</strong> for WireGuard clients that use the in-tunnel resolver. It keeps aggregate operational counts such as total requests, blocked-request totals, resolver errors, and blocklist freshness. Prometheus metrics do not record query names. In-app “blocked” counters are keyed by the temporary WireGuard <strong>tunnel IP</strong> assigned to your peer—not your public WAN IP—and are cleared when that peer is removed. Upstream DNS-over-HTTPS resolvers (for example Cloudflare or Google) still see the hostnames we forward for non-blocked lookups. Well-known public DNS-over-HTTPS resolvers are blocked for WireGuard peers; uncommon or custom DoH endpoints remain a residual risk.</p>
 
       <h2>3. What we do collect</h2>
       <p>To run authentication, billing, and WireGuard peer management we may store:</p>

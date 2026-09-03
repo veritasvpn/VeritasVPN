@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildRulesetIsFailClosedAndConvergent(t *testing.T) {
-	rules := buildRuleset("veritas", "wg0", "enp1s0", "10.42.0.0/24", "10.43.0.0/16", "10.0.0.0/24", "10.0.0.1", 51820)
+	rules := buildRuleset("veritas", "wg0", "enp1s0", "10.42.0.0/24", "10.43.0.0/16", "10.0.0.0/24", "10.0.0.1", 51820, []string{"1.1.1.1", "8.8.8.8"})
 	for _, want := range []string{
 		"destroy table inet veritas",
 		"policy drop",
@@ -20,6 +20,11 @@ func TestBuildRulesetIsFailClosedAndConvergent(t *testing.T) {
 		"masquerade",
 		"type nat hook prerouting priority dstnat",
 		"iifname \"wg0\" udp dport 53 redirect to :53",
+		"add set inet veritas doh_v4",
+		"add element inet veritas doh_v4 { 1.1.1.1, 8.8.8.8 }",
+		"ip daddr @doh_v4 tcp dport 443 counter drop",
+		"ip daddr @doh_v4 udp dport 443 counter drop",
+		"udp dport 853 counter drop",
 	} {
 		if !strings.Contains(rules, want) {
 			t.Fatalf("ruleset missing %q:\n%s", want, rules)
@@ -34,6 +39,13 @@ func TestBuildRulesetIsFailClosedAndConvergent(t *testing.T) {
 	// Final VPN accept must not be a bare iifname wg0 accept.
 	if strings.Contains(rules, "forward iifname \"wg0\" accept\n") {
 		t.Fatalf("bare wg0 accept would allow LAN/peer lateral movement:\n%s", rules)
+	}
+}
+
+func TestBuildRulesetOmitsDoHSetWhenDisabled(t *testing.T) {
+	rules := buildRuleset("veritas", "wg0", "enp1s0", "10.42.0.0/24", "10.43.0.0/16", "10.0.0.0/24", "10.0.0.1", 51820, nil)
+	if strings.Contains(rules, "doh_v4") {
+		t.Fatalf("expected no doh_v4 set when IP list empty:\n%s", rules)
 	}
 }
 

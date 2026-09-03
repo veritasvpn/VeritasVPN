@@ -314,7 +314,7 @@ func (m *Manager) Reconcile(wgIface string, wgPort, mbps int) error {
 		return fmt.Errorf("invalid DNS gateway IP %q", dnsIP)
 	}
 
-	if err := m.runScript(buildRuleset(m.tableName, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP, wgPort)); err != nil {
+	if err := m.runScript(buildRuleset(m.tableName, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP, wgPort, doHBlockIPs())); err != nil {
 		return err
 	}
 	return m.reapplyForwardAccepts()
@@ -356,80 +356,93 @@ func validInterfaceName(name string) bool {
 	return true
 }
 
-func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP string, wgPort int) string {
+func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP string, wgPort int, dohIPs []string) string {
 	q := strconv.Quote
 
 	var b strings.Builder
 	lines := []string{
 		"destroy table inet " + table,
 		"add table inet " + table,
-
+	}
+	if len(dohIPs) > 0 {
+		lines = append(lines,
+			"add set inet "+table+" doh_v4 { type ipv4_addr; }",
+			"add element inet "+table+" doh_v4 { "+strings.Join(dohIPs, ", ")+" }",
+		)
+	}
+	lines = append(lines,
 		// Enforce the VPN DNS resolver even when a client attempts to use an
 		// external plain-DNS server. Redirecting happens before forwarding, so
 		// these queries reach the local resolver and never leave the host.
-		"add chain inet " + table + " dns_redirect { type nat hook prerouting priority dstnat; policy accept; }",
-		"add rule inet " + table + " dns_redirect iifname " + q(wgIface) + " udp dport 53 redirect to :53",
-		"add rule inet " + table + " dns_redirect iifname " + q(wgIface) + " tcp dport 53 redirect to :53",
+		"add chain inet "+table+" dns_redirect { type nat hook prerouting priority dstnat; policy accept; }",
+		"add rule inet "+table+" dns_redirect iifname "+q(wgIface)+" udp dport 53 redirect to :53",
+		"add rule inet "+table+" dns_redirect iifname "+q(wgIface)+" tcp dport 53 redirect to :53",
 
 		// NAT only for VPN clients leaving via the real uplink.
-		"add chain inet " + table + " nat { type nat hook postrouting priority srcnat; policy accept; }",
-		"add rule inet " + table + " nat iifname " + q(wgIface) + " oifname " + q(egress) + " masquerade",
+		"add chain inet "+table+" nat { type nat hook postrouting priority srcnat; policy accept; }",
+		"add rule inet "+table+" nat iifname "+q(wgIface)+" oifname "+q(egress)+" masquerade",
 
 		// Fail-closed forward.
-		"add chain inet " + table + " forward { type filter hook forward priority filter; policy drop; }",
+		"add chain inet "+table+" forward { type filter hook forward priority filter; policy drop; }",
 
 		// Preserve Kubernetes CNI/service forwarding (never from the VPN iface).
-		"add rule inet " + table + " forward iifname != " + q(wgIface) + " ip saddr " + podCIDR + " accept",
-		"add rule inet " + table + " forward iifname != " + q(wgIface) + " ip daddr " + podCIDR + " accept",
-		"add rule inet " + table + " forward iifname != " + q(wgIface) + " ip saddr " + serviceCIDR + " accept",
-		"add rule inet " + table + " forward iifname != " + q(wgIface) + " ip daddr " + serviceCIDR + " accept",
-		"add rule inet " + table + " forward iifname \"cni0\" accept",
-		"add rule inet " + table + " forward oifname \"cni0\" accept",
-		"add rule inet " + table + " forward iifname \"flannel.1\" accept",
-		"add rule inet " + table + " forward oifname \"flannel.1\" accept",
+		"add rule inet "+table+" forward iifname != "+q(wgIface)+" ip saddr "+podCIDR+" accept",
+		"add rule inet "+table+" forward iifname != "+q(wgIface)+" ip daddr "+podCIDR+" accept",
+		"add rule inet "+table+" forward iifname != "+q(wgIface)+" ip saddr "+serviceCIDR+" accept",
+		"add rule inet "+table+" forward iifname != "+q(wgIface)+" ip daddr "+serviceCIDR+" accept",
+		"add rule inet "+table+" forward iifname \"cni0\" accept",
+		"add rule inet "+table+" forward oifname \"cni0\" accept",
+		"add rule inet "+table+" forward iifname \"flannel.1\" accept",
+		"add rule inet "+table+" forward oifname \"flannel.1\" accept",
 
 		// VPN path: established return traffic first.
-		"add rule inet " + table + " forward ct state established,related accept",
+		"add rule inet "+table+" forward ct state established,related accept",
 
 		// Port-forward NEW accepts are appended after Reconcile (comment pf:<id>).
 
 		// No client-to-client, no hairpin onto the tunnel.
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(wgIface) + " counter drop",
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " ip daddr " + wgSubnet + " counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(wgIface)+" counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr "+wgSubnet+" counter drop",
 
 		// Block VPN clients from LAN, cloud metadata, and other private ranges.
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " ip daddr 10.0.0.0/8 counter drop",
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " ip daddr 172.16.0.0/12 counter drop",
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " ip daddr 192.168.0.0/16 counter drop",
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " ip daddr 169.254.0.0/16 counter drop",
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " ip daddr 127.0.0.0/8 counter drop",
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " ip daddr 100.64.0.0/10 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr 10.0.0.0/8 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr 172.16.0.0/12 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr 192.168.0.0/16 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr 169.254.0.0/16 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr 127.0.0.0/8 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr 100.64.0.0/10 counter drop",
 
-		// DNS protection is mandatory for WireGuard clients. Permit only the
-		// in-tunnel gateway (handled by input below), and prevent plain DNS or
-		// DNS-over-TLS from bypassing its malware/phishing policy. DNS-over-HTTPS
-		// cannot be blocked generically without breaking ordinary HTTPS traffic.
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(egress) + " udp dport 53 counter drop",
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(egress) + " tcp dport 53 counter drop",
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(egress) + " udp dport 853 counter drop",
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(egress) + " tcp dport 853 counter drop",
-
+		// DNS protection: plain DNS and DoT cannot bypass the gateway. Known
+		// public DoH resolver anycast IPs are dropped on TCP/UDP 443 (see
+		// doh_v4). Unknown/custom DoH endpoints remain a residual risk.
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" udp dport 53 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" tcp dport 53 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" udp dport 853 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" tcp dport 853 counter drop",
+	)
+	if len(dohIPs) > 0 {
+		lines = append(lines,
+			"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" ip daddr @doh_v4 tcp dport 443 counter drop",
+			"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" ip daddr @doh_v4 udp dport 443 counter drop",
+		)
+	}
+	lines = append(lines,
 		// MSS clamp + allow only VPN -> public egress.
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(egress) + " tcp flags syn tcp option maxseg size set 1380",
-		"add rule inet " + table + " forward oifname " + q(wgIface) + " tcp flags syn tcp option maxseg size set 1380",
-		"add rule inet " + table + " forward iifname " + q(wgIface) + " oifname " + q(egress) + " accept",
-		"add rule inet " + table + " forward iifname " + q(egress) + " oifname " + q(wgIface) + " ct state established,related accept",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" tcp flags syn tcp option maxseg size set 1380",
+		"add rule inet "+table+" forward oifname "+q(wgIface)+" tcp flags syn tcp option maxseg size set 1380",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" accept",
+		"add rule inet "+table+" forward iifname "+q(egress)+" oifname "+q(wgIface)+" ct state established,related accept",
 
 		// Input: allow WG handshakes and VPN DNS; leave general host policy to veritas_filter.
-		"add chain inet " + table + " input { type filter hook input priority filter; policy accept; }",
-		"add rule inet " + table + " input ct state established,related accept",
-		"add rule inet " + table + " input iifname " + q(wgIface) + " ip daddr " + dnsIP + " udp dport 53 accept",
-		"add rule inet " + table + " input iifname " + q(wgIface) + " ip daddr " + dnsIP + " tcp dport 53 accept",
-		"add rule inet " + table + " input iifname " + q(wgIface) + " ip protocol icmp accept",
-		"add rule inet " + table + " input udp dport " + strconv.Itoa(wgPort) + " accept",
+		"add chain inet "+table+" input { type filter hook input priority filter; policy accept; }",
+		"add rule inet "+table+" input ct state established,related accept",
+		"add rule inet "+table+" input iifname "+q(wgIface)+" ip daddr "+dnsIP+" udp dport 53 accept",
+		"add rule inet "+table+" input iifname "+q(wgIface)+" ip daddr "+dnsIP+" tcp dport 53 accept",
+		"add rule inet "+table+" input iifname "+q(wgIface)+" ip protocol icmp accept",
+		"add rule inet "+table+" input udp dport "+strconv.Itoa(wgPort)+" accept",
 		// Drop any other unsolicited packets arriving from VPN clients.
-		"add rule inet " + table + " input iifname " + q(wgIface) + " counter drop",
-	}
+		"add rule inet "+table+" input iifname "+q(wgIface)+" counter drop",
+	)
 	for _, line := range lines {
 		b.WriteString(line)
 		b.WriteByte('\n')

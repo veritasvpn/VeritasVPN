@@ -7,7 +7,7 @@ Last updated: 2026-09-02
 - Advertised UDP endpoint often public **443** (router → host **51820**)
 - Optional **Stealth** (Linux desktop): WireGuard over TLS/WebSocket (`wstunnel`) on TCP **443**
 - Premium **port forwarding** (max 2): public IP:port → peer; recommended **40000–49999**
-- Always-on private DNS gateway (while connected) with DoH upstreams + malware/phishing blocklist; Prometheus has no query names; UI blocked counts are per tunnel IP / session delta
+- Always-on private DNS gateway (while connected) with DoH upstreams + malware/phishing blocklist; well-known public DoH resolver IPs/hostnames blocked for peers; Prometheus has no query names; UI blocked counts are per tunnel IP / session delta
 - Per-device bandwidth cap (~150 Mbps)
 - 5 devices; Premium gate via BTCPay (Bitcoin)
 

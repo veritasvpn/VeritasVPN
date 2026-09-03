@@ -164,7 +164,7 @@ export function SettingsDrawer({
                   {dnsBlockedThisSession !== null ? ` · ${dnsBlockedThisSession} blocked this session` : ""}
                 </span>
                 <span className="settings-dns-explainer">
-                  Malware and phishing hostnames return NXDOMAIN. Lookups use DNS-over-HTTPS upstreams. Apps that speak their own DoH may bypass this gateway.
+                  Malware and phishing hostnames return NXDOMAIN. Lookups use DNS-over-HTTPS upstreams. Well-known public DoH resolvers are blocked; uncommon DoH endpoints may still bypass.
                 </span>
               </div>
             ) : (

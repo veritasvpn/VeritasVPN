@@ -106,7 +106,7 @@ fun TunnelSettingsScreen(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "Lookups use DNS-over-HTTPS upstreams. Apps that speak their own DoH may bypass this gateway.",
+                "Lookups use DNS-over-HTTPS upstreams. Well-known public DoH resolvers are blocked; uncommon DoH endpoints may still bypass.",
                 color = PaperDim,
                 fontSize = 12.sp,
                 lineHeight = 16.sp

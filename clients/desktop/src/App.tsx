@@ -2068,7 +2068,7 @@ function App() {
                       {connected && dnsGateway && (
                         <div className="live-stats-dns-status" role="status">
                           <strong>Protected DNS on</strong>
-                          <span>Gateway {dnsGateway} · malware/phishing blocks via DoH upstreams. Apps with their own DoH may bypass.</span>
+                          <span>Gateway {dnsGateway} · malware/phishing blocks via DoH upstreams. Well-known public DoH resolvers are blocked.</span>
                         </div>
                       )}
                     </div>
