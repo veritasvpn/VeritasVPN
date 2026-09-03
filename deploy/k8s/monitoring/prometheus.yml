@@ -17,6 +17,7 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
+  # hostNetwork agent; requires METRICS_BIND=0.0.0.0 (WAN blocked by host firewall).
   - job_name: veritas-agent
     static_configs:
       - targets: ["veritas-agent.veritas.svc.cluster.local:9090"]

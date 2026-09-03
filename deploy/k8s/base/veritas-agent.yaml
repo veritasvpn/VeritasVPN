@@ -133,12 +133,12 @@ spec:
             # not ~5m, to cut add/remove/stale churn vs the bandwidth reconciler.
             - name: PEER_STALE_AFTER
               value: "30m"
-            # Prefer loopback. hostNetwork probes use host:127.0.0.1 below.
-            # Prefer ClusterIP scrape (headless service) over NodePort; if a
-            # non-loopback bind is ever required, block WAN/LAN via host firewall
-            # (deploy/node/veritas-firewall.sh) rather than exposing NodePort.
+            # hostNetwork + ClusterIP scrape (prometheus → veritas-agent:9090)
+            # requires a non-loopback bind. WAN exposure is blocked by
+            # deploy/node/veritas-firewall.sh (drops 9090 on the egress iface).
+            # Do not use 127.0.0.1 here — it breaks up{job="veritas-agent"}.
             - name: METRICS_BIND
-              value: "127.0.0.1"
+              value: "0.0.0.0"
             - name: METRICS_PORT
               value: "9090"
             - name: AGENT_TOKEN_FILE
