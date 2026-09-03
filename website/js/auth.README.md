@@ -15,3 +15,5 @@ Firebase Authentication for the marketing site and shared helpers for the accoun
 - `goToDashboard(hash)`, `ACCOUNT_PATH`, `requireAuthOrOpenModal`
 - Re-exports: `signOut`, `sendPasswordResetEmail`, `onAuthStateChanged`
 - Account app: `/account/` (see `website/account/README.md`)
+
+<!-- cookie auth: production Pages deploy uses --commit-dirty=true -->
