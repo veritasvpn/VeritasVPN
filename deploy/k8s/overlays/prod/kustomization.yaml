@@ -22,7 +22,7 @@ images:
     digest: sha256:e9473f0bcd9ad39d11811b50fcab20cbd7f6fd84cce49784923fc1a05a7f1bfb
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    digest: sha256:4edfa4894255599d18862d3cd6e05947391d44a9b01aa6cb55cf771c3ae41a7a
+    digest: sha256:553cd7d8d4008fc082ff4ec6da509a08440ae9344d6839ec80692510cd7a71ec
   - name: localhost:31500/wstunnel
     newName: localhost:31500/wstunnel
     digest: sha256:4169260f4a2dc84df3c97aeba46882d5f7ee1b6ef94427b6c7f86951fc3b89b1
