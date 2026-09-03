@@ -13,7 +13,7 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:e4415ac8b93128b2beaf864b887a3a3e67135dd1d2392386c241ae492d3b49d1
+    digest: sha256:725d21ad4bf46d6abf74d029327eeea833dfed58482fc008fef4a63b262c49ec
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
     digest: sha256:4676d8b2983c9f4b1b21074e9fff323dcf39c300c55c1996fded00944f6e3b70
