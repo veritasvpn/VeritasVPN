@@ -4,7 +4,7 @@ import {
   signOutHandler,
   sendPasswordResetEmail,
   apiFetch,
-} from '/js/auth.js?v=handoff2';
+} from '/js/auth.js?v=cookie1';
 import {
   fetchBillingStatus,
   startPremiumCheckout,

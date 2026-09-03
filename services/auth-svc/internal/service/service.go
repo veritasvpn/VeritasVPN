@@ -231,6 +231,25 @@ func (s *AuthService) LogoutAllSessions(ctx context.Context, accountID, accessTo
 	return nil
 }
 
+// LogoutSession revokes a single refresh token (website cookie / one device).
+func (s *AuthService) LogoutSession(ctx context.Context, refreshToken string) error {
+	refreshToken = strings.TrimSpace(refreshToken)
+	if refreshToken == "" {
+		return nil
+	}
+	if err := s.db.DeleteRefreshToken(ctx, hashInput(refreshToken)); err != nil {
+		return fmt.Errorf("delete refresh token: %w", err)
+	}
+	return nil
+}
+
+func (s *AuthService) RefreshTokenTTL() time.Duration {
+	if s.cfg == nil || s.cfg.RefreshTokenTTL <= 0 {
+		return 7 * 24 * time.Hour
+	}
+	return s.cfg.RefreshTokenTTL
+}
+
 func (s *AuthService) RegisterWithEmail(ctx context.Context, email, password string) (string, string, string, int64, error) {
 	if email == "" || password == "" {
 		return "", "", "", 0, fmt.Errorf("email and password are required")

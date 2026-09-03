@@ -7,7 +7,7 @@ data:
   ENVIRONMENT: "development"
   LOG_LEVEL: "debug"
   LOG_FORMAT: "console"
-  CORS_ORIGINS: "http://localhost:8000,http://127.0.0.1:8000"
+  CORS_ORIGINS: "https://veritasvpn.cloud,https://www.veritasvpn.cloud,http://localhost:8000,http://127.0.0.1:8000"
   PUBLIC_BASE_URL: "https://veritasvpn.cloud"
   JWT_ISSUER: "https://api.veritasvpn.cloud"
   JWT_AUDIENCE: "veritasvpn-api"

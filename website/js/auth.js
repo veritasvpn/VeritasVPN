@@ -24,18 +24,21 @@ function getAccessToken() {
 }
 
 function getRefreshToken() {
-  return sessionStorage.getItem(STORAGE_KEYS.refreshToken);
+  // Legacy only — used once to migrate sessionStorage refresh into HttpOnly cookie.
+  return (
+    sessionStorage.getItem(STORAGE_KEYS.refreshToken) ||
+    localStorage.getItem(STORAGE_KEYS.refreshToken)
+  );
 }
 
-function setSession(user, accessToken, refreshToken) {
-  // Access token: memory only. Refresh: sessionStorage (not localStorage).
+function setSession(user, accessToken, _refreshToken) {
+  // Access: memory only. Refresh: HttpOnly cookie (veritas_rt) — never JS storage.
   localStorage.removeItem(STORAGE_KEYS.accessToken);
   localStorage.removeItem(STORAGE_KEYS.refreshToken);
   localStorage.removeItem(STORAGE_KEYS.user);
   sessionStorage.removeItem(STORAGE_KEYS.accessToken);
+  sessionStorage.removeItem(STORAGE_KEYS.refreshToken);
   memoryAccessToken = accessToken || null;
-  if (refreshToken) sessionStorage.setItem(STORAGE_KEYS.refreshToken, refreshToken);
-  else sessionStorage.removeItem(STORAGE_KEYS.refreshToken);
   if (user) sessionStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
   else sessionStorage.removeItem(STORAGE_KEYS.user);
   currentUser = user;
@@ -77,6 +80,7 @@ async function api(path, options = {}) {
   const url = `${AUTH_API}${path}`;
   const res = await fetch(url, {
     ...options,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       'X-Veritas-Client': 'web',
@@ -125,6 +129,7 @@ async function apiWithAuth(path, options = {}) {
   }
   const res = await fetch(`${AUTH_API}${path}`, {
     ...options,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       'X-Veritas-Client': 'web',
@@ -162,7 +167,9 @@ export async function apiFetch(url, options = {}) {
   }
   const res = await fetch(url, {
     ...options,
+    credentials: 'include',
     headers: {
+      'X-Veritas-Client': 'web',
       ...(options.headers || {}),
       Authorization: `Bearer ${token}`,
     },
@@ -188,17 +195,21 @@ export function forceSignOutOnExpiry() {
 }
 
 async function refreshTokenSilently() {
-  const rt = getRefreshToken();
-  if (!rt) return false;
+  const legacyRT = getRefreshToken();
   try {
+    const body = legacyRT
+      ? JSON.stringify({ refresh_token: legacyRT })
+      : '{}';
     const data = await api('/api/v1/auth/refresh', {
       method: 'POST',
-      body: JSON.stringify({ refresh_token: rt }),
+      body,
     });
-    const user = restoreSession();
-    if (user) {
-      setSession(user, data.access_token, data.refresh_token);
-    }
+    sessionStorage.removeItem(STORAGE_KEYS.refreshToken);
+    localStorage.removeItem(STORAGE_KEYS.refreshToken);
+    if (!data?.access_token) return false;
+    const user = restoreSession() || currentUser;
+    if (user) setSession(user, data.access_token, null);
+    else memoryAccessToken = data.access_token;
     return true;
   } catch {
     return false;
@@ -241,13 +252,15 @@ export function onAuthStateChanged(fn) {
 
 export async function getIdToken() {
   const token = getAccessToken();
-  if (!token) return null;
-  const payload = parseJwt(token);
-  const now = Math.floor(Date.now() / 1000);
-  if (payload?.exp && payload.exp > now + 30) return token;
+  if (token) {
+    const payload = parseJwt(token);
+    const now = Math.floor(Date.now() / 1000);
+    if (payload?.exp && payload.exp > now + 30) return token;
+  }
+  // No access token (or expired): refresh via HttpOnly cookie / legacy body token.
   const ok = await refreshTokenSilently();
   if (!ok) {
-    forceSignOutOnExpiry();
+    if (token) forceSignOutOnExpiry();
     return null;
   }
   return getAccessToken();
@@ -1034,8 +1047,12 @@ function renderUser(user) {
 }
 
 export async function signOutHandler() {
+  try {
+    await api('/api/v1/auth/logout', { method: 'POST', body: '{}' });
+  } catch (_) {
+    /* cookie may already be gone */
+  }
   clearSession();
-  currentUser = null;
   notifyListeners(null);
 }
 
@@ -1044,9 +1061,11 @@ export async function logoutAllSessions() {
   if (token) {
     await fetch(`${AUTH_API}/api/v1/auth/logout-all`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
+        'X-Veritas-Client': 'web',
       },
       body: '{}',
     }).catch(() => undefined);

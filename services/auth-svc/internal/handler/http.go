@@ -77,6 +77,7 @@ func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/auth/signin-account", h.withCORS(h.handleSignInAccount))
 	mux.HandleFunc("/api/v1/auth/download-account", h.withCORS(h.handleDownloadAccount))
 	mux.HandleFunc("/api/v1/auth/logout-all", h.withCORS(h.handleLogoutAll))
+	mux.HandleFunc("/api/v1/auth/logout", h.withCORS(h.handleLogout))
 }
 
 func (h *HTTPHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -86,14 +87,13 @@ func (h *HTTPHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (h *HTTPHandler) withCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			if _, ok := h.corsMap[origin]; ok {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Vary", "Origin")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Veritas-Client")
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-			}
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		if origin != "" && h.originAllowedForCookies(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Veritas-Client")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -219,12 +219,8 @@ func (h *HTTPHandler) handleSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeHTTPJSON(w, http.StatusOK, map[string]interface{}{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"account_id":    accountID,
-		"expires_at":    expiresAt,
-		"email":         req.Email,
+	h.writeAuthTokens(w, r, http.StatusOK, accessToken, refreshToken, accountID, expiresAt, map[string]interface{}{
+		"email": req.Email,
 	})
 }
 
@@ -237,23 +233,29 @@ func (h *HTTPHandler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeHTTPError(w, http.StatusBadRequest, "invalid request body")
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	bodyToken := strings.TrimSpace(req.RefreshToken)
+	rt := refreshTokenFromRequest(r, bodyToken)
+	if rt == "" {
+		writeHTTPError(w, http.StatusUnauthorized, "invalid refresh token")
 		return
 	}
-
-	accessToken, refreshToken, expiresAt, err := h.service.RefreshToken(r.Context(), req.RefreshToken)
-	if err != nil {
-		h.log.Warn("refresh failed", zap.Error(err))
+	// Cookie-only refresh must come from the website client (CSRF mitigation).
+	if bodyToken == "" && !h.isWebClient(r) {
 		writeHTTPError(w, http.StatusUnauthorized, "invalid refresh token")
 		return
 	}
 
-	writeHTTPJSON(w, http.StatusOK, map[string]interface{}{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"expires_at":    expiresAt,
-	})
+	accessToken, refreshToken, expiresAt, err := h.service.RefreshToken(r.Context(), rt)
+	if err != nil {
+		h.log.Warn("refresh failed", zap.Error(err))
+		h.clearRefreshCookie(w, r)
+		writeHTTPError(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	}
+
+	h.writeAuthTokens(w, r, http.StatusOK, accessToken, refreshToken, "", expiresAt, nil)
 }
 
 func (h *HTTPHandler) handleValidate(w http.ResponseWriter, r *http.Request) {
@@ -446,12 +448,7 @@ func (h *HTTPHandler) handleRegisterAnonymous(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	writeHTTPJSON(w, http.StatusCreated, map[string]interface{}{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"account_id":    accountID,
-		"expires_at":    expiresAt,
-	})
+	h.writeAuthTokens(w, r, http.StatusCreated, accessToken, refreshToken, accountID, expiresAt, nil)
 }
 
 func (h *HTTPHandler) handleDownloadAccount(w http.ResponseWriter, r *http.Request) {
@@ -534,6 +531,34 @@ func (h *HTTPHandler) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.clearRefreshCookie(w, r)
+	writeHTTPJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+}
+
+func (h *HTTPHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeHTTPError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	rt := refreshTokenFromRequest(r, req.RefreshToken)
+	if rt == "" {
+		h.clearRefreshCookie(w, r)
+		writeHTTPJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+		return
+	}
+	// Cookie-only logout must come from the website client (CSRF mitigation).
+	if strings.TrimSpace(req.RefreshToken) == "" && !h.isWebClient(r) {
+		writeHTTPError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if err := h.service.LogoutSession(r.Context(), rt); err != nil {
+		h.log.Warn("logout failed", zap.Error(err))
+	}
+	h.clearRefreshCookie(w, r)
 	writeHTTPJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
 }
 
@@ -568,12 +593,7 @@ func (h *HTTPHandler) handleSignInAccount(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeHTTPJSON(w, http.StatusOK, map[string]interface{}{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
-		"account_id":    accountID,
-		"expires_at":    expiresAt,
-	})
+	h.writeAuthTokens(w, r, http.StatusOK, accessToken, refreshToken, accountID, expiresAt, nil)
 }
 
 func extractBearer(r *http.Request) string {
