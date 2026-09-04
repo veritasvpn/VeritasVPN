@@ -123,7 +123,7 @@ def nav_html(active: str = "") -> str:
       <ul class="nav-links">
         {item("/learn/", "Learn", "learn")}
         {item("/check/", "Check", "check")}
-        {item("/#dns", "DNS", "dns")}
+        {item("/#dns", "Shield", "dns")}
         {item("/#pricing", "Pricing", "pricing")}
         {item("/downloads.html", "Download", "download")}
         {item("/account/", "Account", "account")}
@@ -242,7 +242,7 @@ def render_hub(articles: list[dict]) -> str:
 {chr(10).join(sections)}
       <aside class="learn-cta" aria-label="Try VeritasVPN">
         <h2>Need protection on the next hop?</h2>
-        <p>VeritasVPN is WireGuard from Paraguay with always-on malware and phishing DNS filtering while connected. Honest docs. Source on GitHub.</p>
+        <p>VeritasVPN is WireGuard from Paraguay plus Veritas Shield DNS security while connected. Honest docs. Source on GitHub.</p>
         <div class="cta-row">
           <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
           <a class="btn btn-outline" href="/check/">Privacy check</a>

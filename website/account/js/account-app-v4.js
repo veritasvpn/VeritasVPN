@@ -272,7 +272,7 @@ function renderHome() {
         <ul class="upgrade-features">
           <li>Access to the current network</li>
           <li>Up to 5 WireGuard devices</li>
-          <li>Private DNS threat protection (Android &amp; Linux)</li>
+          <li>Veritas Shield DNS security (Android &amp; Linux)</li>
           <li>Port forwarding</li>
           <li>Stealth (Linux)</li>
           <li>Kill switch (Linux always on; Android Always-on + Block connections without VPN; Chrome browser-only)</li>
@@ -529,7 +529,7 @@ function renderSecurity() {
       <div class="account-card">
         <ul class="upgrade-features">
           <li>WireGuard-only protocol</li>
-          <li>Private DNS threat protection for Android &amp; Linux</li>
+          <li>Veritas Shield DNS security for Android &amp; Linux</li>
           <li>Port forwarding</li>
           <li>Stealth (Linux)</li>
           <li>Kill switch (Linux always on; Android Always-on + Block connections without VPN; Chrome browser-only)</li>

@@ -100,7 +100,7 @@ async function run() {
     setOutcome(outcome, {
       state: "warn",
       title: "What this means",
-      body: "These resolvers learn the hostnames this browser looks up. If you expected only Veritas Protected DNS, seeing ISP, Google, Cloudflare, or other third-party resolvers means DNS may be leaking outside the tunnel. Connect VeritasVPN and re-run — the list should change away from your normal ISP/public DNS path.",
+      body: "These resolvers learn the hostnames this browser looks up. If you expected only Veritas Shield, seeing ISP, Google, Cloudflare, or other third-party resolvers means DNS may be leaking outside the tunnel. Connect VeritasVPN and re-run — the list should change away from your normal ISP/public DNS path.",
     });
   } catch (err) {
     clearResults(results);
