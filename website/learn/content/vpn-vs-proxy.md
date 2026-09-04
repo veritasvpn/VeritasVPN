@@ -29,4 +29,4 @@ A VPN installs a virtual network interface and routes matching traffic through a
 
 Narrow cases: one browser, low stakes, you understand the trust model. For travel Wi‑Fi and whole-device protection, a VPN is the stronger default.
 
-Chrome’s authenticated proxy path in VeritasVPN is intentionally browser-scoped—different from the Android/Linux full-device tunnel. Read product docs so the mode matches the threat.
+When available, Chrome’s authenticated proxy path in VeritasVPN is intentionally browser-scoped—different from the Android/Linux full-device tunnel. Read product docs so the mode matches the threat.
