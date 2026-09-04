@@ -198,45 +198,34 @@ export function SettingsDrawer({
               <span className="settings-nav-label">Split tunnel</span>
               <span className="settings-nav-note">Exclude LAN · reconnect to apply</span>
             </button>
-            <div className="menu-toggle" role="status" aria-label="Auto-reconnect always on">
-              <span>
-                Auto-reconnect
-                <span className="menu-note">Always on · restores tunnel if the link drops</span>
-              </span>
-              <b className="on">On</b>
-            </div>
-            {linuxDesktop && (
-              <div className="menu-toggle" role="status" aria-label="Kill switch always on">
-                <span>
-                  Kill switch
-                  <span className="menu-note">Always on while connected · no off option</span>
-                </span>
-                <b className="on">On</b>
-              </div>
-            )}
             {linuxDesktop && (
               <button
                 type="button"
-                className="menu-toggle"
+                className="settings-switch"
                 onClick={onToggleStealthMode}
+                aria-pressed={stealthMode}
               >
-                <span>
-                  Stealth mode
-                  <span className="menu-note">TLS wrap · reconnect to apply</span>
+                <span className="settings-switch-copy">
+                  <span className="settings-nav-label">Stealth mode</span>
+                  <span className="settings-nav-note">TLS wrap · reconnect to apply</span>
                 </span>
-                <b className={stealthMode ? "on" : ""}>{stealthMode ? "On" : "Off"}</b>
+                <span className={`settings-switch-track${stealthMode ? " is-on" : ""}`} aria-hidden="true">
+                  <span className="settings-switch-thumb" />
+                </span>
               </button>
             )}
           </section>
 
           <section className="settings-drawer-section settings-drawer-section--session" aria-label="Session">
             <p className="settings-drawer-label">Session</p>
-            <button type="button" className="danger" onClick={() => void onSignOutEverywhere()}>
-              Sign out from all devices
-            </button>
-            <button type="button" className="danger" onClick={onRequestSignOut}>
-              Sign out from this device
-            </button>
+            <div className="settings-session-actions">
+              <button type="button" className="danger" onClick={() => void onSignOutEverywhere()}>
+                Sign out from all devices
+              </button>
+              <button type="button" className="danger" onClick={onRequestSignOut}>
+                Sign out from this device
+              </button>
+            </div>
           </section>
         </div>
       </aside>
