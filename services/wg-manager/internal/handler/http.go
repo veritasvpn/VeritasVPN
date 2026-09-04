@@ -270,6 +270,7 @@ func (h *HTTPHandler) handlePeerStream(w http.ResponseWriter, r *http.Request) {
 				PublicKey:    p.Pubkey,
 				PresharedKey: psk,
 				AllowedIPs:   p.AllowedIPs,
+				ShieldPreset: entitlement.NormalizeShieldPreset(p.ShieldPreset),
 			}
 			line, encErr := hub.EncodeSSE(update)
 			if encErr != nil {
@@ -393,9 +394,10 @@ func (h *HTTPHandler) handlePeerApplied(w http.ResponseWriter, r *http.Request) 
 }
 
 type createPeerRequest struct {
-	PublicKey string `json:"public_key"`
-	DeviceID  string `json:"device_id"`
-	Region    string `json:"region"`
+	PublicKey    string `json:"public_key"`
+	DeviceID     string `json:"device_id"`
+	Region       string `json:"region"`
+	ShieldPreset string `json:"shield_preset"`
 }
 
 func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
@@ -416,7 +418,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "public_key is required"})
 			return
 		}
-		cfg, err := h.svc.CreatePeer(r.Context(), accountID, tier, req.PublicKey, req.DeviceID, req.Region, clientIPFromRequest(r))
+		cfg, err := h.svc.CreatePeer(r.Context(), accountID, tier, req.PublicKey, req.DeviceID, req.Region, clientIPFromRequest(r), req.ShieldPreset)
 		if err != nil {
 			var planErr *entitlement.PlanError
 			if errors.As(err, &planErr) {
@@ -445,6 +447,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			"client_allowed_ips":   cfg.ClientAllowedIPs,
 			"persistent_keepalive": cfg.PersistentKeepaliveSec,
 			"device_id":            cfg.DeviceID,
+			"shield_preset":        cfg.ShieldPreset,
 		})
 	case http.MethodGet:
 		peers, err := h.svc.ListPeers(r.Context(), accountID)
@@ -467,6 +470,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 				"allowed_ips":       p.AllowedIPs,
 				"assigned_ip":       p.AssignedIP,
 				"status":            p.Status,
+				"shield_preset":     entitlement.NormalizeShieldPreset(p.ShieldPreset),
 				"created_at":        p.CreatedAt.Unix(),
 				"expires_at":        expiresAt,
 				"dns_blocked_count": h.svc.DNSBlockedCount(r.Context(), p.AssignedIP),
@@ -499,6 +503,28 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case http.MethodPatch:
+		var req struct {
+			ShieldPreset string `json:"shield_preset"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		if strings.TrimSpace(req.ShieldPreset) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "shield_preset is required"})
+			return
+		}
+		peer, err := h.svc.UpdateShieldPreset(r.Context(), peerID, accountID, req.ShieldPreset)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"id":            peer.ID,
+			"shield_preset": peer.ShieldPreset,
+			"assigned_ip":   peer.AssignedIP,
+		})
 	case http.MethodGet:
 		peer, srv, err := h.svc.GetPeer(r.Context(), peerID, accountID)
 		if err != nil {

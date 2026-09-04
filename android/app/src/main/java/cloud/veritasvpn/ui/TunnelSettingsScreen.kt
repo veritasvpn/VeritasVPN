@@ -27,6 +27,8 @@ fun TunnelSettingsScreen(
     connected: Boolean = false,
     dnsGateway: String? = null,
     dnsBlockedThisSession: Long? = null,
+    shieldPreset: String? = null,
+    onShieldPresetChange: ((String) -> Unit)? = null,
     onExcludeLanChange: (Boolean) -> Unit,
     onBypassAppsChange: (String) -> Unit,
     onBack: () -> Unit
@@ -73,7 +75,7 @@ fun TunnelSettingsScreen(
 
         Spacer(Modifier.height(18.dp))
 
-        Text("PROTECTED DNS", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Text("VERITAS SHIELD", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
         Spacer(Modifier.height(8.dp))
         Column(
             Modifier
@@ -83,7 +85,7 @@ fun TunnelSettingsScreen(
                 .padding(14.dp)
         ) {
             Text(
-                if (connected) "Protected DNS on" else "Protected DNS",
+                if (connected) "Veritas Shield on" else "Veritas Shield",
                 color = Paper,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold
@@ -98,7 +100,7 @@ fun TunnelSettingsScreen(
                         }
                     }
                 } else {
-                    "Always on while connected — malware/phishing filtering through the tunnel DNS gateway."
+                    "Always on while connected — DNS threat filtering through the tunnel gateway."
                 },
                 color = PaperMuted,
                 fontSize = 13.sp,
@@ -111,6 +113,31 @@ fun TunnelSettingsScreen(
                 fontSize = 12.sp,
                 lineHeight = 16.sp
             )
+            if (connected && onShieldPresetChange != null) {
+                Spacer(Modifier.height(12.dp))
+                Text("Preset", color = PaperDim, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(6.dp))
+                listOf(
+                    "security" to "Security — malware, phishing, scam, crypto",
+                    "standard" to "Standard — + trackers (default)",
+                    "aggressive" to "Aggressive — + ads"
+                ).forEach { (value, label) ->
+                    val selected = (shieldPreset ?: "standard") == value
+                    TextButton(
+                        onClick = { onShieldPresetChange(value) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = if (selected) Cyan else PaperMuted
+                        )
+                    ) {
+                        Text(
+                            if (selected) "● $label" else "○ $label",
+                            fontSize = 13.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
         }
 
         Spacer(Modifier.height(18.dp))

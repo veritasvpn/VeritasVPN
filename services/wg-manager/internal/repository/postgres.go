@@ -226,7 +226,7 @@ func (p *Postgres) IsActiveIPAssigned(ctx context.Context, serverID, assignedIP 
 
 func (p *Postgres) GetActivePeerByAccountDevice(ctx context.Context, accountID, deviceID string) (*model.Peer, error) {
 	query := `SELECT id, account_id, server_id, device_id, pubkey, preshared_key,
-	           allowed_ips, assigned_ip, status, created_at, expires_at
+	           allowed_ips, assigned_ip, status, COALESCE(shield_preset, 'standard'), created_at, expires_at
 	           FROM peers
 	           WHERE account_id = $1 AND device_id = $2
 	             AND status IN ('pending', 'active')
@@ -236,7 +236,7 @@ func (p *Postgres) GetActivePeerByAccountDevice(ctx context.Context, accountID, 
 	err := p.pool.QueryRow(ctx, query, accountID, deviceID).Scan(
 		&peer.ID, &peer.AccountID, &peer.ServerID, &peer.DeviceID, &peer.Pubkey,
 		&peer.PresharedKey, &peer.AllowedIPs, &peer.AssignedIP,
-		&peer.Status, &peer.CreatedAt, &peer.ExpiresAt,
+		&peer.Status, &peer.ShieldPreset, &peer.CreatedAt, &peer.ExpiresAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get active peer by account device: %w", err)
@@ -246,13 +246,13 @@ func (p *Postgres) GetActivePeerByAccountDevice(ctx context.Context, accountID, 
 
 func (p *Postgres) CreatePeer(ctx context.Context, peer *model.Peer) error {
 	query := `INSERT INTO peers (account_id, server_id, device_id, pubkey, preshared_key,
-	           allowed_ips, assigned_ip, status, expires_at)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	           allowed_ips, assigned_ip, status, shield_preset, expires_at)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	           RETURNING id, created_at`
 
 	return p.pool.QueryRow(ctx, query,
 		peer.AccountID, peer.ServerID, peer.DeviceID, peer.Pubkey, peer.PresharedKey,
-		peer.AllowedIPs, peer.AssignedIP, peer.Status, peer.ExpiresAt,
+		peer.AllowedIPs, peer.AssignedIP, peer.Status, peer.ShieldPreset, peer.ExpiresAt,
 	).Scan(&peer.ID, &peer.CreatedAt)
 }
 
@@ -276,16 +276,34 @@ func (p *Postgres) UpdatePeerIdentity(ctx context.Context, peer *model.Peer) err
 	).Scan(&peer.CreatedAt)
 }
 
+// UpdatePeerShieldPreset sets the Veritas Shield policy for a device peer.
+func (p *Postgres) UpdatePeerShieldPreset(ctx context.Context, peerID, accountID, preset string) (*model.Peer, error) {
+	query := `UPDATE peers SET shield_preset = $3
+	           WHERE id = $1 AND account_id = $2 AND status IN ('pending', 'active')
+	           RETURNING id, account_id, server_id, device_id, pubkey, preshared_key,
+	                     allowed_ips, assigned_ip, status, COALESCE(shield_preset, 'standard'), created_at, expires_at`
+	peer := &model.Peer{}
+	err := p.pool.QueryRow(ctx, query, peerID, accountID, preset).Scan(
+		&peer.ID, &peer.AccountID, &peer.ServerID, &peer.DeviceID, &peer.Pubkey,
+		&peer.PresharedKey, &peer.AllowedIPs, &peer.AssignedIP,
+		&peer.Status, &peer.ShieldPreset, &peer.CreatedAt, &peer.ExpiresAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update peer shield preset: %w", err)
+	}
+	return peer, nil
+}
+
 func (p *Postgres) GetPeer(ctx context.Context, peerID, accountID string) (*model.Peer, error) {
 	query := `SELECT id, account_id, server_id, device_id, pubkey, preshared_key,
-	           allowed_ips, assigned_ip, status, created_at, expires_at
+	           allowed_ips, assigned_ip, status, COALESCE(shield_preset, 'standard'), created_at, expires_at
 	           FROM peers WHERE id = $1 AND account_id = $2 AND status != 'removed'`
 
 	peer := &model.Peer{}
 	err := p.pool.QueryRow(ctx, query, peerID, accountID).Scan(
 		&peer.ID, &peer.AccountID, &peer.ServerID, &peer.DeviceID, &peer.Pubkey,
 		&peer.PresharedKey, &peer.AllowedIPs, &peer.AssignedIP,
-		&peer.Status, &peer.CreatedAt, &peer.ExpiresAt,
+		&peer.Status, &peer.ShieldPreset, &peer.CreatedAt, &peer.ExpiresAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get peer: %w", err)
@@ -295,7 +313,7 @@ func (p *Postgres) GetPeer(ctx context.Context, peerID, accountID string) (*mode
 
 func (p *Postgres) ListPeersByAccount(ctx context.Context, accountID string) ([]model.Peer, error) {
 	query := `SELECT id, account_id, server_id, device_id, pubkey, preshared_key,
-	           allowed_ips, assigned_ip, status, created_at, expires_at
+	           allowed_ips, assigned_ip, status, COALESCE(shield_preset, 'standard'), created_at, expires_at
 	           FROM peers WHERE account_id = $1 AND status != 'removed'
 	           ORDER BY created_at DESC`
 
@@ -310,7 +328,7 @@ func (p *Postgres) ListPeersByAccount(ctx context.Context, accountID string) ([]
 		var peer model.Peer
 		if err := rows.Scan(
 			&peer.ID, &peer.AccountID, &peer.ServerID, &peer.DeviceID, &peer.Pubkey, &peer.PresharedKey,
-			&peer.AllowedIPs, &peer.AssignedIP, &peer.Status, &peer.CreatedAt, &peer.ExpiresAt,
+			&peer.AllowedIPs, &peer.AssignedIP, &peer.Status, &peer.ShieldPreset, &peer.CreatedAt, &peer.ExpiresAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan peer: %w", err)
 		}
@@ -321,14 +339,14 @@ func (p *Postgres) ListPeersByAccount(ctx context.Context, accountID string) ([]
 
 func (p *Postgres) GetPeerForServer(ctx context.Context, peerID, serverID string) (*model.Peer, error) {
 	query := `SELECT id, account_id, server_id, device_id, pubkey, preshared_key,
-	           allowed_ips, assigned_ip, status, created_at, expires_at
+	           allowed_ips, assigned_ip, status, COALESCE(shield_preset, 'standard'), created_at, expires_at
 	           FROM peers WHERE id = $1 AND server_id = $2
 	             AND status IN ('pending', 'active')`
 	peer := &model.Peer{}
 	err := p.pool.QueryRow(ctx, query, peerID, serverID).Scan(
 		&peer.ID, &peer.AccountID, &peer.ServerID, &peer.DeviceID, &peer.Pubkey,
 		&peer.PresharedKey, &peer.AllowedIPs, &peer.AssignedIP,
-		&peer.Status, &peer.CreatedAt, &peer.ExpiresAt,
+		&peer.Status, &peer.ShieldPreset, &peer.CreatedAt, &peer.ExpiresAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get peer for server: %w", err)
@@ -348,7 +366,7 @@ func (p *Postgres) MarkPeerRemovedForServer(ctx context.Context, peerID, serverI
 
 func (p *Postgres) ListPeersByServer(ctx context.Context, serverID string) ([]model.Peer, error) {
 	query := `SELECT id, account_id, server_id, device_id, pubkey, preshared_key,
-	           allowed_ips, assigned_ip, status, created_at, expires_at
+	           allowed_ips, assigned_ip, status, COALESCE(shield_preset, 'standard'), created_at, expires_at
 	           FROM peers WHERE server_id = $1 AND status IN ('pending', 'active')
 	           ORDER BY created_at ASC`
 
@@ -363,7 +381,7 @@ func (p *Postgres) ListPeersByServer(ctx context.Context, serverID string) ([]mo
 		var peer model.Peer
 		if err := rows.Scan(
 			&peer.ID, &peer.AccountID, &peer.ServerID, &peer.DeviceID, &peer.Pubkey, &peer.PresharedKey,
-			&peer.AllowedIPs, &peer.AssignedIP, &peer.Status, &peer.CreatedAt, &peer.ExpiresAt,
+			&peer.AllowedIPs, &peer.AssignedIP, &peer.Status, &peer.ShieldPreset, &peer.CreatedAt, &peer.ExpiresAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan peer: %w", err)
 		}

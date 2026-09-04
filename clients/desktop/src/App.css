@@ -1341,6 +1341,28 @@ input::placeholder { color: var(--paper-dim); }
   color: var(--paper-muted);
 }
 
+.settings-shield-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.settings-shield-preset {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--paper-muted);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-shield-preset.is-active {
+  color: var(--paper);
+  border-color: var(--cyan, #09c7f5);
+}
+
 /* Devices */
 .devices-screen { display: grid; gap: 16px; }
 .devices-screen .plans-head { width: 100%; }

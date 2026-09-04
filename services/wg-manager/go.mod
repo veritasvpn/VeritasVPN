@@ -9,6 +9,7 @@ require (
 	github.com/veritasvpn/lib/config v0.0.0
 	github.com/veritasvpn/lib/jwt v0.0.0
 	github.com/veritasvpn/lib/logging v0.0.0
+	github.com/veritasvpn/lib/tokenhash v0.0.0
 	go.uber.org/zap v1.27.0
 )
 
@@ -41,4 +42,5 @@ replace (
 	github.com/veritasvpn/lib/config => ../../lib/config
 	github.com/veritasvpn/lib/jwt => ../../lib/jwt
 	github.com/veritasvpn/lib/logging => ../../lib/logging
+	github.com/veritasvpn/lib/tokenhash => ../../lib/tokenhash
 )

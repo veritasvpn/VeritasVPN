@@ -288,7 +288,7 @@ def render_article(a: dict) -> str:
 {related}
         <aside class="learn-cta" aria-label="Need protection">
           <h2>Need protection? Try VeritasVPN</h2>
-          <p>When you want the concepts on this page applied on your device: WireGuard tunnel, protected DNS, and clear limits—not inflated claims.</p>
+          <p>When you want the concepts on this page applied on your device: WireGuard tunnel, Veritas Shield, and clear limits—not inflated claims.</p>
           <div class="cta-row">
             <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
             <a class="btn btn-outline" href="/#pricing">Pricing</a>

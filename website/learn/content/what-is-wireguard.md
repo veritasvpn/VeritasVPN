@@ -26,4 +26,4 @@ That does not make every WireGuard *product* trustworthy—operations, logging, 
 
 ## VeritasVPN and WireGuard
 
-VeritasVPN provisions WireGuard peers for Android and Linux clients. The tunnel carries your traffic to the Paraguay exit; protected DNS rides alongside while connected. Protocol choice is necessary but not sufficient: read [VPN logging explained](/learn/vpn-logging-explained.html) for the rest of the trust story.
+VeritasVPN provisions WireGuard peers for Android and Linux clients. The tunnel carries your traffic to the Paraguay exit; Veritas Shield rides alongside while connected. Protocol choice is necessary but not sufficient: read [VPN logging explained](/learn/vpn-logging-explained.html) for the rest of the trust story.

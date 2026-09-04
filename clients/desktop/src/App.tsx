@@ -147,6 +147,7 @@ interface PeerInfo {
   status?: string;
   created_at?: number;
   dns_blocked_count?: number;
+  shield_preset?: string;
 }
 
 interface PortForwardInfo {
@@ -553,7 +554,7 @@ function DevicesScreen({
                   {isCurrent && <span className="device-current-pill">THIS DEVICE</span>}
                   <span className="device-meta">{peer.assigned_ip || "—"} · {peer.status || "unknown"}</span>
                   {typeof peer.dns_blocked_count === "number" && (
-                    <span className="device-meta">DNS blocked: {peer.dns_blocked_count}</span>
+                    <span className="device-meta">Shield blocked: {peer.dns_blocked_count}</span>
                   )}
                 </div>
                 <button
@@ -781,6 +782,7 @@ function App() {
   const [wgStats, setWgStats] = useState<WgTransferStats | null>(null);
   const [dnsBlockedCount, setDnsBlockedCount] = useState<number | null>(null);
   const [dnsBlockedBaseline, setDnsBlockedBaseline] = useState<number | null>(null);
+  const [shieldPreset, setShieldPreset] = useState("standard");
   const [dnsGateway, setDnsGateway] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [peers, setPeers] = useState<PeerInfo[]>([]);
@@ -1546,6 +1548,9 @@ function App() {
           setDnsBlockedCount(match.dns_blocked_count);
           setDnsBlockedBaseline((prev) => (prev === null ? match.dns_blocked_count! : prev));
         }
+        if (match?.shield_preset) {
+          setShieldPreset(match.shield_preset);
+        }
       } catch (err) {
         if (err instanceof SessionExpiredError) expireAndReturnToSignIn();
       }
@@ -2061,14 +2066,14 @@ function App() {
                       </div>
                       {dnsBlockedThisSession !== null && (
                         <div className="live-stats-dns">
-                          <span>DNS blocked this session</span>
+                          <span>Shield blocked this session</span>
                           <strong>{dnsBlockedThisSession}</strong>
                         </div>
                       )}
                       {connected && dnsGateway && (
                         <div className="live-stats-dns-status" role="status">
-                          <strong>Protected DNS on</strong>
-                          <span>Gateway {dnsGateway} · malware/phishing blocks via DoH upstreams. Well-known public DoH resolvers are blocked.</span>
+                          <strong>Veritas Shield on</strong>
+                          <span>Gateway {dnsGateway} · threat/tracker blocks via DoH upstreams. Well-known public DoH resolvers are blocked.</span>
                         </div>
                       )}
                     </div>
@@ -2106,6 +2111,27 @@ function App() {
         connected={connected}
         dnsGateway={dnsGateway}
         dnsBlockedThisSession={dnsBlockedThisSession}
+        shieldPreset={shieldPreset}
+        onShieldPresetChange={(next) => {
+          const id = peerIdRef.current;
+          if (!id) return;
+          setShieldPreset(next);
+          void (async () => {
+            try {
+              const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ shield_preset: next }),
+              });
+              if (!response.ok) {
+                setStatusMsg("Could not update Veritas Shield preset");
+              }
+            } catch (err) {
+              if (err instanceof SessionExpiredError) expireAndReturnToSignIn();
+              else setStatusMsg("Could not update Veritas Shield preset");
+            }
+          })();
+        }}
         onOpenPlans={openPlans}
         onOpenNetworkMap={openNetworkMap}
         onOpenDevices={openDevices}

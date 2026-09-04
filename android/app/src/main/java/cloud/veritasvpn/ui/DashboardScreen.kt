@@ -286,7 +286,7 @@ private fun LiveTransferStats(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("DNS blocked this session", color = PaperMuted, fontSize = 13.sp)
+                Text("Shield blocked this session", color = PaperMuted, fontSize = 13.sp)
                 Text(
                     dnsBlockedThisSession.toString(),
                     color = Paper,
@@ -298,7 +298,7 @@ private fun LiveTransferStats(
         Spacer(Modifier.height(12.dp))
         HorizontalDivider(color = Line)
         Spacer(Modifier.height(10.dp))
-        Text("Protected DNS on", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text("Veritas Shield on", color = Paper, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
             buildString {

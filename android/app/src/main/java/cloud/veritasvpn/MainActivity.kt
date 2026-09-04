@@ -33,6 +33,7 @@ import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.auth.AuthenticatedApi
 import cloud.veritasvpn.auth.SessionExpiredException
 import cloud.veritasvpn.billing.BillingRepository
+import java.io.IOException
 import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.DashboardScreen
 import cloud.veritasvpn.ui.DevicesScreen
@@ -135,6 +136,7 @@ class MainActivity : ComponentActivity() {
                 var handshakeMs by remember { mutableStateOf(0L) }
                 var dnsBlockedCount by remember { mutableStateOf<Long?>(null) }
                 var dnsBlockedBaseline by remember { mutableStateOf<Long?>(null) }
+                var shieldPreset by remember { mutableStateOf("standard") }
                 var dnsGateway by remember { mutableStateOf<String?>(null) }
                 var excludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
                 var bypassAppsText by remember {
@@ -655,13 +657,16 @@ class MainActivity : ComponentActivity() {
                                         ApiClient.parse<PeerListResponse>(res)
                                             ?.peers
                                             ?.firstOrNull { it.id == peerId }
-                                            ?.dnsBlockedCount
                                     }
                                 }
-                            }.onSuccess { count ->
-                                if (count != null) {
+                            }.onSuccess { peer ->
+                                if (peer != null) {
+                                    val count = peer.dnsBlockedCount
                                     if (dnsBlockedBaseline == null) dnsBlockedBaseline = count
                                     dnsBlockedCount = count
+                                    if (peer.shieldPreset.isNotBlank()) {
+                                        shieldPreset = peer.shieldPreset
+                                    }
                                 }
                             }.onFailure {
                                 if (it is SessionExpiredException) handleSessionExpired()
@@ -724,6 +729,30 @@ class MainActivity : ComponentActivity() {
                         dnsBlockedThisSession = if (dnsBlockedCount != null && dnsBlockedBaseline != null) {
                             (dnsBlockedCount!! - dnsBlockedBaseline!!).coerceAtLeast(0)
                         } else null,
+                        shieldPreset = shieldPreset,
+                        onShieldPresetChange = { next ->
+                            val peerId = currentPeerId ?: VpnSettings.currentPeerId(context) ?: return@TunnelSettingsScreen
+                            shieldPreset = next
+                            scope.launch {
+                                runCatching {
+                                    withContext(Dispatchers.IO) {
+                                        AuthenticatedApi.execute(authRepo, { token ->
+                                            ApiClient.patch(
+                                                "/api/v1/wg/peers/$peerId",
+                                                mapOf("shield_preset" to next),
+                                                token
+                                            )
+                                        }) { res ->
+                                            if (!res.isSuccessful) throw IOException("HTTP ${res.code}")
+                                            true
+                                        }
+                                    }
+                                }.onFailure {
+                                    if (it is SessionExpiredException) handleSessionExpired()
+                                    else statusMsg = "Could not update Veritas Shield preset"
+                                }
+                            }
+                        },
                         onExcludeLanChange = {
                             excludeLan = it
                             VpnSettings.setExcludeLan(context, it)

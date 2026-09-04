@@ -7,6 +7,7 @@ WORKDIR /app
 COPY lib/config/ lib/config/
 COPY lib/logging/ lib/logging/
 COPY lib/jwt/ lib/jwt/
+COPY lib/tokenhash/ lib/tokenhash/
 COPY services/wg-manager/ services/wg-manager/
 
 WORKDIR /app/services/wg-manager

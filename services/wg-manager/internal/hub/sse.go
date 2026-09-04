@@ -20,6 +20,7 @@ type PeerUpdate struct {
 	ExternalPort int      `json:"external_port,omitempty"`
 	InternalPort int      `json:"internal_port,omitempty"`
 	AssignedIP   string   `json:"assigned_ip,omitempty"`
+	ShieldPreset string   `json:"shield_preset,omitempty"`
 }
 
 type subscriber struct {

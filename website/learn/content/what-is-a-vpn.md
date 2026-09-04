@@ -41,6 +41,6 @@ Same broad idea; different threat models.
 
 ## How this relates to VeritasVPN
 
-VeritasVPN is a WireGuard-based consumer VPN with an exit in Paraguay and always-on protected DNS while you are connected. We document limits openly—one live node today, source available under BSL—rather than promising “military-grade anonymity.”
+VeritasVPN is a WireGuard-based consumer VPN with an exit in Paraguay and always-on Veritas Shield while you are connected. We document limits openly—one live node today, source available under BSL—rather than promising “military-grade anonymity.”
 
 If you want the next layer after understanding the concept, [download the clients](/downloads.html) or [run a privacy check](/check/) on your current connection.

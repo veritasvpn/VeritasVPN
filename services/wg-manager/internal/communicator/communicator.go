@@ -13,7 +13,7 @@ import (
 )
 
 type AgentClient interface {
-	PushPeerUpdate(ctx context.Context, serverID string, action string, peerID string, publicKey string, presharedKey string, allowedIPs []string) error
+	PushPeerUpdate(ctx context.Context, serverID string, action string, peerID string, publicKey string, presharedKey string, allowedIPs []string, shieldPreset string) error
 	Publish(serverID string, update hub.PeerUpdate) bool
 }
 
@@ -34,7 +34,7 @@ func (c *Communicator) PushPeerAdded(ctx context.Context, serverID string, peer 
 	if peer.PresharedKey != nil {
 		psk = *peer.PresharedKey
 	}
-	return c.pushWithBackoff(ctx, serverID, "ADD", peer.ID, peer.Pubkey, psk, peer.AllowedIPs)
+	return c.pushWithBackoff(ctx, serverID, "ADD", peer.ID, peer.Pubkey, psk, peer.AllowedIPs, peer.ShieldPreset)
 }
 
 func (c *Communicator) PushPeerRemoved(ctx context.Context, serverID string, peer *model.Peer) error {
@@ -42,7 +42,23 @@ func (c *Communicator) PushPeerRemoved(ctx context.Context, serverID string, pee
 	if len(ips) == 0 && peer.AssignedIP != "" {
 		ips = []string{peer.AssignedIP}
 	}
-	return c.pushWithBackoff(ctx, serverID, "REMOVE", peer.ID, peer.Pubkey, "", ips)
+	return c.pushWithBackoff(ctx, serverID, "REMOVE", peer.ID, peer.Pubkey, "", ips, "")
+}
+
+// PushShieldPreset notifies the agent of a per-peer Veritas Shield policy change
+// without re-applying the WireGuard peer.
+func (c *Communicator) PushShieldPreset(serverID string, peer *model.Peer) bool {
+	ips := peer.AllowedIPs
+	if len(ips) == 0 && peer.AssignedIP != "" {
+		ips = []string{peer.AssignedIP}
+	}
+	return c.PublishUpdate(serverID, hub.PeerUpdate{
+		Action:       "SHIELD_PRESET",
+		PeerID:       peer.ID,
+		AllowedIPs:   ips,
+		AssignedIP:   peer.AssignedIP,
+		ShieldPreset: peer.ShieldPreset,
+	})
 }
 
 // PublishUpdate fans an SSE payload once (no retries). Returns whether any
@@ -91,14 +107,14 @@ func (c *Communicator) PushPortForwardRemove(serverID string, pf *model.PortForw
 	})
 }
 
-func (c *Communicator) pushWithBackoff(ctx context.Context, serverID, action, peerID, pubkey, psk string, allowedIPs []string) error {
+func (c *Communicator) pushWithBackoff(ctx context.Context, serverID, action, peerID, pubkey, psk string, allowedIPs []string, shieldPreset string) error {
 	maxRetries := 3
 	baseDelay := 200 * time.Millisecond
 
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
 		callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := c.client.PushPeerUpdate(callCtx, serverID, action, peerID, pubkey, psk, allowedIPs)
+		err := c.client.PushPeerUpdate(callCtx, serverID, action, peerID, pubkey, psk, allowedIPs, shieldPreset)
 		cancel()
 
 		if err == nil {
@@ -150,7 +166,7 @@ func (s *SSEAgentClient) Publish(serverID string, update hub.PeerUpdate) bool {
 	return s.hub.Publish(serverID, update)
 }
 
-func (s *SSEAgentClient) PushPeerUpdate(ctx context.Context, serverID string, action string, peerID string, publicKey string, presharedKey string, allowedIPs []string) error {
+func (s *SSEAgentClient) PushPeerUpdate(ctx context.Context, serverID string, action string, peerID string, publicKey string, presharedKey string, allowedIPs []string, shieldPreset string) error {
 	_ = ctx
 	ok := s.Publish(serverID, hub.PeerUpdate{
 		Action:       strings.ToUpper(action),
@@ -158,6 +174,7 @@ func (s *SSEAgentClient) PushPeerUpdate(ctx context.Context, serverID string, ac
 		PublicKey:    publicKey,
 		PresharedKey: presharedKey,
 		AllowedIPs:   allowedIPs,
+		ShieldPreset: shieldPreset,
 	})
 	if !ok {
 		return fmt.Errorf("no agent connected for server %s", serverID)

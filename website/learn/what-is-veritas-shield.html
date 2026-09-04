@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>What is protected DNS? — VeritasVPN Learn</title>
-  <meta name="description" content="Filtering and encrypting DNS inside a VPN so malware and phishing names fail closed while you are connected.">
-  <link rel="canonical" href="https://veritasvpn.cloud/learn/what-is-protected-dns.html">
+  <title>What is Veritas Shield? — VeritasVPN Learn</title>
+  <meta name="description" content="DNS security layered on VeritasVPN—malware, phishing, scam, crypto, and tracker blocking with optional ads, while you are connected.">
+  <link rel="canonical" href="https://veritasvpn.cloud/learn/what-is-veritas-shield.html">
   <link rel="stylesheet" href="/css/style-typography1.css">
   <link rel="stylesheet" href="/css/learn.css">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
@@ -34,23 +34,31 @@
       <article class="learn-article">
         <a class="learn-back" href="/learn/">← All topics</a>
         <span class="learn-kicker">Protect</span>
-        <h1>What is protected DNS?</h1>
+        <h1>What is Veritas Shield?</h1>
         <p class="learn-meta">Updated 2026-09-04</p>
-        <p class="learn-lede">Protected DNS means your VPN resolves names through a controlled gateway—often with threat feeds—so lookups are not left to a random café resolver.</p>
+        <p class="learn-lede">Veritas Shield is the DNS security layer inside VeritasVPN. While the tunnel is up, lookups go through our gateway, threat feeds can NXDOMAIN dangerous names, and you can choose how aggressive the filter is.</p>
         <div class="learn-prose">
-<h2>Pieces of the feature</h2>
-<ol><li><strong>Force DNS into the tunnel</strong> so the ISP’s resolver is not the default path</li><li><strong>Encrypt upstream</strong> (DoH/DoT) between the gateway and recursive resolvers</li><li><strong>Block known-bad names</strong> (malware, phishing) with NXDOMAIN or sinkholes</li><li><strong>Reduce bypasses</strong> — drop plain DNS/DoT and well-known public DoH targets from peers</li></ol>
-<h2>What it is not</h2>
-<p>It is not a substitute for browser security updates or common sense. It does not see inside HTTPS bodies. Custom app DoH to unknown endpoints can still residual-bypass curated blocks.</p>
+<h2>VPN + Veritas Shield</h2>
+<p>``<code> Internet ↑ Veritas Shield   ← DNS security (block + filter) ↑ VeritasVPN       ← encrypted tunnel + exit ↑ You </code>``</p>
+<p>The product is <strong>encrypted tunnel plus DNS security</strong>—not a file antivirus and not a claim that every ad or tracker on earth disappears.</p>
+<h2>What it does</h2>
+<ol><li><strong>Forces DNS into the tunnel</strong> so your ISP’s resolver is not the default path</li><li><strong>Encrypts upstream</strong> (DNS-over-HTTPS) between our gateway and recursive resolvers</li><li><strong>Blocks known-bad and optional filter categories</strong> with NXDOMAIN</li><li><strong>Reduces common bypasses</strong> — plain DNS, DNS-over-TLS, and well-known public DoH targets from peers</li></ol>
+<h2>Presets</h2>
+<p>| Preset | Blocks | |--------|--------| | <strong>Security</strong> | Malware, phishing, scam, cryptomining | | <strong>Standard</strong> (default) | Security + trackers | | <strong>Aggressive</strong> | Standard + ads |</p>
+<p>Ads stay off by default because ad lists cause more false positives (CDNs, banks, captive portals). Aggressive mode is opt-in; operators can also publish a small allowlist for known false positives.</p>
+<h2>Honesty limits</h2>
+<ul><li>Upstream DoH resolvers still see hostnames we forward for <strong>non-blocked</strong> lookups</li><li>Uncommon or custom DoH endpoints remain a <strong>residual</strong> bypass risk</li><li>Shield does not inspect HTTPS bodies or replace browser updates</li></ul>
+<h2>Privacy</h2>
+<p>We do not log query names. In-app blocked counts are keyed by your temporary tunnel IP for the session—not your public WAN IP. Details: <a href="/privacy.html">Privacy Policy</a>.</p>
 <h2>How to verify</h2>
-<p>Disconnect vs connect and run a <a href="/check/dns.html">DNS leak test</a>. Resolvers should change to the provider path when the tunnel is healthy.</p>
-<h2>VeritasVPN</h2>
-<p>On VeritasVPN this capability is productized as <strong><a href="/learn/what-is-veritas-shield.html">Veritas Shield</a></strong>: categorized feeds, optional presets (Security / Standard / Aggressive), and honesty about upstream DoH visibility. While connected, Android and Linux peers use <code>10.0.0.1</code> as DNS.</p>
+<p>Connect on Android or Linux, then run a <a href="/check/dns.html">DNS leak test</a>. Resolvers should show the provider path. Product docs also describe a harmless self-test name that must return NXDOMAIN when Shield is healthy.</p>
+<h2>Related</h2>
+<p>For the general idea of filtering DNS inside a VPN (not product-specific), see <a href="/learn/what-is-protected-dns.html">What is protected DNS?</a>.</p>
         </div>
       <nav class="learn-related" aria-label="Related articles">
         <h2>Keep learning</h2>
         <ul>
-        <li><a href="/learn/what-is-veritas-shield.html">What is Veritas Shield?</a></li>
+        <li><a href="/learn/what-is-protected-dns.html">What is protected DNS?</a></li>
         <li><a href="/learn/what-is-dns.html">What is DNS?</a></li>
         <li><a href="/learn/what-is-dns-leak.html">What is a DNS leak?</a></li>
         <li><a href="/learn/vpn-logging-explained.html">VPN logging explained</a></li>

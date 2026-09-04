@@ -32,6 +32,7 @@ type Peer struct {
 	AllowedIPs   []string   `db:"allowed_ips"`
 	AssignedIP   string     `db:"assigned_ip"`
 	Status       string     `db:"status"`
+	ShieldPreset string     `db:"shield_preset"`
 	CreatedAt    time.Time  `db:"created_at"`
 	ExpiresAt    *time.Time `db:"expires_at"`
 }

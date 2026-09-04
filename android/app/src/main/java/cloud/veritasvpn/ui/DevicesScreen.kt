@@ -168,7 +168,7 @@ private fun DeviceCard(
         Spacer(Modifier.height(6.dp))
         Text("IP  ${peer.assignedIp.ifBlank { "—" }}", color = PaperMuted, fontSize = 13.sp)
         Text("Created  ${formatEpoch(peer.createdAt)}", color = PaperDim, fontSize = 12.sp)
-        Text("DNS blocked  ${peer.dnsBlockedCount}", color = PaperDim, fontSize = 12.sp)
+        Text("Shield blocked  ${peer.dnsBlockedCount}", color = PaperDim, fontSize = 12.sp)
         if (isCurrent) {
             Spacer(Modifier.height(4.dp))
             Text("This device", color = CyanHover, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)

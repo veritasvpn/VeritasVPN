@@ -11,6 +11,8 @@ export type SettingsDrawerProps = {
   connected: boolean;
   dnsGateway: string | null;
   dnsBlockedThisSession: number | null;
+  shieldPreset: string;
+  onShieldPresetChange: (preset: string) => void;
   onOpenPlans: () => void;
   onOpenNetworkMap: () => void;
   onOpenDevices: () => void;
@@ -36,6 +38,8 @@ export function SettingsDrawer({
   connected,
   dnsGateway,
   dnsBlockedThisSession,
+  shieldPreset,
+  onShieldPresetChange,
   onOpenPlans,
   onOpenNetworkMap,
   onOpenDevices,
@@ -158,19 +162,40 @@ export function SettingsDrawer({
             <p className="settings-drawer-label">Connection</p>
             {connected ? (
               <div className="settings-dns-status" role="status">
-                <strong>Protected DNS on</strong>
+                <strong>Veritas Shield on</strong>
                 <span>
                   {dnsGateway ? `Gateway ${dnsGateway}` : "Tunnel gateway"}
                   {dnsBlockedThisSession !== null ? ` · ${dnsBlockedThisSession} blocked this session` : ""}
                 </span>
                 <span className="settings-dns-explainer">
-                  Malware and phishing hostnames return NXDOMAIN. Lookups use DNS-over-HTTPS upstreams. Well-known public DoH resolvers are blocked; uncommon DoH endpoints may still bypass.
+                  Threat and tracker hostnames return NXDOMAIN. Lookups use DNS-over-HTTPS upstreams. Well-known public DoH resolvers are blocked; uncommon DoH endpoints may still bypass.
+                </span>
+                <div className="settings-shield-presets" role="group" aria-label="Veritas Shield preset">
+                  {(
+                    [
+                      ["security", "Security"],
+                      ["standard", "Standard"],
+                      ["aggressive", "Aggressive"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={`settings-shield-preset${shieldPreset === value ? " is-active" : ""}`}
+                      onClick={() => onShieldPresetChange(value)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <span className="settings-dns-explainer">
+                  Security: threats only · Standard: + trackers · Aggressive: + ads
                 </span>
               </div>
             ) : (
               <div className="settings-dns-status is-idle" role="status">
-                <strong>Protected DNS</strong>
-                <span>Always on while connected — malware/phishing filtering through the tunnel DNS gateway.</span>
+                <strong>Veritas Shield</strong>
+                <span>Always on while connected — DNS threat filtering through the tunnel gateway.</span>
               </div>
             )}
             <button type="button" className="settings-nav-item" onClick={onOpenTunnelSettings}>

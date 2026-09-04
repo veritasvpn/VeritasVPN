@@ -39,6 +39,7 @@ type PeerConfig struct {
 	ClientAllowedIPs       []string // client tunnel AllowedIPs (full tunnel)
 	PersistentKeepaliveSec int
 	DeviceID               string
+	ShieldPreset           string
 }
 
 type Service struct {
@@ -342,7 +343,7 @@ func (s *Service) DNSBlockedCount(ctx context.Context, assignedIP string) uint64
 	return n
 }
 
-func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, deviceID, preferredRegion, clientIP string) (*PeerConfig, error) {
+func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, deviceID, preferredRegion, clientIP, shieldPreset string) (*PeerConfig, error) {
 	tier = s.resolveTier(ctx, accountID, tier)
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" {
@@ -437,11 +438,15 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		AllowedIPs:   []string{assignedIP},
 		AssignedIP:   assignedIP,
 		Status:       "pending",
+		ShieldPreset: entitlement.NormalizeShieldPreset(shieldPreset),
 		CreatedAt:    time.Now(),
 	}
 
 	if replacedPeer != nil {
 		peer.ID = replacedPeer.ID
+		if strings.TrimSpace(shieldPreset) == "" && replacedPeer.ShieldPreset != "" {
+			peer.ShieldPreset = entitlement.NormalizeShieldPreset(replacedPeer.ShieldPreset)
+		}
 		if err := s.postgres.UpdatePeerIdentity(ctx, peer); err != nil {
 			if stripCIDR(replacedPeer.AssignedIP) != assignedIP {
 				_ = s.redis.ReleaseIP(ctx, srv.ID, assignedIP)
@@ -530,6 +535,7 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		ClientAllowedIPs:       []string{"0.0.0.0/0", "::/0"},
 		PersistentKeepaliveSec: 25,
 		DeviceID:               deviceID,
+		ShieldPreset:           peer.ShieldPreset,
 	}, nil
 }
 
@@ -676,6 +682,17 @@ func (s *Service) ListPeers(ctx context.Context, accountID string) ([]model.Peer
 
 func (s *Service) ListPeersForServer(ctx context.Context, serverID string) ([]model.Peer, error) {
 	return s.postgres.ListPeersByServer(ctx, serverID)
+}
+
+// UpdateShieldPreset stores the peer's Veritas Shield policy and notifies the agent.
+func (s *Service) UpdateShieldPreset(ctx context.Context, peerID, accountID, preset string) (*model.Peer, error) {
+	preset = entitlement.NormalizeShieldPreset(preset)
+	peer, err := s.postgres.UpdatePeerShieldPreset(ctx, peerID, accountID, preset)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.communicator.PushShieldPreset(peer.ServerID, peer)
+	return peer, nil
 }
 
 func (s *Service) MarkPeerActive(ctx context.Context, peerID, serverID string) error {

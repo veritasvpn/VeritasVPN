@@ -37,6 +37,13 @@ object ApiClient {
         return executeWithRetry(requestFactory = { builder.build() })
     }
 
+    fun patch(path: String, body: Map<String, Any>, token: String): Response {
+        val b = gson.toJson(body).toRequestBody(JSON)
+        val builder = Request.Builder().url("$BASE_URL$path").patch(b)
+            .header("Authorization", "Bearer $token")
+        return executeWithRetry(requestFactory = { builder.build() })
+    }
+
     fun delete(path: String, token: String): Response {
         val builder = Request.Builder().url("$BASE_URL$path").delete()
             .header("Authorization", "Bearer $token")
@@ -167,9 +174,11 @@ data class PeerInfo(
     val id: String = "",
     @SerializedName("account_id") val accountId: String? = null,
     @SerializedName("server_id") val serverId: String? = null,
+    @SerializedName("device_id") val deviceId: String? = null,
     val pubkey: String? = null,
     @SerializedName("assigned_ip") val assignedIp: String = "",
     val status: String = "",
+    @SerializedName("shield_preset") val shieldPreset: String = "standard",
     @SerializedName("created_at") val createdAt: Long = 0,
     @SerializedName("expires_at") val expiresAt: Long? = null,
     @SerializedName("dns_blocked_count") val dnsBlockedCount: Long = 0

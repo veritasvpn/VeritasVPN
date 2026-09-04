@@ -24,7 +24,7 @@ Vague “we take privacy seriously” is not a control. See [VPN logging explain
 
 ## Upstream DNS
 
-If the VPN forwards DNS to third parties (common), those resolvers see hostnames for lookups they answer—even when the VPN itself avoids query logs. VeritasVPN documents this tradeoff in privacy materials and protected DNS explainers.
+If the VPN forwards DNS to third parties (common), those resolvers see hostnames for lookups they answer—even when the VPN itself avoids query logs. VeritasVPN documents this tradeoff in privacy materials and Veritas Shield explainers.
 
 ## Trust but verify
 

@@ -18,7 +18,7 @@ lede: Strong Wi‑Fi hygiene reduces local attackers and drive-by abuse—comple
 
 ## DNS and filtering on the LAN
 
-Pointing the whole home at a filtering resolver can block malware domains for devices that never run a VPN. That is different from [protected DNS inside VeritasVPN](/learn/what-is-protected-dns.html), which applies while the tunnel is up.
+Pointing the whole home at a filtering resolver can block malware domains for devices that never run a VPN. That is different from [Veritas Shield inside VeritasVPN](/learn/what-is-protected-dns.html), which applies while the tunnel is up.
 
 ## Remote management
 

@@ -22,12 +22,14 @@ type Metrics struct {
 	OrphanPeerRemovals          prometheus.Counter
 	DNSQueriesTotal             prometheus.Counter
 	DNSBlockedTotal             prometheus.Counter
+	DNSBlockedByCategory        *prometheus.CounterVec
 	DNSUpstreamFailures         prometheus.Counter
 	DNSBlocklistDomains         prometheus.Gauge
+	DNSBlocklistDomainsCategory *prometheus.GaugeVec
 	DNSBlocklistLastRefresh     prometheus.Gauge
 	DNSBlocklistRefreshFailures prometheus.Counter
-	PeerStreamConnected     prometheus.Gauge
-	PeerStreamDisconnects   prometheus.Counter
+	PeerStreamConnected         prometheus.Gauge
+	PeerStreamDisconnects       prometheus.Counter
 
 	registry *prometheus.Registry
 	port     string
@@ -98,16 +100,24 @@ func NewWithBind(port, bind string) *Metrics {
 		}),
 		DNSBlockedTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "veritas_agent_dns_blocked_total",
-			Help: "DNS requests blocked by the malware and phishing policy. No query names or client identifiers are recorded.",
+			Help: "DNS requests blocked by Veritas Shield. No query names or client identifiers are recorded.",
 		}),
+		DNSBlockedByCategory: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "veritas_agent_dns_blocked_by_category_total",
+			Help: "DNS requests blocked by Veritas Shield category. Labels are category only—never query names.",
+		}, []string{"category"}),
 		DNSUpstreamFailures: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "veritas_agent_dns_upstream_failures_total",
 			Help: "Requests for which every encrypted DNS upstream failed.",
 		}),
 		DNSBlocklistDomains: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "veritas_agent_dns_blocklist_domains",
-			Help: "Number of domains in the active malware and phishing blocklist.",
+			Help: "Number of domains in the active Veritas Shield policy (all categories).",
 		}),
+		DNSBlocklistDomainsCategory: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "veritas_agent_dns_blocklist_domains_by_category",
+			Help: "Domains loaded per Veritas Shield category after the last successful refresh.",
+		}, []string{"category"}),
 		DNSBlocklistLastRefresh: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "veritas_agent_dns_blocklist_last_successful_refresh_timestamp_seconds",
 			Help: "Unix timestamp of the most recent successful DNS blocklist refresh.",
@@ -142,8 +152,10 @@ func NewWithBind(port, bind string) *Metrics {
 	reg.MustRegister(m.OrphanPeerRemovals)
 	reg.MustRegister(m.DNSQueriesTotal)
 	reg.MustRegister(m.DNSBlockedTotal)
+	reg.MustRegister(m.DNSBlockedByCategory)
 	reg.MustRegister(m.DNSUpstreamFailures)
 	reg.MustRegister(m.DNSBlocklistDomains)
+	reg.MustRegister(m.DNSBlocklistDomainsCategory)
 	reg.MustRegister(m.DNSBlocklistLastRefresh)
 	reg.MustRegister(m.DNSBlocklistRefreshFailures)
 	reg.MustRegister(m.PeerStreamConnected)
@@ -161,11 +173,25 @@ func (m *Metrics) DNSQuery(blocked bool) {
 	}
 }
 
+func (m *Metrics) DNSBlockedCategory(category string) {
+	if category == "" {
+		category = "unknown"
+	}
+	m.DNSBlockedByCategory.WithLabelValues(category).Inc()
+}
+
 func (m *Metrics) DNSUpstreamFailure() { m.DNSUpstreamFailures.Inc() }
 
 func (m *Metrics) DNSBlocklistRefreshed(domains int, at time.Time) {
 	m.DNSBlocklistDomains.Set(float64(domains))
 	m.DNSBlocklistLastRefresh.Set(float64(at.Unix()))
+}
+
+func (m *Metrics) DNSBlocklistCategorySizes(byCategory map[string]int) {
+	m.DNSBlocklistDomainsCategory.Reset()
+	for cat, n := range byCategory {
+		m.DNSBlocklistDomainsCategory.WithLabelValues(cat).Set(float64(n))
+	}
 }
 
 func (m *Metrics) DNSBlocklistRefreshFailed() { m.DNSBlocklistRefreshFailures.Inc() }

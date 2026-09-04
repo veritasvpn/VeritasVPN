@@ -3,7 +3,7 @@ title: What is protected DNS?
 description: Filtering and encrypting DNS inside a VPN so malware and phishing names fail closed while you are connected.
 category: protect
 slug: what-is-protected-dns
-related: [what-is-dns, what-is-dns-leak, vpn-logging-explained]
+related: [what-is-veritas-shield, what-is-dns, what-is-dns-leak, vpn-logging-explained]
 updated: 2026-09-04
 lede: Protected DNS means your VPN resolves names through a controlled gateway—often with threat feeds—so lookups are not left to a random café resolver.
 ---
@@ -25,4 +25,4 @@ Disconnect vs connect and run a [DNS leak test](/check/dns.html). Resolvers shou
 
 ## VeritasVPN
 
-While connected, Android and Linux peers use `10.0.0.1` as DNS. The agent applies malware/phishing lists, forwards over DoH, and blocks common bypass channels. Details stay in product docs and the privacy policy—not in superlatives.
+On VeritasVPN this capability is productized as **[Veritas Shield](/learn/what-is-veritas-shield.html)**: categorized feeds, optional presets (Security / Standard / Aggressive), and honesty about upstream DoH visibility. While connected, Android and Linux peers use `10.0.0.1` as DNS.

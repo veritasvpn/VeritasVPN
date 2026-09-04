@@ -68,6 +68,7 @@ type PeerUpdate struct {
 	ExternalPort int      `json:"external_port"`
 	InternalPort int      `json:"internal_port"`
 	AssignedIP   string   `json:"assigned_ip"`
+	ShieldPreset string   `json:"shield_preset,omitempty"`
 }
 
 type AgentManagerClient interface {
@@ -302,6 +303,8 @@ type AgentConfig struct {
 	DNSListen             string
 	DNSUpstream           string
 	DNSBlocklistURLs      string
+	DNSShieldCategories   []string
+	DNSShieldURLs         map[string][]string
 	DNSBlocklistRefresh   time.Duration
 	DNSBlocklistStateFile string
 	BandwidthLimitMbps    int
@@ -317,6 +320,7 @@ func LoadAgentConfig() *AgentConfig {
 	port, _ := strconv.Atoi(envOrDefault("WG_PORT", "51820"))
 	publicPort, _ := strconv.Atoi(envOrDefault("WG_PUBLIC_PORT", strconv.Itoa(port)))
 	bandwidth, _ := strconv.Atoi(envOrDefault("PEER_BANDWIDTH_LIMIT_MBPS", "150"))
+	shieldCats, shieldURLs := dnssvc.LoadShieldSourcesFromEnv()
 
 	return &AgentConfig{
 		AuthToken:             os.Getenv("AGENT_AUTH_TOKEN"),
@@ -335,6 +339,8 @@ func LoadAgentConfig() *AgentConfig {
 		DNSListen:             envOrDefault("DNS_LISTEN", "10.0.0.1:53"),
 		DNSUpstream:           envOrDefault("DNS_UPSTREAM", "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query"),
 		DNSBlocklistURLs:      os.Getenv("DNS_BLOCKLIST_URLS"),
+		DNSShieldCategories:   shieldCats,
+		DNSShieldURLs:         shieldURLs,
 		DNSBlocklistRefresh:   durationOrDefault("DNS_BLOCKLIST_REFRESH", 6*time.Hour),
 		DNSBlocklistStateFile: envOrDefault("DNS_BLOCKLIST_STATE_FILE", "/var/lib/veritasvpn/dns/blocklist.txt"),
 		BandwidthLimitMbps:    bandwidth,
@@ -426,8 +432,12 @@ func (a *Agent) Run() error {
 		ListenAddr:         a.cfg.DNSListen,
 		UpstreamAddr:       a.cfg.DNSUpstream,
 		BlocklistURLs:      a.cfg.DNSBlocklistURLs,
+		ShieldCategories:   a.cfg.DNSShieldCategories,
+		ShieldURLs:         a.cfg.DNSShieldURLs,
 		BlocklistRefresh:   a.cfg.DNSBlocklistRefresh,
 		BlocklistStateFile: a.cfg.DNSBlocklistStateFile,
+		DefaultPreset:      dnssvc.DefaultPreset,
+		Allowlist:          dnssvc.LoadAllowlistFromEnv(),
 	}, a.metrics, a.logger)
 	if err := a.dnsForwarder.Start(ctx); err != nil {
 		return fmt.Errorf("start encrypted DNS forwarder: %w", err)
@@ -767,7 +777,11 @@ func (a *Agent) handlePeerUpdate(update *PeerUpdate) {
 				zap.String("peer_id", update.PeerID), zap.Error(err))
 			return
 		}
-		a.logger.Info("Peer added", zap.String("peer_id", update.PeerID))
+		if a.dnsForwarder != nil {
+			a.dnsForwarder.SetPeerPreset(update.AllowedIPs, update.ShieldPreset)
+		}
+		a.logger.Info("Peer added", zap.String("peer_id", update.PeerID),
+			zap.String("shield_preset", dnssvc.NormalizePreset(update.ShieldPreset)))
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := a.managerClient.ReportPeerApplied(ctx, a.serverID, update.PeerID, a.operationalAuthToken()); err != nil {
@@ -788,6 +802,17 @@ func (a *Agent) handlePeerUpdate(update *PeerUpdate) {
 			a.dnsForwarder.ClearBlockedForCIDRs(allowedIPs)
 		}
 		a.logger.Info("Peer removed", zap.String("peer_id", update.PeerID))
+	case "SHIELD_PRESET":
+		ips := update.AllowedIPs
+		if len(ips) == 0 && update.AssignedIP != "" {
+			ips = []string{update.AssignedIP}
+		}
+		if a.dnsForwarder != nil && len(ips) > 0 {
+			a.dnsForwarder.SetPeerPreset(ips, update.ShieldPreset)
+		}
+		a.logger.Info("Shield preset updated",
+			zap.String("peer_id", update.PeerID),
+			zap.String("shield_preset", dnssvc.NormalizePreset(update.ShieldPreset)))
 	case "PORT_FORWARD_ADD":
 		if err := a.fwManager.AddPortForward(firewall.PortForward{
 			ID:           update.ForwardID,

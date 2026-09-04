@@ -32,4 +32,4 @@ lede: Pick a VPN by threat model and verifiable claims—not by affiliate rankin
 
 ## Trying VeritasVPN
 
-We run WireGuard from Paraguay, document protected DNS behavior, take Bitcoin for Premium, and keep source available under BSL. We will not claim a global anycast fantasy we do not operate. [Download](/downloads.html) or read [logging explained](/learn/vpn-logging-explained.html) first.
+We run WireGuard from Paraguay, document Veritas Shield behavior, take Bitcoin for Premium, and keep source available under BSL. We will not claim a global anycast fantasy we do not operate. [Download](/downloads.html) or read [logging explained](/learn/vpn-logging-explained.html) first.

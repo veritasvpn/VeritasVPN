@@ -121,8 +121,24 @@ spec:
               value: "10.0.0.1:53"
             - name: DNS_UPSTREAM
               value: "https://cloudflare-dns.com/dns-query,https://dns.google/dns-query"
-            - name: DNS_BLOCKLIST_URLS
-              value: "https://urlhaus.abuse.ch/downloads/hostfile/,https://phishing.army/download/phishing_army_blocklist_extended.txt"
+            # Veritas Shield Phase 1+2 — load all category feeds; per-peer presets select policy.
+            - name: DNS_SHIELD_CATEGORIES
+              value: "malware,phishing,scam,crypto,trackers,ads"
+            - name: DNS_BLOCKLIST_URLS_MALWARE
+              value: "https://urlhaus.abuse.ch/downloads/hostfile/"
+            - name: DNS_BLOCKLIST_URLS_PHISHING
+              value: "https://phishing.army/download/phishing_army_blocklist_extended.txt"
+            - name: DNS_BLOCKLIST_URLS_SCAM
+              value: "https://hole.cert.pl/domains/domains.txt"
+            - name: DNS_BLOCKLIST_URLS_CRYPTO
+              value: "https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt"
+            - name: DNS_BLOCKLIST_URLS_TRACKERS
+              value: "https://small.oisd.nl/"
+            - name: DNS_BLOCKLIST_URLS_ADS
+              value: "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext"
+            # Ops-curated escape hatch for Aggressive false positives (comma-separated domains).
+            - name: DNS_SHIELD_ALLOWLIST
+              value: ""
             - name: DNS_BLOCKLIST_REFRESH
               value: "6h"
             - name: DNS_BLOCKLIST_STATE_FILE
@@ -183,10 +199,10 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 64Mi
+              memory: 128Mi
             limits:
               cpu: 200m
-              memory: 256Mi
+              memory: 512Mi
       volumes:
         - name: wireguard
           hostPath:

@@ -414,7 +414,7 @@ function renderDevices() {
           <div>
             <strong>Device ${escapeHtml(short)}</strong>
             <p class="plan-card-meta" style="margin:6px 0 0;">IP ${escapeHtml(ip)} · ${escapeHtml(status)}${created ? ' · ' + escapeHtml(created) : ''}</p>
-            <p class="plan-card-meta" style="margin:4px 0 0;">DNS threats blocked: ${escapeHtml(blocked)}</p>
+            <p class="plan-card-meta" style="margin:4px 0 0;">Veritas Shield blocked: ${escapeHtml(blocked)}</p>
           </div>
           <button type="button" class="btn btn-outline btn-sm" data-action="revoke-peer" data-peer-id="${escapeHtml(id)}">Revoke</button>
         </div>

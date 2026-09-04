@@ -33,9 +33,3 @@ var builtInDoHBypassDomains = []string{
 	"security.cloudflare-dns.com",
 	"family.cloudflare-dns.com",
 }
-
-func addBuiltInDoHBypassDomains(domains map[string]struct{}) {
-	for _, d := range builtInDoHBypassDomains {
-		domains[d] = struct{}{}
-	}
-}

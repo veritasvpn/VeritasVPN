@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 const (
 	blocklistFetchTimeout = 20 * time.Second
+	categoryStatePrefix   = "# veritas-shield-category:"
 
 	// ProtectedDNSTestDomain is a harmless, reserved name that lets an
 	// administrator verify the DNS protection path without visiting a real
@@ -28,20 +30,25 @@ const (
 // never receive a queried domain or a client address.
 type Observer interface {
 	DNSQuery(blocked bool)
+	DNSBlockedCategory(category string)
 	DNSUpstreamFailure()
 	DNSBlocklistRefreshed(domains int, at time.Time)
+	DNSBlocklistCategorySizes(byCategory map[string]int)
 	DNSBlocklistRefreshFailed()
 }
 
 type noopObserver struct{}
 
-func (noopObserver) DNSQuery(bool)                        {}
-func (noopObserver) DNSUpstreamFailure()                  {}
-func (noopObserver) DNSBlocklistRefreshed(int, time.Time) {}
-func (noopObserver) DNSBlocklistRefreshFailed()           {}
+func (noopObserver) DNSQuery(bool)                              {}
+func (noopObserver) DNSBlockedCategory(string)                  {}
+func (noopObserver) DNSUpstreamFailure()                        {}
+func (noopObserver) DNSBlocklistRefreshed(int, time.Time)       {}
+func (noopObserver) DNSBlocklistCategorySizes(map[string]int)   {}
+func (noopObserver) DNSBlocklistRefreshFailed()                 {}
 
 type Blocklist struct {
-	sources      []string
+	categories   []string
+	sources      map[string][]string // category → HTTPS feeds
 	statePath    string
 	refreshEvery time.Duration
 	client       *http.Client
@@ -49,21 +56,59 @@ type Blocklist struct {
 	observer     Observer
 
 	mu          sync.RWMutex
-	domains     map[string]struct{}
+	domains     map[string]string // domain → category (first enabled category wins)
 	lastSuccess time.Time
 }
 
-func NewBlocklist(sourceList, statePath string, refreshEvery time.Duration, observer Observer, log *logging.Logger) *Blocklist {
+// NewBlocklist builds a Shield blocklist. Prefer NewShieldBlocklist.
+// legacyURLs alone enables malware+phishing with those feeds (backward compatible).
+func NewBlocklist(legacyURLs, statePath string, refreshEvery time.Duration, observer Observer, log *logging.Logger) *Blocklist {
+	cats := append([]string(nil), DefaultShieldCategories...)
+	urls := map[string][]string{}
+	legacy := splitSources(legacyURLs)
+	if len(legacy) > 0 {
+		cats = []string{CategoryMalware, CategoryPhishing}
+		urls[CategoryMalware] = append([]string(nil), legacy...)
+		urls[CategoryPhishing] = append([]string(nil), legacy...)
+	} else {
+		for _, c := range cats {
+			if def, ok := defaultCategoryURLs[c]; ok {
+				urls[c] = []string{def}
+			}
+		}
+	}
+	return NewShieldBlocklist(cats, urls, statePath, refreshEvery, observer, log)
+}
+
+// NewShieldBlocklist constructs a categorized Veritas Shield policy.
+func NewShieldBlocklist(categories []string, urls map[string][]string, statePath string, refreshEvery time.Duration, observer Observer, log *logging.Logger) *Blocklist {
 	if observer == nil {
 		observer = noopObserver{}
 	}
 	if refreshEvery <= 0 {
 		refreshEvery = 6 * time.Hour
 	}
-	domains := make(map[string]struct{}, len(builtInDoHBypassDomains)+1)
+	if urls == nil {
+		urls = map[string][]string{}
+	}
+	cleanCats := make([]string, 0, len(categories))
+	seen := map[string]struct{}{}
+	for _, c := range categories {
+		c = strings.ToLower(strings.TrimSpace(c))
+		if _, ok := knownCategories[c]; !ok {
+			continue
+		}
+		if _, dup := seen[c]; dup {
+			continue
+		}
+		seen[c] = struct{}{}
+		cleanCats = append(cleanCats, c)
+	}
+	domains := make(map[string]string, len(builtInDoHBypassDomains)+8)
 	addBuiltInProtectionDomains(domains)
 	return &Blocklist{
-		sources:      splitSources(sourceList),
+		categories:   cleanCats,
+		sources:      urls,
 		statePath:    statePath,
 		refreshEvery: refreshEvery,
 		client:       &http.Client{Timeout: blocklistFetchTimeout},
@@ -84,12 +129,20 @@ func splitSources(raw string) []string {
 	return out
 }
 
+func (b *Blocklist) sourceCount() int {
+	n := 0
+	for _, cat := range b.categories {
+		n += len(b.sources[cat])
+	}
+	return n
+}
+
 func (b *Blocklist) Start(ctx context.Context) {
 	if err := b.loadState(); err != nil && !os.IsNotExist(err) {
 		b.log.Warn("load DNS blocklist cache failed", zap.Error(err))
 	}
-	if len(b.sources) == 0 {
-		b.log.Warn("DNS security blocklist is disabled because no sources were configured")
+	if b.sourceCount() == 0 {
+		b.log.Warn("Veritas Shield blocklist feeds are empty; built-in protections only")
 		return
 	}
 	go func() {
@@ -108,53 +161,67 @@ func (b *Blocklist) Start(ctx context.Context) {
 }
 
 func (b *Blocklist) refresh(parent context.Context) {
-	ctx, cancel := context.WithTimeout(parent, blocklistFetchTimeout*time.Duration(len(b.sources)))
+	totalFeeds := b.sourceCount()
+	if totalFeeds == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, blocklistFetchTimeout*time.Duration(totalFeeds))
 	defer cancel()
 
-	next := make(map[string]struct{})
+	next := make(map[string]string)
 	addBuiltInProtectionDomains(next)
+	byCategory := map[string]int{}
 	loadedSources := 0
-	for _, source := range b.sources {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
-		if err != nil {
-			continue
-		}
-		request.Header.Set("User-Agent", "VeritasVPN-DNS-Protection/1.0")
-		response, err := b.client.Do(request)
-		if err != nil {
-			b.log.Warn("DNS blocklist source unavailable", zap.Error(err))
-			continue
-		}
-		if response.StatusCode != http.StatusOK {
+
+	for _, cat := range b.categories {
+		for _, source := range b.sources[cat] {
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+			if err != nil {
+				continue
+			}
+			request.Header.Set("User-Agent", "VeritasVPN-Shield/1.0")
+			response, err := b.client.Do(request)
+			if err != nil {
+				b.log.Warn("DNS blocklist source unavailable", zap.String("category", cat), zap.Error(err))
+				continue
+			}
+			if response.StatusCode != http.StatusOK {
+				response.Body.Close()
+				b.log.Warn("DNS blocklist source returned non-success status", zap.String("category", cat), zap.Int("status", response.StatusCode))
+				continue
+			}
+			added, err := parseBlocklistCategory(response.Body, next, cat)
 			response.Body.Close()
-			b.log.Warn("DNS blocklist source returned non-success status", zap.Int("status", response.StatusCode))
-			continue
-		}
-		count, err := parseBlocklist(response.Body, next)
-		response.Body.Close()
-		if err != nil {
-			b.log.Warn("DNS blocklist source could not be parsed", zap.Error(err))
-			continue
-		}
-		if count > 0 {
-			loadedSources++
+			if err != nil {
+				b.log.Warn("DNS blocklist source could not be parsed", zap.String("category", cat), zap.Error(err))
+				continue
+			}
+			if added > 0 {
+				loadedSources++
+				byCategory[cat] += added
+			}
 		}
 	}
-	if loadedSources == 0 || len(next) == 0 {
+
+	if loadedSources == 0 {
 		b.observer.DNSBlocklistRefreshFailed()
-		b.log.Warn("DNS blocklist refresh failed; retaining the last known-good policy")
+		b.log.Warn("Veritas Shield blocklist refresh failed; retaining the last known-good policy")
 		return
 	}
 
 	now := time.Now().UTC()
-	b.replace(next, now)
-	if err := b.writeState(next, now); err != nil {
+	b.replace(next, byCategory, now)
+	if err := b.writeState(next); err != nil {
 		b.log.Warn("persist DNS blocklist cache failed", zap.Error(err))
 	}
-	b.log.Info("DNS malware/phishing blocklist refreshed", zap.Int("domains", len(next)), zap.Int("sources", loadedSources))
+	b.log.Info("Veritas Shield blocklist refreshed",
+		zap.Int("domains", len(next)),
+		zap.Int("sources", loadedSources),
+		zap.Any("by_category", byCategory),
+	)
 }
 
-func parseBlocklist(body interface{ Read([]byte) (int, error) }, target map[string]struct{}) (int, error) {
+func parseBlocklist(body io.Reader, target map[string]struct{}) (int, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 	before := len(target)
@@ -164,6 +231,26 @@ func parseBlocklist(body interface{ Read([]byte) (int, error) }, target map[stri
 		}
 	}
 	return len(target) - before, scanner.Err()
+}
+
+// parseBlocklistCategory inserts domains; existing entries keep their category
+// (first enabled category in refresh order wins).
+func parseBlocklistCategory(body io.Reader, target map[string]string, category string) (int, error) {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 4096), 1024*1024)
+	added := 0
+	for scanner.Scan() {
+		domain := domainFromBlocklistLine(scanner.Text())
+		if domain == "" {
+			continue
+		}
+		if _, exists := target[domain]; exists {
+			continue
+		}
+		target[domain] = category
+		added++
+	}
+	return added, scanner.Err()
 }
 
 func domainFromBlocklistLine(line string) string {
@@ -211,27 +298,37 @@ func validDomain(domain string) bool {
 }
 
 func (b *Blocklist) Blocked(name string) bool {
+	_, ok := b.BlockedCategory(name)
+	return ok
+}
+
+// BlockedCategory returns the Shield category for a query name (suffix match).
+func (b *Blocklist) BlockedCategory(name string) (string, bool) {
 	name = strings.TrimSuffix(strings.ToLower(name), ".")
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	for {
-		if _, found := b.domains[name]; found {
-			return true
+		if cat, found := b.domains[name]; found {
+			return cat, true
 		}
 		separator := strings.IndexByte(name, '.')
 		if separator < 0 {
-			return false
+			return "", false
 		}
 		name = name[separator+1:]
 	}
 }
 
-func (b *Blocklist) replace(domains map[string]struct{}, refreshed time.Time) {
+func (b *Blocklist) replace(domains map[string]string, byCategory map[string]int, refreshed time.Time) {
 	b.mu.Lock()
 	b.domains = domains
 	b.lastSuccess = refreshed
 	b.mu.Unlock()
 	b.observer.DNSBlocklistRefreshed(len(domains), refreshed)
+	if byCategory == nil {
+		byCategory = map[string]int{}
+	}
+	b.observer.DNSBlocklistCategorySizes(byCategory)
 }
 
 func (b *Blocklist) loadState() error {
@@ -243,8 +340,32 @@ func (b *Blocklist) loadState() error {
 		return err
 	}
 	defer file.Close()
-	domains := make(map[string]struct{})
-	if _, err := parseBlocklist(file, domains); err != nil {
+
+	domains := make(map[string]string)
+	byCategory := map[string]int{}
+	currentCat := CategoryMalware
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 4096), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, categoryStatePrefix) {
+			currentCat = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, categoryStatePrefix)))
+			if _, ok := knownCategories[currentCat]; !ok {
+				currentCat = CategoryMalware
+			}
+			continue
+		}
+		domain := domainFromBlocklistLine(line)
+		if domain == "" {
+			continue
+		}
+		if _, exists := domains[domain]; exists {
+			continue
+		}
+		domains[domain] = currentCat
+		byCategory[currentCat]++
+	}
+	if err := scanner.Err(); err != nil {
 		return err
 	}
 	addBuiltInProtectionDomains(domains)
@@ -255,17 +376,23 @@ func (b *Blocklist) loadState() error {
 	if err != nil {
 		return err
 	}
-	b.replace(domains, info.ModTime().UTC())
-	b.log.Info("loaded cached DNS malware/phishing blocklist", zap.Int("domains", len(domains)))
+	b.replace(domains, byCategory, info.ModTime().UTC())
+	b.log.Info("loaded cached Veritas Shield blocklist", zap.Int("domains", len(domains)), zap.Any("by_category", byCategory))
 	return nil
 }
 
-func addBuiltInProtectionDomains(domains map[string]struct{}) {
-	domains[ProtectedDNSTestDomain] = struct{}{}
-	addBuiltInDoHBypassDomains(domains)
+func addBuiltInProtectionDomains(domains map[string]string) {
+	if _, ok := domains[ProtectedDNSTestDomain]; !ok {
+		domains[ProtectedDNSTestDomain] = CategoryMalware
+	}
+	for _, d := range builtInDoHBypassDomains {
+		if _, ok := domains[d]; !ok {
+			domains[d] = CategoryMalware
+		}
+	}
 }
 
-func (b *Blocklist) writeState(domains map[string]struct{}, _ time.Time) error {
+func (b *Blocklist) writeState(domains map[string]string) error {
 	if b.statePath == "" {
 		return nil
 	}
@@ -278,10 +405,38 @@ func (b *Blocklist) writeState(domains map[string]struct{}, _ time.Time) error {
 		return err
 	}
 	writer := bufio.NewWriter(file)
-	for domain := range domains {
-		if _, err := writer.WriteString(domain + "\n"); err != nil {
+
+	byCat := map[string][]string{}
+	for domain, cat := range domains {
+		byCat[cat] = append(byCat[cat], domain)
+	}
+	order := append([]string(nil), b.categories...)
+	for _, extra := range []string{CategoryMalware, CategoryPhishing, CategoryScam, CategoryCrypto, CategoryTrackers, CategoryAds} {
+		found := false
+		for _, c := range order {
+			if c == extra {
+				found = true
+				break
+			}
+		}
+		if !found {
+			order = append(order, extra)
+		}
+	}
+	for _, cat := range order {
+		list := byCat[cat]
+		if len(list) == 0 {
+			continue
+		}
+		if _, err := writer.WriteString(categoryStatePrefix + cat + "\n"); err != nil {
 			file.Close()
 			return err
+		}
+		for _, domain := range list {
+			if _, err := writer.WriteString(domain + "\n"); err != nil {
+				file.Close()
+				return err
+			}
 		}
 	}
 	if err := writer.Flush(); err != nil {

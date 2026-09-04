@@ -57,14 +57,23 @@ type Forwarder struct {
 
 	blockedMu       sync.Mutex
 	blockedByClient map[string]uint64 // tunnel client IP → blocked query count (no domains)
+
+	policyMu     sync.RWMutex
+	presetByIP   map[string]string // tunnel client IP → shield preset
+	defaultPreset string
+	allowlist    map[string]struct{}
 }
 
 type Config struct {
 	ListenAddr         string
 	UpstreamAddr       string
-	BlocklistURLs      string
+	BlocklistURLs      string // legacy fallback
+	ShieldCategories   []string
+	ShieldURLs         map[string][]string
 	BlocklistRefresh   time.Duration
 	BlocklistStateFile string
+	DefaultPreset      string
+	Allowlist          map[string]struct{}
 }
 
 func New(cfg Config, observer Observer, log *logging.Logger) *Forwarder {
@@ -87,15 +96,26 @@ func New(cfg Config, observer Observer, log *logging.Logger) *Forwarder {
 	if len(upstreams) == 0 {
 		upstreams = []string{"https://cloudflare-dns.com/dns-query", "https://dns.google/dns-query"}
 	}
+
+	var blocklist *Blocklist
+	if len(cfg.ShieldCategories) > 0 && len(cfg.ShieldURLs) > 0 {
+		blocklist = NewShieldBlocklist(cfg.ShieldCategories, cfg.ShieldURLs, cfg.BlocklistStateFile, cfg.BlocklistRefresh, observer, log)
+	} else {
+		blocklist = NewBlocklist(cfg.BlocklistURLs, cfg.BlocklistStateFile, cfg.BlocklistRefresh, observer, log)
+	}
+
 	return &Forwarder{
 		listenAddr:      cfg.ListenAddr,
 		upstreams:       upstreams,
 		log:             log,
 		cache:           make(map[string]cacheEntry),
 		buckets:         make(map[string]*clientBucket),
-		blocklist:       NewBlocklist(cfg.BlocklistURLs, cfg.BlocklistStateFile, cfg.BlocklistRefresh, observer, log),
+		blocklist:       blocklist,
 		observer:        observer,
 		blockedByClient: make(map[string]uint64),
+		presetByIP:      make(map[string]string),
+		defaultPreset:   NormalizePreset(cfg.DefaultPreset),
+		allowlist:       cfg.Allowlist,
 	}
 }
 
@@ -119,17 +139,75 @@ func (f *Forwarder) ClearBlockedForCIDRs(cidrs []string) {
 		return
 	}
 	f.blockedMu.Lock()
-	defer f.blockedMu.Unlock()
 	for _, cidr := range cidrs {
-		ip := cidr
-		if i := strings.IndexByte(ip, '/'); i >= 0 {
-			ip = ip[:i]
-		}
+		ip := stripHost(cidr)
 		if ip == "" {
 			continue
 		}
 		delete(f.blockedByClient, ip)
 	}
+	f.blockedMu.Unlock()
+	f.ClearPeerPresets(cidrs)
+}
+
+// SetPeerPreset associates a Veritas Shield preset with tunnel address(es).
+func (f *Forwarder) SetPeerPreset(cidrs []string, preset string) {
+	if f == nil {
+		return
+	}
+	preset = NormalizePreset(preset)
+	f.policyMu.Lock()
+	defer f.policyMu.Unlock()
+	if f.presetByIP == nil {
+		f.presetByIP = make(map[string]string)
+	}
+	for _, cidr := range cidrs {
+		ip := stripHost(cidr)
+		if ip == "" {
+			continue
+		}
+		f.presetByIP[ip] = preset
+	}
+}
+
+// ClearPeerPresets removes preset mappings for the given tunnel addresses.
+func (f *Forwarder) ClearPeerPresets(cidrs []string) {
+	if f == nil || len(cidrs) == 0 {
+		return
+	}
+	f.policyMu.Lock()
+	defer f.policyMu.Unlock()
+	for _, cidr := range cidrs {
+		ip := stripHost(cidr)
+		if ip == "" {
+			continue
+		}
+		delete(f.presetByIP, ip)
+	}
+}
+
+func (f *Forwarder) presetForClient(clientIP string) string {
+	ip := stripHost(clientIP)
+	f.policyMu.RLock()
+	defer f.policyMu.RUnlock()
+	if p, ok := f.presetByIP[ip]; ok && p != "" {
+		return p
+	}
+	if f.defaultPreset != "" {
+		return f.defaultPreset
+	}
+	return DefaultPreset
+}
+
+func stripHost(addr string) string {
+	ip := strings.TrimSpace(addr)
+	if i := strings.IndexByte(ip, '/'); i >= 0 {
+		ip = ip[:i]
+	}
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+	return strings.Trim(ip, "[]")
 }
 
 func (f *Forwarder) Start(ctx context.Context) error {
@@ -320,18 +398,23 @@ func (f *Forwarder) handleQuery(query []byte, write func([]byte) error, clientIP
 		f.log.Warn("DNS rate limit")
 		return nil
 	}
-	if name, questionEnd, ok := queryName(query); ok && f.blocklist.Blocked(name) {
-		f.observer.DNSQuery(true)
-		if clientIP != "" {
-			f.blockedMu.Lock()
-			f.blockedByClient[clientIP]++
-			f.blockedMu.Unlock()
+	if name, questionEnd, ok := queryName(query); ok {
+		if AllowlistMatch(f.allowlist, name) {
+			// Escape hatch — never block allowlisted names (Aggressive FP relief).
+		} else if cat, blocked := f.blocklist.BlockedCategory(name); blocked && CategoryEnabled(f.presetForClient(clientIP), cat) {
+			f.observer.DNSQuery(true)
+			f.observer.DNSBlockedCategory(cat)
+			if clientIP != "" {
+				f.blockedMu.Lock()
+				f.blockedByClient[stripHost(clientIP)]++
+				f.blockedMu.Unlock()
+			}
+			if err := write(blockedResponse(query, questionEnd)); err != nil {
+				f.log.Error("write blocked DNS response", zap.Error(err))
+				return err
+			}
+			return nil
 		}
-		if err := write(blockedResponse(query, questionEnd)); err != nil {
-			f.log.Error("write blocked DNS response", zap.Error(err))
-			return err
-		}
-		return nil
 	}
 	f.observer.DNSQuery(false)
 
