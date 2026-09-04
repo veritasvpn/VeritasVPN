@@ -61,12 +61,14 @@ export function rejectForeignOrigin(request) {
 
 /**
  * Sliding-window rate limit using the Cache API (best-effort per isolate).
- * @returns {Promise<Response|null>} 429 response or null if allowed
+ * On Cloudflare (`request.cf`), Cache API failures fail closed (503) so an
+ * outage cannot open an unthrottled flood path. Local/dev without `cf` still
+ * allows the request when the cache is unavailable.
+ * @returns {Promise<Response|null>} 429/503 response or null if allowed
  */
 export async function rateLimit(request, { bucket, limit = 30, windowSec = 60 } = {}) {
   const ip = clientIP(request) || "unknown";
   const keyUrl = `https://rate-limit.veritasvpn.internal/${bucket}/${ip}`;
-  const now = Date.now();
   let count = 1;
   try {
     const cache = caches.default;
@@ -83,7 +85,13 @@ export async function rateLimit(request, { bucket, limit = 30, windowSec = 60 } 
     });
     await cache.put(keyUrl, res);
   } catch {
-    /* cache unavailable — allow */
+    if (request && request.cf) {
+      return jsonResponse(
+        { error: "Rate limit unavailable. Try again shortly." },
+        503,
+        { "Retry-After": String(windowSec) }
+      );
+    }
     return null;
   }
   if (count > limit) {

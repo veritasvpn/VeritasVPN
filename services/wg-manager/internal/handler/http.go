@@ -569,7 +569,7 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 			resp["server_endpoint"] = h.svc.ClientEndpoint(srv, clientIP)
 			resp["stealth_endpoint"] = h.svc.ClientStealthEndpoint(srv, clientIP)
 			resp["stealth_available"] = h.svc.StealthAvailable()
-			resp["stealth_path_prefix"] = h.svc.StealthPathPrefix()
+			// stealth_path_prefix is provisioned only on create peer (not GET).
 		}
 		writeJSON(w, http.StatusOK, resp)
 	default:

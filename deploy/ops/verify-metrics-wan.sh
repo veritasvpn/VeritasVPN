@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Probe production public IP metrics ports from off-LAN. Expect fail (refused/timeout).
 # Agent/node-exporter bind 0.0.0.0 for in-cluster scrape; uplink must drop 9090/9100.
+#
+# CI: set GitHub Actions repository variable VERITAS_PUBLIC_IP to the node egress
+# address (not a Cloudflare CDN A record). Example:
+#   gh variable set VERITAS_PUBLIC_IP --repo veritasvpn/VeritasVPN --body '<egress-ip>'
 set -euo pipefail
 
 PUBLIC_IP="${PUBLIC_IP:-}"

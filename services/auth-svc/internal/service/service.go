@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -388,7 +389,7 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, emailAddr string
 	)
 
 	if s.email != nil {
-		resetURL := fmt.Sprintf("%s/reset-password#token=%s", s.cfg.PublicBaseURL, token)
+		resetURL := fmt.Sprintf("%s/reset-password#token=%s", strings.TrimRight(s.cfg.PublicBaseURL, "/"), url.QueryEscape(token))
 		if err := s.email.Send(ctx, email.SendRequest{
 			From:    "VeritasVPN <noreply@veritasvpn.cloud>",
 			To:      emailAddr,

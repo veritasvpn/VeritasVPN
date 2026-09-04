@@ -5,7 +5,7 @@ import (
 )
 
 // listServersPublicView is the JSON object shape returned by GET /api/v1/wg/servers
-// for one server. Intentionally omits stealth_path_prefix (peer create/get only).
+// for one server. Intentionally omits stealth_path_prefix (peer create only).
 func listServersPublicView(srv *model.Server, serverEndpoint, stealthEndpoint string, stealthAvailable bool) map[string]interface{} {
 	return map[string]interface{}{
 		"id":                srv.ID,

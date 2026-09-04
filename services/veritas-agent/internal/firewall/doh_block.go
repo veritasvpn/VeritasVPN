@@ -6,11 +6,11 @@ import (
 	"strings"
 )
 
-// Default public DNS-over-HTTPS resolver anycast addresses.
+// Default public DNS-over-HTTPS resolver anycast addresses (IPv4).
 // Scoped drops on wg→egress TCP/UDP 443 only; the agent’s own DoH uses host
 // OUTPUT and is unaffected. Keep this list to dedicated resolver IPs — not
 // whole CDN ASNs — to avoid breaking ordinary HTTPS.
-var defaultDoHBlockIPs = []string{
+var defaultDoHBlockIPv4 = []string{
 	// Cloudflare
 	"1.1.1.1", "1.0.0.1",
 	"1.1.1.2", "1.0.0.2",
@@ -41,28 +41,67 @@ var defaultDoHBlockIPs = []string{
 	"45.90.28.0", "45.90.30.0",
 }
 
-// doHBlockIPs returns the IPv4 addresses dropped for app DoH from VPN clients.
-// Set DOH_BLOCK_IPS=none to disable. Otherwise defaults are used and optional
-// comma/space-separated extras from DOH_BLOCK_EXTRA_IPS are merged.
-func doHBlockIPs() []string {
+// Known public DoH anycast IPv6 addresses (same providers as IPv4 list).
+var defaultDoHBlockIPv6 = []string{
+	// Cloudflare
+	"2606:4700:4700::1111", "2606:4700:4700::1001",
+	"2606:4700:4700::1112", "2606:4700:4700::1002",
+	"2606:4700:4700::1113", "2606:4700:4700::1003",
+	// Google
+	"2001:4860:4860::8888", "2001:4860:4860::8844",
+	// Quad9
+	"2620:fe::fe", "2620:fe::9",
+	"2620:fe::10", "2620:fe::fe:10",
+	"2620:fe::11", "2620:fe::fe:11",
+	// OpenDNS
+	"2620:119:35::35", "2620:119:53::53",
+	// AdGuard
+	"2a10:50c0::ad1:ff", "2a10:50c0::ad2:ff",
+	"2a10:50c0::1:ff", "2a10:50c0::2:ff",
+	// Mullvad
+	"2a07:e340::2", "2a07:e340::3",
+	"2a07:e340::4", "2a07:e340::5",
+	"2a07:e340::6", "2a07:e340::9",
+	// Control D
+	"2606:1a40::", "2606:1a40:1::",
+	"2606:1a40::1", "2606:1a40:1::1",
+	// NextDNS
+	"2a07:a8c0::", "2a07:a8c1::",
+}
+
+// doHBlockLists returns IPv4 and IPv6 addresses dropped for app DoH from VPN clients.
+// Set DOH_BLOCK_IPS=none to disable. Optional DOH_BLOCK_EXTRA_IPS merges IPv4/IPv6 extras.
+func doHBlockLists() (v4, v6 []string) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("DOH_BLOCK_IPS")), "none") {
-		return nil
+		return nil, nil
 	}
-	seen := make(map[string]struct{}, len(defaultDoHBlockIPs)+8)
-	out := make([]string, 0, len(defaultDoHBlockIPs)+8)
+	seen4 := make(map[string]struct{}, len(defaultDoHBlockIPv4)+8)
+	seen6 := make(map[string]struct{}, len(defaultDoHBlockIPv6)+8)
 	add := func(raw string) {
 		ip := net.ParseIP(strings.TrimSpace(raw))
-		if ip == nil || ip.To4() == nil {
+		if ip == nil {
 			return
 		}
-		s := ip.To4().String()
-		if _, ok := seen[s]; ok {
+		if ip4 := ip.To4(); ip4 != nil {
+			s := ip4.String()
+			if _, ok := seen4[s]; ok {
+				return
+			}
+			seen4[s] = struct{}{}
+			v4 = append(v4, s)
 			return
 		}
-		seen[s] = struct{}{}
-		out = append(out, s)
+		s := ip.String()
+		if _, ok := seen6[s]; ok {
+			return
+		}
+		seen6[s] = struct{}{}
+		v6 = append(v6, s)
 	}
-	for _, ip := range defaultDoHBlockIPs {
+	for _, ip := range defaultDoHBlockIPv4 {
+		add(ip)
+	}
+	for _, ip := range defaultDoHBlockIPv6 {
 		add(ip)
 	}
 	for _, part := range strings.FieldsFunc(os.Getenv("DOH_BLOCK_EXTRA_IPS"), func(r rune) bool {
@@ -70,5 +109,11 @@ func doHBlockIPs() []string {
 	}) {
 		add(part)
 	}
-	return out
+	return v4, v6
+}
+
+// Deprecated alias kept for older call sites/tests; prefer doHBlockLists.
+func doHBlockIPs() []string {
+	v4, _ := doHBlockLists()
+	return v4
 }

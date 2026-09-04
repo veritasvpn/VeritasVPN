@@ -314,7 +314,8 @@ func (m *Manager) Reconcile(wgIface string, wgPort, mbps int) error {
 		return fmt.Errorf("invalid DNS gateway IP %q", dnsIP)
 	}
 
-	if err := m.runScript(buildRuleset(m.tableName, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP, wgPort, doHBlockIPs())); err != nil {
+	dohV4, dohV6 := doHBlockLists()
+	if err := m.runScript(buildRuleset(m.tableName, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP, wgPort, dohV4, dohV6)); err != nil {
 		return err
 	}
 	return m.reapplyForwardAccepts()
@@ -356,7 +357,7 @@ func validInterfaceName(name string) bool {
 	return true
 }
 
-func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP string, wgPort int, dohIPs []string) string {
+func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP string, wgPort int, dohIPv4, dohIPv6 []string) string {
 	q := strconv.Quote
 
 	var b strings.Builder
@@ -364,10 +365,16 @@ func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP 
 		"destroy table inet " + table,
 		"add table inet " + table,
 	}
-	if len(dohIPs) > 0 {
+	if len(dohIPv4) > 0 {
 		lines = append(lines,
 			"add set inet "+table+" doh_v4 { type ipv4_addr; }",
-			"add element inet "+table+" doh_v4 { "+strings.Join(dohIPs, ", ")+" }",
+			"add element inet "+table+" doh_v4 { "+strings.Join(dohIPv4, ", ")+" }",
+		)
+	}
+	if len(dohIPv6) > 0 {
+		lines = append(lines,
+			"add set inet "+table+" doh_v6 { type ipv6_addr; }",
+			"add element inet "+table+" doh_v6 { "+strings.Join(dohIPv6, ", ")+" }",
 		)
 	}
 	lines = append(lines,
@@ -404,7 +411,7 @@ func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP 
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(wgIface)+" counter drop",
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr "+wgSubnet+" counter drop",
 
-		// Block VPN clients from LAN, cloud metadata, and other private ranges.
+		// Block VPN clients from LAN, cloud metadata, and other private ranges (IPv4).
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr 10.0.0.0/8 counter drop",
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr 172.16.0.0/12 counter drop",
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr 192.168.0.0/16 counter drop",
@@ -412,18 +419,30 @@ func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP 
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr 127.0.0.0/8 counter drop",
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr 100.64.0.0/10 counter drop",
 
+		// Same intent for IPv6 if forwarding is enabled on the node.
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip6 daddr fc00::/7 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip6 daddr fe80::/10 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip6 daddr ::1/128 counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip6 daddr ff00::/8 counter drop",
+
 		// DNS protection: plain DNS and DoT cannot bypass the gateway. Known
 		// public DoH resolver anycast IPs are dropped on TCP/UDP 443 (see
-		// doh_v4). Unknown/custom DoH endpoints remain a residual risk.
+		// doh_v4 / doh_v6). Unknown/custom DoH endpoints remain a residual risk.
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" udp dport 53 counter drop",
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" tcp dport 53 counter drop",
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" udp dport 853 counter drop",
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" tcp dport 853 counter drop",
 	)
-	if len(dohIPs) > 0 {
+	if len(dohIPv4) > 0 {
 		lines = append(lines,
 			"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" ip daddr @doh_v4 tcp dport 443 counter drop",
 			"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" ip daddr @doh_v4 udp dport 443 counter drop",
+		)
+	}
+	if len(dohIPv6) > 0 {
+		lines = append(lines,
+			"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" ip6 daddr @doh_v6 tcp dport 443 counter drop",
+			"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(egress)+" ip6 daddr @doh_v6 udp dport 443 counter drop",
 		)
 	}
 	lines = append(lines,

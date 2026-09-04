@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildRulesetIsFailClosedAndConvergent(t *testing.T) {
-	rules := buildRuleset("veritas", "wg0", "enp1s0", "10.42.0.0/24", "10.43.0.0/16", "10.0.0.0/24", "10.0.0.1", 51820, []string{"1.1.1.1", "8.8.8.8"})
+	rules := buildRuleset("veritas", "wg0", "enp1s0", "10.42.0.0/24", "10.43.0.0/16", "10.0.0.0/24", "10.0.0.1", 51820, []string{"1.1.1.1", "8.8.8.8"}, []string{"2606:4700:4700::1111"})
 	for _, want := range []string{
 		"destroy table inet veritas",
 		"policy drop",
@@ -14,6 +14,8 @@ func TestBuildRulesetIsFailClosedAndConvergent(t *testing.T) {
 		"iifname \"wg0\" oifname \"enp1s0\" accept",
 		"ip daddr 192.168.0.0/16 counter drop",
 		"ip daddr 10.0.0.0/8 counter drop",
+		"ip6 daddr fc00::/7 counter drop",
+		"ip6 daddr fe80::/10 counter drop",
 		"iifname \"wg0\" oifname \"wg0\" counter drop",
 		"ip daddr 10.0.0.1 udp dport 53 accept",
 		"iifname != \"wg0\" ip saddr 10.42.0.0/24 accept",
@@ -24,6 +26,8 @@ func TestBuildRulesetIsFailClosedAndConvergent(t *testing.T) {
 		"add element inet veritas doh_v4 { 1.1.1.1, 8.8.8.8 }",
 		"ip daddr @doh_v4 tcp dport 443 counter drop",
 		"ip daddr @doh_v4 udp dport 443 counter drop",
+		"add set inet veritas doh_v6",
+		"ip6 daddr @doh_v6 tcp dport 443 counter drop",
 		"udp dport 853 counter drop",
 	} {
 		if !strings.Contains(rules, want) {
@@ -43,9 +47,9 @@ func TestBuildRulesetIsFailClosedAndConvergent(t *testing.T) {
 }
 
 func TestBuildRulesetOmitsDoHSetWhenDisabled(t *testing.T) {
-	rules := buildRuleset("veritas", "wg0", "enp1s0", "10.42.0.0/24", "10.43.0.0/16", "10.0.0.0/24", "10.0.0.1", 51820, nil)
-	if strings.Contains(rules, "doh_v4") {
-		t.Fatalf("expected no doh_v4 set when IP list empty:\n%s", rules)
+	rules := buildRuleset("veritas", "wg0", "enp1s0", "10.42.0.0/24", "10.43.0.0/16", "10.0.0.0/24", "10.0.0.1", 51820, nil, nil)
+	if strings.Contains(rules, "doh_v4") || strings.Contains(rules, "doh_v6") {
+		t.Fatalf("expected no doh sets when IP lists empty:\n%s", rules)
 	}
 }
 

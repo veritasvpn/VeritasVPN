@@ -32,4 +32,15 @@ var builtInDoHBypassDomains = []string{
 	"mozilla.cloudflare-dns.com",
 	"security.cloudflare-dns.com",
 	"family.cloudflare-dns.com",
+	// Additional common encrypted-DNS fronts (NXDOMAIN via gateway).
+	"dns64.dns.google",
+	"ordns.he.net",
+	"doh.li",
+	"dns.switch.ch",
+	"dns.osl.basefarm.net",
+	"doh.libredns.gr",
+	"dns.digitale-gesellschaft.ch",
+	"dnsforge.de",
+	"doh.ffmuc.net",
+	"wikimedia-dns.org",
 }

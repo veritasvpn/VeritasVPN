@@ -4,11 +4,10 @@ const messageEl = document.getElementById('message');
 const resend = document.getElementById('resend');
 
 function tokenFromLocation() {
+  // Fragment only — never read ?token= (leaks via history, logs, Referer).
   const hash = (location.hash || '').replace(/^#/, '');
   if (hash.startsWith('token=')) return decodeURIComponent(hash.slice('token='.length));
-  const fromHash = new URLSearchParams(hash).get('token');
-  if (fromHash) return fromHash;
-  return new URLSearchParams(location.search).get('token') || '';
+  return new URLSearchParams(hash).get('token') || '';
 }
 
 function failed() {

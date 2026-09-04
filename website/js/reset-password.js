@@ -1,12 +1,10 @@
 const API = 'https://api.veritasvpn.cloud';
 
 function tokenFromLocation() {
+  // Fragment only — never read ?token= (leaks via history, logs, Referer).
   const hash = (location.hash || '').replace(/^#/, '');
   if (hash.startsWith('token=')) return decodeURIComponent(hash.slice('token='.length));
-  const fromHash = new URLSearchParams(hash).get('token');
-  if (fromHash) return fromHash;
-  // Legacy query links still work once; prefer fragment going forward.
-  return new URLSearchParams(location.search).get('token') || '';
+  return new URLSearchParams(hash).get('token') || '';
 }
 
 const token = tokenFromLocation();

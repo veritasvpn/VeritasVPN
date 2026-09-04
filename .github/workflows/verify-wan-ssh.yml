@@ -25,6 +25,7 @@ jobs:
         run: |
           if [ -z "${PUBLIC_IP}" ]; then
             echo "VERITAS_PUBLIC_IP repository variable is required (Cloudflare CDN A records are not the node egress)." >&2
+            echo "Set with: gh variable set VERITAS_PUBLIC_IP --repo veritasvpn/VeritasVPN --body '<egress-ip>'" >&2
             exit 1
           fi
           echo "ip=${PUBLIC_IP}" >> "$GITHUB_OUTPUT"
