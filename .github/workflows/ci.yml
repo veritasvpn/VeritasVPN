@@ -41,6 +41,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Agents edge must 404 (no proxy_pass)
+        run: |
+          chmod +x deploy/ops/verify-agents-nginx-404.sh
+          bash deploy/ops/verify-agents-nginx-404.sh
+
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
