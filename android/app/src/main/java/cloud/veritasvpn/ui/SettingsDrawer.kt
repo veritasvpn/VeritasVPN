@@ -211,6 +211,14 @@ fun SettingsDrawer(
                             note = "Exclude LAN · per-app bypass",
                             onClick = { navigate(onTunnelSettings) },
                         )
+                        SettingsDrawerStatusItem(
+                            label = "Auto-reconnect",
+                            note = "Always on · restores tunnel if the link drops",
+                        )
+                        SettingsDrawerStatusItem(
+                            label = "Kill switch",
+                            note = "Always on · Always-on VPN + Block connections without VPN",
+                        )
                     }
 
                     SettingsDrawerSection(title = "Session") {
@@ -293,5 +301,43 @@ private fun SettingsDrawerNavItem(
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun SettingsDrawerStatusItem(
+    label: String,
+    note: String,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                color = Paper,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 15.sp,
+            )
+            Text(
+                text = note,
+                color = PaperDim,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+        Text(
+            text = "On",
+            color = CyanHover,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+        )
     }
 }

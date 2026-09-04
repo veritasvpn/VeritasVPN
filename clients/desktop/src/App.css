@@ -551,33 +551,38 @@ input::placeholder { color: var(--paper-dim); }
   background: rgba(255, 107, 122, 0.24);
 }
 
-.settings-drawer button.menu-toggle {
+.settings-drawer button.menu-toggle,
+.settings-drawer div.menu-toggle {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.settings-drawer button.menu-toggle span {
+.settings-drawer button.menu-toggle span,
+.settings-drawer div.menu-toggle span {
   display: flex;
   flex-direction: column;
   gap: 2px;
   text-align: left;
 }
 
-.settings-drawer button.menu-toggle .menu-note {
+.settings-drawer button.menu-toggle .menu-note,
+.settings-drawer div.menu-toggle .menu-note {
   color: var(--paper-dim);
   font-size: 10px;
   font-weight: 500;
 }
 
-.settings-drawer button.menu-toggle b {
+.settings-drawer button.menu-toggle b,
+.settings-drawer div.menu-toggle b {
   color: var(--paper-dim);
   font-size: 12px;
   font-weight: 700;
 }
 
-.settings-drawer button.menu-toggle b.on {
+.settings-drawer button.menu-toggle b.on,
+.settings-drawer div.menu-toggle b.on {
   color: var(--cyan-hover);
 }
 
@@ -588,6 +593,16 @@ input::placeholder { color: var(--paper-dim); }
 
 .settings-drawer button.menu-toggle:disabled:hover {
   background: transparent;
+}
+
+.settings-drawer div.menu-toggle {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 9px;
+  color: var(--paper);
+  font-size: 13px;
+  font-weight: 600;
+  box-sizing: border-box;
 }
 
 @media (prefers-reduced-motion: reduce) {

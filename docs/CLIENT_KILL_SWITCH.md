@@ -26,7 +26,7 @@ Only remove this route when the VPN is intentionally disconnected; removing it w
 
 ## Android
 
-The Android client uses a full-tunnel VpnService so connected app traffic is forced through WireGuard while the session is up. Connect starts immediately after the one-time Android VPN permission prompt. Android does not allow apps to silently enable system Always-on VPN / lockdown settings; VeritasVPN does not block connect on those toggles or show a setup dialog for them.
+The Android client uses a full-tunnel VpnService so connected app traffic is forced through WireGuard while the session is up. Connect also requires system **Always-on VPN** and **Block connections without VPN** for VeritasVPN (Android’s kill switch). Apps cannot flip those OS settings themselves; the client blocks Connect until both are on and deep-links to system VPN settings. There is no in-app off toggle. Auto-reconnect is always on for an established session (sticky restore + Always-on).
 
 ## Chrome extension
 

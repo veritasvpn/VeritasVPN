@@ -76,7 +76,6 @@ const STATS_POLL_MS = 1_500;
 const PEERS_POLL_MS = 5_000;
 const HANDSHAKE_HEALTHY_SEC = 180;
 const RECONNECT_BACKOFF_MS = [2_000, 5_000, 15_000, 30_000];
-const LS_AUTO_RECONNECT = "veritas_auto_reconnect";
 const LS_EXCLUDE_LAN = "veritas_exclude_lan";
 const LS_STEALTH = "veritas_stealth_mode";
 const LS_DEVICE_ID = "veritas_device_id";
@@ -770,7 +769,6 @@ function App() {
   const [showDevices, setShowDevices] = useState(false);
   const [showPortForwards, setShowPortForwards] = useState(false);
   const [showTunnelSettings, setShowTunnelSettings] = useState(false);
-  const [autoReconnect, setAutoReconnect] = useState(() => readLocalFlag(LS_AUTO_RECONNECT, "1"));
   const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
   const [stealthMode, setStealthMode] = useState(() => {
     const enabled = readLocalFlag(LS_STEALTH, "0");
@@ -806,7 +804,6 @@ function App() {
   const reconnectTimerRef = useRef<number | null>(null);
   const settingsCogRef = useRef<HTMLButtonElement>(null);
   const peerIdRef = useRef("");
-  const autoReconnectRef = useRef(autoReconnect);
   const subscriptionActiveRef = useRef(subscriptionActive);
   const connectedRef = useRef(connected);
   const connectingRef = useRef(connecting);
@@ -826,7 +823,6 @@ function App() {
   }, []);
 
   useEffect(() => { peerIdRef.current = peerId; }, [peerId]);
-  useEffect(() => { autoReconnectRef.current = autoReconnect; }, [autoReconnect]);
   useEffect(() => { subscriptionActiveRef.current = subscriptionActive; }, [subscriptionActive]);
   useEffect(() => { connectedRef.current = connected; }, [connected]);
   useEffect(() => { connectingRef.current = connecting; }, [connecting]);
@@ -1395,7 +1391,7 @@ function App() {
 
   const attemptReconnect = useCallback(async () => {
     if (reconnectingRef.current) return;
-    if (!autoReconnectRef.current || userDisconnectedRef.current || !subscriptionActiveRef.current) return;
+    if (userDisconnectedRef.current || !subscriptionActiveRef.current) return;
     if (connectingRef.current) return;
 
     reconnectingRef.current = true;
@@ -1408,7 +1404,7 @@ function App() {
     clearReconnectTimer();
     reconnectTimerRef.current = window.setTimeout(async () => {
       reconnectTimerRef.current = null;
-      if (userDisconnectedRef.current || !autoReconnectRef.current || !subscriptionActiveRef.current) {
+      if (userDisconnectedRef.current || !subscriptionActiveRef.current) {
         reconnectingRef.current = false;
         setReconnecting(false);
         return;
@@ -1437,7 +1433,7 @@ function App() {
       } else {
         reconnectAttemptRef.current = Math.min(attempt + 1, RECONNECT_BACKOFF_MS.length - 1);
         reconnectingRef.current = false;
-        if (!userDisconnectedRef.current && autoReconnectRef.current && subscriptionActiveRef.current) {
+        if (!userDisconnectedRef.current && subscriptionActiveRef.current) {
           setStatusMsg("Reconnecting…");
           void attemptReconnect();
         } else {
@@ -1508,7 +1504,6 @@ function App() {
 
         if (
           (down || handshakeDead) &&
-          autoReconnectRef.current &&
           !userDisconnectedRef.current &&
           subscriptionActiveRef.current &&
           !reconnectingRef.current &&
@@ -1716,14 +1711,6 @@ function App() {
       setRevokingId(null);
     }
   }, [revokingId, handleDisconnect, expireAndReturnToSignIn]);
-
-  const toggleAutoReconnect = useCallback(() => {
-    setAutoReconnect((prev) => {
-      const next = !prev;
-      writeLocalFlag(LS_AUTO_RECONNECT, next);
-      return next;
-    });
-  }, []);
 
   const toggleStealthMode = useCallback(() => {
     if (!linuxDesktop) return;
@@ -2106,7 +2093,6 @@ function App() {
         returnFocusRef={settingsCogRef}
         subscriptionActive={subscriptionActive}
         linuxDesktop={linuxDesktop}
-        autoReconnect={autoReconnect}
         stealthMode={stealthMode}
         connected={connected}
         dnsGateway={dnsGateway}
@@ -2137,7 +2123,6 @@ function App() {
         onOpenDevices={openDevices}
         onOpenPortForwards={openPortForwards}
         onOpenTunnelSettings={openTunnelSettings}
-        onToggleAutoReconnect={toggleAutoReconnect}
         onToggleStealthMode={toggleStealthMode}
         onSignOutEverywhere={handleSignOutEverywhere}
         onRequestSignOut={requestSignOut}

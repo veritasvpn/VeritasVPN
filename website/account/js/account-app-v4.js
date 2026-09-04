@@ -275,7 +275,7 @@ function renderHome() {
           <li>Veritas Shield DNS security (Android &amp; Linux)</li>
           <li>Port forwarding</li>
           <li>Stealth (Linux)</li>
-          <li>Kill switch (Linux always on; Android Always-on + Block connections without VPN; Chrome browser-only)</li>
+          <li>Kill switch + auto-reconnect always on (Linux; Android Always-on + Block connections without VPN; Chrome browser-only)</li>
           <li>Split tunnel</li>
           <li>Pay with Bitcoin (no card)</li>
           <li>Priority support while we expand</li>
@@ -532,7 +532,7 @@ function renderSecurity() {
           <li>Veritas Shield DNS security for Android &amp; Linux</li>
           <li>Port forwarding</li>
           <li>Stealth (Linux)</li>
-          <li>Kill switch (Linux always on; Android Always-on + Block connections without VPN; Chrome browser-only)</li>
+          <li>Kill switch + auto-reconnect always on (Linux; Android Always-on + Block connections without VPN; Chrome browser-only)</li>
           <li>Split tunnel</li>
           <li>No traffic logs — see Privacy Policy for operational data</li>
           <li>Paid with Bitcoin (no card required)</li>

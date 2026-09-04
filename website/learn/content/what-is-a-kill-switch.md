@@ -30,4 +30,4 @@ The trustworthy ones are **fail-closed**: prefer no internet over accidental exp
 
 ## On VeritasVPN clients
 
-Linux desktop uses firewall-oriented fail-closed behavior while connected. Android relies on system Always-on VPN plus “Block connections without VPN.” Enable those OS toggles for the protection to match the marketing sentence.
+Linux desktop uses firewall-oriented fail-closed behavior while connected (always on; no off option). Android requires system Always-on VPN plus “Block connections without VPN” before Connect (apps cannot flip those OS toggles; no in-app off option). Auto-reconnect is always on for both clients.

@@ -48,6 +48,10 @@ fun DashboardScreen(
     onDevices: () -> Unit,
     onPortForwards: () -> Unit,
     onTunnelSettings: () -> Unit,
+    onOpenKillSwitchSettings: () -> Unit,
+    killSwitchEnabled: Boolean,
+    showKillSwitchRequired: Boolean,
+    onDismissKillSwitchRequired: () -> Unit,
     isPremium: Boolean,
     billingReady: Boolean,
     statusMsg: String?,
@@ -64,6 +68,13 @@ fun DashboardScreen(
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var showNetworkMap by remember { mutableStateOf(false) }
+
+    if (showKillSwitchRequired) {
+        KillSwitchRequiredDialog(
+            onOpenSystemVpnSettings = onOpenKillSwitchSettings,
+            onCancel = onDismissKillSwitchRequired
+        )
+    }
 
     if (showSignOutConfirmation) {
         AlertDialog(
@@ -180,6 +191,14 @@ fun DashboardScreen(
                     color = Paper,
                     fontWeight = FontWeight.Bold,
                     fontSize = 22.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = if (killSwitchEnabled) "Kill switch on" else "Kill switch required",
+                    color = if (killSwitchEnabled) CyanHover else ErrorRed,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.6.sp
                 )
             }
 
@@ -701,4 +720,55 @@ private fun ExposureNode(
         Text(label, color = Paper, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         Text(detail, color = PaperDim, fontSize = 9.sp)
     }
+}
+
+@Composable
+fun KillSwitchRequiredDialog(
+    onOpenSystemVpnSettings: () -> Unit,
+    onCancel: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Kill switch required", color = Paper, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "VeritasVPN keeps the Android kill switch always on. Before connecting, enable both system options for VeritasVPN:",
+                    color = PaperMuted,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+                Text(
+                    "1. Always-on VPN",
+                    color = Paper,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "2. Block connections without VPN",
+                    color = Paper,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "There is no in-app off switch. Return here after enabling both; connect continues automatically when they are on.",
+                    color = PaperDim,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onOpenSystemVpnSettings,
+                colors = ButtonDefaults.buttonColors(containerColor = CyanHover)
+            ) {
+                Text("Open VPN settings", color = Ink, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text("Cancel", color = CyanHover) }
+        },
+        containerColor = CardElevated
+    )
 }

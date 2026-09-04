@@ -28,5 +28,6 @@ macOS: run `./scripts/bundle-wg-macos.sh` before build. Stealth is disabled in t
 - Toggle Exclude LAN / Stealth while connected → banner **Reconnect to apply**.
 - Connected badge shows **Direct UDP** or **Stealth TLS**.
 - Kill switch is always on for the whole Linux session while connected (firewall + fail-closed routes; no off option). Connect aborts if the firewall ruleset cannot be installed.
+- Auto-reconnect is always on (no off option).
 
 See `src-tauri/resources/README.md` for binary paths.

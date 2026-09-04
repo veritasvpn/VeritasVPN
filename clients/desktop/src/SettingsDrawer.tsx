@@ -6,7 +6,6 @@ export type SettingsDrawerProps = {
   returnFocusRef: RefObject<HTMLButtonElement | null>;
   subscriptionActive: boolean;
   linuxDesktop: boolean;
-  autoReconnect: boolean;
   stealthMode: boolean;
   connected: boolean;
   dnsGateway: string | null;
@@ -18,7 +17,6 @@ export type SettingsDrawerProps = {
   onOpenDevices: () => void;
   onOpenPortForwards: () => void;
   onOpenTunnelSettings: () => void;
-  onToggleAutoReconnect: () => void;
   onToggleStealthMode: () => void;
   onSignOutEverywhere: () => void;
   onRequestSignOut: () => void;
@@ -33,7 +31,6 @@ export function SettingsDrawer({
   returnFocusRef,
   subscriptionActive,
   linuxDesktop,
-  autoReconnect,
   stealthMode,
   connected,
   dnsGateway,
@@ -45,7 +42,6 @@ export function SettingsDrawer({
   onOpenDevices,
   onOpenPortForwards,
   onOpenTunnelSettings,
-  onToggleAutoReconnect,
   onToggleStealthMode,
   onSignOutEverywhere,
   onRequestSignOut,
@@ -202,13 +198,22 @@ export function SettingsDrawer({
               <span className="settings-nav-label">Split tunnel</span>
               <span className="settings-nav-note">Exclude LAN · reconnect to apply</span>
             </button>
-            <button type="button" className="menu-toggle" onClick={onToggleAutoReconnect}>
+            <div className="menu-toggle" role="status" aria-label="Auto-reconnect always on">
               <span>
                 Auto-reconnect
-                <span className="menu-note">Restore tunnel if link drops</span>
+                <span className="menu-note">Always on · restores tunnel if the link drops</span>
               </span>
-              <b className={autoReconnect ? "on" : ""}>{autoReconnect ? "On" : "Off"}</b>
-            </button>
+              <b className="on">On</b>
+            </div>
+            {linuxDesktop && (
+              <div className="menu-toggle" role="status" aria-label="Kill switch always on">
+                <span>
+                  Kill switch
+                  <span className="menu-note">Always on while connected · no off option</span>
+                </span>
+                <b className="on">On</b>
+              </div>
+            )}
             {linuxDesktop && (
               <button
                 type="button"
