@@ -359,12 +359,18 @@ func (h *HTTPHandler) handleDeleteAccount(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := h.service.DeleteAccount(r.Context(), claims.AccountID); err != nil {
+	if err := h.service.DeleteAccount(r.Context(), claims.AccountID, token); err != nil {
 		h.log.Error("delete account failed", zap.String("account_hash", logging.HashIdentifier(claims.AccountID)), zap.Error(err))
+		msg := err.Error()
+		if strings.Contains(msg, "vpn teardown") || strings.Contains(msg, "teardown") {
+			writeHTTPError(w, http.StatusServiceUnavailable, "failed to revoke VPN sessions; try again shortly")
+			return
+		}
 		writeHTTPError(w, http.StatusInternalServerError, "failed to delete account")
 		return
 	}
 
+	h.clearRefreshCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 

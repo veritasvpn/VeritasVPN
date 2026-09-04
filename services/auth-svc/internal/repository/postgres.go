@@ -253,6 +253,7 @@ func (p *Postgres) DeleteAccount(ctx context.Context, accountID string) error {
 	for _, query := range []string{
 		`DELETE FROM payment_records WHERE account_id = $1`,
 		`DELETE FROM subscriptions WHERE account_id = $1`,
+		`DELETE FROM port_forwards WHERE account_id = $1`,
 		`DELETE FROM peers WHERE account_id = $1`,
 		`DELETE FROM refresh_tokens WHERE account_id = $1`,
 	} {

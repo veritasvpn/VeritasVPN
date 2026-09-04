@@ -386,7 +386,7 @@ function renderAccount(user) {
       <div class="account-section-header">
         <div>
           <h2>Delete account</h2>
-          <p>Permanently delete your VeritasVPN account and revoke all sign-in sessions.</p>
+          <p>Permanently delete your VeritasVPN account, revoke sign-in sessions, and tear down active VPN peers.</p>
         </div>
       </div>
       <div class="account-card account-danger-card">

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/veritasvpn/lib/logging"
@@ -103,8 +104,12 @@ func (h *AuthHandler) DeleteAccount(ctx context.Context, req *authv1.DeleteAccou
 		return nil, status.Error(codes.PermissionDenied, "permission denied")
 	}
 
-	if err := h.service.DeleteAccount(ctx, accountID); err != nil {
+	accessToken, _ := middleware.AccessTokenFromContext(ctx)
+	if err := h.service.DeleteAccount(ctx, accountID, accessToken); err != nil {
 		h.log.Error("delete account failed", zap.Error(err))
+		if strings.Contains(err.Error(), "teardown") {
+			return nil, status.Error(codes.Unavailable, "failed to revoke VPN sessions; try again shortly")
+		}
 		return nil, status.Error(codes.Internal, "failed to delete account")
 	}
 

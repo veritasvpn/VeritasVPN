@@ -187,7 +187,15 @@ func (s *AuthService) GetAccount(ctx context.Context, accountID string) (*model.
 	return s.db.GetAccountByID(ctx, accountID)
 }
 
-func (s *AuthService) DeleteAccount(ctx context.Context, accountID string) error {
+// DeleteAccount tears down live VPN resources, revokes the caller's access JWT,
+// then permanently deletes the account and related rows.
+func (s *AuthService) DeleteAccount(ctx context.Context, accountID, accessToken string) error {
+	if err := s.requestAccountTeardown(ctx, accountID); err != nil {
+		return fmt.Errorf("delete account: %w", err)
+	}
+	if err := s.blacklistAccessToken(ctx, accessToken); err != nil {
+		return fmt.Errorf("delete account: %w", err)
+	}
 	if err := s.db.DeleteAccount(ctx, accountID); err != nil {
 		return fmt.Errorf("delete account: %w", err)
 	}
@@ -214,17 +222,8 @@ func (s *AuthService) LogoutAllSessions(ctx context.Context, accountID, accessTo
 	if err := s.db.DeleteAllRefreshTokens(ctx, accountID); err != nil {
 		return fmt.Errorf("delete refresh tokens: %w", err)
 	}
-
-	ttl := s.cfg.AccessTokenTTL
-	if claims, err := s.jwt.ValidateAccessToken(accessToken); err == nil && claims.ExpiresAt != nil {
-		if remaining := time.Until(claims.ExpiresAt.Time); remaining > 0 {
-			ttl = remaining
-		}
-	}
-	if ttl > 0 {
-		if err := s.redis.BlacklistToken(ctx, hashInput(accessToken), ttl); err != nil {
-			return fmt.Errorf("blacklist access token: %w", err)
-		}
+	if err := s.blacklistAccessToken(ctx, accessToken); err != nil {
+		return err
 	}
 
 	s.log.Info("all sessions logged out", zap.String("account_hash", logging.HashIdentifier(accountID)))

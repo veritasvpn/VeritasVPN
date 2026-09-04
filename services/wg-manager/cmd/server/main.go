@@ -85,6 +85,10 @@ func main() {
 	}
 
 	svc := service.New(pgRepo, redisRepo, sched, comm, nc, cfg.AgentAuthToken, tierCache, log)
+	if err := svc.StartAccountTeardownSync(nc); err != nil {
+		log.Fatal("failed to start account teardown sync", "error", err)
+	}
+	log.Info("listening for account teardown requests")
 	svc.SetFreeAllowedRegions(entitlement.ParseFreeRegions(os.Getenv("FREE_ALLOWED_REGIONS")))
 	if lanIP := strings.TrimSpace(os.Getenv("LAN_ENDPOINT_IP")); lanIP != "" {
 		lanPort := int32(51820)

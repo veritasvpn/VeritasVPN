@@ -22,6 +22,7 @@ type contextKey string
 
 const AccountIDKey contextKey = "account_id"
 const TierKey contextKey = "tier"
+const AccessTokenKey contextKey = "access_token"
 
 type AuthInterceptor struct {
 	log    *logging.Logger
@@ -89,6 +90,7 @@ func (i *AuthInterceptor) authorize(ctx context.Context, method string) (context
 
 	newCtx := context.WithValue(ctx, AccountIDKey, claims.AccountID)
 	newCtx = context.WithValue(newCtx, TierKey, claims.Tier)
+	newCtx = context.WithValue(newCtx, AccessTokenKey, token)
 
 	return newCtx, nil
 }
@@ -104,6 +106,11 @@ func AccountIDFromContext(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("account_id not found in context")
 	}
 	return id, nil
+}
+
+func AccessTokenFromContext(ctx context.Context) (string, bool) {
+	token, ok := ctx.Value(AccessTokenKey).(string)
+	return token, ok && token != ""
 }
 
 func TierFromContext(ctx context.Context) (string, error) {
