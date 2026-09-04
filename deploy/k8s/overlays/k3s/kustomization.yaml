@@ -9,10 +9,10 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:725d21ad4bf46d6abf74d029327eeea833dfed58482fc008fef4a63b262c49ec
+    digest: sha256:8d00c46d4664705740d04fdc26c81864327c2e140c3d7475b4fee7b6a4644f69
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    digest: sha256:0c20a3b00a413e42947b400f644bf354112cc1a4b55b466144ce361864fc64d4
+    digest: sha256:fe4bd58226195cbc925c905370588002ba8007273cbbd72a4f46afdeff28f1f6
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
     digest: sha256:ec30e98cb0a55485d7531ba5b709c236a315e433431e95e36b935b3fa75643e4
