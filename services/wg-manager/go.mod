@@ -10,7 +10,7 @@ require (
 	github.com/veritasvpn/lib/jwt v0.0.0
 	github.com/veritasvpn/lib/logging v0.0.0
 	github.com/veritasvpn/lib/tokenhash v0.0.0
-	go.uber.org/zap v1.27.0
+	go.uber.org/zap v1.28.0
 )
 
 require github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
