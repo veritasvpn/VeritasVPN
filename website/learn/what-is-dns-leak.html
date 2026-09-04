@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>What is a DNS leak? — VeritasVPN Learn</title>
+  <meta name="description" content="When your VPN tunnel is up but DNS queries still go to another resolver—and how to catch it.">
+  <link rel="canonical" href="https://veritasvpn.cloud/learn/what-is-dns-leak.html">
+  <link rel="stylesheet" href="/css/style-typography1.css">
+  <link rel="stylesheet" href="/css/learn.css">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/learn/" aria-current="page">Learn</a></li>
+        <li><a href="/check/">Check</a></li>
+        <li><a href="/#dns">DNS</a></li>
+        <li><a href="/#pricing">Pricing</a></li>
+        <li><a href="/downloads.html">Download</a></li>
+        <li><a href="/account/">Account</a></li>
+      </ul>
+      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+    </div>
+  </nav>
+  <main id="main" class="learn-page">
+    <div class="container">
+      <article class="learn-article">
+        <a class="learn-back" href="/learn/">← All topics</a>
+        <span class="learn-kicker">Threats &amp; leaks</span>
+        <h1>What is a DNS leak?</h1>
+        <p class="learn-meta">Updated 2026-09-04</p>
+        <p class="learn-lede">A DNS leak happens when name lookups bypass your intended resolver—often still hitting your ISP—even though other traffic uses the VPN.</p>
+        <div class="learn-prose">
+<h2>The mismatch</h2>
+<p>You connect a VPN expecting privacy. Web pages load through the tunnel, but your device keeps asking your <strong>ISP’s resolver</strong> (or a browser DoH service) for hostnames. Those parties still learn much of your destination map.</p>
+<p>That split is a <strong>DNS leak</strong>.</p>
+<h2>Common causes</h2>
+<ul><li>OS or browser still using DHCP DNS instead of the VPN’s resolver</li><li><strong>Smart DNS</strong> or “media unblocker” features that intentionally split DNS</li><li>Apps using their own <a href="/learn/what-is-dns.html">DNS-over-HTTPS</a> endpoints</li><li>Misconfigured split tunnel or kill switch gaps</li></ul>
+<h2>How to detect it</h2>
+<p>Use an independent check that shows which resolvers answered—VeritasVPN’s <a href="/check/dns.html">DNS leak test</a> is built for that. Compare resolvers while disconnected vs connected.</p>
+<h2>How serious is it?</h2>
+<p>Severity depends on threat model. Against a café attacker, tunnel encryption may still help. Against an ISP or resolver that logs queries, a leak undoes a large part of the privacy you thought you bought.</p>
+<h2>Mitigation</h2>
+<ul><li>Prefer VPNs that <strong>force</strong> tunnel DNS and block obvious bypasses</li><li>Disable conflicting “secure DNS” browser settings when testing</li><li>Re-test after OS updates</li></ul>
+<p>VeritasVPN’s gateway is always on for connected WireGuard peers, with blocks for plain DNS, DoT, and well-known public DoH resolvers. Uncommon custom DoH can still residual-bypass—honesty beats false certainty.</p>
+        </div>
+      <nav class="learn-related" aria-label="Related articles">
+        <h2>Keep learning</h2>
+        <ul>
+        <li><a href="/learn/what-is-dns.html">What is DNS?</a></li>
+        <li><a href="/learn/what-is-protected-dns.html">What is protected DNS?</a></li>
+        <li><a href="/learn/what-is-webrtc-leak.html">What is a WebRTC leak?</a></li>
+        </ul>
+      </nav>
+        <aside class="learn-cta" aria-label="Need protection">
+          <h2>Need protection? Try VeritasVPN</h2>
+          <p>When you want the concepts on this page applied on your device: WireGuard tunnel, protected DNS, and clear limits—not inflated claims.</p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+            <a class="btn btn-outline" href="/#pricing">Pricing</a>
+            <a class="btn btn-outline" href="/check/">Run a privacy check</a>
+          </div>
+        </aside>
+        <p class="learn-footer-note">Part of <a href="/learn/">VeritasVPN Learn</a>. Educational only—not legal advice.</p>
+      </article>
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/learn/">Learn</a> · <a href="/check/">Privacy check</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

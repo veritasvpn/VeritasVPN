@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>What is WireGuard? — VeritasVPN Learn</title>
+  <meta name="description" content="Why WireGuard became the default modern VPN protocol—and what “simple” really buys you.">
+  <link rel="canonical" href="https://veritasvpn.cloud/learn/what-is-wireguard.html">
+  <link rel="stylesheet" href="/css/style-typography1.css">
+  <link rel="stylesheet" href="/css/learn.css">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/learn/" aria-current="page">Learn</a></li>
+        <li><a href="/check/">Check</a></li>
+        <li><a href="/#dns">DNS</a></li>
+        <li><a href="/#pricing">Pricing</a></li>
+        <li><a href="/downloads.html">Download</a></li>
+        <li><a href="/account/">Account</a></li>
+      </ul>
+      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+    </div>
+  </nav>
+  <main id="main" class="learn-page">
+    <div class="container">
+      <article class="learn-article">
+        <a class="learn-back" href="/learn/">← All topics</a>
+        <span class="learn-kicker">Basics</span>
+        <h1>What is WireGuard?</h1>
+        <p class="learn-meta">Updated 2026-09-04</p>
+        <p class="learn-lede">WireGuard is a lean VPN protocol built into modern operating systems kernels and userspace stacks, focused on strong cryptography and a small codebase.</p>
+        <div class="learn-prose">
+<h2>Design goals</h2>
+<p>WireGuard aims to be <strong>auditable and fast</strong>: a small set of modern crypto primitives, static key pairs per peer, and UDP transport. Less negotiable complexity than older IPsec or OpenVPN stacks means fewer sharp edges—and a clearer threat model.</p>
+<h2>How a peer looks</h2>
+<p>Each side has a private key and a public key. Peers are configured with each other’s public keys and allowed IPs. There is no sprawling cipher suite negotiation in the classic sense; the protocol suite is fixed and versioned carefully.</p>
+<h2>Why products switched</h2>
+<ul><li>Lower overhead on mobile and constrained links</li><li>Faster handshakes and roaming behavior</li><li>Easier secure defaults</li></ul>
+<p>That does not make every WireGuard *product* trustworthy—operations, logging, DNS, and jurisdiction still matter.</p>
+<h2>VeritasVPN and WireGuard</h2>
+<p>VeritasVPN provisions WireGuard peers for Android and Linux clients. The tunnel carries your traffic to the Paraguay exit; protected DNS rides alongside while connected. Protocol choice is necessary but not sufficient: read <a href="/learn/vpn-logging-explained.html">VPN logging explained</a> for the rest of the trust story.</p>
+        </div>
+      <nav class="learn-related" aria-label="Related articles">
+        <h2>Keep learning</h2>
+        <ul>
+        <li><a href="/learn/how-does-a-vpn-work.html">How does a VPN work?</a></li>
+        <li><a href="/learn/what-is-a-vpn.html">What is a VPN?</a></li>
+        <li><a href="/learn/what-is-encryption.html">What is encryption?</a></li>
+        </ul>
+      </nav>
+        <aside class="learn-cta" aria-label="Need protection">
+          <h2>Need protection? Try VeritasVPN</h2>
+          <p>When you want the concepts on this page applied on your device: WireGuard tunnel, protected DNS, and clear limits—not inflated claims.</p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+            <a class="btn btn-outline" href="/#pricing">Pricing</a>
+            <a class="btn btn-outline" href="/check/">Run a privacy check</a>
+          </div>
+        </aside>
+        <p class="learn-footer-note">Part of <a href="/learn/">VeritasVPN Learn</a>. Educational only—not legal advice.</p>
+      </article>
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/learn/">Learn</a> · <a href="/check/">Privacy check</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

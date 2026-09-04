@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>What is a WebRTC leak? — VeritasVPN Learn</title>
+  <meta name="description" content="How browsers can reveal local or public IPs through WebRTC even when a VPN is connected.">
+  <link rel="canonical" href="https://veritasvpn.cloud/learn/what-is-webrtc-leak.html">
+  <link rel="stylesheet" href="/css/style-typography1.css">
+  <link rel="stylesheet" href="/css/learn.css">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/learn/" aria-current="page">Learn</a></li>
+        <li><a href="/check/">Check</a></li>
+        <li><a href="/#dns">DNS</a></li>
+        <li><a href="/#pricing">Pricing</a></li>
+        <li><a href="/downloads.html">Download</a></li>
+        <li><a href="/account/">Account</a></li>
+      </ul>
+      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+    </div>
+  </nav>
+  <main id="main" class="learn-page">
+    <div class="container">
+      <article class="learn-article">
+        <a class="learn-back" href="/learn/">← All topics</a>
+        <span class="learn-kicker">Threats &amp; leaks</span>
+        <h1>What is a WebRTC leak?</h1>
+        <p class="learn-meta">Updated 2026-09-04</p>
+        <p class="learn-lede">WebRTC helps real-time audio and video in browsers—and its connection setup can expose addresses outside your VPN path.</p>
+        <div class="learn-prose">
+<h2>What WebRTC is for</h2>
+<p>WebRTC lets browsers talk peer-to-peer for calls, meetings, and some interactive apps. To punch through NATs, it gathers <strong>ICE candidates</strong>: possible addresses the browser might use, including local LAN addresses and sometimes reflexive public addresses.</p>
+<h2>How that becomes a leak</h2>
+<p>JavaScript on a page can often read those candidates. If your VPN does not cover every path the browser probes, a site may learn an address you intended to hide—classic “VPN connected, IP still visible” reports.</p>
+<p>This is separate from a <a href="/learn/what-is-dns-leak.html">DNS leak</a>, though both undermine the mental model of “the VPN hides me.”</p>
+<h2>What to do</h2>
+<ul><li>Test with a <a href="/check/vpn.html">VPN leak check</a> while connected</li><li>Prefer full-tunnel modes and OS-level kill switches where available</li><li>Understand that disabling WebRTC entirely can break legitimate apps—tradeoffs are real</li></ul>
+<p>Browser extensions that “force WebRTC through proxy” vary in quality; treat them as helpers, not guarantees.</p>
+        </div>
+      <nav class="learn-related" aria-label="Related articles">
+        <h2>Keep learning</h2>
+        <ul>
+        <li><a href="/learn/what-is-dns-leak.html">What is a DNS leak?</a></li>
+        <li><a href="/learn/what-is-an-ip-address.html">What is an IP address?</a></li>
+        <li><a href="/learn/what-is-a-kill-switch.html">What is a VPN kill switch?</a></li>
+        </ul>
+      </nav>
+        <aside class="learn-cta" aria-label="Need protection">
+          <h2>Need protection? Try VeritasVPN</h2>
+          <p>When you want the concepts on this page applied on your device: WireGuard tunnel, protected DNS, and clear limits—not inflated claims.</p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+            <a class="btn btn-outline" href="/#pricing">Pricing</a>
+            <a class="btn btn-outline" href="/check/">Run a privacy check</a>
+          </div>
+        </aside>
+        <p class="learn-footer-note">Part of <a href="/learn/">VeritasVPN Learn</a>. Educational only—not legal advice.</p>
+      </article>
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/learn/">Learn</a> · <a href="/check/">Privacy check</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

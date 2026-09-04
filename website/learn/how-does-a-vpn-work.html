@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How does a VPN work? — VeritasVPN Learn</title>
+  <meta name="description" content="Step-by-step look at tunnels, encryption, handshakes, and how traffic exits to the internet.">
+  <link rel="canonical" href="https://veritasvpn.cloud/learn/how-does-a-vpn-work.html">
+  <link rel="stylesheet" href="/css/style-typography1.css">
+  <link rel="stylesheet" href="/css/learn.css">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/learn/" aria-current="page">Learn</a></li>
+        <li><a href="/check/">Check</a></li>
+        <li><a href="/#dns">DNS</a></li>
+        <li><a href="/#pricing">Pricing</a></li>
+        <li><a href="/downloads.html">Download</a></li>
+        <li><a href="/account/">Account</a></li>
+      </ul>
+      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+    </div>
+  </nav>
+  <main id="main" class="learn-page">
+    <div class="container">
+      <article class="learn-article">
+        <a class="learn-back" href="/learn/">← All topics</a>
+        <span class="learn-kicker">Basics</span>
+        <h1>How does a VPN work?</h1>
+        <p class="learn-meta">Updated 2026-09-04</p>
+        <p class="learn-lede">Your device and a VPN server agree on keys, encapsulate packets inside an encrypted tunnel, then the server forwards them to the open internet.</p>
+        <div class="learn-prose">
+<h2>The short path</h2>
+<ol><li>You authenticate (account, key, or device credential).</li><li>Your client and the server perform a <strong>handshake</strong> and derive session keys.</li><li>Your OS routes selected traffic into a virtual network interface.</li><li>Packets are <strong>encrypted and encapsulated</strong> toward the VPN server’s public endpoint.</li><li>The server decrypts, applies its policy (DNS, firewall, bandwidth), and <strong>forwards</strong> traffic to destinations.</li><li>Replies return through the same tunnel.</li></ol>
+<h2>Handshake and keys</h2>
+<p>Modern protocols such as <a href="/learn/what-is-wireguard.html">WireGuard</a> use public-key cryptography so each side proves identity without shipping a long-lived password on every packet. After the handshake, symmetric keys encrypt bulk traffic efficiently.</p>
+<p>If keys or peer records are wrong, the tunnel simply fails to pass traffic—prefer fail-closed behavior (see <a href="/learn/what-is-a-kill-switch.html">kill switch</a>).</p>
+<h2>Encapsulation</h2>
+<p>Think of your original IP packet as a letter. The VPN puts that letter inside a locked envelope addressed to the VPN server. Observers on your local network see envelopes to the VPN IP and port (for WireGuard, typically UDP), not every inner destination in cleartext.</p>
+<h2>Exit and return path</h2>
+<p>At the server, the envelope is opened. The inner packet goes out via the provider’s uplink with <strong>network address translation</strong> in most consumer setups, so destinations see the VPN’s address. Return traffic is mapped back into your tunnel.</p>
+<h2>DNS inside the tunnel</h2>
+<p>Name lookups should also go through the provider’s resolver while connected; otherwise you can suffer a <a href="/learn/what-is-dns-leak.html">DNS leak</a>. VeritasVPN pushes an in-tunnel DNS gateway and blocks common bypasses for peers.</p>
+<h2>Failure modes worth knowing</h2>
+<ul><li><strong>Tunnel up, DNS elsewhere</strong> — sites load but resolvers still see queries.</li><li><strong>IPv6 or WebRTC bypass</strong> — some apps punch outside the tunnel; test with a <a href="/check/vpn.html">VPN leak check</a>.</li><li><strong>Split tunnel</strong> — some traffic intentionally skips the VPN; see <a href="/learn/what-is-split-tunneling.html">split tunneling</a>.</li></ul>
+<p>Understanding the path makes marketing claims easier to evaluate—and makes honest products easier to trust.</p>
+        </div>
+      <nav class="learn-related" aria-label="Related articles">
+        <h2>Keep learning</h2>
+        <ul>
+        <li><a href="/learn/what-is-a-vpn.html">What is a VPN?</a></li>
+        <li><a href="/learn/what-is-wireguard.html">What is WireGuard?</a></li>
+        <li><a href="/learn/what-is-a-kill-switch.html">What is a VPN kill switch?</a></li>
+        </ul>
+      </nav>
+        <aside class="learn-cta" aria-label="Need protection">
+          <h2>Need protection? Try VeritasVPN</h2>
+          <p>When you want the concepts on this page applied on your device: WireGuard tunnel, protected DNS, and clear limits—not inflated claims.</p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+            <a class="btn btn-outline" href="/#pricing">Pricing</a>
+            <a class="btn btn-outline" href="/check/">Run a privacy check</a>
+          </div>
+        </aside>
+        <p class="learn-footer-note">Part of <a href="/learn/">VeritasVPN Learn</a>. Educational only—not legal advice.</p>
+      </article>
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/learn/">Learn</a> · <a href="/check/">Privacy check</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

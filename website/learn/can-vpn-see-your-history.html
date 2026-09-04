@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Can a VPN see your history? — VeritasVPN Learn</title>
+  <meta name="description" content="What VPN operators can observe by design—and how to read logging claims without wishful thinking.">
+  <link rel="canonical" href="https://veritasvpn.cloud/learn/can-vpn-see-your-history.html">
+  <link rel="stylesheet" href="/css/style-typography1.css">
+  <link rel="stylesheet" href="/css/learn.css">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <nav class="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/learn/" aria-current="page">Learn</a></li>
+        <li><a href="/check/">Check</a></li>
+        <li><a href="/#dns">DNS</a></li>
+        <li><a href="/#pricing">Pricing</a></li>
+        <li><a href="/downloads.html">Download</a></li>
+        <li><a href="/account/">Account</a></li>
+      </ul>
+      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+    </div>
+  </nav>
+  <main id="main" class="learn-page">
+    <div class="container">
+      <article class="learn-article">
+        <a class="learn-back" href="/learn/">← All topics</a>
+        <span class="learn-kicker">Threats &amp; leaks</span>
+        <h1>Can a VPN see your history?</h1>
+        <p class="learn-meta">Updated 2026-09-04</p>
+        <p class="learn-lede">Traffic that enters a VPN must be decrypted at the provider before it goes to the internet—so the operator is in a position to see a great deal unless they deliberately minimize data.</p>
+        <div class="learn-prose">
+<h2>Physics of the exit</h2>
+<p>Your tunnel ends at the VPN server. For the server to forward packets, it handles <strong>inner destinations</strong>. A provider *could* log every host, timestamp, and byte count. Whether they *do* is a policy and engineering choice—not a law of cryptography.</p>
+<h2>What “no logs” should mean</h2>
+<p>Clear products define:</p>
+<ul><li>What is stored (account billing, aggregate bandwidth, nothing about destinations…)</li><li>Retention periods</li><li>How DNS is handled</li></ul>
+<p>Vague “we take privacy seriously” is not a control. See <a href="/learn/vpn-logging-explained.html">VPN logging explained</a>.</p>
+<h2>Upstream DNS</h2>
+<p>If the VPN forwards DNS to third parties (common), those resolvers see hostnames for lookups they answer—even when the VPN itself avoids query logs. VeritasVPN documents this tradeoff in privacy materials and protected DNS explainers.</p>
+<h2>Trust but verify</h2>
+<ul><li>Prefer source-available clients and honest jurisdiction statements</li><li>Prefer payments that reduce identity linkage when that matters to you</li><li>Remember accounts, browsers, and apps create history outside the VPN</li></ul>
+<p>A VPN moves trust; it does not eliminate it.</p>
+        </div>
+      <nav class="learn-related" aria-label="Related articles">
+        <h2>Keep learning</h2>
+        <ul>
+        <li><a href="/learn/vpn-logging-explained.html">VPN logging explained</a></li>
+        <li><a href="/learn/what-is-a-vpn.html">What is a VPN?</a></li>
+        <li><a href="/learn/can-isp-see-vpn-traffic.html">Can my ISP see VPN traffic?</a></li>
+        </ul>
+      </nav>
+        <aside class="learn-cta" aria-label="Need protection">
+          <h2>Need protection? Try VeritasVPN</h2>
+          <p>When you want the concepts on this page applied on your device: WireGuard tunnel, protected DNS, and clear limits—not inflated claims.</p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+            <a class="btn btn-outline" href="/#pricing">Pricing</a>
+            <a class="btn btn-outline" href="/check/">Run a privacy check</a>
+          </div>
+        </aside>
+        <p class="learn-footer-note">Part of <a href="/learn/">VeritasVPN Learn</a>. Educational only—not legal advice.</p>
+      </article>
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/learn/">Learn</a> · <a href="/check/">Privacy check</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

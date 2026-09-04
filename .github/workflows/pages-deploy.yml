@@ -5,6 +5,7 @@ on:
     branches: [master, main]
     paths:
       - "website/**"
+      - "scripts/build-learn.py"
       - ".github/workflows/pages-deploy.yml"
 
 jobs:
@@ -17,6 +18,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Generate Learn education pages
+        run: python3 scripts/build-learn.py
 
       - name: Prepare deploy directory
         run: |
@@ -37,6 +41,7 @@ jobs:
             --exclude 'functions' \
             --exclude 'README.md' \
             --exclude '.gitignore' \
+            --exclude 'learn/content' \
             website/ dist-site/
           # Wrangler discovers Pages Functions from the project root.
           cp -a website/functions ./functions

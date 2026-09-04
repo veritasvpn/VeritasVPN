@@ -6,4 +6,5 @@
 /install-staging  /install/  301
 /js-v2/*  /js/:splat  301
 /check  /check/  301
+/learn  /learn/  301
 https://www.veritasvpn.cloud/*  https://veritasvpn.cloud/:splat  301
