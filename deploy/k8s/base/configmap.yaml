@@ -25,7 +25,7 @@ data:
   NATS_HOST: "nats"
   NATS_PORT: "4222"
 
-  LAN_ENDPOINT_IP: "192.168.0.6"
+  LAN_ENDPOINT_IP: ""
   LAN_ENDPOINT_PORT: "51820"
   # Stealth = WireGuard over TLS/WebSocket (wstunnel). Direct UDP remains default.
   STEALTH_ENABLED: "false"

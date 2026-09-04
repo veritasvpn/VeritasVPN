@@ -16,8 +16,8 @@ type Server struct {
 	LoadFactor         float64    `db:"load_factor"`
 	WGSubnet           string     `db:"wg_subnet"`
 	DNSServer          string     `db:"dns_server"`
-	AgentTokenHash     string     `db:"agent_token_hash"`
-	AgentTokenIssuedAt *time.Time `db:"agent_token_issued_at"`
+	AgentTokenHash     string     `db:"agent_token_hash" json:"-"`
+	AgentTokenIssuedAt *time.Time `db:"agent_token_issued_at" json:"-"`
 	CreatedAt          time.Time  `db:"created_at"`
 	UpdatedAt          time.Time  `db:"updated_at"`
 }

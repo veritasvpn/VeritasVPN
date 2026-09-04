@@ -29,6 +29,10 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if strings.TrimSpace(cfg.AgentAuthToken) == "" {
+		fmt.Fprintln(os.Stderr, "AGENT_AUTH_TOKEN must be set to a non-empty value")
+		os.Exit(1)
+	}
 
 	log, err := logging.New(cfg.LogLevel)
 	if err != nil {

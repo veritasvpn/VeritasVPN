@@ -1554,11 +1554,9 @@ if ! curl -4 -fsS --connect-timeout 5 --max-time 12 https://api.ipify.org \
   restore_after_validation_fail "VPN internet egress validation failed; normal internet was restored"
 fi
 
-# Install passwordless sudo so future connects/disconnects skip pkexec prompts
-SUDOERS_FILE="/etc/sudoers.d/veritasvpn-{user}"
-# Keep passwordless helpers current (includes path-adapt refresh-route.sh + stats.sh).
-echo "{user} ALL=(root) NOPASSWD: {home}/.veritasvpn/bringup.sh, {home}/.veritasvpn/teardown.sh, {home}/.veritasvpn/refresh-route.sh, {home}/.veritasvpn/stats.sh" > "$SUDOERS_FILE" 2>/dev/null || true
-chmod 0440 "$SUDOERS_FILE" 2>/dev/null || true
+# Install passwordless sudo was removed: never NOPASSWD user-writable
+# ~/.veritasvpn/*.sh (local replace → root). Future connects use pkexec.
+# A root-owned binary helper may restore passwordless connect later.
 
 echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}} gw=$GW engine=$ENGINE"
 "#,
@@ -1574,10 +1572,6 @@ echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}
         address = address,
         dns = dns,
         endpoint = endpoint,
-        user = std::env::var("USER").unwrap_or_default(),
-        home = dirs_next::home_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default(),
     )
 }
 

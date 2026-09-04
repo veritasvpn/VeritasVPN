@@ -9,6 +9,6 @@ Type=oneshot
 # ownership") on every timer tick and previously masked that as a clean tree.
 User=jpg
 Group=jpg
-Environment=KUBECONFIG=/home/jpg/.kube/config
-WorkingDirectory=/home/jpg/VeritasVPN
-ExecStart=/home/jpg/VeritasVPN/deploy/verify/deployment-drift.sh
+Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+WorkingDirectory=/opt/veritasvpn
+ExecStart=/opt/veritasvpn/deploy/verify/deployment-drift.sh

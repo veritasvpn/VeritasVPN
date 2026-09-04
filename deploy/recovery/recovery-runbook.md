@@ -1,13 +1,13 @@
 # VeritasVPN Dell/K3s disaster-recovery runbook
 
-This restores the single production Dell after system-disk loss. It does not use the retired Raspberry Pi or Docker Compose deployment.
+This restores the single production the production host after system-disk loss. It does not use the retired Raspberry Pi or Docker Compose deployment.
 
 ## Recovery targets
 
 - RPO: 24 hours (daily encrypted backup).
 - RTO: 4 hours after replacement hardware and router access are available.
 - Canonical source: `master` in `veritasvpn/VeritasVPN`.
-- Canonical deployment: `deploy/k8s/overlays/k3s` on the Dell OptiPlex.
+- Canonical deployment: `deploy/k8s/overlays/k3s` on the production node.
 
 ## Required material
 
@@ -36,8 +36,8 @@ Use the K3s version recorded in the most recent recovery record if it differs.
 ## 2. Restore source and authenticate the backup
 
 ```sh
-git clone https://github.com/veritasvpn/VeritasVPN.git /home/jpg/VeritasVPN
-cd /home/jpg/VeritasVPN
+git clone https://github.com/veritasvpn/VeritasVPN.git /opt/veritasvpn
+cd /opt/veritasvpn
 git checkout master
 git status --short
 sudo BACKUP_ROOT=/path/to/recovery-backup KEY_FILE=/root/.config/veritasvpn/backup.key \
@@ -57,9 +57,9 @@ sudo openssl enc -d -aes-256-cbc -pbkdf2 \
 ## 3. Restore host VPN state and hardening
 
 ```sh
-sudo install -d -m 700 /home/jpg/VeritasVPN/data/wireguard
+sudo install -d -m 700 /opt/veritasvpn/data/wireguard
 sudo install -m 600 /var/lib/veritasvpn/recovery/wireguard-private.key \
-  /home/jpg/VeritasVPN/data/wireguard/private.key
+  /opt/veritasvpn/data/wireguard/private.key
 sudo ./deploy/node/bootstrap-wg.sh
 sudo ./deploy/node/persist-rules.sh
 sudo ./deploy/security/install-host-auditing.sh
@@ -92,8 +92,8 @@ sudo ./deploy/k8s/scripts/apply.sh k3s
 
 ## 5. Restore public routing
 
-1. Update the `k3s` overlay if the Dell public IPv4 changed.
-2. Forward UDP 51820 and TCP 443 to the Dell only. Do not expose TCP 41080
+1. Update the `k3s` overlay if the production host public IPv4 changed.
+2. Forward UDP 51820 and TCP 443 to the production host only. Do not expose TCP 41080
    unless the Chrome gateway has separately passed its public-edge security review.
 3. Restore the Cloudflare Tunnel Secret and verify the API, analytics, and mainnet BTCPay routes.
 4. Keep all management ports private to LAN/Tailscale.

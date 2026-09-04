@@ -63,15 +63,16 @@ patches:
       - op: replace
         path: /data/SERVER_HOSTNAME
         value: "veritas-node"
+      # PUBLIC_IP placeholders — replace via private site overlay before apply (see SITE_LOCAL.md).
       - op: replace
         path: /data/PUBLIC_IP
-        value: "170.51.31.139"
+        value: "REPLACE_ME_PUBLIC_IP"
       - op: replace
         path: /data/STEALTH_ENABLED
         value: "true"
       - op: replace
         path: /data/STEALTH_ENDPOINT_HOST
-        value: "170.51.31.139"
+        value: "REPLACE_ME_PUBLIC_IP"
       - op: replace
         path: /data/STEALTH_ENDPOINT_PORT
         value: "443"

@@ -6,8 +6,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/veritasvpn/e2e.env
-WorkingDirectory=/home/jpg/VeritasVPN
-ExecStart=/home/jpg/VeritasVPN/deploy/verify/tunnel-hold-e2e.sh
+WorkingDirectory=/opt/veritasvpn
+ExecStart=/opt/veritasvpn/deploy/verify/tunnel-hold-e2e.sh
 # Failures land in the journal; Alertmanager covers cluster, not this host oneshot.
 StandardOutput=journal
 StandardError=journal

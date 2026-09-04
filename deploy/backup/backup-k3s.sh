@@ -21,7 +21,7 @@ kubectl -n veritas exec postgres-0 -- pg_dumpall -U veritas | gzip -9 > "$WORK/v
 kubectl -n btcpay-mainnet exec postgres-btcpay-mainnet-0 -- pg_dumpall -U btcpay | gzip -9 > "$WORK/btcpay.sql.gz"
 kubectl -n veritas get configmap,secret -o yaml > "$WORK/veritas-k8s.yaml"
 kubectl -n btcpay-mainnet get configmap,secret -o yaml > "$WORK/btcpay-k8s.yaml"
-install -m 600 /home/jpg/VeritasVPN/data/wireguard/private.key "$WORK/wireguard-private.key"
+install -m 600 /opt/veritasvpn/data/wireguard/private.key "$WORK/wireguard-private.key"
 wg show all dump > "$WORK/wireguard-state.txt"
 # The Android signing identity is an irreplaceable release credential. Include
 # it only inside this already encrypted and authenticated off-site backup.
@@ -51,7 +51,7 @@ openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$KEY_FILE" -in "$archive" | tar 
 
 offsite_success=0
 if [[ -n "${R2_ENDPOINT:-}" && -n "${R2_BUCKET:-}" && -n "${R2_ACCESS_KEY_ID:-}" && -n "${R2_SECRET_ACCESS_KEY:-}" ]]; then
-  python3 /home/jpg/VeritasVPN/deploy/backup/r2-upload.py \
+  python3 /opt/veritasvpn/deploy/backup/r2-upload.py \
     --prefix "${R2_PREFIX:-veritasvpn/backups}/$STAMP" \
     --file "$archive" --file "$archive.hmac" --file "$archive.sha256"
   offsite_success=1

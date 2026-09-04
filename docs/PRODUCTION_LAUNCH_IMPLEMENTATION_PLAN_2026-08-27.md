@@ -183,7 +183,7 @@ Do not cut over any overlay until Phase 4.
 | M2 testnet NS | Scale already 0 → delete `btcpay` NS after backup confirmation; archive `deploy/k8s/btcpay/` or mark deprecated | Agent + human confirm |
 | M3 rate-limit IP | Prefer `X-Real-IP` from nginx only; ignore client-supplied `CF-Connecting-IP` unless request came from Cloudflare tunnel hop | Agent |
 
-**Verify:** external SSH to `170.51.31.139:22` fails; LAN/Tailscale SSH works; live site HEAD has no `ACAO: *`; health no longer needs testnet.
+**Verify:** external SSH to `REPLACE_ME_PUBLIC_IP:22` fails; LAN/Tailscale SSH works; live site HEAD has no `ACAO: *`; health no longer needs testnet.
 
 **Phase 5 exit:** node not casually SSH-scannable; edge headers match security story.
 
@@ -222,7 +222,7 @@ Ship if time; otherwise list as known follow-ups in FEATURES / STATUS:
 
 ```text
 1. Code + tests locally
-2. rsync → Dell /home/jpg/VeritasVPN
+2. rsync → Dell /opt/veritasvpn
 3. docker build --network=host + push localhost:31500/<svc>:<tag>
 4. Update overlays/k3s digests
 5. kubectl set image / apply -k (never apply incomplete secrets)

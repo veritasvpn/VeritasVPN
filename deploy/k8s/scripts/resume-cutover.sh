@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-export REPO_ROOT=/home/jpg/VeritasVPN
+export REPO_ROOT=/opt/veritasvpn
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 export BACKUP_DIR
 BACKUP_DIR=$(ls -d "$REPO_ROOT"/backups/pre-k3s-* | tail -1)

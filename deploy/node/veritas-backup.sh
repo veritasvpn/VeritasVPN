@@ -2,7 +2,7 @@
 # Daily root-only recovery snapshot for the single-node Pi deployment.
 set -euo pipefail
 
-PROJECT_DIR="${PROJECT_DIR:-/home/jpg/VeritasVPN}"
+PROJECT_DIR="${PROJECT_DIR:-/opt/veritasvpn}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/veritasvpn/automatic}"
 RETENTION_DAYS="${RETENTION_DAYS:-35}"
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-veritasvpn-postgres-1}"

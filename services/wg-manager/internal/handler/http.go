@@ -531,12 +531,43 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 			return
 		}
-		resp := map[string]interface{}{"peer": peer}
+		clientIP := clientIPFromRequest(r)
+		var expiresAt interface{}
+		if peer.ExpiresAt != nil {
+			expiresAt = peer.ExpiresAt.Unix()
+		}
+		peerOut := map[string]interface{}{
+			"id":            peer.ID,
+			"account_id":    peer.AccountID,
+			"server_id":     peer.ServerID,
+			"device_id":     peer.DeviceID,
+			"pubkey":        peer.Pubkey,
+			"allowed_ips":   peer.AllowedIPs,
+			"assigned_ip":   peer.AssignedIP,
+			"status":        peer.Status,
+			"shield_preset": entitlement.NormalizeShieldPreset(peer.ShieldPreset),
+			"created_at":    peer.CreatedAt.Unix(),
+			"expires_at":    expiresAt,
+		}
+		if peer.PresharedKey != nil {
+			peerOut["preshared_key"] = *peer.PresharedKey
+		}
+		resp := map[string]interface{}{"peer": peerOut}
 		if srv != nil {
-			endpoint := h.svc.ClientEndpoint(srv, clientIPFromRequest(r))
-			resp["server"] = srv
-			resp["server_endpoint"] = endpoint
-			resp["stealth_endpoint"] = h.svc.ClientStealthEndpoint(srv, clientIPFromRequest(r))
+			resp["server"] = map[string]interface{}{
+				"id":         srv.ID,
+				"hostname":   srv.Hostname,
+				"public_ip":  srv.PublicIP,
+				"wg_port":    srv.WGPort,
+				"public_key": srv.PublicKey,
+				"status":     srv.Status,
+				"region":     srv.Region,
+				"city":       srv.City,
+				"country":    srv.Country,
+				"dns_server": srv.DNSServer,
+			}
+			resp["server_endpoint"] = h.svc.ClientEndpoint(srv, clientIP)
+			resp["stealth_endpoint"] = h.svc.ClientStealthEndpoint(srv, clientIP)
 			resp["stealth_available"] = h.svc.StealthAvailable()
 			resp["stealth_path_prefix"] = h.svc.StealthPathPrefix()
 		}

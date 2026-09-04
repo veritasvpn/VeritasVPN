@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: veritas
       POSTGRES_USER: veritas
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-change-me-set-in-env-file}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./services/auth-svc/migrations:/docker-entrypoint-initdb.d/auth:ro
@@ -19,6 +19,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Local compose only — bind via Docker network, not published ports. Do not use for production.
     command: redis-server --appendonly no --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -33,7 +34,7 @@ services:
       context: .
       dockerfile: services/auth-svc/Dockerfile
     environment:
-      DATABASE_URL: postgres://veritas:${DB_PASSWORD:-change-me}@postgres:5432/veritas?sslmode=disable
+      DATABASE_URL: postgres://veritas:${DB_PASSWORD:?DB_PASSWORD must be set}@postgres:5432/veritas?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       NATS_URL: nats://nats:4222
       JWT_ED25519_PRIVATE_KEY: ${JWT_ED25519_PRIVATE_KEY:?JWT_ED25519_PRIVATE_KEY must be set in .env}
@@ -63,7 +64,7 @@ services:
       # The host-network WireGuard agent is the only host-side caller.
       - "127.0.0.1:8082:8080"
     environment:
-      DATABASE_URL: postgres://veritas:${DB_PASSWORD:-change-me}@postgres:5432/veritas?sslmode=disable
+      DATABASE_URL: postgres://veritas:${DB_PASSWORD:?DB_PASSWORD must be set}@postgres:5432/veritas?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       NATS_URL: nats://nats:4222
       JWT_ED25519_PUBLIC_KEYS: ${JWT_ED25519_PUBLIC_KEYS:?JWT_ED25519_PUBLIC_KEYS must be set in .env}
@@ -117,7 +118,7 @@ services:
       - default
       - btcpay_default
     environment:
-      DATABASE_URL: postgres://veritas:${DB_PASSWORD:-change-me}@postgres:5432/veritas?sslmode=disable
+      DATABASE_URL: postgres://veritas:${DB_PASSWORD:?DB_PASSWORD must be set}@postgres:5432/veritas?sslmode=disable
       NATS_URL: nats://nats:4222
       JWT_ED25519_PUBLIC_KEYS: ${JWT_ED25519_PUBLIC_KEYS:?JWT_ED25519_PUBLIC_KEYS must be set in .env}
       JWT_ISSUER: ${JWT_ISSUER:-https://api.veritasvpn.cloud}
@@ -171,7 +172,7 @@ services:
     container_name: browser-proxy-port-mapper
     network_mode: host
     environment:
-      INTERNAL_IP: ${BROWSER_PROXY_INTERNAL_IP:-192.168.0.6}
+      INTERNAL_IP: ${BROWSER_PROXY_INTERNAL_IP:?BROWSER_PROXY_INTERNAL_IP must be set}
       INTERNAL_PORT: "1080"
       EXTERNAL_PORT: ${BROWSER_PROXY_EXTERNAL_PORT:-41080}
     restart: unless-stopped

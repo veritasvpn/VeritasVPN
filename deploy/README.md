@@ -1,6 +1,6 @@
 # VeritasVPN production deployment
 
-Production runs only on the Dell OptiPlex with K3s. The website is deployed independently by Cloudflare Pages. Raspberry Pi and Docker Compose instructions are retired; see `docs/DEPLOYMENT_SOURCE_OF_TRUTH.md`.
+Production runs only on the production node with K3s. The website is deployed independently by Cloudflare Pages. Raspberry Pi and Docker Compose instructions are retired; see `docs/DEPLOYMENT_SOURCE_OF_TRUTH.md`.
 
 ## Directory Layout
 
@@ -36,7 +36,7 @@ deploy/
 │   ├── redis-acl.conf         # Redis ACL rules
 │   ├── nats-server.conf       # NATS auth and limits
 │   └── .env.prod.example      # Production env template
-├── systemd/          # Dell K3s health, backup, drift, and hardware timers
+├── systemd/          # production host K3s health, backup, drift, and hardware timers
 └── verify/           # Post-deployment verification
     └── boot-verify.sh         # Verify WireGuard, forwarding, services after boot
 ```
@@ -44,7 +44,7 @@ deploy/
 ## Controlled deployment on the Dell
 
 ```bash
-cd /home/jpg/VeritasVPN
+cd /opt/veritasvpn
 git status --short
 sudo ./deploy/backup/backup-k3s.sh
 sudo ./deploy/backup/restore-test.sh

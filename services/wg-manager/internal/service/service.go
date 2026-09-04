@@ -208,7 +208,7 @@ func (s *Service) VerifyAgentToken(ctx context.Context, serverID, token string) 
 }
 
 func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publicIP string, wgPort int32, region, city, country, authToken string) (*model.Server, string, error) {
-	if authToken != s.authToken {
+	if s.authToken == "" || subtle.ConstantTimeCompare([]byte(authToken), []byte(s.authToken)) != 1 {
 		return nil, "", fmt.Errorf("invalid agent auth token")
 	}
 

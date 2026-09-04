@@ -65,15 +65,14 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox-exporter.monitoring.svc.cluster.local:9115
 
-  # Stealth WireGuard (wstunnel TLS on public/LAN TCP 443).
+  # Stealth WireGuard (wstunnel TLS on public TCP 443).
   - job_name: blackbox-stealth
     metrics_path: /probe
     params:
       module: [tls_connect]
     static_configs:
       - targets:
-          - 170.51.31.139:443
-          - 192.168.0.6:443
+          - api.veritasvpn.cloud:443
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

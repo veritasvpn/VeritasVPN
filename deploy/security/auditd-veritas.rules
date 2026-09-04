@@ -5,5 +5,5 @@
 -w /etc/nftables.conf -p wa -k veritas_firewall
 -w /etc/systemd/system/ -p wa -k veritas_systemd
 -w /usr/local/sbin/veritas-k8s-health -p wa -k veritas_monitoring
--w /home/jpg/VeritasVPN/deploy/ -p wa -k veritas_deployment
+-w /opt/veritasvpn/deploy/ -p wa -k veritas_deployment
 

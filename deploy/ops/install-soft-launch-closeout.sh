@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Idempotent Dell install for soft-launch closeout timers + firewall refresh.
-# Run as root on the production node (Dell OptiPlex).
+# Idempotent production host install for soft-launch closeout timers + firewall refresh.
+# Run as root on the production node (production node).
 set -euo pipefail
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -8,7 +8,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 2
 fi
 
-REPO_ROOT="${REPO_ROOT:-/home/jpg/VeritasVPN}"
+REPO_ROOT="${REPO_ROOT:-/opt/veritasvpn}"
 if [[ ! -d "$REPO_ROOT/.git" ]]; then
   printf 'REPO_ROOT missing git checkout: %s\n' "$REPO_ROOT" >&2
   exit 2
@@ -57,9 +57,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-Environment=KUBECONFIG=/home/jpg/.kube/config
+Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 Environment=JWT_CUTOVER_AT_FILE=/etc/veritasvpn/jwt-cutover-at
-# Script runs as root; kubectl uses jpg kubeconfig (readable).
+# Script runs as root; kubectl uses the node kubeconfig.
 User=root
 ExecStart=/usr/local/sbin/veritas-delete-jwt-secret-after
 StandardOutput=journal
@@ -67,7 +67,7 @@ StandardError=journal
 EOF
 install -m 0644 "$REPO_ROOT/deploy/systemd/veritas-jwt-secret-cleanup.timer" /etc/systemd/system/
 # Fix tunnel-hold ExecStart to absolute repo path
-sed "s|/home/jpg/VeritasVPN|${REPO_ROOT}|g" \
+sed "s|/opt/veritasvpn|${REPO_ROOT}|g" \
   "$REPO_ROOT/deploy/systemd/veritas-tunnel-hold.service" \
   >/etc/systemd/system/veritas-tunnel-hold.service
 

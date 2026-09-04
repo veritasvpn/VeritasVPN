@@ -3,7 +3,7 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-veritas}"
-PUBLIC_HOST="${PUBLIC_HOST:-170.51.31.139}"
+PUBLIC_HOST="${PUBLIC_HOST:-api.veritasvpn.cloud}"
 PUBLIC_PORT="${PUBLIC_PORT:-443}"
 KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/config}"
 export KUBECONFIG

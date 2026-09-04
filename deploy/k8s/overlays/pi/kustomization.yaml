@@ -8,19 +8,19 @@ resources:
 
 images:
   - name: localhost:31500/auth-svc
-    newName: 192.168.0.5:30500/auth-svc
+    newName: registry.example.invalid:30500/auth-svc
     digest: sha256:45a6f1a962abacb0eb52c529e9a3355c78d49b7dd4300aef4945344334b5c073
   - name: localhost:31500/wg-manager
-    newName: 192.168.0.5:30500/wg-manager
+    newName: registry.example.invalid:30500/wg-manager
     digest: sha256:ec33cc94485723b36eed42318a86650dbd4d28a04bd366fb2e73d49f0ff55e61
   - name: localhost:31500/billing-svc
-    newName: 192.168.0.5:30500/billing-svc
+    newName: registry.example.invalid:30500/billing-svc
     digest: sha256:72ef4de5fd40962028558683732b51bf12239d7479e6e49dd49cbea2484ed153
   - name: localhost:31500/veritas-agent
-    newName: 192.168.0.5:30500/veritas-agent
+    newName: registry.example.invalid:30500/veritas-agent
     digest: sha256:a1c1cab57c87013d4a00d3324693f3b372556263722a069f2d947deae4c900cd
   - name: localhost:31500/veritas-proxy
-    newName: 192.168.0.5:30500/veritas-proxy
+    newName: registry.example.invalid:30500/veritas-proxy
     digest: sha256:735d0c4463bf3f0e87133f5e62e17749bb47efe7d83d9daac9c7e9c8c9ce7579
 
 patches:

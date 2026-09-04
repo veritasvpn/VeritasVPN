@@ -14,7 +14,7 @@ The Linux desktop WireGuard client uses fail-closed routing plus a dedicated nft
 
 ## Scope
 
-This protects Linux desktop traffic managed by the Tauri client. The Dell OptiPlex is the VPN server, so installing a route there does not protect a user's device. Android and Chrome have their own platform-specific behavior described below.
+This protects Linux desktop traffic managed by the Tauri client. The production node is the VPN server, so installing a route there does not protect a user's device. Android and Chrome have their own platform-specific behavior described below.
 
 ## Recovery
 

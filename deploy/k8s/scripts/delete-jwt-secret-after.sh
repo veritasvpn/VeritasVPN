@@ -10,7 +10,7 @@ CUTOVER_FILE="${JWT_CUTOVER_AT_FILE:-/etc/veritasvpn/jwt-cutover-at}"
 # Default matches live Dell cutover (UTC).
 DEFAULT_CUTOVER="2026-08-31T18:42:00Z"
 DRAIN_SECONDS="${JWT_DRAIN_SECONDS:-86400}"
-KUBECONFIG="${KUBECONFIG:-/home/jpg/.kube/config}"
+KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
 force_if_due=0

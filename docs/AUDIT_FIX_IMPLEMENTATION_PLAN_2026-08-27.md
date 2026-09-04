@@ -28,7 +28,7 @@ Goal: clear all 12 agent-shippable Dell audit findings so a follow-up audit does
 
 ### 5 — Stealth / wstunnel monitoring
 - Add `tcp_connect` (and optional `tls_connect`) modules in `blackbox.yml`.
-- Blackbox job targets `170.51.31.139:443`.
+- Blackbox job targets `REPLACE_ME_PUBLIC_IP:443`.
 - Alert `StealthTunnelUnavailable` when probe fails.
 - Optional: readiness on wstunnel DaemonSet after item 7.
 

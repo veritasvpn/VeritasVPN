@@ -66,7 +66,7 @@ table inet veritas_filter {
     # Tailscale iptables chain otherwise accepts every host port before UFW
     # can filter it, so allow only the services intentionally administered
     # over Tailscale.  The local tailscaled listener is retained for transport.
-    iifname "tailscale0" tcp dport { 22, 6443, 31500, 64462 } accept
+    iifname "tailscale0" tcp dport { 22, 6443, 64462 } accept
     iifname "tailscale0" counter drop
     iifname "wg0" accept
     iifname "cni0" accept
@@ -87,7 +87,7 @@ table inet veritas_filter {
     $LAN_K3S_RULE
 
     # Explicitly deny management/metrics on the uplink before the catch-all.
-    iifname "$EGRESS_IFACE" tcp dport { 22, 9090, 9100, 10250, 10255, 6443, 31500, 5000, 2375, 2376 } counter drop
+    iifname "$EGRESS_IFACE" tcp dport { 22, 9090, 9100, 10250, 10255, 6443, 5000, 2375, 2376 } counter drop
     iifname "$EGRESS_IFACE" udp dport { 9090, 9100 } counter drop
 
     # Drop unsolicited WAN/LAN traffic (SSH from WAN, kubelet, registry, ...).

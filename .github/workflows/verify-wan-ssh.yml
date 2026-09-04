@@ -20,9 +20,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Probe production public IP :22 from off-LAN GitHub runner
         env:
-          # Override if the public edge IP changes.
-          PUBLIC_IP: ${{ vars.VERITAS_PUBLIC_IP || '170.51.31.139' }}
+          # Set repository variable VERITAS_PUBLIC_IP (no hardcoded prod IP in-repo).
+          PUBLIC_IP: ${{ vars.VERITAS_PUBLIC_IP }}
         run: |
           chmod +x deploy/ops/verify-ssh-wan.sh
+          if [ -z "${PUBLIC_IP}" ]; then
+            PUBLIC_IP="$(dig +short api.veritasvpn.cloud A | head -1)"
+          fi
+          if [ -z "${PUBLIC_IP}" ]; then
+            echo "PUBLIC_IP unset and api.veritasvpn.cloud did not resolve" >&2
+            exit 1
+          fi
           # From Actions (not the LAN), success means the port is closed to the internet.
           PUBLIC_IP="$PUBLIC_IP" TIMEOUT_SEC=8 bash deploy/ops/verify-ssh-wan.sh

@@ -23,26 +23,10 @@ spec:
   selector:
     app: registry
 ---
-# Host-local build/push endpoint. Prefer ClusterIP + kubectl port-forward.
-# NodePort 31500 MUST remain firewalled from LAN/WAN (nftables drop on non-loopback).
-# On the node: docker tag ... localhost:31500/svc:tag && docker push localhost:31500/svc:tag
-apiVersion: v1
-kind: Service
-metadata:
-  name: registry-hostlocal
-  namespace: veritas
-  labels:
-    app: registry
-spec:
-  type: NodePort
-  externalTrafficPolicy: Local
-  ports:
-    - port: 5000
-      targetPort: 5000
-      nodePort: 31500
-  selector:
-    app: registry
----
+# Host pushes: from the node, forward loopback only then docker push:
+#   kubectl -n veritas port-forward svc/registry 31500:5000
+#   docker tag … localhost:31500/<image>:<tag> && docker push localhost:31500/<image>:<tag>
+# Do not expose an unauthenticated NodePort; ClusterIP stays in-cluster only.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

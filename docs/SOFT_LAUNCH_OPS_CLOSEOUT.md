@@ -11,7 +11,7 @@
 | Item | Lasting mechanism | Status |
 |------|-------------------|--------|
 | Android/Linux **v0.2.19** release + Functions/SHA | Tag + `release.yml` + install pages + Functions pin | **DONE** — [release](https://github.com/veritasvpn/VeritasVPN/releases/tag/v0.2.19) |
-| Tunnel-hold (5+ min) | `.github/workflows/tunnel-hold.yml` daily (+ optional Dell systemd) | **DONE** — workflow on master; concurrency shared with vpn-e2e |
+| Tunnel-hold (5+ min) | `.github/workflows/tunnel-hold.yml` daily (+ optional production host systemd) | **DONE** — workflow on master; concurrency shared with vpn-e2e |
 | prod-smoke green | `.github/workflows/prod-smoke.yml` | **DONE** — [run](https://github.com/veritasvpn/VeritasVPN/actions/runs/33444007922) |
 | Remove `JWT_SECRET` from Secret | user timer `veritas-jwt-secret-cleanup` + script | **ARMED** — due ≥2026-09-01T18:42:00Z (auto) |
 | RELEASE_SMOKE tick | This board + `docs/RELEASE_SMOKE.md` | **DONE** for automated items; manual UX/BTC still human |
@@ -33,9 +33,9 @@ Cutover reference: JWT mounts removed **2026-08-31T18:42:00Z** (Dell).
 
 ## 2. Tunnel-hold
 
-**Preferred (no Dell sudo):** GitHub Actions `.github/workflows/tunnel-hold.yml` (daily).
+**Preferred (no production host sudo):** GitHub Actions `.github/workflows/tunnel-hold.yml` (daily).
 
-**Optional on Dell** (when you have sudo once):
+**Optional on the production host** (when you have sudo once):
 
 ```bash
 sudo bash deploy/ops/install-soft-launch-closeout.sh
@@ -70,7 +70,7 @@ bash deploy/k8s/scripts/delete-jwt-secret-after.sh --force-if-due
 
 ## 5. SSH WAN
 
-Dell intentionally allows SSH from **LAN + Tailscale** only. Probing from the LAN
+production host intentionally allows SSH from **LAN + Tailscale** only. Probing from the LAN
 or from the node itself is **not** a WAN test.
 
 ```bash
@@ -99,7 +99,7 @@ If it fails: Cloudflare → Transform Rule → Response header → Remove `Acces
 | Release tag | `v0.2.19` — https://github.com/veritasvpn/VeritasVPN/releases/tag/v0.2.19 |
 | prod-smoke run URL | https://github.com/veritasvpn/VeritasVPN/actions/runs/33444007922 (success) |
 | Tunnel-hold | **PASS** https://github.com/veritasvpn/VeritasVPN/actions/runs/33446956850 (after agent pin); short vpn-e2e https://github.com/veritasvpn/VeritasVPN/actions/runs/33446464674 |
-| JWT_SECRET removed | Timer armed on Dell (jpg user); due ≥2026-09-01T18:42:00Z |
+| JWT_SECRET removed | Timer armed on the production host (jpg user); due ≥2026-09-01T18:42:00Z |
 | WAN :22 | https://github.com/veritasvpn/VeritasVPN/actions/runs/33444195855 (PASS; LAN probes are false positives) |
 | ACAO | `verify-acao.sh` PASS 2026-08-31 (also in prod-smoke) |
 | Agent health | `verify-agent-health.sh` PASS after pin `sha256:62905883a2156ea86d530fe26d28d4f1d0a7b2cac31107bbe00fc7beb038d3fc` |
@@ -124,7 +124,7 @@ instead of public `WG_PUBLIC_PORT=443`). WAN only DNATs UDP **443→51820**.
 3. Never leave `digest:` empty in kustomize image pins (breaks apply silently).
 
 ```bash
-# Dell rebuild + pin (example)
+# production host rebuild + pin (example)
 TAG=agent-$(date -u +%Y%m%d%H%M%S)
 docker build --network=host -t localhost:31500/veritas-agent:$TAG -f services/veritas-agent/Dockerfile .
 docker push localhost:31500/veritas-agent:$TAG

@@ -280,10 +280,6 @@ spec:
       ports:
         - port: 5000
           protocol: TCP
-    # host-local docker push via nodePort / host network path
-    - ports:
-        - port: 5000
-          protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

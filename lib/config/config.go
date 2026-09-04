@@ -59,7 +59,8 @@ func Load() *Config {
 		DatabaseURL:    envOrDefault("DATABASE_URL", "postgres://veritas:change-me@localhost:5432/veritas?sslmode=disable"),
 		RedisURL:       envOrDefault("REDIS_URL", "redis://localhost:6379/0"),
 		NatsURL:        envOrDefault("NATS_URL", "nats://localhost:4222"),
-		JWTSecret:      envRequired("JWT_SECRET"),
+		// Legacy HS256; optional during EdDSA cutover (may be unset in production).
+		JWTSecret:      strings.TrimSpace(os.Getenv("JWT_SECRET")),
 		JWTPrivateKey:  envRequired("JWT_ED25519_PRIVATE_KEY"),
 		JWTPublicKeys:  envRequired("JWT_ED25519_PUBLIC_KEYS"),
 		JWTActiveKeyID: envRequired("JWT_ACTIVE_KEY_ID"),
@@ -85,11 +86,12 @@ func Load() *Config {
 		CORSOrigins:          envOrDefault("CORS_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000"),
 		BillingPublicURL:     envOrDefault("BILLING_PUBLIC_URL", "http://localhost:8083"),
 
-		AgentAuthToken:          envRequired("AGENT_AUTH_TOKEN"),
-		BrowserProxyHost:        envRequired("BROWSER_PROXY_HOST"),
+		// Validated non-empty by wg-manager (and any service that registers agents).
+		AgentAuthToken:          strings.TrimSpace(os.Getenv("AGENT_AUTH_TOKEN")),
+		BrowserProxyHost:        strings.TrimSpace(os.Getenv("BROWSER_PROXY_HOST")),
 		BrowserProxyPort:        intEnvOrDefault("BROWSER_PROXY_PORT", 41080),
 		BrowserProxyScheme:      envOrDefault("BROWSER_PROXY_SCHEME", "http"),
-		BrowserExpectedEgressIP: envRequired("BROWSER_EXPECTED_EGRESS_IP"),
+		BrowserExpectedEgressIP: strings.TrimSpace(os.Getenv("BROWSER_EXPECTED_EGRESS_IP")),
 
 		ResendAPIKey:       os.Getenv("RESEND_API_KEY"),
 		TurnstileSecretKey: os.Getenv("TURNSTILE_SECRET_KEY"),
@@ -107,8 +109,14 @@ func envOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
+// envRequired returns a non-empty trimmed env value or exits the process.
 func envRequired(key string) string {
-	return strings.TrimSpace(os.Getenv(key))
+	val := strings.TrimSpace(os.Getenv(key))
+	if val == "" {
+		fmt.Fprintf(os.Stderr, "missing required env: %s\n", key)
+		os.Exit(1)
+	}
+	return val
 }
 
 func intEnvOrDefault(key string, defaultVal int) int {
