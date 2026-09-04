@@ -60,10 +60,12 @@ func Load() *Config {
 		RedisURL:       envOrDefault("REDIS_URL", "redis://localhost:6379/0"),
 		NatsURL:        envOrDefault("NATS_URL", "nats://localhost:4222"),
 		// Legacy HS256; optional during EdDSA cutover (may be unset in production).
-		JWTSecret:      strings.TrimSpace(os.Getenv("JWT_SECRET")),
-		JWTPrivateKey:  envRequired("JWT_ED25519_PRIVATE_KEY"),
+		JWTSecret: strings.TrimSpace(os.Getenv("JWT_SECRET")),
+		// Private key + active kid are required only by auth mint (auth-svc checks).
+		// Verifiers (wg-manager, billing) mount public keys only.
+		JWTPrivateKey:  strings.TrimSpace(os.Getenv("JWT_ED25519_PRIVATE_KEY")),
 		JWTPublicKeys:  envRequired("JWT_ED25519_PUBLIC_KEYS"),
-		JWTActiveKeyID: envRequired("JWT_ACTIVE_KEY_ID"),
+		JWTActiveKeyID: strings.TrimSpace(os.Getenv("JWT_ACTIVE_KEY_ID")),
 		JWTIssuer:      envOrDefault("JWT_ISSUER", "https://api.veritasvpn.cloud"),
 		JWTAudience:    envOrDefault("JWT_AUDIENCE", "veritasvpn-api"),
 		LogLevel:       envOrDefault("LOG_LEVEL", "info"),

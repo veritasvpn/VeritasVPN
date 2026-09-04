@@ -595,21 +595,12 @@ func (h *HTTPHandler) handleListServers(w http.ResponseWriter, r *http.Request) 
 	out := make([]map[string]interface{}, 0, len(servers))
 	for i := range servers {
 		srv := &servers[i]
-		out = append(out, map[string]interface{}{
-			"id":                  srv.ID,
-			"hostname":            srv.Hostname,
-			"public_ip":           srv.PublicIP,
-			"wg_port":             srv.WGPort,
-			"public_key":          srv.PublicKey,
-			"status":              srv.Status,
-			"region":              srv.Region,
-			"city":                srv.City,
-			"country":             srv.Country,
-			"server_endpoint":     h.svc.ClientEndpoint(srv, clientIP),
-			"stealth_endpoint":    h.svc.ClientStealthEndpoint(srv, clientIP),
-			"stealth_available":   h.svc.StealthAvailable(),
-			"stealth_path_prefix": h.svc.StealthPathPrefix(),
-		})
+		out = append(out, listServersPublicView(
+			srv,
+			h.svc.ClientEndpoint(srv, clientIP),
+			h.svc.ClientStealthEndpoint(srv, clientIP),
+			h.svc.StealthAvailable(),
+		))
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"servers": out})
 }
