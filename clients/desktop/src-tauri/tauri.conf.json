@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicholas/tauri/refs/heads/v2/crates/tauri-config-schema/schema.json",
   "productName": "VeritasVPN",
-  "version": "0.2.36",
+  "version": "0.2.37",
   "identifier": "cloud.veritasvpn.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",

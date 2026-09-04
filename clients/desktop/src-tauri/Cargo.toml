@@ -1,6 +1,6 @@
 [package]
 name = "veritasvpn-desktop"
-version = "0.2.36"
+version = "0.2.37"
 description = "VeritasVPN Desktop App"
 authors = ["VeritasVPN"]
 edition = "2021"

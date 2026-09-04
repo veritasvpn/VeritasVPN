@@ -453,7 +453,7 @@ input::placeholder { color: var(--paper-dim); }
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 12px 16px 18px;
+  padding: 14px 10px 14px 18px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -465,21 +465,30 @@ input::placeholder { color: var(--paper-dim); }
   letter-spacing: -0.02em;
 }
 
-.settings-drawer-close {
+.settings-drawer button.settings-drawer-close {
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: 7px;
   background: transparent;
   color: var(--paper-muted);
   cursor: pointer;
+  flex: 0 0 auto;
+  font-size: 0;
 }
 
-.settings-drawer-close:hover {
+.settings-drawer button.settings-drawer-close:hover {
   color: var(--paper);
   background: rgba(9, 199, 245, 0.1);
+}
+
+.settings-drawer-close svg {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 
 .settings-drawer-body {
