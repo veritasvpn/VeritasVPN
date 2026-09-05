@@ -55,7 +55,7 @@ func (h *HTTPHandler) verifyTurnstileIfRequired(w http.ResponseWriter, r *http.R
 			zap.String("client", client),
 			zap.Error(err),
 		)
-		writeHTTPError(w, http.StatusBadRequest, "verification failed; please try again")
+		writeHTTPError(w, http.StatusBadRequest, "security check failed; complete the check and try again")
 		return false
 	}
 	return true

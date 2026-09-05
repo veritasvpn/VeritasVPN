@@ -72,11 +72,11 @@ fun AuthScreen(
     var turnstileToken by remember { mutableStateOf("") }
     var turnstileResetKey by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
-    val needsTurnstile = mode == AuthMode.SIGN_UP
+    val needsTurnstile = true
 
     LaunchedEffect(mode, method) {
         turnstileToken = ""
-        if (needsTurnstile) turnstileResetKey += 1
+        turnstileResetKey += 1
     }
     LaunchedEffect(resetCooldown) {
         if (resetCooldown > 0) {
@@ -501,7 +501,7 @@ fun AuthScreen(
         if (needsTurnstile) {
             Spacer(Modifier.height(12.dp))
             Text(
-                "Verification required",
+                "Security check",
                 color = PaperDim,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -540,7 +540,7 @@ fun AuthScreen(
                     method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN && accountId.isBlank() ->
                         "Enter your Account ID."
                     needsTurnstile && turnstileToken.isBlank() ->
-                        "Complete the verification check first."
+                        "Complete the security check first."
                     else -> null
                 }
                 if (validationError != null) {
@@ -552,11 +552,11 @@ fun AuthScreen(
                             val user = withContext(Dispatchers.IO) {
                                 when {
                                     method == AuthMethod.EMAIL && mode == AuthMode.SIGN_IN ->
-                                        authRepo.signIn(email, password)
+                                        authRepo.signIn(email, password, turnstileToken)
                                     method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP ->
                                         authRepo.signUp(email, password, turnstileToken)
                                     method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN ->
-                                        authRepo.signInWithAccountId(accountId)
+                                        authRepo.signInWithAccountId(accountId, turnstileToken)
                                     else -> authRepo.registerAnonymous(turnstileToken)
                                 }
                             }

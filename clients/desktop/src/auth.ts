@@ -104,6 +104,16 @@ function humanizeError(msg: string): string {
   if (m.includes("email_not_verified") || m.includes("verify your email")) {
     return "Verify your email before signing in.";
   }
+  // Turnstile / bot-check failures — not email verification.
+  if (
+    m.includes("security check failed") ||
+    (m.includes("verification failed") && !m.includes("email"))
+  ) {
+    return "Security check failed. Complete the check and try again.";
+  }
+  if (m.includes("complete verification") || m.includes("complete the check")) {
+    return "Complete the security check to continue.";
+  }
   if (m.includes("too many")) return msg.endsWith(".") ? msg : `${msg}.`;
   if (m.includes("already exists")) return "An account with this email already exists.";
   if (m.includes("account") && (m.includes("invalid") || m.includes("not found") || m.includes("id"))) {
@@ -243,13 +253,16 @@ export async function refreshSession(): Promise<boolean> {
 
 export async function signIn(
   email: string,
-  password: string
+  password: string,
+  turnstileToken: string
 ): Promise<User> {
   const normalizedEmail = email.trim().toLowerCase();
+  if (!turnstileToken.trim()) throw new Error("Complete the security check to continue.");
   try {
     const data = await authAPI("/api/v1/auth/signin", {
       email: normalizedEmail,
       password,
+      turnstile_token: turnstileToken,
     });
     return await persistSession(
       { email: data.email || normalizedEmail, account_id: data.account_id || "" },
@@ -307,7 +320,7 @@ export async function signUp(
   turnstileToken: string
 ): Promise<User> {
   const normalizedEmail = email.trim().toLowerCase();
-  if (!turnstileToken.trim()) throw new Error("Complete verification to continue.");
+  if (!turnstileToken.trim()) throw new Error("Complete the security check to continue.");
   const url = `${AUTH_API}/api/v1/auth/register`;
   const res = await fetch(url, {
     method: "POST",
@@ -355,11 +368,16 @@ export async function resendVerification(email: string): Promise<void> {
 }
 
 /** Sign in with an anonymous account ID — no password. Email accounts must use password. */
-export async function signInWithAccountId(accountId: string): Promise<User> {
+export async function signInWithAccountId(
+  accountId: string,
+  turnstileToken: string
+): Promise<User> {
   const id = accountId.trim();
   if (!id) throw new Error("Enter your account ID.");
+  if (!turnstileToken.trim()) throw new Error("Complete the security check to continue.");
   const data = await authAPI("/api/v1/auth/signin-account", {
     account_id: id,
+    turnstile_token: turnstileToken,
   });
   return await persistSession(
     { account_id: data.account_id || "", is_anonymous: true },
@@ -369,7 +387,7 @@ export async function signInWithAccountId(accountId: string): Promise<User> {
 
 /** Create an anonymous account; caller must show `account_id` to the user once. */
 export async function registerAnonymous(turnstileToken: string): Promise<User> {
-  if (!turnstileToken.trim()) throw new Error("Complete verification to continue.");
+  if (!turnstileToken.trim()) throw new Error("Complete the security check to continue.");
   const data = await authAPI("/api/v1/auth/register-anonymous", {
     turnstile_token: turnstileToken,
   });

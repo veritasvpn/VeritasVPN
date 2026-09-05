@@ -290,7 +290,9 @@ export function requireAuthOrOpenModal(preferredMode = 'signin') {
 
 function mapAuthError(message) {
   const msg = (message || '').toLowerCase();
-  if (msg.includes('verification failed')) return 'Verification failed. Complete the check and try again.';
+  if (msg.includes('verification failed') || msg.includes('security check failed')) {
+    return 'Security check failed. Complete the check and try again.';
+  }
   if (msg.includes('verification required')) return 'Complete the verification check before continuing.';
   if (msg.includes('verify your email') || msg.includes('email_not_verified')) {
     return 'Verify your email before signing in.';

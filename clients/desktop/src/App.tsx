@@ -1025,7 +1025,8 @@ function App() {
     try {
       if (method === "accountId") {
         if (mode === "signin") {
-          const u = await doSignInAccountId(accountId);
+          const turnstileToken = await obtainTurnstileToken();
+          const u = await doSignInAccountId(accountId, turnstileToken);
           setUser(u);
           setAccountId("");
         } else {
@@ -1035,7 +1036,8 @@ function App() {
           setUser(u);
         }
       } else if (mode === "signin") {
-        const u = await doSignIn(email, password);
+        const turnstileToken = await obtainTurnstileToken();
+        const u = await doSignIn(email, password, turnstileToken);
         setUser(u);
         setEmail("");
         setPassword("");

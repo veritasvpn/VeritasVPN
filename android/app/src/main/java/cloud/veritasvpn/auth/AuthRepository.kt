@@ -78,10 +78,17 @@ class AuthRepository(context: Context) {
             .apply()
     }
 
-    fun signIn(email: String, password: String): User {
+    fun signIn(email: String, password: String, turnstileToken: String): User {
         val normalized = email.trim().lowercase()
-        val data = ApiClient.post("/api/v1/auth/signin",
-            mapOf("email" to normalized, "password" to password)).use { res ->
+        if (turnstileToken.isBlank()) throw Error("Complete the security check to continue.")
+        val data = ApiClient.post(
+            "/api/v1/auth/signin",
+            mapOf(
+                "email" to normalized,
+                "password" to password,
+                "turnstile_token" to turnstileToken
+            )
+        ).use { res ->
             if (!res.isSuccessful) {
                 val message = extractError(res)
                 if (message.contains("Verify your email", ignoreCase = true)) {
@@ -134,9 +141,15 @@ class AuthRepository(context: Context) {
         }
     }
 
-    fun signInWithAccountId(accountId: String): User {
-        val data = ApiClient.post("/api/v1/auth/signin-account",
-            mapOf("account_id" to accountId.trim())).use { res ->
+    fun signInWithAccountId(accountId: String, turnstileToken: String): User {
+        if (turnstileToken.isBlank()) throw Error("Complete the security check to continue.")
+        val data = ApiClient.post(
+            "/api/v1/auth/signin-account",
+            mapOf(
+                "account_id" to accountId.trim(),
+                "turnstile_token" to turnstileToken
+            )
+        ).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))
             ApiClient.parse<AuthResponse>(res)
                 ?: throw Error("The server returned an invalid sign-in response.")
@@ -199,6 +212,9 @@ class AuthRepository(context: Context) {
         return when {
             msg.contains("email_not_verified", true) || msg.contains("verify your email", true) ->
                 "Verify your email before signing in."
+            msg.contains("security check failed", true) ||
+                (msg.contains("verification failed", true) && !msg.contains("email", true)) ->
+                "Security check failed. Complete the check and try again."
             msg.contains("incorrect email or password", true) || msg.contains("invalid email or password", true) ->
                 "Incorrect email or password."
             msg.contains("password must be at least", true) -> "Password must be at least 10 characters."

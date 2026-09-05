@@ -15,7 +15,7 @@ export function obtainTurnstileToken(timeoutMs = 120_000): Promise<string> {
       "width:min(360px,100%);background:#0b1726;border:1px solid #1e2f45;border-radius:12px;padding:12px;display:grid;gap:10px;";
 
     const title = document.createElement("p");
-    title.textContent = "Complete verification to continue";
+    title.textContent = "Complete the security check to continue";
     title.style.cssText = "margin:0;color:#9db0c7;font-size:14px;text-align:center;";
 
     const frame = document.createElement("iframe");
@@ -34,7 +34,10 @@ export function obtainTurnstileToken(timeoutMs = 120_000): Promise<string> {
     document.body.appendChild(overlay);
 
     let settled = false;
-    const timer = window.setTimeout(() => finish(new Error("Verification timed out.")), timeoutMs);
+    const timer = window.setTimeout(
+      () => finish(new Error("Security check timed out. Try signing in again.")),
+      timeoutMs
+    );
 
     function cleanup() {
       window.clearTimeout(timer);
@@ -59,11 +62,11 @@ export function obtainTurnstileToken(timeoutMs = 120_000): Promise<string> {
         return;
       }
       if (data.type === "error" || data.type === "expired") {
-        finish(new Error("Verification failed; please try again."));
+        finish(new Error("Security check failed. Complete the check and try again."));
       }
     }
 
-    cancel.addEventListener("click", () => finish(new Error("Verification cancelled.")));
+    cancel.addEventListener("click", () => finish(new Error("Security check cancelled.")));
     window.addEventListener("message", onMessage);
   });
 }

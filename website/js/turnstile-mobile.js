@@ -41,7 +41,7 @@ function renderWhenReady() {
     theme: 'dark',
     callback: token => post({ type: 'token', token }),
     'expired-callback': () => post({ type: 'expired' }),
-    'error-callback': () => post({ type: 'error', message: 'verification failed' }),
+    'error-callback': () => post({ type: 'error', message: 'security check failed' }),
   });
 }
 
