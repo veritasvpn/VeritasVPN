@@ -12,21 +12,42 @@
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
-  <nav class="navbar">
+    <nav class="navbar" id="navbar">
     <div class="container">
       <a href="/" class="logo">
         <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
         <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
       </a>
       <ul class="nav-links">
-        <li><a href="/learn/" aria-current="page">Learn</a></li>
-        <li><a href="/check/">Check</a></li>
-        <li><a href="/#dns">Shield</a></li>
-        <li><a href="/#pricing">Pricing</a></li>
-        <li><a href="/downloads.html">Download</a></li>
-        <li><a href="/account/">Account</a></li>
+                <li><a href="/learn/" aria-current="page">Learn</a></li>
+                <li><a href="/check/">Check</a></li>
+                <li><a href="/#network">Network</a></li>
+                <li><a href="/#product">Product</a></li>
+                <li><a href="/#dns">Shield</a></li>
+                <li><a href="/#pricing">Pricing</a></li>
+                <li><a href="/downloads.html">Download</a></li>
+                <li><a href="/#faq">FAQ</a></li>
       </ul>
-      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
+      <div class="nav-auth">
+        <div id="navAuthLoggedOut" class="nav-auth-logged-out">
+          <a href="/?signin=1" class="btn btn-primary nav-login">Log in</a>
+        </div>
+        <div id="navAuthLoggedIn" class="nav-auth-logged-in is-hidden">
+          <span id="navPlanBadge" class="nav-plan-badge" hidden>Inactive</span>
+          <button type="button" class="nav-user-btn" id="navUserMenuBtn" aria-haspopup="true" aria-expanded="false">
+            <span class="nav-user-avatar" aria-hidden="true"></span>
+            <span id="navUserEmail" class="nav-user-email"></span>
+          </button>
+          <div class="nav-user-menu" id="navUserMenu" role="menu">
+            <a href="/account/" class="nav-user-menu-item" role="menuitem">Open dashboard</a>
+            <button type="button" class="nav-user-menu-item nav-user-menu-item--signout" id="authSignOutAll" role="menuitem">Sign out from all devices</button>
+            <button type="button" class="nav-user-menu-item nav-user-menu-item--signout" id="authSignOut" role="menuitem">Sign out from this device</button>
+          </div>
+        </div>
+      </div>
+      <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
     </div>
   </nav>
   <main id="main" class="learn-page">
@@ -237,5 +258,6 @@
       </div>
     </div>
   </footer>
+  <script type="module" src="/js/site-nav.js"></script>
 </body>
 </html>

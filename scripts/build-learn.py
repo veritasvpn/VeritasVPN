@@ -24,6 +24,9 @@ OUT_DIR = ROOT / "website" / "learn"
 SITEMAP = ROOT / "website" / "sitemap.xml"
 SITE = "https://veritasvpn.cloud"
 
+sys.path.insert(0, str(ROOT / "scripts"))
+from site_nav import nav_html  # noqa: E402
+
 CATEGORIES = [
     ("basics", "Basics", "Core ideas behind private networking."),
     ("threats", "Threats & leaks", "How exposure happens on the open internet."),
@@ -109,30 +112,6 @@ def markdown_to_html(md: str) -> str:
     return "\n".join(out)
 
 
-def nav_html(active: str = "") -> str:
-    def item(href: str, label: str, key: str) -> str:
-        cur = ' aria-current="page"' if active == key else ""
-        return f'<li><a href="{href}"{cur}>{label}</a></li>'
-
-    return f"""  <nav class="navbar">
-    <div class="container">
-      <a href="/" class="logo">
-        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
-        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
-      </a>
-      <ul class="nav-links">
-        {item("/learn/", "Learn", "learn")}
-        {item("/check/", "Check", "check")}
-        {item("/#dns", "Shield", "dns")}
-        {item("/#pricing", "Pricing", "pricing")}
-        {item("/downloads.html", "Download", "download")}
-        {item("/account/", "Account", "account")}
-      </ul>
-      <a class="btn btn-primary" href="/downloads.html">Get Veritas</a>
-    </div>
-  </nav>"""
-
-
 def footer_html() -> str:
     return """  <footer class="footer">
     <div class="container">
@@ -161,6 +140,7 @@ def page_shell(title: str, description: str, canonical: str, body: str, active: 
 {nav_html(active)}
 {body}
 {footer_html()}
+  <script type="module" src="/js/site-nav.js"></script>
 </body>
 </html>
 """

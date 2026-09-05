@@ -1,11 +1,6 @@
 /* VeritasVPN Learn — education hub + articles */
 
-body:has(.learn-page) .navbar {
-  background: rgba(7, 17, 15, 0.92);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border-bottom-color: var(--line);
-}
+/* Navbar opacity is owned by style-typography1.css (shared chrome). */
 
 .learn-page {
   padding: calc(var(--nav-h) + 8px) 0 96px;

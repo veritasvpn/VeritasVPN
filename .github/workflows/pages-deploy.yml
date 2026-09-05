@@ -6,6 +6,8 @@ on:
     paths:
       - "website/**"
       - "scripts/build-learn.py"
+      - "scripts/site_nav.py"
+      - "scripts/inject-site-nav.py"
       - ".github/workflows/pages-deploy.yml"
 
 jobs:
@@ -21,6 +23,9 @@ jobs:
 
       - name: Generate Learn education pages
         run: python3 scripts/build-learn.py
+
+      - name: Inject shared marketing site nav
+        run: python3 scripts/inject-site-nav.py
 
       - name: Prepare deploy directory
         run: |

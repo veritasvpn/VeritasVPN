@@ -1,13 +1,6 @@
 /* Privacy check tools — extends marketing tokens */
 
-/* Check pages omit main.js; keep the fixed nav opaque so content never
-   reads through it while scrolling. */
-body:has(.check-page) .navbar {
-  background: rgba(7, 17, 15, 0.92);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border-bottom-color: var(--line);
-}
+/* Navbar opacity is owned by style-typography1.css (shared chrome). */
 
 .check-page {
   /* Clear the fixed navbar so links like "All checks" stay clickable. */
