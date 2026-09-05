@@ -11,14 +11,19 @@
   Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: https://challenges.cloudflare.com https://tile.openstreetmap.org; font-src 'self'; style-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com https://btcpay-mainnet.veritasvpn.cloud; connect-src 'self' https://api.veritasvpn.cloud https://btcpay-mainnet.veritasvpn.cloud https://cloudflareinsights.com https://challenges.cloudflare.com https://edns.ip-api.com https://*.edns.ip-api.com https://api64.ipify.org https://tile.openstreetmap.org stun:stun.l.google.com:19302; worker-src 'self' blob: https://challenges.cloudflare.com
 
 # Desktop Tauri embeds this page in an iframe (Android loads it top-level).
-# Allow only known Veritas client origins; keep scripts limited to Turnstile.
+# Cloudflare Pages merges path headers with /* — unset global anti-framing
+# headers first, otherwise frame-ancestors 'none' still blocks the embed.
 /turnstile-mobile
   ! X-Frame-Options
+  ! Content-Security-Policy
+  ! Cross-Origin-Resource-Policy
   Cross-Origin-Resource-Policy: cross-origin
   Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self' tauri://localhost http://tauri.localhost https://tauri.localhost; form-action 'self'; img-src 'self' data: https://challenges.cloudflare.com; font-src 'self'; style-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; worker-src 'self' blob: https://challenges.cloudflare.com
 
 /turnstile-mobile.html
   ! X-Frame-Options
+  ! Content-Security-Policy
+  ! Cross-Origin-Resource-Policy
   Cross-Origin-Resource-Policy: cross-origin
   Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self' tauri://localhost http://tauri.localhost https://tauri.localhost; form-action 'self'; img-src 'self' data: https://challenges.cloudflare.com; font-src 'self'; style-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; worker-src 'self' blob: https://challenges.cloudflare.com
 
