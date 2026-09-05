@@ -4733,7 +4733,7 @@ dependencies = [
 
 [[package]]
 name = "veritasvpn-desktop"
-version = "0.2.40"
+version = "0.2.41"
 dependencies = [
  "base64 0.22.1",
  "dirs-next",

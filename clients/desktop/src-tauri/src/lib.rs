@@ -437,14 +437,23 @@ fn wireguard_stats_linux() -> WgTransferStats {
 }
 
 #[tauri::command]
-async fn disconnect_wireguard(app: AppHandle) -> ConnectResult {
-    // Stop the recovery watcher before teardown so we don't soft-reconnect
-    // after the user intentionally disconnected.
-    stop_network_switch_watcher();
-    // Teardown can prompt for elevation — keep it off the UI thread.
-    let result = tauri::async_runtime::spawn_blocking(move || bring_down_wireguard(&app))
-        .await
-        .unwrap_or_else(|e| Err(format!("disconnect task failed: {e}")));
+async fn disconnect_wireguard(app: AppHandle, soft: Option<bool>) -> ConnectResult {
+    let soft = soft.unwrap_or(false);
+    // Soft disconnect is used by auto-reconnect / timeouts — never prompt.
+    // Intentional Disconnect (soft=false) may still use interactive elevation.
+    if !soft {
+        stop_network_switch_watcher();
+    }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        if soft {
+            let _guard = SoftElevatedGuard::enter();
+            bring_down_wireguard(&app)
+        } else {
+            bring_down_wireguard(&app)
+        }
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("disconnect task failed: {e}")));
     match result {
         Ok(msg) => ConnectResult {
             success: true,
@@ -833,6 +842,7 @@ fn public_egress_ok() -> bool {
 /// Root-owned soft-recovery helpers installed at connect time.
 const SOFT_CLEANUP_HELPER: &str = "/var/lib/veritasvpn/cleanup-killswitch.sh";
 const SOFT_PATH_ADAPT_HELPER: &str = "/var/lib/veritasvpn/path-adapt.sh";
+const SOFT_TEARDOWN_HELPER: &str = "/var/lib/veritasvpn/teardown.sh";
 
 pub(crate) fn cleanup_kill_switch_noninteractive() -> Result<bool, String> {
     // Soft recovery MUST never prompt. Only the root-owned helper installed at
@@ -2033,8 +2043,92 @@ chmod 755 "$SOFT_DIR/path-adapt.sh"
 chown root:root "$SOFT_DIR/path-adapt.sh"
 
 if [[ -n "$DESKTOP_USER" ]]; then
-  printf '%s ALL=(root) NOPASSWD: %s/cleanup-killswitch.sh, %s/path-adapt.sh\n' \
-    "$DESKTOP_USER" "$SOFT_DIR" "$SOFT_DIR" > /etc/sudoers.d/veritasvpn-soft
+  # Install a root-owned full teardown helper (does NOT remove soft-recovery
+  # sudoers — intentional Disconnect still uses ~/.veritasvpn/teardown.sh).
+  cat > "$SOFT_DIR/teardown.sh" <<'SOFT_TEARDOWN'
+#!/bin/bash
+set -uo pipefail
+STATE_DIR="${{HOME:-/root}}/.veritasvpn"
+if [[ -n "${{SUDO_USER:-}}" ]]; then
+  STATE_DIR="$(getent passwd "$SUDO_USER" | cut -d: -f6)/.veritasvpn"
+fi
+IFACE_FILE="$STATE_DIR/iface"
+PID_FILE="$STATE_DIR/wireguard-go.pid"
+STEALTH_PID_FILE="$STATE_DIR/wstunnel.pid"
+META_FILE="$STATE_DIR/iface.meta"
+DNS_BACKUP="${{META_FILE}}.dns"
+ENDPOINT_IP=""
+IFACE=""
+GW_IF=""
+if [[ -f "$META_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$META_FILE" 2>/dev/null || true
+  ENDPOINT_IP="${{endpoint_ip:-}}"
+  IFACE="${{iface:-}}"
+  GW_IF="${{gw_if:-}}"
+fi
+if [[ -z "$IFACE" && -f "$IFACE_FILE" ]]; then
+  IFACE="$(cat "$IFACE_FILE")"
+fi
+ip route del blackhole default metric 1 2>/dev/null || true
+if command -v nft >/dev/null 2>&1; then
+  nft delete table inet veritasvpn_killswitch 2>/dev/null || true
+fi
+if command -v iptables >/dev/null 2>&1; then
+  while iptables -C OUTPUT -j VERITASVPN_KILLSWITCH 2>/dev/null; do
+    iptables -D OUTPUT -j VERITASVPN_KILLSWITCH 2>/dev/null || break
+  done
+  iptables -F VERITASVPN_KILLSWITCH 2>/dev/null || true
+  iptables -X VERITASVPN_KILLSWITCH 2>/dev/null || true
+fi
+if command -v ip6tables >/dev/null 2>&1; then
+  while ip6tables -C OUTPUT -j VERITASVPN_KILLSWITCH_V6 2>/dev/null; do
+    ip6tables -D OUTPUT -j VERITASVPN_KILLSWITCH_V6 2>/dev/null || break
+  done
+  ip6tables -F VERITASVPN_KILLSWITCH_V6 2>/dev/null || true
+  ip6tables -X VERITASVPN_KILLSWITCH_V6 2>/dev/null || true
+fi
+ip route del blackhole default metric 1 2>/dev/null || true
+ip -6 route del blackhole default metric 1 2>/dev/null || true
+if [[ -n "$IFACE" ]]; then
+  ip route del 10.0.0.0/24 dev "$IFACE" 2>/dev/null || true
+  ip route del 0.0.0.0/1 dev "$IFACE" 2>/dev/null || true
+  ip route del 128.0.0.0/1 dev "$IFACE" 2>/dev/null || true
+  ip link set "$IFACE" down 2>/dev/null || true
+  ip link delete "$IFACE" 2>/dev/null || true
+fi
+ip route del 0.0.0.0/1 2>/dev/null || true
+ip route del 128.0.0.0/1 2>/dev/null || true
+if [[ -n "$ENDPOINT_IP" && "$ENDPOINT_IP" != "127.0.0.1" ]]; then
+  ip route del "$ENDPOINT_IP" 2>/dev/null || true
+fi
+if [[ -f "$PID_FILE" ]]; then
+  kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
+  rm -f "$PID_FILE"
+fi
+pkill -f 'wireguard-go veritas0' 2>/dev/null || true
+rm -f /var/run/wireguard/*.sock 2>/dev/null || true
+if [[ -f "$STEALTH_PID_FILE" ]]; then
+  kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
+  rm -f "$STEALTH_PID_FILE"
+fi
+pkill -f '/wstunnel client' 2>/dev/null || true
+rm -f "$IFACE_FILE" "$META_FILE"
+if [[ -f "$DNS_BACKUP" ]]; then
+  cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
+fi
+if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
+  resolvectl revert "$GW_IF" 2>/dev/null || true
+  resolvectl flush-caches 2>/dev/null || true
+fi
+rm -f "$DNS_BACKUP"
+echo ok
+SOFT_TEARDOWN
+  chmod 755 "$SOFT_DIR/teardown.sh"
+  chown root:root "$SOFT_DIR/teardown.sh"
+
+  printf '%s ALL=(root) NOPASSWD: %s/cleanup-killswitch.sh, %s/path-adapt.sh, %s/teardown.sh\n' \
+    "$DESKTOP_USER" "$SOFT_DIR" "$SOFT_DIR" "$SOFT_DIR" > /etc/sudoers.d/veritasvpn-soft
   chmod 440 /etc/sudoers.d/veritasvpn-soft
 fi
 
@@ -2254,7 +2348,7 @@ ip -6 route del blackhole default metric 1 2>/dev/null || true
 
 # Soft-recovery helpers (installed at connect) — remove on intentional disconnect.
 rm -f /etc/sudoers.d/veritasvpn-soft
-rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh
+rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh
 rmdir /var/lib/veritasvpn 2>/dev/null || true
 
 # Remove split-tunnel routes
@@ -2323,6 +2417,39 @@ echo ok
         perms.set_mode(0o700);
         fs::set_permissions(&script_path, perms).ok();
     }
+
+    // Soft / auto-reconnect teardown: passwordless helper only — never pkexec.
+    if is_soft_elevated() {
+        if Path::new(SOFT_TEARDOWN_HELPER).exists() {
+            match Command::new("sudo")
+                .args(["-n", "timeout", "20", SOFT_TEARDOWN_HELPER])
+                .output()
+            {
+                Ok(out) if out.status.success() => {
+                    let _ = fs::remove_file(conf_path()?);
+                    let _ = fs::remove_file(peer_id_path()?);
+                    return Ok("WireGuard disconnected (soft)".into());
+                }
+                Ok(out) => {
+                    return Err(format!(
+                        "soft teardown helper failed: {}",
+                        String::from_utf8_lossy(&out.stderr)
+                    ));
+                }
+                Err(e) => return Err(format!("soft teardown helper spawn failed: {e}")),
+            }
+        }
+        // Fallback: sudo -n on the user-home script — still never pkexec.
+        match run_elevated_noninteractive(&script_path) {
+            Ok(()) => {
+                let _ = fs::remove_file(conf_path()?);
+                let _ = fs::remove_file(peer_id_path()?);
+                return Ok("WireGuard disconnected (soft)".into());
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
     if let Err(elev_err) = run_elevated(&script_path) {
         let _ = Command::new("bash").arg(&script_path).output();
         let _ = fs::remove_file(conf_path()?);

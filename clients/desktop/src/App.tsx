@@ -962,7 +962,7 @@ function App() {
       if (!connecting) return;
       const timedOutPeer = connectPeerRef.current;
       connectPeerRef.current = "";
-      await invoke<ConnectResult>("disconnect_wireguard").catch(() => undefined);
+      await invoke<ConnectResult>("disconnect_wireguard", { soft: true }).catch(() => undefined);
       if (timedOutPeer) {
         await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${timedOutPeer}`, {
           method: "DELETE",
@@ -1412,7 +1412,7 @@ function App() {
 
       const oldPeer = peerIdRef.current;
       try {
-        await invoke<ConnectResult>("disconnect_wireguard").catch(() => undefined);
+        await invoke<ConnectResult>("disconnect_wireguard", { soft: true }).catch(() => undefined);
       } catch {
         // continue teardown
       }
@@ -1478,29 +1478,9 @@ function App() {
           hadGoodHandshakeRef.current = true;
         }
 
-        // Only reconnect when the tunnel interface is actually down.
-        // A handshake age past WireGuard's natural rekey (~2m) is normal while
-        // interface_up; tearing down for that alone drops the session briefly.
-        const down = hadInterfaceUpRef.current && !stats.interface_up;
-
-        // Dead tunnel with kill switch still installed: interface stays up but
-        // the peer was replaced/removed (e.g. old multi-device upsert) or the
-        // handshake never recovers. Tear down + reconnect so clearnet is not
-        // blackholed.
-        const handshakeDead =
-          hadGoodHandshakeRef.current &&
-          stats.interface_up &&
-          (stats.last_handshake_sec <= 0 || handshakeAge > HANDSHAKE_HEALTHY_SEC);
-
-        if (
-          (down || handshakeDead) &&
-          !userDisconnectedRef.current &&
-          subscriptionActiveRef.current &&
-          !reconnectingRef.current &&
-          !connectingRef.current
-        ) {
-          void attemptReconnect();
-        }
+        // Network-switch / tunnel flaps are handled by the backend soft-recovery
+        // watcher (passwordless). Never call UI hard-reconnect here — that used
+        // interactive pkexec for teardown.sh and spammed auth dialogs.
       } catch {
         // ignore transient stats errors
       }
@@ -1512,7 +1492,7 @@ function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [connected, reconnecting, attemptReconnect]);
+  }, [connected, reconnecting]);
 
   // Poll peers for DNS blocked count of current peer
   useEffect(() => {
