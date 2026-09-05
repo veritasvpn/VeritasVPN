@@ -6,19 +6,21 @@ import (
 
 // listServersPublicView is the JSON object shape returned by GET /api/v1/wg/servers
 // for one server. Intentionally omits stealth_path_prefix (peer create only).
-func listServersPublicView(srv *model.Server, serverEndpoint, stealthEndpoint string, stealthAvailable bool) map[string]interface{} {
+func listServersPublicView(srv *model.Server, serverEndpoint, stealthEndpoint string, stealthAvailable bool, endpointLAN, endpointWAN string) map[string]interface{} {
 	return map[string]interface{}{
-		"id":                srv.ID,
-		"hostname":          srv.Hostname,
-		"public_ip":         srv.PublicIP,
-		"wg_port":           srv.WGPort,
-		"public_key":        srv.PublicKey,
-		"status":            srv.Status,
-		"region":            srv.Region,
-		"city":              srv.City,
-		"country":           srv.Country,
-		"server_endpoint":   serverEndpoint,
-		"stealth_endpoint":  stealthEndpoint,
-		"stealth_available": stealthAvailable,
+		"id":                   srv.ID,
+		"hostname":             srv.Hostname,
+		"public_ip":            srv.PublicIP,
+		"wg_port":              srv.WGPort,
+		"public_key":           srv.PublicKey,
+		"status":               srv.Status,
+		"region":               srv.Region,
+		"city":                 srv.City,
+		"country":              srv.Country,
+		"server_endpoint":      serverEndpoint,
+		"server_endpoint_lan":  endpointLAN,
+		"server_endpoint_wan":  endpointWAN,
+		"stealth_endpoint":     stealthEndpoint,
+		"stealth_available":    stealthAvailable,
 	}
 }

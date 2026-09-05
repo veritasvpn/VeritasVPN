@@ -60,6 +60,8 @@ interface PeerResponse {
   peer_id: string;
   server_public_key: string;
   server_endpoint: string;
+  server_endpoint_lan?: string;
+  server_endpoint_wan?: string;
   stealth_endpoint?: string;
   stealth_available?: boolean;
   stealth_path_prefix?: string;
@@ -1296,6 +1298,8 @@ function App() {
           dns: gatewayDns,
           server_public_key: peer.server_public_key,
           endpoint: peer.server_endpoint,
+          endpoint_lan: peer.server_endpoint_lan || "",
+          endpoint_wan: peer.server_endpoint_wan || "",
           allowed_ips: allowed,
           peer_id: peer.peer_id,
           preshared_key: peer.preshared_key || "",

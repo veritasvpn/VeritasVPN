@@ -30,6 +30,10 @@ pub struct SavedTunnelConfig {
     pub stealth_endpoint: String,
     #[serde(default)]
     pub stealth_path_prefix: String,
+    #[serde(default)]
+    pub endpoint_lan: String,
+    #[serde(default)]
+    pub endpoint_wan: String,
 }
 
 /// Result of one recovery pass.

@@ -19,7 +19,7 @@ func TestListServersPublicViewOmitsStealthPathPrefix(t *testing.T) {
 		City:      "asuncion",
 		Country:   "PY",
 	}
-	view := listServersPublicView(srv, "203.0.113.10:443", "203.0.113.10:443", true)
+	view := listServersPublicView(srv, "203.0.113.10:443", "203.0.113.10:443", true, "192.168.0.6:51820", "203.0.113.10:51820")
 	raw, err := json.Marshal(view)
 	if err != nil {
 		t.Fatal(err)

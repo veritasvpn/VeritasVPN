@@ -67,6 +67,11 @@ pub struct WgTunnelConfig {
     pub stealth_endpoint: String,
     #[serde(default)]
     pub stealth_path_prefix: String,
+    /// Alternate LAN/WAN WireGuard endpoints so path-adapt can fail over.
+    #[serde(default)]
+    pub endpoint_lan: String,
+    #[serde(default)]
+    pub endpoint_wan: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -216,6 +221,8 @@ async fn connect_wireguard(app: AppHandle, config: WgTunnelConfig) -> ConnectRes
         preshared_key: config.preshared_key.clone(),
         stealth_endpoint: config.stealth_endpoint.clone(),
         stealth_path_prefix: config.stealth_path_prefix.clone(),
+        endpoint_lan: config.endpoint_lan.clone(),
+        endpoint_wan: config.endpoint_wan.clone(),
     });
 
     // Run elevated bring-up off the async runtime so the UI stays responsive
@@ -904,6 +911,8 @@ pub(crate) fn bring_up_from_saved_config_soft() -> Result<String, String> {
         preshared_key: saved.preshared_key,
         stealth_endpoint: saved.stealth_endpoint,
         stealth_path_prefix: saved.stealth_path_prefix,
+        endpoint_lan: saved.endpoint_lan,
+        endpoint_wan: saved.endpoint_wan,
     };
     // Soft reconnect: force noninteractive elevated only — never pkexec.
     // Soft reconnect is detached so soft recovery never freezes the watcher.
@@ -1516,6 +1525,8 @@ fn bring_up_wireguard_linux_full(app: &AppHandle, config: &WgTunnelConfig) -> Re
         &stealth_prefix,
         &stealth_pid,
         &desktop_username(),
+        config.endpoint_lan.trim(),
+        config.endpoint_wan.trim(),
     );
 
     fs::write(&script_path, script).map_err(|e| format!("write script: {e}"))?;
@@ -1568,6 +1579,8 @@ fn build_bringup_script_linux(
     stealth_prefix: &str,
     stealth_pid: &Path,
     desktop_user: &str,
+    endpoint_lan: &str,
+    endpoint_wan: &str,
 ) -> String {
     format!(
         r#"#!/bin/bash
@@ -1586,6 +1599,8 @@ DNS_BACKUP="${{META_FILE}}.dns"
 ADDR='{address}'
 DNS='{dns}'
 ENDPOINT='{endpoint}'
+ENDPOINT_LAN='{endpoint_lan}'
+ENDPOINT_WAN='{endpoint_wan}'
 DESKTOP_USER_FROM_APP='{desktop_user}'
 IFACE_NAME="veritas0"
 ENDPOINT_PORT="${{ENDPOINT##*:}}"
@@ -1621,13 +1636,17 @@ install_killswitch() {{
     nft "add chain inet $KILLSWITCH_TABLE output {{ type filter hook output priority -5; policy accept; }}" || return 1
     nft add rule inet "$KILLSWITCH_TABLE" output oifname "lo" accept || return 1
     nft add rule inet "$KILLSWITCH_TABLE" output oifname "$IFACE_NAME" accept || return 1
-    if [[ -n "$ROUTE_IP" && -n "$ROUTE_PORT" ]]; then
+    seen=""
+    for ip in $ROUTE_IP $LAN_HOST $WAN_HOST; do
+      [[ -n "$ip" && "$ip" != "127.0.0.1" ]] || continue
+      case " $seen " in *" $ip "*) continue ;; esac
+      seen="$seen $ip"
       if [[ -n "$STEALTH_REMOTE" ]]; then
-        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ROUTE_IP" tcp dport "$ROUTE_PORT" accept || return 1
+        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ip" tcp dport "$ROUTE_PORT" accept || return 1
       else
-        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ROUTE_IP" udp dport "$ROUTE_PORT" accept || return 1
+        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ip" udp dport "$ROUTE_PORT" accept || return 1
       fi
-    fi
+    done
     nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" drop || return 1
     nft add rule inet "$KILLSWITCH_TABLE" output meta nfproto ipv6 oifname "lo" accept || return 1
     nft add rule inet "$KILLSWITCH_TABLE" output meta nfproto ipv6 oifname "$IFACE_NAME" accept || return 1
@@ -1640,13 +1659,17 @@ install_killswitch() {{
     iptables -C OUTPUT -j "$KILLSWITCH_CHAIN" 2>/dev/null || iptables -I OUTPUT 1 -j "$KILLSWITCH_CHAIN" || return 1
     iptables -A "$KILLSWITCH_CHAIN" -o lo -j ACCEPT || return 1
     iptables -A "$KILLSWITCH_CHAIN" -o "$IFACE_NAME" -j ACCEPT || return 1
-    if [[ -n "$ROUTE_IP" && -n "$ROUTE_PORT" ]]; then
+    seen=""
+    for ip in $ROUTE_IP $LAN_HOST $WAN_HOST; do
+      [[ -n "$ip" && "$ip" != "127.0.0.1" && -n "$ROUTE_PORT" ]] || continue
+      case " $seen " in *" $ip "*) continue ;; esac
+      seen="$seen $ip"
       if [[ -n "$STEALTH_REMOTE" ]]; then
-        iptables -A "$KILLSWITCH_CHAIN" -d "$ROUTE_IP" -p tcp --dport "$ROUTE_PORT" -j ACCEPT || return 1
+        iptables -A "$KILLSWITCH_CHAIN" -d "$ip" -p tcp --dport "$ROUTE_PORT" -j ACCEPT || return 1
       else
-        iptables -A "$KILLSWITCH_CHAIN" -d "$ROUTE_IP" -p udp --dport "$ROUTE_PORT" -j ACCEPT || return 1
+        iptables -A "$KILLSWITCH_CHAIN" -d "$ip" -p udp --dport "$ROUTE_PORT" -j ACCEPT || return 1
       fi
-    fi
+    done
     iptables -A "$KILLSWITCH_CHAIN" -j DROP || return 1
     if command -v ip6tables >/dev/null 2>&1; then
       ip6tables -N "${{KILLSWITCH_CHAIN}}_V6" 2>/dev/null || true
@@ -1713,6 +1736,45 @@ if [[ -n "$ROUTE_HOST" ]]; then
   fi
 fi
 ENDPOINT_IP="$ROUTE_IP"
+LAN_HOST="${{ENDPOINT_LAN%%:*}}"
+WAN_HOST="${{ENDPOINT_WAN%%:*}}"
+[[ "$LAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || LAN_HOST=""
+[[ "$WAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || WAN_HOST=""
+# Older APIs only sent the current endpoint. Treat a private one as LAN.
+if [[ -z "$LAN_HOST" && "$ROUTE_IP" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.) ]]; then
+  LAN_HOST="$ROUTE_IP"
+  [[ -n "$ENDPOINT_LAN" ]] || ENDPOINT_LAN="$ENDPOINT"
+fi
+
+same_ipv4_24() {{
+  local a="$1" b="$2"
+  [[ "$a" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {{ echo no; return; }}
+  [[ "$b" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {{ echo no; return; }}
+  [[ "${{a%.*}}" == "${{b%.*}}" ]] && echo yes || echo no
+}}
+
+bind_host_route() {{
+  local ip="$1" gw="$2" gif="$3" src="$4"
+  [[ -n "$ip" && "$ip" != "127.0.0.1" ]] || return 0
+  ip route del "$ip" 2>/dev/null || true
+  ip route del "$ip/32" 2>/dev/null || true
+  if [[ -n "$src" && -n "$gif" ]] && [[ "$(same_ipv4_24 "$ip" "$src")" == "yes" ]]; then
+    ip route replace "$ip/32" dev "$gif" ${{src:+src $src}} 2>/dev/null || \
+      ip route replace "$ip" dev "$gif" 2>/dev/null || true
+  elif [[ -n "$gw" ]]; then
+    ip route replace "$ip/32" via "$gw" ${{gif:+dev $gif}} 2>/dev/null || \
+      ip route replace "$ip" via "$gw" ${{gif:+dev $gif}} 2>/dev/null || true
+  fi
+}}
+
+unbind_host_routes() {{
+  local ip
+  for ip in $ROUTE_IP $LAN_HOST $WAN_HOST; do
+    [[ -n "$ip" && "$ip" != "127.0.0.1" ]] || continue
+    ip route del "$ip" 2>/dev/null || true
+    ip route del "$ip/32" 2>/dev/null || true
+  done
+}}
 
 # Optional stealth sidecar: local UDP → TLS/WebSocket → server WG
 if [[ -n "$STEALTH_REMOTE" ]]; then
@@ -1831,10 +1893,22 @@ if ! ping -c 3 -W 1 10.0.0.1 >/tmp/veritas-wg-handshake.log 2>&1; then
   exit 1
 fi
 
-# Host route so VPN transport stays reachable outside the tunnel
-if [[ -n "$ROUTE_IP" && -n "$GW" && "$ROUTE_IP" != "127.0.0.1" ]]; then
-  ip route del "$ROUTE_IP" 2>/dev/null || true
-  ip route add "$ROUTE_IP" via "$GW" 2>/dev/null || true
+# Host route so VPN transport stays reachable outside the tunnel.
+# Same-subnet (home LAN node) must be on-link — via the default gateway
+# hairpins and often blackholes 192.168.0.6.
+UNDERLAY_SRC=""
+if [[ -n "$GW_IF" ]]; then
+  UNDERLAY_SRC="$(ip -4 -o addr show dev "$GW_IF" 2>/dev/null | awk '{{print $4; exit}}')"
+  UNDERLAY_SRC="${{UNDERLAY_SRC%%/*}}"
+fi
+if [[ -n "$ROUTE_IP" && "$ROUTE_IP" != "127.0.0.1" ]]; then
+  bind_host_route "$ROUTE_IP" "$GW" "$GW_IF" "$UNDERLAY_SRC"
+fi
+if [[ -n "$WAN_HOST" && "$WAN_HOST" != "$ROUTE_IP" ]]; then
+  bind_host_route "$WAN_HOST" "$GW" "$GW_IF" "$UNDERLAY_SRC"
+fi
+if [[ -n "$LAN_HOST" && "$LAN_HOST" != "$ROUTE_IP" && -n "$UNDERLAY_SRC" ]] && [[ "$(same_ipv4_24 "$LAN_HOST" "$UNDERLAY_SRC")" == "yes" ]]; then
+  bind_host_route "$LAN_HOST" "$GW" "$GW_IF" "$UNDERLAY_SRC"
 fi
 
 # Split default via the tunnel
@@ -1850,7 +1924,7 @@ if ! ip route replace blackhole default metric 1 2>/tmp/veritas-wg-killswitch-er
   ip route del 0.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
   ip route del 128.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
-  [[ -n "$ROUTE_IP" && "$ROUTE_IP" != "127.0.0.1" ]] && ip route del "$ROUTE_IP" 2>/dev/null || true
+  unbind_host_routes
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
   [[ -f "$STEALTH_PID_FILE" ]] && kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
@@ -1866,7 +1940,7 @@ if ! ip -6 route replace blackhole default metric 1 2>/tmp/veritas-wg-killswitch
   ip route del 128.0.0.0/1 dev "$IFACE_NAME" 2>/dev/null || true
   ip route del blackhole default metric 1 2>/dev/null || true
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
-  [[ -n "$ROUTE_IP" && "$ROUTE_IP" != "127.0.0.1" ]] && ip route del "$ROUTE_IP" 2>/dev/null || true
+  unbind_host_routes
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
   [[ -f "$STEALTH_PID_FILE" ]] && kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
@@ -1885,7 +1959,7 @@ if ! install_killswitch; then
   ip route del blackhole default metric 1 2>/dev/null || true
   ip -6 route del blackhole default metric 1 2>/dev/null || true
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
-  [[ -n "$ROUTE_IP" && "$ROUTE_IP" != "127.0.0.1" ]] && ip route del "$ROUTE_IP" 2>/dev/null || true
+  unbind_host_routes
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
   [[ -f "$STEALTH_PID_FILE" ]] && kill -9 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null || true
@@ -1910,8 +1984,8 @@ if [[ -n "$GW_IF" ]]; then
   UNDERLAY_SRC="$(ip -4 -o addr show dev "$GW_IF" 2>/dev/null | awk '{{print $4; exit}}')"
   UNDERLAY_SRC="${{UNDERLAY_SRC%%/*}}"
 fi
-printf 'endpoint_ip=%s\nendpoint=%s\ngateway=%s\niface=%s\ngw_if=%s\nunderlay_src=%s\ndns=%s\nstealth_remote=%s\nengine=%s\n' \
-  "$ROUTE_IP" "$ENDPOINT" "$GW" "$IFACE_NAME" "$GW_IF" "$UNDERLAY_SRC" "$DNS" "$STEALTH_REMOTE" "$ENGINE" > "$META_FILE"
+printf 'endpoint_ip=%s\nendpoint=%s\nendpoint_lan=%s\nendpoint_wan=%s\ngateway=%s\niface=%s\ngw_if=%s\nunderlay_src=%s\ndns=%s\nstealth_remote=%s\nengine=%s\n' \
+  "$ROUTE_IP" "$ENDPOINT" "$ENDPOINT_LAN" "$ENDPOINT_WAN" "$GW" "$IFACE_NAME" "$GW_IF" "$UNDERLAY_SRC" "$DNS" "$STEALTH_REMOTE" "$ENGINE" > "$META_FILE"
 
 restore_after_validation_fail() {{
   local msg="$1"
@@ -1921,7 +1995,7 @@ restore_after_validation_fail() {{
   ip route del blackhole default metric 1 2>/dev/null || true
   ip -6 route del blackhole default metric 1 2>/dev/null || true
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
-  [[ -n "$ROUTE_IP" && "$ROUTE_IP" != "127.0.0.1" ]] && ip route del "$ROUTE_IP" 2>/dev/null || true
+  unbind_host_routes
   if [[ -f "$DNS_BACKUP" ]]; then
     cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
   fi
@@ -2062,21 +2136,50 @@ ENDPOINT_IP="${{endpoint_ip:-}}"
 IFACE="${{iface:-veritas0}}"
 DNS="${{dns:-}}"
 ENDPOINT="${{endpoint:-}}"
+ENDPOINT_LAN="${{endpoint_lan:-}}"
+ENDPOINT_WAN="${{endpoint_wan:-}}"
+OLD_IF="${{gw_if:-}}"
+LAN_HOST="${{ENDPOINT_LAN%%:*}}"
+WAN_HOST="${{ENDPOINT_WAN%%:*}}"
+[[ "$LAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || LAN_HOST=""
+[[ "$WAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || WAN_HOST=""
 [[ -n "$ENDPOINT_IP" && "$ENDPOINT_IP" != "127.0.0.1" ]] || exit 0
+# Older APIs only sent the current endpoint. Treat a private one as LAN.
+if [[ -z "$LAN_HOST" && "$ENDPOINT_IP" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.) ]]; then
+  LAN_HOST="$ENDPOINT_IP"
+  [[ -n "$ENDPOINT_LAN" ]] || ENDPOINT_LAN="${{ENDPOINT:-$ENDPOINT_IP:51820}}"
+fi
+
+same_ipv4_24() {{
+  local a="$1" b="$2"
+  [[ "$a" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {{ echo no; return; }}
+  [[ "$b" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {{ echo no; return; }}
+  [[ "${{a%.*}}" == "${{b%.*}}" ]] && echo yes || echo no
+}}
 
 detect_underlay() {{
   local gw="" gif="" src=""
+  local cand_gw cand_if cand_src
   if command -v nmcli >/dev/null 2>&1; then
-    local dev type state
+    local dev type state oper
     while IFS=: read -r dev type state; do
       [[ "$state" == "connected" ]] || continue
       case "$type" in wifi|ethernet|802-11-wireless|802-3-ethernet) ;; *) continue ;; esac
       [[ -n "$dev" && "$dev" != "$IFACE" && "$dev" != "lo" ]] || continue
-      gw="$(nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1)"
-      src="$(nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1)"
-      src="${{src%%/*}}"
-      gif="$dev"
-      [[ -n "$gw" ]] && break
+      oper="$(cat "/sys/class/net/$dev/operstate" 2>/dev/null || true)"
+      [[ "$oper" == "up" ]] || continue
+      cand_gw="$(nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1)"
+      cand_src="$(nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1)"
+      cand_src="${{cand_src%%/*}}"
+      cand_if="$dev"
+      [[ -n "$cand_gw" && -n "$cand_src" ]] || continue
+      # Prefer a live underlay that is not the interface we just left.
+      if [[ -n "$OLD_IF" && "$dev" == "$OLD_IF" ]]; then
+        gw="$cand_gw"; gif="$cand_if"; src="$cand_src"
+        continue
+      fi
+      gw="$cand_gw"; gif="$cand_if"; src="$cand_src"
+      break
     done < <(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null)
   fi
   if [[ -z "$gw" ]]; then
@@ -2103,30 +2206,63 @@ detect_underlay() {{
 }}
 
 NEW_GW=""; NEW_GW_IF=""; NEW_SRC=""
-for _ in $(seq 1 20); do
+for _ in $(seq 1 25); do
   read -r NEW_GW NEW_GW_IF NEW_SRC <<<"$(detect_underlay)"
   [[ -n "$NEW_GW" && -n "$NEW_GW_IF" ]] && break
   sleep 0.4
 done
 [[ -n "$NEW_GW" ]] || exit 0
 
-ip route del "$ENDPOINT_IP" 2>/dev/null || true
-ip route replace "$ENDPOINT_IP/32" via "$NEW_GW" dev "$NEW_GW_IF" 2>/dev/null || \
-  ip route replace "$ENDPOINT_IP" via "$NEW_GW" ${{NEW_GW_IF:+dev $NEW_GW_IF}} 2>/dev/null || true
-ip neigh flush dev "$NEW_GW_IF" 2>/dev/null || true
-if command -v conntrack >/dev/null 2>&1; then
-  conntrack -D -p udp --dst "$ENDPOINT_IP" 2>/dev/null || true
-  conntrack -D -p tcp --dst "$ENDPOINT_IP" 2>/dev/null || true
+# Prefer the LAN node address when we are on its subnet; otherwise WAN.
+# Frozen connect-time endpoint is why leaving/joining home used to die.
+# Stealth keeps WireGuard on loopback — only the TLS host route moves.
+CHOOSE_IP="$ENDPOINT_IP"
+CHOOSE_EP="${{ENDPOINT:-$ENDPOINT_IP:51820}}"
+STEALTH="${{stealth_remote:-}}"
+if [[ -z "$STEALTH" ]]; then
+  if [[ -n "$LAN_HOST" && -n "$NEW_SRC" ]] && [[ "$(same_ipv4_24 "$LAN_HOST" "$NEW_SRC")" == "yes" ]]; then
+    CHOOSE_IP="$LAN_HOST"
+    CHOOSE_EP="${{ENDPOINT_LAN:-$LAN_HOST:51820}}"
+  elif [[ -n "$WAN_HOST" ]]; then
+    CHOOSE_IP="$WAN_HOST"
+    CHOOSE_EP="${{ENDPOINT_WAN:-$WAN_HOST:51820}}"
+  fi
 fi
-if command -v wg >/dev/null 2>&1 && ip link show "$IFACE" >/dev/null 2>&1; then
+
+OLD_EP_IP="$ENDPOINT_IP"
+ip route del "$OLD_EP_IP" 2>/dev/null || true
+ip route del "$OLD_EP_IP/32" 2>/dev/null || true
+ip route del "$CHOOSE_IP" 2>/dev/null || true
+ip route del "$CHOOSE_IP/32" 2>/dev/null || true
+if [[ -n "$NEW_SRC" ]] && [[ "$(same_ipv4_24 "$CHOOSE_IP" "$NEW_SRC")" == "yes" ]]; then
+  ip route replace "$CHOOSE_IP/32" dev "$NEW_GW_IF" src "$NEW_SRC" 2>/dev/null || \
+    ip route replace "$CHOOSE_IP" dev "$NEW_GW_IF" 2>/dev/null || true
+  # Refresh ARP for the on-link VPN node; do not flush the whole neighbor table.
+  ip neigh del "$CHOOSE_IP" dev "$NEW_GW_IF" 2>/dev/null || true
+  ping -c 1 -W 1 -I "$NEW_GW_IF" "$CHOOSE_IP" >/dev/null 2>&1 || true
+else
+  ip route replace "$CHOOSE_IP/32" via "$NEW_GW" dev "$NEW_GW_IF" 2>/dev/null || \
+    ip route replace "$CHOOSE_IP" via "$NEW_GW" ${{NEW_GW_IF:+dev $NEW_GW_IF}} 2>/dev/null || true
+fi
+if [[ -n "$WAN_HOST" && "$WAN_HOST" != "$CHOOSE_IP" ]]; then
+  ip route del "$WAN_HOST" 2>/dev/null || true
+  ip route del "$WAN_HOST/32" 2>/dev/null || true
+  ip route replace "$WAN_HOST/32" via "$NEW_GW" ${{NEW_GW_IF:+dev $NEW_GW_IF}} 2>/dev/null || true
+fi
+if [[ -n "$LAN_HOST" && "$LAN_HOST" != "$CHOOSE_IP" ]]; then
+  ip route del "$LAN_HOST" 2>/dev/null || true
+  ip route del "$LAN_HOST/32" 2>/dev/null || true
+fi
+if command -v conntrack >/dev/null 2>&1; then
+  conntrack -D -p udp --dst "$OLD_EP_IP" 2>/dev/null || true
+  conntrack -D -p tcp --dst "$OLD_EP_IP" 2>/dev/null || true
+  conntrack -D -p udp --dst "$CHOOSE_IP" 2>/dev/null || true
+  conntrack -D -p tcp --dst "$CHOOSE_IP" 2>/dev/null || true
+fi
+if [[ -z "$STEALTH" ]] && [[ "$CHOOSE_EP" != 127.0.0.1:* ]] && command -v wg >/dev/null 2>&1 && ip link show "$IFACE" >/dev/null 2>&1; then
   PEER="$(wg show "$IFACE" peers 2>/dev/null | head -1)"
   if [[ -n "$PEER" ]]; then
-    CUR_EP="$(wg show "$IFACE" endpoints 2>/dev/null | awk 'NR==1{{print $2}}')"
-    USE_EP="$CUR_EP"
-    if [[ -z "$USE_EP" || "$USE_EP" == "(none)" ]]; then
-      USE_EP="${{ENDPOINT:-$ENDPOINT_IP:51820}}"
-    fi
-    wg set "$IFACE" peer "$PEER" endpoint "$USE_EP" 2>/dev/null || true
+    wg set "$IFACE" peer "$PEER" endpoint "$CHOOSE_EP" 2>/dev/null || true
   fi
 fi
 if [[ -n "$DNS" ]] && command -v resolvectl >/dev/null 2>&1; then
@@ -2140,20 +2276,24 @@ if [[ -n "$DNS" && -w /etc/resolv.conf ]]; then
   echo "nameserver $DNS" > /etc/resolv.conf 2>/dev/null || true
 fi
 tmp="$(mktemp)"
-awk -v gw="$NEW_GW" -v gwif="$NEW_GW_IF" -v src="$NEW_SRC" '
-  BEGIN{{gw_set=0; gwif_set=0; src_set=0}}
+awk -v gw="$NEW_GW" -v gwif="$NEW_GW_IF" -v src="$NEW_SRC" -v epip="$CHOOSE_IP" -v ep="$CHOOSE_EP" '
+  BEGIN{{gw_set=0; gwif_set=0; src_set=0; epip_set=0; ep_set=0}}
   /^gateway=/ {{print "gateway=" gw; gw_set=1; next}}
   /^gw_if=/ {{print "gw_if=" gwif; gwif_set=1; next}}
   /^underlay_src=/ {{print "underlay_src=" src; src_set=1; next}}
+  /^endpoint_ip=/ {{print "endpoint_ip=" epip; epip_set=1; next}}
+  /^endpoint=/ {{print "endpoint=" ep; ep_set=1; next}}
   {{print}}
   END{{
     if (!gw_set) print "gateway=" gw
     if (!gwif_set) print "gw_if=" gwif
     if (!src_set && src != "") print "underlay_src=" src
+    if (!epip_set) print "endpoint_ip=" epip
+    if (!ep_set) print "endpoint=" ep
   }}
 ' "$META" > "$tmp"
 mv "$tmp" "$META"
-echo "ok endpoint=$ENDPOINT_IP via=$NEW_GW dev=$NEW_GW_IF src=$NEW_SRC"
+echo "ok endpoint=$CHOOSE_IP via=$NEW_GW dev=$NEW_GW_IF src=$NEW_SRC onlink=$(same_ipv4_24 "$CHOOSE_IP" "$NEW_SRC")"
 SOFT_PATH
 chmod 755 "$SOFT_DIR/path-adapt.sh"
 chown root:root "$SOFT_DIR/path-adapt.sh"
@@ -2190,12 +2330,16 @@ STEALTH_PID_FILE="$STATE_DIR/wstunnel.pid"
 META_FILE="$STATE_DIR/iface.meta"
 DNS_BACKUP="${{META_FILE}}.dns"
 ENDPOINT_IP=""
+LAN_HOST=""
+WAN_HOST=""
 IFACE=""
 GW_IF=""
 if [[ -f "$META_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$META_FILE" 2>/dev/null || true
   ENDPOINT_IP="${{endpoint_ip:-}}"
+  LAN_HOST="${{endpoint_lan%%:*}}"
+  WAN_HOST="${{endpoint_wan%%:*}}"
   IFACE="${{iface:-}}"
   GW_IF="${{gw_if:-}}"
 fi
@@ -2231,9 +2375,12 @@ if [[ -n "$IFACE" ]]; then
 fi
 ip route del 0.0.0.0/1 2>/dev/null || true
 ip route del 128.0.0.0/1 2>/dev/null || true
-if [[ -n "$ENDPOINT_IP" && "$ENDPOINT_IP" != "127.0.0.1" ]]; then
-  ip route del "$ENDPOINT_IP" 2>/dev/null || true
-fi
+for ep in $ENDPOINT_IP $LAN_HOST $WAN_HOST; do
+  [[ -n "$ep" && "$ep" != "127.0.0.1" ]] || continue
+  [[ "$ep" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+  ip route del "$ep" 2>/dev/null || true
+  ip route del "$ep/32" 2>/dev/null || true
+done
 if [[ -f "$PID_FILE" ]]; then
   kill -9 "$(cat "$PID_FILE")" 2>/dev/null || true
   rm -f "$PID_FILE"
@@ -2278,6 +2425,8 @@ echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}
         address = address,
         dns = dns,
         endpoint = endpoint,
+        endpoint_lan = endpoint_lan,
+        endpoint_wan = endpoint_wan,
         desktop_user = desktop_user,
     )
 }

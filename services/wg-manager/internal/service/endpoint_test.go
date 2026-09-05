@@ -63,6 +63,12 @@ func TestClientEndpoint(t *testing.T) {
 	if got := svc.ClientEndpoint(srv, "203.0.113.1"); got != "192.168.0.6:51820" {
 		t.Fatalf("client on public IP: got %q", got)
 	}
+	if got := svc.ClientEndpointLAN(srv); got != "192.168.0.6:51820" {
+		t.Fatalf("LAN endpoint: got %q", got)
+	}
+	if got := svc.ClientEndpointWAN(srv); got != "203.0.113.1:51820" {
+		t.Fatalf("WAN endpoint: got %q", got)
+	}
 }
 
 func TestClientStealthEndpoint(t *testing.T) {

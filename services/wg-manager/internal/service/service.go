@@ -29,6 +29,8 @@ type PeerConfig struct {
 	ServerHostname         string
 	ServerPublicKey        string
 	ServerEndpoint         string
+	ServerEndpointLAN      string
+	ServerEndpointWAN      string
 	StealthEndpoint        string
 	StealthAvailable       bool
 	StealthPathPrefix      string
@@ -106,15 +108,37 @@ func (s *Service) SetStealthEndpoint(host string, port int32, pathPrefix string)
 	s.stealthAvailable = s.stealthHost != "" && s.stealthPort > 0 && s.stealthPathPrefix != ""
 }
 
-// ClientEndpoint returns the WireGuard endpoint a client should dial.
+// ClientEndpoint returns the WireGuard endpoint a client should dial now.
 func (s *Service) ClientEndpoint(srv *model.Server, clientIP string) string {
 	if srv == nil {
 		return ""
 	}
 	if s.useLANEndpoint(clientIP, srv.PublicIP) {
-		return fmt.Sprintf("%s:%d", s.lanIP, s.lanPort)
+		if ep := s.ClientEndpointLAN(srv); ep != "" {
+			return ep
+		}
 	}
-	return fmt.Sprintf("%s:%d", srv.PublicIP, srv.WGPort)
+	return s.ClientEndpointWAN(srv)
+}
+
+// ClientEndpointLAN is the on-LAN WireGuard endpoint, or "" if unset.
+func (s *Service) ClientEndpointLAN(_ *model.Server) string {
+	if s.lanIP == "" || s.lanPort <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", s.lanIP, s.lanPort)
+}
+
+// ClientEndpointWAN is the public WireGuard endpoint.
+func (s *Service) ClientEndpointWAN(srv *model.Server) string {
+	if srv == nil || strings.TrimSpace(srv.PublicIP) == "" {
+		return ""
+	}
+	port := srv.WGPort
+	if port <= 0 {
+		port = 51820
+	}
+	return fmt.Sprintf("%s:%d", srv.PublicIP, port)
 }
 
 // ClientStealthEndpoint returns host:port for the TLS stealth transport, or "".
@@ -522,6 +546,8 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		ServerHostname:    srv.Hostname,
 		ServerPublicKey:   srv.PublicKey,
 		ServerEndpoint:    endpoint,
+		ServerEndpointLAN: s.ClientEndpointLAN(srv),
+		ServerEndpointWAN: s.ClientEndpointWAN(srv),
 		StealthEndpoint:   s.ClientStealthEndpoint(srv, clientIP),
 		StealthAvailable:  s.StealthAvailable(),
 		StealthPathPrefix: s.StealthPathPrefix(),

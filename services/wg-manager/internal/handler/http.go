@@ -436,6 +436,8 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			"server_hostname":      cfg.ServerHostname,
 			"server_public_key":    cfg.ServerPublicKey,
 			"server_endpoint":      cfg.ServerEndpoint,
+			"server_endpoint_lan":  cfg.ServerEndpointLAN,
+			"server_endpoint_wan":  cfg.ServerEndpointWAN,
 			"stealth_endpoint":     cfg.StealthEndpoint,
 			"stealth_available":    cfg.StealthAvailable,
 			"stealth_path_prefix":  cfg.StealthPathPrefix,
@@ -567,6 +569,8 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 				"dns_server": srv.DNSServer,
 			}
 			resp["server_endpoint"] = h.svc.ClientEndpoint(srv, clientIP)
+			resp["server_endpoint_lan"] = h.svc.ClientEndpointLAN(srv)
+			resp["server_endpoint_wan"] = h.svc.ClientEndpointWAN(srv)
 			resp["stealth_endpoint"] = h.svc.ClientStealthEndpoint(srv, clientIP)
 			resp["stealth_available"] = h.svc.StealthAvailable()
 			// stealth_path_prefix is provisioned only on create peer (not GET).
@@ -600,6 +604,8 @@ func (h *HTTPHandler) handleListServers(w http.ResponseWriter, r *http.Request) 
 			h.svc.ClientEndpoint(srv, clientIP),
 			h.svc.ClientStealthEndpoint(srv, clientIP),
 			h.svc.StealthAvailable(),
+			h.svc.ClientEndpointLAN(srv),
+			h.svc.ClientEndpointWAN(srv),
 		))
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"servers": out})
