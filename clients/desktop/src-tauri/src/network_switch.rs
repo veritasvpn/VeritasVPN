@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    bring_up_from_saved_config_soft, cleanup_kill_switch_noninteractive, reapply_dns_from_saved,
-    refresh_endpoint_route_linux, state_dir, tunnel_is_healthy, write_last_config_json,
+    reapply_dns_from_saved, refresh_endpoint_route_linux, state_dir, tunnel_is_healthy,
+    write_last_config_json,
 };
 
 /// Last successful tunnel config so soft reconnect can re-bring the peer up.
@@ -58,18 +58,15 @@ pub fn recover_network_switch() -> NetworkRecoverResult {
     }
 }
 
-// Soft reconnect throttle — avoid thrashing if soft reconnect keeps failing.
-static LAST_SOFT_RECONNECT: Mutex<Option<Instant>> = Mutex::new(None);
-const SOFT_RECONNECT_MIN_INTERVAL: Duration = Duration::from_secs(20);
+// Rebind throttle — keep the tunnel up; never tear it down on a network switch.
+static LAST_REBIND: Mutex<Option<Instant>> = Mutex::new(None);
+const REBIND_MIN_INTERVAL: Duration = Duration::from_secs(3);
 
-// Soft path adapt throttle — only re-run when the gateway changes.
-static LAST_GATEWAY: Mutex<Option<String>> = Mutex::new(None);
+// Underlay fingerprint: gateway|iface|src. Gateway IP alone misses Wi-Fi→Wi-Fi
+// switches that keep 192.168.1.1 (Android rebinds on any network change).
+static LAST_FINGERPRINT: Mutex<Option<String>> = Mutex::new(None);
 
-// Soft reconnect in-flight so concurrent watcher ticks do not thrash.
-static SOFT_RECONNECT_IN_FLIGHT: Mutex<bool> = Mutex::new(false);
-
-// Soft reconnect is detached so soft recovery never freezes the watcher.
-static SOFT_RECONNECT_HANDLE: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+static REBIND_IN_FLIGHT: Mutex<bool> = Mutex::new(false);
 
 fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
     let dir = state_dir()?;
@@ -82,149 +79,134 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
         });
     }
 
-    // Soft path adapt when underlay gateway changes.
-    let mut soft_path_msg = String::from("soft path adapt ok");
-    let mut soft_path_changed = false;
-    {
-        let detect = detect_current_gateway();
-        let mut last = LAST_GATEWAY.lock().map_err(|e| e.to_string())?;
-        let gateway_changed = match detect.as_deref() {
-            Some(gw) if last.as_deref() != Some(gw) => true,
-            None => false,
-            Some(_) => false,
-        };
-        if gateway_changed {
-            *last = detect;
-            let endpoint = refresh_endpoint_route_linux();
-            let dns = reapply_dns_from_saved();
-            if endpoint.refreshed {
-                soft_path_msg.push_str("; endpoint host route refreshed");
-                soft_path_changed = true;
-            } else if !endpoint.message.is_empty() {
-                soft_path_msg.push_str(&format!("; path-adapt: {}", endpoint.message));
-            }
-            if let Ok(dns) = dns {
-                if dns.refreshed {
-                    soft_path_msg.push_str("; DNS re-applied");
-                    soft_path_changed = true;
-                }
-            }
-            std::thread::sleep(Duration::from_millis(400));
-        }
-    }
-
+    let fp = detect_underlay_fingerprint();
     let healthy = tunnel_is_healthy().unwrap_or(false);
-    if healthy {
+    let mut last_fp = LAST_FINGERPRINT.lock().map_err(|e| e.to_string())?;
+    let underlay_changed = match (fp.as_ref(), last_fp.as_ref()) {
+        (Some(now), Some(prev)) => now != prev,
+        // Underlay vanished (DHCP/association gap) — still rebind so the
+        // helper can wait for the new path.
+        (None, Some(_)) => true,
+        (Some(_), None) => false,
+        (None, None) => false,
+    };
+    if let Some(now) = fp.clone() {
+        *last_fp = Some(now);
+    }
+    drop(last_fp);
+
+    if healthy && !underlay_changed {
         return Ok(NetworkRecoverResult {
-            changed: soft_path_changed,
-            message: soft_path_msg,
-            action: if soft_path_changed {
-                "soft_path".into()
-            } else {
-                "noop".into()
-            },
+            changed: false,
+            message: "underlay unchanged; tunnel healthy".into(),
+            action: "noop".into(),
         });
     }
 
-    // Tunnel/egress is dead. Throttle elevated work — never spam auth prompts.
     {
-        let mut last = LAST_SOFT_RECONNECT.lock().map_err(|e| e.to_string())?;
+        let mut in_flight = REBIND_IN_FLIGHT.lock().map_err(|e| e.to_string())?;
+        if *in_flight {
+            return Ok(NetworkRecoverResult {
+                changed: false,
+                message: "path rebind already in progress".into(),
+                action: "in_progress".into(),
+            });
+        }
+        let mut last = LAST_REBIND.lock().map_err(|e| e.to_string())?;
         let now = Instant::now();
-        if let Some(t) = *last {
-            if now.duration_since(t) < SOFT_RECONNECT_MIN_INTERVAL {
-                // Do NOT call cleanup here — that was spawning pkexec every tick.
-                return Ok(NetworkRecoverResult {
-                    changed: soft_path_changed,
-                    message: format!(
-                        "{soft_path_msg}; soft recovery throttled"
-                    ),
-                    action: "throttle".into(),
-                });
-            }
-        }
-        {
-            let mut in_flight = SOFT_RECONNECT_IN_FLIGHT.lock().map_err(|e| e.to_string())?;
-            if *in_flight {
-                return Ok(NetworkRecoverResult {
-                    changed: soft_path_changed,
-                    message: format!(
-                        "{soft_path_msg}; soft recovery already in progress"
-                    ),
-                    action: "in_progress".into(),
-                });
-            }
-            *in_flight = true;
-        }
-        *last = Some(now);
-    }
-
-    // Passwordless helper only — never pkexec.
-    let kill_cleaned = match cleanup_kill_switch_noninteractive() {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("[veritas] soft cleanup skipped (no prompt): {e}");
-            false
-        }
-    };
-    let _ = refresh_endpoint_route_linux();
-
-    let handle = std::thread::spawn(move || {
-        match bring_up_from_saved_config_soft() {
-            Ok(msg) => {
-                eprintln!(
-                    "[veritas] soft reconnect after network switch (kill_switch_cleaned={kill_cleaned}): {msg}"
-                );
-            }
-            Err(e) => {
-                eprintln!(
-                    "[veritas] soft reconnect failed after network switch (kill_switch_cleaned={kill_cleaned}): {e}"
-                );
-                // Best-effort clearnet restore again — still never prompts.
-                if let Err(ce) = cleanup_kill_switch_noninteractive() {
-                    eprintln!("[veritas] soft cleanup after reconnect fail: {ce}");
+        if !underlay_changed {
+            if let Some(t) = *last {
+                if now.duration_since(t) < REBIND_MIN_INTERVAL {
+                    return Ok(NetworkRecoverResult {
+                        changed: false,
+                        message: "path rebind throttled".into(),
+                        action: "throttle".into(),
+                    });
                 }
             }
         }
-        *SOFT_RECONNECT_IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = false;
-    });
-    {
-        let mut handles = SOFT_RECONNECT_HANDLE.lock().map_err(|e| e.to_string())?;
-        *handles = Some(handle);
+        *last = Some(now);
+        *in_flight = true;
     }
 
+    // Android keeps the VPN session and rebinds the underlay. Do the same:
+    // refresh the endpoint host route + handshake. Never cleanup/teardown —
+    // that dropped the tunnel and could not rebuild it without a password.
+    let endpoint = refresh_endpoint_route_linux();
+    let dns = reapply_dns_from_saved();
+    *REBIND_IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = false;
+
+    let mut msg = endpoint.message.clone();
+    if let Ok(dns) = dns {
+        if dns.refreshed {
+            msg.push_str("; DNS re-applied");
+        }
+    }
     Ok(NetworkRecoverResult {
-        changed: true,
-        message: format!(
-            "soft recovery scheduled (kill_switch_cleaned={kill_cleaned}); {soft_path_msg}"
-        ),
-        action: "soft_recovery_scheduled".into(),
+        changed: endpoint.refreshed || underlay_changed,
+        message: msg,
+        action: if endpoint.refreshed {
+            "soft_path".into()
+        } else {
+            "soft_path_pending".into()
+        },
     })
 }
 
-/// Detect the current underlay gateway (best-effort, non-elevated).
-fn detect_current_gateway() -> Option<String> {
+/// Detect underlay path as `gateway|iface|src` (best-effort, non-elevated).
+fn detect_underlay_fingerprint() -> Option<String> {
     let out = std::process::Command::new("bash")
         .arg("-c")
         .arg(
             r#"
-IFACE="$(cat ~/.veritasvpn/iface 2>/dev/null || echo veritas0)"
-ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
-  /blackhole/ { next }
-  /via/ {
-    for (i = 1; i <= NF; i++) if ($i == "dev") { d=$(i+1); break }
-    if (d == "" || d != iface) { print $3; exit }
-  }
-' 2>/dev/null | head -1
+IFACE="$(cat "${HOME}/.veritasvpn/iface" 2>/dev/null || echo veritas0)"
+gw=""; gif=""; src=""
+if command -v nmcli >/dev/null 2>&1; then
+  while IFS=: read -r dev type state; do
+    [ "$state" = "connected" ] || continue
+    case "$type" in wifi|ethernet|802-11-wireless|802-3-ethernet) ;; *) continue ;; esac
+    [ -n "$dev" ] && [ "$dev" != "$IFACE" ] && [ "$dev" != "lo" ] || continue
+    gw="$(nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1)"
+    src="$(nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1)"
+    src="${src%%/*}"
+    gif="$dev"
+    [ -n "$gw" ] && break
+  done <<EOF
+$(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null)
+EOF
+fi
+if [ -z "$gw" ]; then
+  gw="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
+    /blackhole/ { next }
+    /via/ {
+      for (i = 1; i <= NF; i++) if ($i == "dev") { d=$(i+1); break }
+      if (d == "" || d != iface) { print $3; exit }
+    }
+  ')"
+  gif="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
+    /blackhole/ { next }
+    /via/ {
+      for (i = 1; i <= NF; i++) if ($i == "dev") { d=$(i+1); break }
+      if (d == "" || d != iface) { print d; exit }
+    }
+  ')"
+fi
+if [ -z "$src" ] && [ -n "$gif" ]; then
+  src="$(ip -4 -o addr show dev "$gif" 2>/dev/null | awk '{print $4; exit}')"
+  src="${src%%/*}"
+fi
+[ -n "$gw" ] || exit 0
+printf '%s|%s|%s\n' "$gw" "$gif" "$src"
 "#,
         )
         .output()
         .ok()?;
     let s = String::from_utf8_lossy(&out.stdout);
-    let gw = s.trim();
-    if gw.is_empty() {
+    let fp = s.trim();
+    if fp.is_empty() {
         None
     } else {
-        Some(gw.to_string())
+        Some(fp.to_string())
     }
 }
 

@@ -559,6 +559,44 @@ pub(crate) fn refresh_endpoint_route_linux() -> RouteRefreshResult {
         };
     }
 
+    // Helper rebinds on any underlay change, including same gateway IP.
+    if Path::new(SOFT_PATH_ADAPT_HELPER).exists() {
+        match Command::new("sudo")
+            .args(["-n", "timeout", "20", SOFT_PATH_ADAPT_HELPER])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                let msg = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                return RouteRefreshResult {
+                    refreshed: true,
+                    gateway: old_gw,
+                    message: if msg.is_empty() {
+                        "endpoint route rebound".into()
+                    } else {
+                        msg
+                    },
+                };
+            }
+            Ok(out) => {
+                return RouteRefreshResult {
+                    refreshed: false,
+                    gateway: old_gw,
+                    message: format!(
+                        "path-adapt: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ),
+                };
+            }
+            Err(e) => {
+                return RouteRefreshResult {
+                    refreshed: false,
+                    gateway: old_gw,
+                    message: format!("path-adapt spawn: {e}"),
+                };
+            }
+        }
+    }
+
     // Prefer a unicast underlay default (skip blackhole kill-switch + tunnel).
     let detect = Command::new("bash")
         .arg("-c")
@@ -677,22 +715,6 @@ echo "ok refreshed endpoint=$ENDPOINT_IP via=$NEW_GW dev=$NEW_GW_IF iface=$IFACE
         };
     }
     let _ = Command::new("chmod").args(["0700", &script_path.to_string_lossy()]).status();
-    // Prefer root-owned path-adapt helper (passwordless after connect).
-    if Path::new(SOFT_PATH_ADAPT_HELPER).exists() {
-        match Command::new("sudo")
-            .args(["-n", "timeout", "15", SOFT_PATH_ADAPT_HELPER])
-            .output()
-        {
-            Ok(out) if out.status.success() => {
-                return RouteRefreshResult {
-                    refreshed: true,
-                    gateway: new_gw.clone(),
-                    message: format!("endpoint route moved {old_gw} → {new_gw} (helper)"),
-                };
-            }
-            _ => {}
-        }
-    }
     // Soft recovery / path adapt must never use interactive pkexec.
     // Soft path adapt only uses noninteractive elevation.
     match run_elevated_noninteractive(&script_path) {
@@ -844,6 +866,7 @@ const SOFT_CLEANUP_HELPER: &str = "/var/lib/veritasvpn/cleanup-killswitch.sh";
 const SOFT_PATH_ADAPT_HELPER: &str = "/var/lib/veritasvpn/path-adapt.sh";
 const SOFT_TEARDOWN_HELPER: &str = "/var/lib/veritasvpn/teardown.sh";
 
+#[allow(dead_code)]
 pub(crate) fn cleanup_kill_switch_noninteractive() -> Result<bool, String> {
     // Soft recovery MUST never prompt. Only the root-owned helper installed at
     // connect (via /etc/sudoers.d/veritasvpn-soft + sudo -n) is allowed.
@@ -865,8 +888,9 @@ pub(crate) fn cleanup_kill_switch_noninteractive() -> Result<bool, String> {
 }
 
 /// Soft reconnect using last-config.json (Phase 3).
-/// Soft reconnect MUST never use interactive elevation (pkexec).
-/// Soft reconnect is non-blocking and must never freeze the UI.
+/// Kept for a full rebuild if the interface is gone; network-switch recovery
+/// no longer calls this — it rebinds the existing tunnel like Android.
+#[allow(dead_code)]
 pub(crate) fn bring_up_from_saved_config_soft() -> Result<String, String> {
     let saved = network_switch::load_last_config().map_err(|e| e)?;
     let config = WgTunnelConfig {
@@ -1491,6 +1515,7 @@ fn bring_up_wireguard_linux_full(app: &AppHandle, config: &WgTunnelConfig) -> Re
         &wstunnel,
         &stealth_prefix,
         &stealth_pid,
+        &desktop_username(),
     );
 
     fs::write(&script_path, script).map_err(|e| format!("write script: {e}"))?;
@@ -1518,6 +1543,17 @@ fn bring_up_wireguard_linux_full(app: &AppHandle, config: &WgTunnelConfig) -> Re
 }
 
 #[cfg(target_os = "linux")]
+fn desktop_username() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(32)
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
 fn build_bringup_script_linux(
     wg_go: &Path,
     uapi_path: &Path,
@@ -1531,6 +1567,7 @@ fn build_bringup_script_linux(
     wstunnel: &Path,
     stealth_prefix: &str,
     stealth_pid: &Path,
+    desktop_user: &str,
 ) -> String {
     format!(
         r#"#!/bin/bash
@@ -1549,6 +1586,7 @@ DNS_BACKUP="${{META_FILE}}.dns"
 ADDR='{address}'
 DNS='{dns}'
 ENDPOINT='{endpoint}'
+DESKTOP_USER_FROM_APP='{desktop_user}'
 IFACE_NAME="veritas0"
 ENDPOINT_PORT="${{ENDPOINT##*:}}"
 KILLSWITCH_TABLE="veritasvpn_killswitch"
@@ -1866,9 +1904,14 @@ elif command -v resolvectl >/dev/null 2>&1; then
   resolvectl flush-caches 2>/dev/null || true
 fi
 
-# Persist state for teardown
-printf 'endpoint_ip=%s\ngateway=%s\niface=%s\ngw_if=%s\nstealth_remote=%s\nengine=%s\n' \
-  "$ROUTE_IP" "$GW" "$IFACE_NAME" "$GW_IF" "$STEALTH_REMOTE" "$ENGINE" > "$META_FILE"
+# Persist state for teardown / path rebind
+UNDERLAY_SRC=""
+if [[ -n "$GW_IF" ]]; then
+  UNDERLAY_SRC="$(ip -4 -o addr show dev "$GW_IF" 2>/dev/null | awk '{{print $4; exit}}')"
+  UNDERLAY_SRC="${{UNDERLAY_SRC%%/*}}"
+fi
+printf 'endpoint_ip=%s\nendpoint=%s\ngateway=%s\niface=%s\ngw_if=%s\nunderlay_src=%s\ndns=%s\nstealth_remote=%s\nengine=%s\n' \
+  "$ROUTE_IP" "$ENDPOINT" "$GW" "$IFACE_NAME" "$GW_IF" "$UNDERLAY_SRC" "$DNS" "$STEALTH_REMOTE" "$ENGINE" > "$META_FILE"
 
 restore_after_validation_fail() {{
   local msg="$1"
@@ -1925,12 +1968,18 @@ fi
 # unlike ~/.veritasvpn/*.sh which must never get NOPASSWD.
 SOFT_DIR=/var/lib/veritasvpn
 mkdir -p "$SOFT_DIR"
-DESKTOP_USER="${{SUDO_USER:-}}"
+DESKTOP_USER="${{DESKTOP_USER_FROM_APP:-}}"
+if [[ -z "$DESKTOP_USER" ]]; then
+  DESKTOP_USER="${{SUDO_USER:-}}"
+fi
 if [[ -z "$DESKTOP_USER" && -n "${{PKEXEC_UID:-}}" ]]; then
   DESKTOP_USER="$(getent passwd "$PKEXEC_UID" | cut -d: -f1 || true)"
 fi
 if [[ -z "$DESKTOP_USER" ]]; then
   DESKTOP_USER="$(stat -c '%U' "$(dirname "$IFACE_FILE")" 2>/dev/null || true)"
+fi
+if [[ "$DESKTOP_USER" == "root" ]]; then
+  DESKTOP_USER=""
 fi
 
 cat > "$SOFT_DIR/cleanup-killswitch.sh" <<'SOFT_CLEANUP'
@@ -1989,10 +2038,21 @@ chown root:root "$SOFT_DIR/cleanup-killswitch.sh"
 
 cat > "$SOFT_DIR/path-adapt.sh" <<'SOFT_PATH'
 #!/bin/bash
+# Rebind the WireGuard endpoint onto the current underlay without tearing
+# the tunnel down. Same behavior as Android: stay connected across network
+# changes (including Wi-Fi→Wi-Fi with the same gateway IP).
 set -uo pipefail
 STATE_DIR="${{HOME:-/root}}/.veritasvpn"
 if [[ -n "${{SUDO_USER:-}}" ]]; then
   STATE_DIR="$(getent passwd "$SUDO_USER" | cut -d: -f6)/.veritasvpn"
+fi
+if [[ ! -f "$STATE_DIR/iface.meta" ]]; then
+  for d in /home/*/.veritasvpn; do
+    if [[ -f "$d/iface.meta" ]]; then
+      STATE_DIR="$d"
+      break
+    fi
+  done
 fi
 META="$STATE_DIR/iface.meta"
 [[ -f "$META" ]] || exit 0
@@ -2000,47 +2060,119 @@ META="$STATE_DIR/iface.meta"
 source "$META" 2>/dev/null || true
 ENDPOINT_IP="${{endpoint_ip:-}}"
 IFACE="${{iface:-veritas0}}"
+DNS="${{dns:-}}"
+ENDPOINT="${{endpoint:-}}"
 [[ -n "$ENDPOINT_IP" && "$ENDPOINT_IP" != "127.0.0.1" ]] || exit 0
-NEW_GW="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
-  /blackhole/ {{ next }}
-  /via/ {{
-    for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
-    if (d == "" || d != iface) {{ print $3; exit }}
-  }}
-')"
-NEW_GW_IF="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
-  /blackhole/ {{ next }}
-  /via/ {{
-    for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
-    if (d == "" || d != iface) {{ print d; exit }}
-  }}
-')"
-if [[ -z "$NEW_GW" ]]; then
-  LINE="$(ip -4 route get 1.1.1.1 2>/dev/null | head -1 || true)"
-  if [[ "$LINE" != *"dev $IFACE"* ]]; then
-    NEW_GW="$(awk '{{for(i=1;i<=NF;i++) if($i=="via"){{print $(i+1); exit}}}}' <<<"$LINE")"
-    NEW_GW_IF="$(awk '{{for(i=1;i<=NF;i++) if($i=="dev"){{print $(i+1); exit}}}}' <<<"$LINE")"
+
+detect_underlay() {{
+  local gw="" gif="" src=""
+  if command -v nmcli >/dev/null 2>&1; then
+    local dev type state
+    while IFS=: read -r dev type state; do
+      [[ "$state" == "connected" ]] || continue
+      case "$type" in wifi|ethernet|802-11-wireless|802-3-ethernet) ;; *) continue ;; esac
+      [[ -n "$dev" && "$dev" != "$IFACE" && "$dev" != "lo" ]] || continue
+      gw="$(nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1)"
+      src="$(nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1)"
+      src="${{src%%/*}}"
+      gif="$dev"
+      [[ -n "$gw" ]] && break
+    done < <(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null)
+  fi
+  if [[ -z "$gw" ]]; then
+    gw="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
+      /blackhole/ {{ next }}
+      /via/ {{
+        for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
+        if (d == "" || d != iface) {{ print $3; exit }}
+      }}
+    ')"
+    gif="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
+      /blackhole/ {{ next }}
+      /via/ {{
+        for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
+        if (d == "" || d != iface) {{ print d; exit }}
+      }}
+    ')"
+  fi
+  if [[ -z "$src" && -n "$gif" ]]; then
+    src="$(ip -4 -o addr show dev "$gif" 2>/dev/null | awk '{{print $4; exit}}')"
+    src="${{src%%/*}}"
+  fi
+  printf '%s %s %s\n' "$gw" "$gif" "$src"
+}}
+
+NEW_GW=""; NEW_GW_IF=""; NEW_SRC=""
+for _ in $(seq 1 20); do
+  read -r NEW_GW NEW_GW_IF NEW_SRC <<<"$(detect_underlay)"
+  [[ -n "$NEW_GW" && -n "$NEW_GW_IF" ]] && break
+  sleep 0.4
+done
+[[ -n "$NEW_GW" ]] || exit 0
+
+ip route del "$ENDPOINT_IP" 2>/dev/null || true
+ip route replace "$ENDPOINT_IP/32" via "$NEW_GW" dev "$NEW_GW_IF" 2>/dev/null || \
+  ip route replace "$ENDPOINT_IP" via "$NEW_GW" ${{NEW_GW_IF:+dev $NEW_GW_IF}} 2>/dev/null || true
+ip neigh flush dev "$NEW_GW_IF" 2>/dev/null || true
+if command -v conntrack >/dev/null 2>&1; then
+  conntrack -D -p udp --dst "$ENDPOINT_IP" 2>/dev/null || true
+  conntrack -D -p tcp --dst "$ENDPOINT_IP" 2>/dev/null || true
+fi
+if command -v wg >/dev/null 2>&1 && ip link show "$IFACE" >/dev/null 2>&1; then
+  PEER="$(wg show "$IFACE" peers 2>/dev/null | head -1)"
+  if [[ -n "$PEER" ]]; then
+    CUR_EP="$(wg show "$IFACE" endpoints 2>/dev/null | awk 'NR==1{{print $2}}')"
+    USE_EP="$CUR_EP"
+    if [[ -z "$USE_EP" || "$USE_EP" == "(none)" ]]; then
+      USE_EP="${{ENDPOINT:-$ENDPOINT_IP:51820}}"
+    fi
+    wg set "$IFACE" peer "$PEER" endpoint "$USE_EP" 2>/dev/null || true
   fi
 fi
-[[ -n "$NEW_GW" ]] || exit 0
-ip route replace "$ENDPOINT_IP" via "$NEW_GW" ${{NEW_GW_IF:+dev $NEW_GW_IF}} 2>/dev/null || \
-  ip route replace "$ENDPOINT_IP" via "$NEW_GW" 2>/dev/null || true
+if [[ -n "$DNS" ]] && command -v resolvectl >/dev/null 2>&1; then
+  if [[ -n "${{gw_if:-}}" && "${{gw_if}}" != "$NEW_GW_IF" ]]; then
+    resolvectl revert "$gw_if" 2>/dev/null || true
+  fi
+  resolvectl dns "$NEW_GW_IF" "$DNS" 2>/dev/null || true
+  resolvectl flush-caches 2>/dev/null || true
+fi
+if [[ -n "$DNS" && -w /etc/resolv.conf ]]; then
+  echo "nameserver $DNS" > /etc/resolv.conf 2>/dev/null || true
+fi
 tmp="$(mktemp)"
-awk -v gw="$NEW_GW" -v gwif="$NEW_GW_IF" '
-  BEGIN{{gw_set=0; gwif_set=0}}
+awk -v gw="$NEW_GW" -v gwif="$NEW_GW_IF" -v src="$NEW_SRC" '
+  BEGIN{{gw_set=0; gwif_set=0; src_set=0}}
   /^gateway=/ {{print "gateway=" gw; gw_set=1; next}}
   /^gw_if=/ {{print "gw_if=" gwif; gwif_set=1; next}}
+  /^underlay_src=/ {{print "underlay_src=" src; src_set=1; next}}
   {{print}}
   END{{
     if (!gw_set) print "gateway=" gw
     if (!gwif_set) print "gw_if=" gwif
+    if (!src_set && src != "") print "underlay_src=" src
   }}
 ' "$META" > "$tmp"
 mv "$tmp" "$META"
-echo "ok endpoint=$ENDPOINT_IP via=$NEW_GW"
+echo "ok endpoint=$ENDPOINT_IP via=$NEW_GW dev=$NEW_GW_IF src=$NEW_SRC"
 SOFT_PATH
 chmod 755 "$SOFT_DIR/path-adapt.sh"
 chown root:root "$SOFT_DIR/path-adapt.sh"
+
+# NetworkManager calls this as root on every underlay change — same idea as
+# Android ConnectivityManager. Safe no-op when the tunnel is down.
+if [[ -d /etc/NetworkManager/dispatcher.d ]]; then
+  cat > /etc/NetworkManager/dispatcher.d/50-veritasvpn <<'SOFT_NM'
+#!/bin/bash
+case "$2" in
+  up|down|dhcp4-change|dhcp6-change|connectivity-change)
+    if [[ -x /var/lib/veritasvpn/path-adapt.sh ]]; then
+      /var/lib/veritasvpn/path-adapt.sh >/tmp/veritas-path-adapt.log 2>&1 || true
+    fi
+    ;;
+esac
+SOFT_NM
+  chmod 755 /etc/NetworkManager/dispatcher.d/50-veritasvpn
+fi
 
 if [[ -n "$DESKTOP_USER" ]]; then
   # Install a root-owned full teardown helper (does NOT remove soft-recovery
@@ -2146,6 +2278,7 @@ echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}
         address = address,
         dns = dns,
         endpoint = endpoint,
+        desktop_user = desktop_user,
     )
 }
 
@@ -2348,6 +2481,7 @@ ip -6 route del blackhole default metric 1 2>/dev/null || true
 
 # Soft-recovery helpers (installed at connect) — remove on intentional disconnect.
 rm -f /etc/sudoers.d/veritasvpn-soft
+rm -f /etc/NetworkManager/dispatcher.d/50-veritasvpn
 rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh
 rmdir /var/lib/veritasvpn 2>/dev/null || true
 
