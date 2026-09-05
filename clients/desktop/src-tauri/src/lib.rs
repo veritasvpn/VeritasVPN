@@ -668,6 +668,22 @@ echo "ok refreshed endpoint=$ENDPOINT_IP via=$NEW_GW dev=$NEW_GW_IF iface=$IFACE
         };
     }
     let _ = Command::new("chmod").args(["0700", &script_path.to_string_lossy()]).status();
+    // Prefer root-owned path-adapt helper (passwordless after connect).
+    if Path::new(SOFT_PATH_ADAPT_HELPER).exists() {
+        match Command::new("sudo")
+            .args(["-n", "timeout", "15", SOFT_PATH_ADAPT_HELPER])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                return RouteRefreshResult {
+                    refreshed: true,
+                    gateway: new_gw.clone(),
+                    message: format!("endpoint route moved {old_gw} → {new_gw} (helper)"),
+                };
+            }
+            _ => {}
+        }
+    }
     // Soft recovery / path adapt must never use interactive pkexec.
     // Soft path adapt only uses noninteractive elevation.
     match run_elevated_noninteractive(&script_path) {
@@ -791,30 +807,14 @@ fn load_dns_from_last_config() -> Option<String> {
 
 /// True if the tunnel is healthy enough for soft recovery to skip.
 pub(crate) fn tunnel_is_healthy() -> Result<bool, String> {
-    // Prefer wireguard_stats: if the interface is up and we have a recent
-    // handshake, the tunnel is healthy. Soft recovery should not soft-reconnect.
     let stats = wireguard_stats_linux();
     if !stats.interface_up {
         return Ok(false);
     }
-    // Soft recovery: require a recent handshake when available so we do not
-    // soft-reconnect solely on a flaky public-egress probe.
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let handshake_ok = stats.last_handshake_sec > 0
-        && now.saturating_sub(stats.last_handshake_sec) <= 180;
-    if handshake_ok {
-        return Ok(true);
-    }
-    // Soft recovery also needs public egress to work. If the interface is up
-    // but kill switch is still blackholing clearnet (no handshake), soft
-    // reconnect / kill-switch cleanup is required.
-    if !public_egress_ok() {
-        return Ok(false);
-    }
-    Ok(true)
+    // Always require working public egress. A recent handshake alone is NOT
+    // enough: after a network switch the peer can still look "fresh" while the
+    // endpoint host route is stale and the kill switch blackholes clearnet.
+    Ok(public_egress_ok())
 }
 
 fn public_egress_ok() -> bool {
@@ -830,12 +830,44 @@ fn public_egress_ok() -> bool {
     }
 }
 
+/// Root-owned soft-recovery helpers installed at connect time.
+const SOFT_CLEANUP_HELPER: &str = "/var/lib/veritasvpn/cleanup-killswitch.sh";
+const SOFT_PATH_ADAPT_HELPER: &str = "/var/lib/veritasvpn/path-adapt.sh";
+
 pub(crate) fn cleanup_kill_switch_noninteractive() -> Result<bool, String> {
-    // Soft recovery must never hang the UI waiting on a password dialog.
-    // Prefer passwordless sudo; if that fails, spawn detached pkexec so the
-    // auth prompt appears once without freezing the app — restores clearnet.
+    // Prefer the root-owned helper installed at connect (passwordless via
+    // /etc/sudoers.d/veritasvpn-soft). That path actually restores clearnet:
+    // kill switch + blackhole + split /1 routes + DNS.
+    if Path::new(SOFT_CLEANUP_HELPER).exists() {
+        match Command::new("sudo")
+            .args(["-n", "timeout", "15", SOFT_CLEANUP_HELPER])
+            .output()
+        {
+            Ok(out) if out.status.success() => return Ok(true),
+            Ok(out) => {
+                eprintln!(
+                    "[veritas] soft cleanup helper failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+            Err(e) => eprintln!("[veritas] soft cleanup helper spawn failed: {e}"),
+        }
+    }
+
+    // Fallback: write a user-home script and try sudo -n / detached pkexec.
+    // Must also remove split /1 routes or traffic still dies into the tunnel.
     let script = r#"#!/bin/bash
 set -uo pipefail
+IFACE="$(cat "$HOME/.veritasvpn/iface" 2>/dev/null || echo veritas0)"
+META="$HOME/.veritasvpn/iface.meta"
+DNS_BACKUP="${META}.dns"
+GW_IF=""
+if [[ -f "$META" ]]; then
+  # shellcheck disable=SC1090
+  source "$META" 2>/dev/null || true
+  GW_IF="${gw_if:-}"
+  IFACE="${iface:-$IFACE}"
+fi
 if command -v nft >/dev/null 2>&1; then
   nft delete table inet veritasvpn_killswitch 2>/dev/null || true
 fi
@@ -855,6 +887,20 @@ if command -v ip6tables >/dev/null 2>&1; then
 fi
 ip route del blackhole default metric 1 2>/dev/null || true
 ip -6 route del blackhole default metric 1 2>/dev/null || true
+# Critical: remove split defaults or traffic still goes into the dead tunnel.
+ip route del 0.0.0.0/1 dev "$IFACE" 2>/dev/null || true
+ip route del 128.0.0.0/1 dev "$IFACE" 2>/dev/null || true
+ip route del 0.0.0.0/1 2>/dev/null || true
+ip route del 128.0.0.0/1 2>/dev/null || true
+ip route del 10.0.0.0/24 dev "$IFACE" 2>/dev/null || true
+# Restore DNS so browsing works without the tunnel gateway.
+if [[ -f "$DNS_BACKUP" ]]; then
+  cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
+fi
+if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
+  resolvectl revert "$GW_IF" 2>/dev/null || true
+  resolvectl flush-caches 2>/dev/null || true
+fi
 "#;
     let dir = state_dir()?;
     let script_path = dir.join("cleanup-killswitch-recover.sh");
@@ -871,12 +917,9 @@ ip -6 route del blackhole default metric 1 2>/dev/null || true
     match run_elevated_noninteractive(&script_path) {
         Ok(()) => Ok(true),
         Err(_) => {
-            // Best-effort non-elevated (usually fails for nft/iptables).
             let _ = Command::new("timeout")
                 .args(["2", "bash", &script_path.to_string_lossy()])
                 .output();
-            // Detached pkexec: one auth prompt, UI stays responsive, clearnet
-            // can come back after the user approves. Never wait on pkexec here.
             #[cfg(target_os = "linux")]
             {
                 let _ = Command::new("pkexec")
@@ -1945,9 +1988,133 @@ if ! curl -4 -fsS --connect-timeout 5 --max-time 12 https://api.ipify.org \
   restore_after_validation_fail "VPN internet egress validation failed; normal internet was restored"
 fi
 
-# Install passwordless sudo was removed: never NOPASSWD user-writable
-# ~/.veritasvpn/*.sh (local replace → root). Future connects use pkexec.
-# A root-owned binary helper may restore passwordless connect later.
+# Install passwordless soft-recovery helpers. These live under /var/lib/veritasvpn
+# (root-owned, not user-writable) so local replace cannot escalate to root —
+# unlike ~/.veritasvpn/*.sh which must never get NOPASSWD.
+SOFT_DIR=/var/lib/veritasvpn
+mkdir -p "$SOFT_DIR"
+DESKTOP_USER="${{SUDO_USER:-}}"
+if [[ -z "$DESKTOP_USER" && -n "${{PKEXEC_UID:-}}" ]]; then
+  DESKTOP_USER="$(getent passwd "$PKEXEC_UID" | cut -d: -f1 || true)"
+fi
+if [[ -z "$DESKTOP_USER" ]]; then
+  DESKTOP_USER="$(stat -c '%U' "$(dirname "$IFACE_FILE")" 2>/dev/null || true)"
+fi
+
+cat > "$SOFT_DIR/cleanup-killswitch.sh" <<'SOFT_CLEANUP'
+#!/bin/bash
+set -uo pipefail
+STATE_DIR="${{HOME:-/root}}/.veritasvpn"
+# Prefer the real desktop user's state when invoked via sudo -n.
+if [[ -n "${{SUDO_USER:-}}" ]]; then
+  STATE_DIR="$(getent passwd "$SUDO_USER" | cut -d: -f6)/.veritasvpn"
+fi
+IFACE="$(cat "$STATE_DIR/iface" 2>/dev/null || echo veritas0)"
+META="$STATE_DIR/iface.meta"
+DNS_BACKUP="${{META}}.dns"
+GW_IF=""
+if [[ -f "$META" ]]; then
+  # shellcheck disable=SC1090
+  source "$META" 2>/dev/null || true
+  GW_IF="${{gw_if:-}}"
+  IFACE="${{iface:-$IFACE}}"
+fi
+if command -v nft >/dev/null 2>&1; then
+  nft delete table inet veritasvpn_killswitch 2>/dev/null || true
+fi
+if command -v iptables >/dev/null 2>&1; then
+  while iptables -C OUTPUT -j VERITASVPN_KILLSWITCH 2>/dev/null; do
+    iptables -D OUTPUT -j VERITASVPN_KILLSWITCH 2>/dev/null || break
+  done
+  iptables -F VERITASVPN_KILLSWITCH 2>/dev/null || true
+  iptables -X VERITASVPN_KILLSWITCH 2>/dev/null || true
+fi
+if command -v ip6tables >/dev/null 2>&1; then
+  while ip6tables -C OUTPUT -j VERITASVPN_KILLSWITCH_V6 2>/dev/null; do
+    ip6tables -D OUTPUT -j VERITASVPN_KILLSWITCH_V6 2>/dev/null || break
+  done
+  ip6tables -F VERITASVPN_KILLSWITCH_V6 2>/dev/null || true
+  ip6tables -X VERITASVPN_KILLSWITCH_V6 2>/dev/null || true
+fi
+ip route del blackhole default metric 1 2>/dev/null || true
+ip -6 route del blackhole default metric 1 2>/dev/null || true
+ip route del 0.0.0.0/1 dev "$IFACE" 2>/dev/null || true
+ip route del 128.0.0.0/1 dev "$IFACE" 2>/dev/null || true
+ip route del 0.0.0.0/1 2>/dev/null || true
+ip route del 128.0.0.0/1 2>/dev/null || true
+ip route del 10.0.0.0/24 dev "$IFACE" 2>/dev/null || true
+if [[ -f "$DNS_BACKUP" ]]; then
+  cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
+fi
+if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
+  resolvectl revert "$GW_IF" 2>/dev/null || true
+  resolvectl flush-caches 2>/dev/null || true
+fi
+echo ok
+SOFT_CLEANUP
+chmod 755 "$SOFT_DIR/cleanup-killswitch.sh"
+chown root:root "$SOFT_DIR/cleanup-killswitch.sh"
+
+cat > "$SOFT_DIR/path-adapt.sh" <<'SOFT_PATH'
+#!/bin/bash
+set -uo pipefail
+STATE_DIR="${{HOME:-/root}}/.veritasvpn"
+if [[ -n "${{SUDO_USER:-}}" ]]; then
+  STATE_DIR="$(getent passwd "$SUDO_USER" | cut -d: -f6)/.veritasvpn"
+fi
+META="$STATE_DIR/iface.meta"
+[[ -f "$META" ]] || exit 0
+# shellcheck disable=SC1090
+source "$META" 2>/dev/null || true
+ENDPOINT_IP="${{endpoint_ip:-}}"
+IFACE="${{iface:-veritas0}}"
+[[ -n "$ENDPOINT_IP" && "$ENDPOINT_IP" != "127.0.0.1" ]] || exit 0
+NEW_GW="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
+  /blackhole/ {{ next }}
+  /via/ {{
+    for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
+    if (d == "" || d != iface) {{ print $3; exit }}
+  }}
+')"
+NEW_GW_IF="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
+  /blackhole/ {{ next }}
+  /via/ {{
+    for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
+    if (d == "" || d != iface) {{ print d; exit }}
+  }}
+')"
+if [[ -z "$NEW_GW" ]]; then
+  LINE="$(ip -4 route get 1.1.1.1 2>/dev/null | head -1 || true)"
+  if [[ "$LINE" != *"dev $IFACE"* ]]; then
+    NEW_GW="$(awk '{{for(i=1;i<=NF;i++) if($i=="via"){{print $(i+1); exit}}}}' <<<"$LINE")"
+    NEW_GW_IF="$(awk '{{for(i=1;i<=NF;i++) if($i=="dev"){{print $(i+1); exit}}}}' <<<"$LINE")"
+  fi
+fi
+[[ -n "$NEW_GW" ]] || exit 0
+ip route replace "$ENDPOINT_IP" via "$NEW_GW" ${{NEW_GW_IF:+dev $NEW_GW_IF}} 2>/dev/null || \
+  ip route replace "$ENDPOINT_IP" via "$NEW_GW" 2>/dev/null || true
+tmp="$(mktemp)"
+awk -v gw="$NEW_GW" -v gwif="$NEW_GW_IF" '
+  BEGIN{{gw_set=0; gwif_set=0}}
+  /^gateway=/ {{print "gateway=" gw; gw_set=1; next}}
+  /^gw_if=/ {{print "gw_if=" gwif; gwif_set=1; next}}
+  {{print}}
+  END{{
+    if (!gw_set) print "gateway=" gw
+    if (!gwif_set) print "gw_if=" gwif
+  }}
+' "$META" > "$tmp"
+mv "$tmp" "$META"
+echo "ok endpoint=$ENDPOINT_IP via=$NEW_GW"
+SOFT_PATH
+chmod 755 "$SOFT_DIR/path-adapt.sh"
+chown root:root "$SOFT_DIR/path-adapt.sh"
+
+if [[ -n "$DESKTOP_USER" ]]; then
+  printf '%s ALL=(root) NOPASSWD: %s/cleanup-killswitch.sh, %s/path-adapt.sh\n' \
+    "$DESKTOP_USER" "$SOFT_DIR" "$SOFT_DIR" > /etc/sudoers.d/veritasvpn-soft
+  chmod 440 /etc/sudoers.d/veritasvpn-soft
+fi
 
 echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}} gw=$GW engine=$ENGINE"
 "#,
@@ -2162,6 +2329,11 @@ if command -v ip6tables >/dev/null 2>&1; then
 fi
 ip route del blackhole default metric 1 2>/dev/null || true
 ip -6 route del blackhole default metric 1 2>/dev/null || true
+
+# Soft-recovery helpers (installed at connect) — remove on intentional disconnect.
+rm -f /etc/sudoers.d/veritasvpn-soft
+rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh
+rmdir /var/lib/veritasvpn 2>/dev/null || true
 
 # Remove split-tunnel routes
 if [[ -n "$IFACE" ]]; then

@@ -1,7 +1,7 @@
 import { withSecurityHeaders, textResponse } from "../_lib/security.js";
 
 const DEB_URL =
-  "https://github.com/veritasvpn/VeritasVPN/releases/download/v0.2.38/veritasvpn-linux.deb";
+  "https://github.com/veritasvpn/VeritasVPN/releases/download/v0.2.39/veritasvpn-linux.deb";
 
 function downloadHeaders(upstream) {
   const headers = withSecurityHeaders({
