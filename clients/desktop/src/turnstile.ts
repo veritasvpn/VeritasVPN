@@ -21,7 +21,12 @@ export function obtainTurnstileToken(timeoutMs = 120_000): Promise<string> {
     const frame = document.createElement("iframe");
     frame.src = TURNSTILE_PAGE;
     frame.title = "Cloudflare Turnstile";
-    frame.style.cssText = "width:100%;height:120px;border:0;border-radius:8px;background:#06101c;";
+    frame.style.cssText =
+      "width:100%;height:160px;border:0;border-radius:8px;background:#06101c;";
+
+    const status = document.createElement("p");
+    status.textContent = "Loading security check…";
+    status.style.cssText = "margin:0;color:#6b7f96;font-size:12px;text-align:center;";
 
     const cancel = document.createElement("button");
     cancel.type = "button";
@@ -29,7 +34,7 @@ export function obtainTurnstileToken(timeoutMs = 120_000): Promise<string> {
     cancel.style.cssText =
       "appearance:none;border:0;background:transparent;color:#9db0c7;padding:8px;cursor:pointer;";
 
-    panel.append(title, frame, cancel);
+    panel.append(title, frame, status, cancel);
     overlay.append(panel);
     document.body.appendChild(overlay);
 
@@ -38,9 +43,15 @@ export function obtainTurnstileToken(timeoutMs = 120_000): Promise<string> {
       () => finish(new Error("Security check timed out. Try signing in again.")),
       timeoutMs
     );
+    const loadWatch = window.setTimeout(() => {
+      if (!settled) {
+        status.textContent = "Still loading… Cancel and try again if this stays blank.";
+      }
+    }, 8_000);
 
     function cleanup() {
       window.clearTimeout(timer);
+      window.clearTimeout(loadWatch);
       window.removeEventListener("message", onMessage);
       overlay.remove();
     }
@@ -65,6 +76,13 @@ export function obtainTurnstileToken(timeoutMs = 120_000): Promise<string> {
         finish(new Error("Security check failed. Complete the check and try again."));
       }
     }
+
+    frame.addEventListener("load", () => {
+      if (!settled) status.textContent = "Waiting for the check to finish…";
+    });
+    frame.addEventListener("error", () => {
+      finish(new Error("Could not load the security check. Check your connection and try again."));
+    });
 
     cancel.addEventListener("click", () => finish(new Error("Security check cancelled.")));
     window.addEventListener("message", onMessage);
