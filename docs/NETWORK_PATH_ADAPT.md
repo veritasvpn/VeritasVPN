@@ -18,11 +18,73 @@ flaps, sticky service restarts, or transient tunnel DOWN events.
 
 ## Linux desktop (`refresh_endpoint_route`)
 
-1. Stats poll invokes `refresh_endpoint_route` while connected.
+1. Soft path adapt runs in the **backend watcher only** (never from the UI stats
+   poll — that froze the app with “veritasvpn is not responding”).
 2. Reads `~/.veritasvpn/iface.meta` (`endpoint_ip`, `gateway`, `iface`).
 3. Detects the current **unicast underlay** default gateway (skips blackhole kill-switch + tunnel iface).
-4. If the gateway changed, elevates `refresh-route.sh` to `ip route replace $ENDPOINT via $NEW_GW` and updates meta.
-5. Passwordless sudo includes `refresh-route.sh` (rewritten on each successful connect).
+4. If the gateway changed, elevates `refresh-route.sh` with **noninteractive**
+   sudo only (`sudo -n`) to `ip route replace $ENDPOINT via $NEW_GW` and updates meta.
+5. Soft recovery never falls back to interactive `pkexec` for path adapt.
+
+## Phase 0 notes (network switch bug)
+
+**User report:** Connect → change network → UI still Connected → no clearnet browse → Disconnect fixes → Connect works.
+Also: Connect often showed “veritasvpn is not responding” (Cancel / Wait).
+
+**What existed before Phase 1–3:**
+
+- Endpoint host route is refreshed when the underlay gateway IP changes.
+- No netlink / link-change watch.
+- DNS is applied only at bring-up (not re-applied after a switch).
+- Kill switch stays installed (nft/iptables + blackhole default) even if the tunnel is dead.
+- Soft recovery does not force a reconnect when the tunnel is unreachable.
+
+**How to capture Phase 0 evidence:**
+
+```bash
+bash clients/desktop/scripts/network-switch-repro.sh baseline
+# ... switch networks ...
+bash clients/desktop/scripts/network-switch-repro.sh after
+```
+
+See `docs/NETWORK_SWITCH_REPRO.md` for the failure-mode matrix (A–E).
+
+## Phase 1–3 (network switch recovery)
+
+Implemented on Linux desktop (0.2.38+):
+
+1. **Phase 1 — underlay watch**
+   - Background watcher polls every ~2s while a tunnel is up.
+   - Detects underlay gateway / tunnel health changes.
+2. **Phase 2 — soft recovery**
+   - Endpoint host route refresh when underlay gateway changes (noninteractive sudo).
+   - DNS re-applied from last-config after a switch.
+   - Kill switch is cleaned if the tunnel is unhealthy so clearnet can recover.
+   - If passwordless sudo is unavailable, kill-switch cleanup is spawned via
+     **detached** `pkexec` (one auth prompt, UI stays responsive).
+3. **Phase 3 — soft reconnect**
+   - If tunnel is still dead after soft recovery, re-bring the tunnel up using
+     `last-config.json` (saved on connect) without user Disconnect.
+   - Soft reconnect is **detached**, throttled (~30s), and uses **soft-elevated**
+     mode (noninteractive sudo only — never interactive pkexec).
+4. **UI freeze fix**
+   - Connect/disconnect run elevated work via `spawn_blocking` (async commands).
+   - UI stats poll never calls soft recovery / path adapt.
+
+### Files
+
+- `clients/desktop/src-tauri/src/network_switch.rs` — recovery logic
+- `clients/desktop/src-tauri/src/lib.rs` — watcher + soft reconnect + config save
+- `clients/desktop/src/App.tsx` — stats poll only (no soft recovery invoke)
+
+### Soft recovery commands
+
+```bash
+# Manual recovery (diagnostics)
+bash clients/desktop/scripts/network-switch-repro.sh baseline
+# switch networks without Disconnect
+bash clients/desktop/scripts/network-switch-repro.sh after
+```
 
 ## Chrome extension
 

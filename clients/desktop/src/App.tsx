@@ -1462,19 +1462,9 @@ function App() {
         if (cancelled) return;
         setWgStats(stats);
 
-        // Soft path adapt: refresh the pinned endpoint host route when the
-        // underlay gateway changes (Wi-Fi↔cellular/Wi-Fi). Avoids a full
-        // disconnect/reconnect while kill-switch routes stay in place.
-        try {
-          const route = await invoke<{ refreshed: boolean; message: string }>(
-            "refresh_endpoint_route"
-          );
-          if (route.refreshed) {
-            console.info("[veritas] endpoint route refreshed:", route.message);
-          }
-        } catch {
-          // Non-fatal — hard reconnect still covers interface loss.
-        }
+        // Soft path adapt and soft reconnect are done only in the backend
+        // watcher. Never call elevated recovery from the UI poll — that freezes
+        // the app with "veritasvpn is not responding".
 
         const nowSec = Math.floor(Date.now() / 1000);
         const handshakeAge =

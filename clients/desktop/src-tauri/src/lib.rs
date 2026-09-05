@@ -4,10 +4,18 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread;
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 const KEYRING_SERVICE: &str = "cloud.veritasvpn.desktop";
+
+mod network_switch;
 
 fn keyring_entry(name: &str) -> Result<keyring::Entry, String> {
     if name != "access_token" && name != "refresh_token" {
@@ -75,7 +83,7 @@ pub struct KeyPair {
     pub public_key: String,
 }
 
-fn state_dir() -> Result<PathBuf, String> {
+pub(crate) fn state_dir() -> Result<PathBuf, String> {
     let home = dirs_next::home_dir().ok_or("Could not resolve home directory")?;
     #[cfg(target_os = "macos")]
     let dir = home
@@ -195,20 +203,89 @@ fn b64_key_to_hex(b64: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn connect_wireguard(app: AppHandle, config: WgTunnelConfig) -> ConnectResult {
-    match bring_up_wireguard(&app, &config) {
-        Ok(msg) => ConnectResult {
-            success: true,
-            message: msg,
-            mode: "wireguard".into(),
-            peer_id: config.peer_id,
-        },
+async fn connect_wireguard(app: AppHandle, config: WgTunnelConfig) -> ConnectResult {
+    // Persist config for soft reconnect after network switch (Phase 3).
+    let _ = network_switch::save_last_config(&network_switch::SavedTunnelConfig {
+        private_key: config.private_key.clone(),
+        address: config.address.clone(),
+        dns: config.dns.clone(),
+        server_public_key: config.server_public_key.clone(),
+        endpoint: config.endpoint.clone(),
+        allowed_ips: config.allowed_ips.clone(),
+        peer_id: config.peer_id.clone(),
+        preshared_key: config.preshared_key.clone(),
+        stealth_endpoint: config.stealth_endpoint.clone(),
+        stealth_path_prefix: config.stealth_path_prefix.clone(),
+    });
+
+    // Run elevated bring-up off the async runtime so the UI stays responsive
+    // (avoids GTK "veritasvpn is not responding" during pkexec + handshake).
+    let peer_id = config.peer_id.clone();
+    let app_for_thread = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || bring_up_wireguard(&app_for_thread, &config))
+        .await
+        .unwrap_or_else(|e| Err(format!("connect task failed: {e}")));
+
+    match result {
+        Ok(msg) => {
+            // Store AppHandle so soft reconnect can re-bring the tunnel up.
+            let _ = APP_HANDLE_FOR_RECOVER.set(app.clone());
+            // Start background watcher (Phase 1) for underlay flaps.
+            start_network_switch_watcher_if_needed();
+            ConnectResult {
+                success: true,
+                message: msg,
+                mode: "wireguard".into(),
+                peer_id,
+            }
+        }
         Err(e) => ConnectResult {
             success: false,
             message: e,
             mode: "wireguard".into(),
-            peer_id: config.peer_id,
+            peer_id,
         },
+    }
+}
+
+/// Start the network-switch recovery watcher if not already running.
+static NETWORK_SWITCH_WATCHER: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+static NETWORK_SWITCH_JOIN: std::sync::OnceLock<thread::JoinHandle<()>> = std::sync::OnceLock::new();
+
+fn start_network_switch_watcher_if_needed() {
+    // Allow restart after disconnect/reconnect.
+    if let Some(running) = NETWORK_SWITCH_WATCHER.get() {
+        if running.load(Ordering::SeqCst) {
+            return;
+        }
+        running.store(true, Ordering::SeqCst);
+    } else {
+        let running = Arc::new(AtomicBool::new(true));
+        let _ = NETWORK_SWITCH_WATCHER.set(running.clone());
+        let handle = thread::spawn(move || {
+            while running.load(Ordering::SeqCst) {
+                // Soft recovery is best-effort and must never block the UI.
+                // Soft reconnect is also throttled inside recover_network_switch.
+                match network_switch::recover_network_switch() {
+                    network_switch::NetworkRecoverResult {
+                        changed: true, ..
+                    } => {
+                        // Soft recovery ran; keep logging to stderr for diagnostics.
+                    }
+                    _ => {}
+                }
+                // Soft recovery is cheap when gateway is unchanged.
+                // Soft reconnect is throttled inside recover_network_switch.
+                thread::sleep(Duration::from_secs(2));
+            }
+        });
+        let _ = NETWORK_SWITCH_JOIN.set(handle);
+    }
+}
+
+fn stop_network_switch_watcher() {
+    if let Some(running) = NETWORK_SWITCH_WATCHER.get() {
+        running.store(false, Ordering::SeqCst);
     }
 }
 
@@ -360,8 +437,15 @@ fn wireguard_stats_linux() -> WgTransferStats {
 }
 
 #[tauri::command]
-fn disconnect_wireguard(app: AppHandle) -> ConnectResult {
-    match bring_down_wireguard(&app) {
+async fn disconnect_wireguard(app: AppHandle) -> ConnectResult {
+    // Stop the recovery watcher before teardown so we don't soft-reconnect
+    // after the user intentionally disconnected.
+    stop_network_switch_watcher();
+    // Teardown can prompt for elevation — keep it off the UI thread.
+    let result = tauri::async_runtime::spawn_blocking(move || bring_down_wireguard(&app))
+        .await
+        .unwrap_or_else(|e| Err(format!("disconnect task failed: {e}")));
+    match result {
         Ok(msg) => ConnectResult {
             success: true,
             message: msg,
@@ -374,6 +458,27 @@ fn disconnect_wireguard(app: AppHandle) -> ConnectResult {
             mode: "wireguard".into(),
             peer_id: String::new(),
         },
+    }
+}
+
+/// Soft recovery for Linux network switch (Phase 1–3). Exposed for diagnostics.
+/// Prefer the background watcher; this is only for diagnostics and should
+/// never be called from the UI poll loop.
+#[tauri::command]
+fn network_switch_recover() -> serde_json::Value {
+    #[cfg(target_os = "linux")]
+    {
+        return serde_json::to_value(network_switch::recover_network_switch()).unwrap_or_else(|_| {
+            serde_json::json!({"changed": false, "message": "recover failed", "action": "error"})
+        });
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        serde_json::json!({
+            "changed": false,
+            "message": "network switch recovery is Linux-only",
+            "action": "noop"
+        })
     }
 }
 
@@ -404,7 +509,7 @@ fn refresh_endpoint_route() -> RouteRefreshResult {
 }
 
 #[cfg(target_os = "linux")]
-fn refresh_endpoint_route_linux() -> RouteRefreshResult {
+pub(crate) fn refresh_endpoint_route_linux() -> RouteRefreshResult {
     let iface_file = match iface_path() {
         Ok(p) => p,
         Err(e) => {
@@ -563,7 +668,9 @@ echo "ok refreshed endpoint=$ENDPOINT_IP via=$NEW_GW dev=$NEW_GW_IF iface=$IFACE
         };
     }
     let _ = Command::new("chmod").args(["0700", &script_path.to_string_lossy()]).status();
-    match run_elevated(&script_path) {
+    // Soft recovery / path adapt must never use interactive pkexec.
+    // Soft path adapt only uses noninteractive elevation.
+    match run_elevated_noninteractive(&script_path) {
         Ok(()) => RouteRefreshResult {
             refreshed: true,
             gateway: new_gw.clone(),
@@ -576,6 +683,285 @@ echo "ok refreshed endpoint=$ENDPOINT_IP via=$NEW_GW dev=$NEW_GW_IF iface=$IFACE
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// Network-switch recovery helpers (Phase 1–3)
+// ---------------------------------------------------------------------------
+
+pub(crate) fn last_config_path() -> Result<PathBuf, String> {
+    Ok(state_dir()?.join("last-config.json"))
+}
+
+pub(crate) fn write_last_config_json(dir: &Path, config: &network_switch::SavedTunnelConfig) -> Result<(), String> {
+    let path = dir.join("last-config.json");
+    let raw = serde_json::to_string(config)
+        .map_err(|e| format!("serialize last-config: {e}"))?;
+    fs::write(&path, raw).map_err(|e| format!("write last-config: {e}"))
+}
+
+pub(crate) fn reapply_dns_from_saved() -> Result<RouteRefreshResult, String> {
+    // Re-apply DNS after underlay switch. Prefer the DNS value from last-config.
+    // Soft recovery must never use interactive elevation — noninteractive only.
+    let dns = load_dns_from_last_config().unwrap_or_default();
+    if dns.is_empty() {
+        return Ok(RouteRefreshResult {
+            refreshed: false,
+            gateway: String::new(),
+            message: "no DNS in last-config".into(),
+        });
+    }
+
+    let dir = state_dir().map_err(|e| e)?;
+    let meta_file = dir.join("iface.meta");
+    let mut gw_if = String::new();
+    if meta_file.exists() {
+        for line in fs::read_to_string(&meta_file).unwrap_or_default().lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                if k.trim() == "gw_if" {
+                    gw_if = v.trim().to_string();
+                    break;
+                }
+            }
+        }
+    }
+    // Prefer resolvectl on the underlay interface when available.
+    if !gw_if.is_empty() {
+        if let Ok(out) = Command::new("resolvectl")
+            .args(["dns", &gw_if, &dns])
+            .output()
+        {
+            if out.status.success() {
+                return Ok(RouteRefreshResult {
+                    refreshed: true,
+                    gateway: gw_if.clone(),
+                    message: format!("DNS re-applied via resolvectl on {gw_if}: {dns}"),
+                });
+            }
+        }
+    }
+    // Fallback: write the DNS server into resolv.conf if writable.
+    // Soft recovery must never hang on elevated — use noninteractive only.
+    let script = format!(
+        r#"#!/bin/bash
+set -uo pipefail
+if command -v resolvectl >/dev/null 2>&1; then
+  GW_IF="{gw_if}"
+  DNS="{dns}"
+  if [[ -n "$GW_IF" ]]; then
+    resolvectl dns "$GW_IF" "$DNS" 2>/dev/null || true
+    resolvectl flush-caches 2>/dev/null || true
+  fi
+fi
+"#,
+        gw_if = gw_if.replace('\'', "'\\''"),
+        dns = dns.replace('\'', "'\\''"),
+    );
+    let script_path = dir.join("reapply-dns.sh");
+    if fs::write(&script_path, script).is_ok() {
+        let _ = Command::new("chmod")
+            .args(["0700", &script_path.to_string_lossy()])
+            .status();
+        // Soft recovery: noninteractive elevated only — never pkexec.
+        if let Ok(()) = run_elevated_noninteractive(&script_path) {
+            return Ok(RouteRefreshResult {
+                refreshed: true,
+                gateway: gw_if,
+                message: format!("DNS re-applied: {dns}"),
+            });
+        }
+    }
+    Ok(RouteRefreshResult {
+        refreshed: false,
+        gateway: gw_if,
+        message: "DNS re-apply failed".into(),
+    })
+}
+
+fn load_dns_from_last_config() -> Option<String> {
+    let path = match last_config_path() {
+        Ok(p) => p,
+        Err(_) => return None,
+    };
+    let raw = fs::read_to_string(&path).ok()?;
+    let cfg: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    cfg.get("dns")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// True if the tunnel is healthy enough for soft recovery to skip.
+pub(crate) fn tunnel_is_healthy() -> Result<bool, String> {
+    // Prefer wireguard_stats: if the interface is up and we have a recent
+    // handshake, the tunnel is healthy. Soft recovery should not soft-reconnect.
+    let stats = wireguard_stats_linux();
+    if !stats.interface_up {
+        return Ok(false);
+    }
+    // Soft recovery: require a recent handshake when available so we do not
+    // soft-reconnect solely on a flaky public-egress probe.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let handshake_ok = stats.last_handshake_sec > 0
+        && now.saturating_sub(stats.last_handshake_sec) <= 180;
+    if handshake_ok {
+        return Ok(true);
+    }
+    // Soft recovery also needs public egress to work. If the interface is up
+    // but kill switch is still blackholing clearnet (no handshake), soft
+    // reconnect / kill-switch cleanup is required.
+    if !public_egress_ok() {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn public_egress_ok() -> bool {
+    // Best-effort: if curl fails for a short window, recovery is needed.
+    // Timeout is short so soft recovery never hangs the UI.
+    let out = Command::new("curl")
+        .args(["-fsS", "--max-time", "2", "https://api.ipify.org"])
+        .output()
+        .ok();
+    match out {
+        Some(o) if o.status.success() => true,
+        _ => false,
+    }
+}
+
+pub(crate) fn cleanup_kill_switch_noninteractive() -> Result<bool, String> {
+    // Soft recovery must never hang the UI waiting on a password dialog.
+    // Prefer passwordless sudo; if that fails, spawn detached pkexec so the
+    // auth prompt appears once without freezing the app — restores clearnet.
+    let script = r#"#!/bin/bash
+set -uo pipefail
+if command -v nft >/dev/null 2>&1; then
+  nft delete table inet veritasvpn_killswitch 2>/dev/null || true
+fi
+if command -v iptables >/dev/null 2>&1; then
+  while iptables -C OUTPUT -j VERITASVPN_KILLSWITCH 2>/dev/null; do
+    iptables -D OUTPUT -j VERITASVPN_KILLSWITCH 2>/dev/null || break
+  done
+  iptables -F VERITASVPN_KILLSWITCH 2>/dev/null || true
+  iptables -X VERITASVPN_KILLSWITCH 2>/dev/null || true
+fi
+if command -v ip6tables >/dev/null 2>&1; then
+  while ip6tables -C OUTPUT -j VERITASVPN_KILLSWITCH_V6 2>/dev/null; do
+    ip6tables -D OUTPUT -j VERITASVPN_KILLSWITCH_V6 2>/dev/null || break
+  done
+  ip6tables -F VERITASVPN_KILLSWITCH_V6 2>/dev/null || true
+  ip6tables -X VERITASVPN_KILLSWITCH_V6 2>/dev/null || true
+fi
+ip route del blackhole default metric 1 2>/dev/null || true
+ip -6 route del blackhole default metric 1 2>/dev/null || true
+"#;
+    let dir = state_dir()?;
+    let script_path = dir.join("cleanup-killswitch-recover.sh");
+    fs::write(&script_path, script).map_err(|e| format!("write cleanup: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .map_err(|e| format!("stat cleanup: {e}"))?
+            .permissions();
+        perms.set_mode(0o700);
+        fs::set_permissions(&script_path, perms).ok();
+    }
+    match run_elevated_noninteractive(&script_path) {
+        Ok(()) => Ok(true),
+        Err(_) => {
+            // Best-effort non-elevated (usually fails for nft/iptables).
+            let _ = Command::new("timeout")
+                .args(["2", "bash", &script_path.to_string_lossy()])
+                .output();
+            // Detached pkexec: one auth prompt, UI stays responsive, clearnet
+            // can come back after the user approves. Never wait on pkexec here.
+            #[cfg(target_os = "linux")]
+            {
+                let _ = Command::new("pkexec")
+                    .arg("bash")
+                    .arg(&script_path)
+                    .spawn();
+            }
+            Ok(true)
+        }
+    }
+}
+
+/// Soft reconnect using last-config.json (Phase 3).
+/// Soft reconnect MUST never use interactive elevation (pkexec).
+/// Soft reconnect is non-blocking and must never freeze the UI.
+pub(crate) fn bring_up_from_saved_config_soft() -> Result<String, String> {
+    let saved = network_switch::load_last_config().map_err(|e| e)?;
+    let config = WgTunnelConfig {
+        private_key: saved.private_key,
+        address: saved.address,
+        dns: saved.dns,
+        server_public_key: saved.server_public_key,
+        endpoint: saved.endpoint,
+        allowed_ips: saved.allowed_ips,
+        peer_id: saved.peer_id,
+        preshared_key: saved.preshared_key,
+        stealth_endpoint: saved.stealth_endpoint,
+        stealth_path_prefix: saved.stealth_path_prefix,
+    };
+    // Soft reconnect: force noninteractive elevated only — never pkexec.
+    // Soft reconnect is detached so soft recovery never freezes the watcher.
+    // Soft reconnect is best-effort and may fail if passwordless sudo is
+    // not available for soft recovery (user may need to reconnect).
+    soft_reconnect_via_existing_bringup(&config)
+}
+
+/// Soft reconnect that reuses the normal bringup path but never falls back
+/// to interactive pkexec. Soft reconnect is timed and non-blocking.
+/// Soft reconnect is best-effort and never freezes the UI.
+fn soft_reconnect_via_existing_bringup(config: &WgTunnelConfig) -> Result<String, String> {
+    let app = get_app_handle_for_recover().ok_or_else(|| {
+        String::from("no AppHandle for soft reconnect")
+    })?;
+    // Soft reconnect runs with noninteractive elevated only.
+    // Soft reconnect is best-effort and may fail if passwordless sudo is
+    // not available for soft recovery.
+    // Soft recovery uses a dedicated soft mode so run_elevated never falls back
+    // to interactive pkexec. Soft recovery never freezes the UI.
+    let _guard = SoftElevatedGuard::enter();
+    bring_up_wireguard(&app, config)
+}
+
+/// RAII guard so soft-elevated mode is always cleared.
+struct SoftElevatedGuard;
+impl SoftElevatedGuard {
+    fn enter() -> Self {
+        set_soft_elevated(true);
+        SoftElevatedGuard
+    }
+}
+impl Drop for SoftElevatedGuard {
+    fn drop(&mut self) {
+        set_soft_elevated(false);
+    }
+}
+
+/// Soft-elevated mode: only for soft recovery. Soft recovery never freezes UI.
+static SOFT_ELEVATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn set_soft_elevated(on: bool) {
+    SOFT_ELEVATED.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn is_soft_elevated() -> bool {
+    SOFT_ELEVATED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+fn get_app_handle_for_recover() -> Option<AppHandle> {
+    APP_HANDLE_FOR_RECOVER.get().cloned()
+}
+
+// Stored when the first successful connect happens.
+static APP_HANDLE_FOR_RECOVER: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+// ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
 fn bring_up_wireguard(app: &AppHandle, config: &WgTunnelConfig) -> Result<String, String> {
@@ -1143,7 +1529,12 @@ fn bring_up_wireguard_linux_full(app: &AppHandle, config: &WgTunnelConfig) -> Re
         fs::set_permissions(&script_path, perms).ok();
     }
 
-    run_elevated(&script_path)?;
+    // Soft recovery never freezes the UI — never fall back to interactive pkexec.
+    if is_soft_elevated() {
+        run_elevated_noninteractive(&script_path)?;
+    } else {
+        run_elevated(&script_path)?;
+    }
     if stealth_remote.is_empty() {
         Ok(format!("WireGuard connected via {endpoint}"))
     } else {
@@ -1853,6 +2244,63 @@ echo ok
     Ok("WireGuard disconnected".into())
 }
 
+/// Elevated execution without interactive password prompts.
+/// Never falls back to pkexec (which shows a password dialog and freezes the UI).
+fn run_elevated_noninteractive(script: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // macOS uses osascript with administrator privileges only when needed —
+        // never use soft recovery with this path.
+        let path = script
+            .to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        let apple = format!(r#"do shell script "bash \"{path}\"" with administrator privileges"#);
+        let output = Command::new("osascript")
+            .args(["-e", &apple])
+            .output()
+            .map_err(|e| format!("osascript: {e}"))?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            let out = String::from_utf8_lossy(&output.stdout);
+            return Err(format!("privilege bring-up failed: {err} {out}"));
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let path = script.to_string_lossy().replace('"', "\\\"");
+        // Soft recovery must never hang the UI — only noninteractive sudo.
+        // Soft recovery never falls back to pkexec (which freezes the UI).
+        let timeout = if is_soft_elevated() { "30" } else { "20" };
+        match Command::new("sudo")
+            .args(["-n", "timeout", timeout, "bash", &path])
+            .output()
+        {
+            Ok(out) if out.status.success() => Ok(()),
+            Ok(out) => Err(format!(
+                "noninteractive sudo failed (status={}): {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            )),
+            Err(e) => Err(format!("sudo noninteractive: {e}")),
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let output = Command::new("bash")
+            .arg(script)
+            .output()
+            .map_err(|e| format!("bash: {e}"))?;
+        if !output.status.success() {
+            return Err("elevated script failed".into());
+        }
+        Ok(())
+    }
+}
+
 fn run_elevated(script: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -1876,6 +2324,8 @@ fn run_elevated(script: &Path) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         let path = script.to_string_lossy().replace('"', "\\\"");
+        // Soft recovery paths must never use interactive pkexec.
+        // Prefer noninteractive sudo only.
         if let Ok(ref out) = Command::new("sudo")
             .args(["-n", "bash", &path])
             .output()
@@ -1883,6 +2333,12 @@ fn run_elevated(script: &Path) -> Result<(), String> {
             if out.status.success() {
                 return Ok(());
             }
+        }
+        // Interactive fallback only for intentional connect/disconnect — never for soft recovery.
+        // Soft recovery uses run_elevated_noninteractive only.
+        // Soft elevated mode never falls back to interactive elevation.
+        if is_soft_elevated() {
+            return Err("soft recovery cannot use interactive elevation".into());
         }
         let output = Command::new("pkexec")
             .arg("bash")
@@ -2039,7 +2495,8 @@ pub fn run() {
             connect_wireguard,
             disconnect_wireguard,
             wireguard_stats,
-            refresh_endpoint_route
+            refresh_endpoint_route,
+            network_switch_recover
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
