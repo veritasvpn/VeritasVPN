@@ -1,8 +1,7 @@
 //! Linux network-switch recovery (Phase 1–3).
 //!
 //! Soft recovery is background-only and non-interactive.
-//! Soft recovery never freezes the UI.
-//! Soft reconnect is detached and non-blocking.
+//! Soft recovery never freezes the UI and never prompts for a password.
 
 use std::fs;
 use std::sync::Mutex;
@@ -61,7 +60,7 @@ pub fn recover_network_switch() -> NetworkRecoverResult {
 
 // Soft reconnect throttle — avoid thrashing if soft reconnect keeps failing.
 static LAST_SOFT_RECONNECT: Mutex<Option<Instant>> = Mutex::new(None);
-const SOFT_RECONNECT_MIN_INTERVAL: Duration = Duration::from_secs(12);
+const SOFT_RECONNECT_MIN_INTERVAL: Duration = Duration::from_secs(20);
 
 // Soft path adapt throttle — only re-run when the gateway changes.
 static LAST_GATEWAY: Mutex<Option<String>> = Mutex::new(None);
@@ -83,7 +82,7 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
         });
     }
 
-    // Soft path adapt when underlay gateway changes (or on first observation).
+    // Soft path adapt when underlay gateway changes.
     let mut soft_path_msg = String::from("soft path adapt ok");
     let mut soft_path_changed = false;
     {
@@ -110,14 +109,10 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
                     soft_path_changed = true;
                 }
             }
-            // After a gateway change, give the path adapt a moment then
-            // re-check egress. If still dead, fall through to kill-switch
-            // cleanup so browsing is restored immediately.
             std::thread::sleep(Duration::from_millis(400));
         }
     }
 
-    // Soft recovery: tunnel health requires working public egress.
     let healthy = tunnel_is_healthy().unwrap_or(false);
     if healthy {
         return Ok(NetworkRecoverResult {
@@ -131,34 +126,29 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
         });
     }
 
-    // Tunnel/egress is dead. Restore clearnet first (kill switch + /1 routes),
-    // then attempt soft reconnect. Cleanup is synchronous and passwordless
-    // via the root-owned helper installed at connect.
+    // Tunnel/egress is dead. Throttle elevated work — never spam auth prompts.
     {
         let mut last = LAST_SOFT_RECONNECT.lock().map_err(|e| e.to_string())?;
         let now = Instant::now();
         if let Some(t) = *last {
             if now.duration_since(t) < SOFT_RECONNECT_MIN_INTERVAL {
-                // Still try cleanup every throttle window so browsing returns
-                // even when soft reconnect is waiting.
-                let _ = cleanup_kill_switch_noninteractive();
+                // Do NOT call cleanup here — that was spawning pkexec every tick.
                 return Ok(NetworkRecoverResult {
-                    changed: true,
+                    changed: soft_path_changed,
                     message: format!(
-                        "{soft_path_msg}; clearnet restore attempted; soft reconnect throttled"
+                        "{soft_path_msg}; soft recovery throttled"
                     ),
-                    action: "clearnet_restore".into(),
+                    action: "throttle".into(),
                 });
             }
         }
         {
             let mut in_flight = SOFT_RECONNECT_IN_FLIGHT.lock().map_err(|e| e.to_string())?;
             if *in_flight {
-                let _ = cleanup_kill_switch_noninteractive();
                 return Ok(NetworkRecoverResult {
-                    changed: true,
+                    changed: soft_path_changed,
                     message: format!(
-                        "{soft_path_msg}; clearnet restore attempted; soft reconnect in progress"
+                        "{soft_path_msg}; soft recovery already in progress"
                     ),
                     action: "in_progress".into(),
                 });
@@ -168,10 +158,14 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
         *last = Some(now);
     }
 
-    // Restore clearnet immediately — remove kill switch, blackhole, and split
-    // /1 routes. This is the critical fix for "cannot browse after switch".
-    let kill_cleaned = cleanup_kill_switch_noninteractive().unwrap_or(false);
-    // Also refresh endpoint route once more in case underlay just arrived.
+    // Passwordless helper only — never pkexec.
+    let kill_cleaned = match cleanup_kill_switch_noninteractive() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[veritas] soft cleanup skipped (no prompt): {e}");
+            false
+        }
+    };
     let _ = refresh_endpoint_route_linux();
 
     let handle = std::thread::spawn(move || {
@@ -180,17 +174,18 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
                 eprintln!(
                     "[veritas] soft reconnect after network switch (kill_switch_cleaned={kill_cleaned}): {msg}"
                 );
-                *SOFT_RECONNECT_IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = false;
             }
             Err(e) => {
                 eprintln!(
                     "[veritas] soft reconnect failed after network switch (kill_switch_cleaned={kill_cleaned}): {e}"
                 );
-                // Soft reconnect failed — ensure clearnet stays usable.
-                let _ = cleanup_kill_switch_noninteractive();
-                *SOFT_RECONNECT_IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = false;
+                // Best-effort clearnet restore again — still never prompts.
+                if let Err(ce) = cleanup_kill_switch_noninteractive() {
+                    eprintln!("[veritas] soft cleanup after reconnect fail: {ce}");
+                }
             }
         }
+        *SOFT_RECONNECT_IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = false;
     });
     {
         let mut handles = SOFT_RECONNECT_HANDLE.lock().map_err(|e| e.to_string())?;
@@ -200,9 +195,9 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
     Ok(NetworkRecoverResult {
         changed: true,
         message: format!(
-            "clearnet restored (kill_switch_cleaned={kill_cleaned}); soft reconnect scheduled; {soft_path_msg}"
+            "soft recovery scheduled (kill_switch_cleaned={kill_cleaned}); {soft_path_msg}"
         ),
-        action: "clearnet_restore_and_soft_reconnect".into(),
+        action: "soft_recovery_scheduled".into(),
     })
 }
 

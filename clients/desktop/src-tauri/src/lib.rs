@@ -835,100 +835,22 @@ const SOFT_CLEANUP_HELPER: &str = "/var/lib/veritasvpn/cleanup-killswitch.sh";
 const SOFT_PATH_ADAPT_HELPER: &str = "/var/lib/veritasvpn/path-adapt.sh";
 
 pub(crate) fn cleanup_kill_switch_noninteractive() -> Result<bool, String> {
-    // Prefer the root-owned helper installed at connect (passwordless via
-    // /etc/sudoers.d/veritasvpn-soft). That path actually restores clearnet:
-    // kill switch + blackhole + split /1 routes + DNS.
-    if Path::new(SOFT_CLEANUP_HELPER).exists() {
-        match Command::new("sudo")
-            .args(["-n", "timeout", "15", SOFT_CLEANUP_HELPER])
-            .output()
-        {
-            Ok(out) if out.status.success() => return Ok(true),
-            Ok(out) => {
-                eprintln!(
-                    "[veritas] soft cleanup helper failed: {}",
-                    String::from_utf8_lossy(&out.stderr)
-                );
-            }
-            Err(e) => eprintln!("[veritas] soft cleanup helper spawn failed: {e}"),
-        }
+    // Soft recovery MUST never prompt. Only the root-owned helper installed at
+    // connect (via /etc/sudoers.d/veritasvpn-soft + sudo -n) is allowed.
+    // Never fall back to pkexec — that spammed auth dialogs every watcher tick.
+    if !Path::new(SOFT_CLEANUP_HELPER).exists() {
+        return Err("soft cleanup helper not installed (reconnect once to install)".into());
     }
-
-    // Fallback: write a user-home script and try sudo -n / detached pkexec.
-    // Must also remove split /1 routes or traffic still dies into the tunnel.
-    let script = r#"#!/bin/bash
-set -uo pipefail
-IFACE="$(cat "$HOME/.veritasvpn/iface" 2>/dev/null || echo veritas0)"
-META="$HOME/.veritasvpn/iface.meta"
-DNS_BACKUP="${META}.dns"
-GW_IF=""
-if [[ -f "$META" ]]; then
-  # shellcheck disable=SC1090
-  source "$META" 2>/dev/null || true
-  GW_IF="${gw_if:-}"
-  IFACE="${iface:-$IFACE}"
-fi
-if command -v nft >/dev/null 2>&1; then
-  nft delete table inet veritasvpn_killswitch 2>/dev/null || true
-fi
-if command -v iptables >/dev/null 2>&1; then
-  while iptables -C OUTPUT -j VERITASVPN_KILLSWITCH 2>/dev/null; do
-    iptables -D OUTPUT -j VERITASVPN_KILLSWITCH 2>/dev/null || break
-  done
-  iptables -F VERITASVPN_KILLSWITCH 2>/dev/null || true
-  iptables -X VERITASVPN_KILLSWITCH 2>/dev/null || true
-fi
-if command -v ip6tables >/dev/null 2>&1; then
-  while ip6tables -C OUTPUT -j VERITASVPN_KILLSWITCH_V6 2>/dev/null; do
-    ip6tables -D OUTPUT -j VERITASVPN_KILLSWITCH_V6 2>/dev/null || break
-  done
-  ip6tables -F VERITASVPN_KILLSWITCH_V6 2>/dev/null || true
-  ip6tables -X VERITASVPN_KILLSWITCH_V6 2>/dev/null || true
-fi
-ip route del blackhole default metric 1 2>/dev/null || true
-ip -6 route del blackhole default metric 1 2>/dev/null || true
-# Critical: remove split defaults or traffic still goes into the dead tunnel.
-ip route del 0.0.0.0/1 dev "$IFACE" 2>/dev/null || true
-ip route del 128.0.0.0/1 dev "$IFACE" 2>/dev/null || true
-ip route del 0.0.0.0/1 2>/dev/null || true
-ip route del 128.0.0.0/1 2>/dev/null || true
-ip route del 10.0.0.0/24 dev "$IFACE" 2>/dev/null || true
-# Restore DNS so browsing works without the tunnel gateway.
-if [[ -f "$DNS_BACKUP" ]]; then
-  cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
-fi
-if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
-  resolvectl revert "$GW_IF" 2>/dev/null || true
-  resolvectl flush-caches 2>/dev/null || true
-fi
-"#;
-    let dir = state_dir()?;
-    let script_path = dir.join("cleanup-killswitch-recover.sh");
-    fs::write(&script_path, script).map_err(|e| format!("write cleanup: {e}"))?;
-    #[cfg(unix)]
+    match Command::new("sudo")
+        .args(["-n", "timeout", "15", SOFT_CLEANUP_HELPER])
+        .output()
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&script_path)
-            .map_err(|e| format!("stat cleanup: {e}"))?
-            .permissions();
-        perms.set_mode(0o700);
-        fs::set_permissions(&script_path, perms).ok();
-    }
-    match run_elevated_noninteractive(&script_path) {
-        Ok(()) => Ok(true),
-        Err(_) => {
-            let _ = Command::new("timeout")
-                .args(["2", "bash", &script_path.to_string_lossy()])
-                .output();
-            #[cfg(target_os = "linux")]
-            {
-                let _ = Command::new("pkexec")
-                    .arg("bash")
-                    .arg(&script_path)
-                    .spawn();
-            }
-            Ok(true)
-        }
+        Ok(out) if out.status.success() => Ok(true),
+        Ok(out) => Err(format!(
+            "soft cleanup helper failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )),
+        Err(e) => Err(format!("soft cleanup helper spawn failed: {e}")),
     }
 }
 
