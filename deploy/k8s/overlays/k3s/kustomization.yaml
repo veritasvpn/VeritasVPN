@@ -12,7 +12,7 @@ images:
     digest: sha256:8d00c46d4664705740d04fdc26c81864327c2e140c3d7475b4fee7b6a4644f69
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    digest: sha256:dea2ba22ccceba427248bc9912ec44bdf2b1b7e4906ed8beab825290495f9e3e
+    digest: sha256:287c60efde82c76523ee77f3e5e426c02a483cd89aa20c3b3270863c99e8dda0
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
     digest: sha256:ec30e98cb0a55485d7531ba5b709c236a315e433431e95e36b935b3fa75643e4

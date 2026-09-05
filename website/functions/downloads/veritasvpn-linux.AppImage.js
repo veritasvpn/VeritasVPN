@@ -1,7 +1,7 @@
 import { withSecurityHeaders, textResponse } from "../_lib/security.js";
 
 const APPIMAGE_URL =
-  "https://github.com/veritasvpn/VeritasVPN/releases/download/v0.2.43/veritasvpn-linux.AppImage";
+  "https://github.com/veritasvpn/VeritasVPN/releases/download/v0.2.44/veritasvpn-linux.AppImage";
 
 function downloadHeaders(upstream) {
   const headers = withSecurityHeaders({
