@@ -1054,6 +1054,14 @@ class MainActivity : ComponentActivity() {
                 val intent = Intent(context, VeritasVpnService::class.java).apply {
                     action = VeritasVpnService.ACTION_CONNECT
                     putExtra(VeritasVpnService.EXTRA_CONFIG, config)
+                    putExtra(
+                        VeritasVpnService.EXTRA_ENDPOINT_LAN,
+                        peer.serverEndpointLan?.trim().orEmpty()
+                    )
+                    putExtra(
+                        VeritasVpnService.EXTRA_ENDPOINT_WAN,
+                        peer.serverEndpointWan?.trim().orEmpty()
+                    )
                 }
                 currentPeerId = peer.peerId
                 VpnSettings.setCurrentPeerId(context, peer.peerId)

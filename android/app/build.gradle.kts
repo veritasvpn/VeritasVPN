@@ -32,8 +32,8 @@ android {
         applicationId = "cloud.veritasvpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 31
-        versionName = "0.2.30"
+        versionCode = 32
+        versionName = "0.2.31"
     }
 
     signingConfigs {
@@ -93,6 +93,7 @@ dependencies {
 
     implementation("com.wireguard.android:tunnel:1.0.20260102")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+    testImplementation("junit:junit:4.13.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

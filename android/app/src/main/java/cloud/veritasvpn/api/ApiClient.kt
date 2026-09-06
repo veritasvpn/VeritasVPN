@@ -154,6 +154,8 @@ data class PeerResponse(
     @SerializedName("peer_id") val peerId: String,
     @SerializedName("server_public_key") val serverPublicKey: String,
     @SerializedName("server_endpoint") val serverEndpoint: String,
+    @SerializedName("server_endpoint_lan") val serverEndpointLan: String? = null,
+    @SerializedName("server_endpoint_wan") val serverEndpointWan: String? = null,
     @SerializedName("stealth_endpoint") val stealthEndpoint: String? = null,
     @SerializedName("stealth_available") val stealthAvailable: Boolean = false,
     @SerializedName("stealth_path_prefix") val stealthPathPrefix: String? = null,

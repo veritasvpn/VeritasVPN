@@ -7,12 +7,12 @@ After the user taps **Connect now**, the session must stay up until they tap
 auto-disconnect, delete the peer, or flip the UI to “Connecting…” on underlay
 flaps, sticky service restarts, or transient tunnel DOWN events.
 
-## Android (`VeritasVpnService` / `MainActivity`) — 0.2.26+
+## Android (`VeritasVpnService` / `MainActivity`) — 0.2.31+
 
 **2-minute loop note:** WireGuard rekeys around 120s. Older builds treated handshake age > 120s as stale and called reconnect (or soft-adapted DOWN→UP). Never reconnect on handshake age; the Handshake “2m ago” UI label alone is not a failure.
 
-1. **No underlay NetworkCallback path-adapt.** WireGuard `PersistentKeepalive = 25` handles roaming. Previous path-adapt (DOWN→UP, then pinned `setUnderlyingNetworks`) caused connect loops.
-2. On connect/restore: `setUnderlyingNetworks(null)` once (dynamic underlay only).
+1. **Underlay NetworkCallback path-adapt.** Watch `INTERNET` + `NOT_VPN` networks. On Wi‑Fi/cellular change, pick the exact API LAN (`:51820`) or WAN (`:443`) endpoint from the device’s underlay IPv4 `/24`, bind `setUnderlyingNetworks` to that physical network, and reapply WireGuard so UDP sockets follow the new path. Debounce ~1.2s. Do **not** delete the peer, flip the UI to Connecting, or reconnect on handshake age.
+2. First callback after connect only binds the underlay if the endpoint is already correct (avoids the old connect-loop from an immediate DOWN→UP).
 3. While `KEY_CONFIG` is saved (session intended): never clear it except **Disconnect** / `onRevoke`. Unexpected DOWN → keep UI connected + sticky/`START_STICKY` restore loop.
 4. MainActivity ignores unintended `ACTION_STATE` disconnect broadcasts after a session is established. No automatic peer-delete reconnect.
 
