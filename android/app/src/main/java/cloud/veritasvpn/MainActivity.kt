@@ -567,6 +567,11 @@ class MainActivity : ComponentActivity() {
                                         intent.getBooleanExtra(VeritasVpnService.EXTRA_CONNECTED, false)
                                     val error = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
                                     if (nowConnected) {
+                                        if (!userWantsConnected) {
+                                            // User already tapped Disconnect; ignore a late
+                                            // service broadcast that would re-arm the session.
+                                            return
+                                        }
                                         connected = true
                                         connecting = false
                                         reconnecting = false

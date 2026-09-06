@@ -7,14 +7,16 @@ After the user taps **Connect now**, the session must stay up until they tap
 auto-disconnect, delete the peer, or flip the UI to “Connecting…” on underlay
 flaps, sticky service restarts, or transient tunnel DOWN events.
 
-## Android (`VeritasVpnService` / `MainActivity`) — 0.2.31+
+## Android (`VeritasVpnService` / `MainActivity`) — 0.2.32+
 
 **2-minute loop note:** WireGuard rekeys around 120s. Older builds treated handshake age > 120s as stale and called reconnect (or soft-adapted DOWN→UP). Never reconnect on handshake age; the Handshake “2m ago” UI label alone is not a failure.
 
-1. **Underlay NetworkCallback path-adapt.** Watch `INTERNET` + `NOT_VPN` networks. On Wi‑Fi/cellular change, pick the exact API LAN (`:51820`) or WAN (`:443`) endpoint from the device’s underlay IPv4 `/24`, bind `setUnderlyingNetworks` to that physical network, and reapply WireGuard so UDP sockets follow the new path. Debounce ~1.2s. Do **not** delete the peer, flip the UI to Connecting, or reconnect on handshake age.
-2. First callback after connect only binds the underlay if the endpoint is already correct (avoids the old connect-loop from an immediate DOWN→UP).
-3. While `KEY_CONFIG` is saved (session intended): never clear it except **Disconnect** / `onRevoke`. Unexpected DOWN → keep UI connected + sticky/`START_STICKY` restore loop.
-4. MainActivity ignores unintended `ACTION_STATE` disconnect broadcasts after a session is established. No automatic peer-delete reconnect.
+1. **Underlay NetworkCallback path-adapt.** Watch `INTERNET` + `NOT_VPN` networks. Debounce ~1.2s. Always `setUnderlyingNetworks(null)` — never pin a `Network`. Do **not** delete the peer, flip the UI to Connecting, or reconnect on handshake age.
+2. First callback after connect **records the underlay fingerprint only**. Do not change the API endpoint and do not bounce WireGuard (0.2.31 swapped WAN `:443` → LAN `:51820` on any `192.168.0.0/24` Wi‑Fi and blackholed browse).
+3. Later callbacks reapply WireGuard only when that fingerprint **changes** (real A→B). Then pick the exact API LAN (`:51820`) or WAN (`:443`) from the **validated default** underlay’s IPv4 `/24` — not “any Wi‑Fi that exists.”
+4. `sessionGeneration` increments on Connect and Disconnect. Path-adapt/restore abort (no `KEY_CONFIG` write, no `setState(UP)`) if the generation changed. Disconnect returns `START_NOT_STICKY` and `stopSelf()`.
+5. While `KEY_CONFIG` is saved (session intended): never clear it except **Disconnect** / `onRevoke`. Unexpected DOWN → keep UI connected + sticky/`START_STICKY` restore loop.
+6. MainActivity ignores `EXTRA_CONNECTED=true` when `userWantsConnected` is false, and ignores unintended disconnect broadcasts after a session is established. No automatic peer-delete reconnect.
 
 ## Linux desktop (`refresh_endpoint_route`)
 

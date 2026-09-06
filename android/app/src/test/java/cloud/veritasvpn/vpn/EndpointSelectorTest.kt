@@ -91,6 +91,21 @@ class EndpointSelectorTest {
     }
 
     @Test
+    fun cafeSlash24SelectsLanIfAskedSoServiceMustNotCallChooseOnFirstBind() {
+        // choose() cannot tell the node LAN from any other 192.168.0.0/24.
+        // VeritasVpnService must not call this until the underlay fingerprint
+        // actually changes; otherwise a WAN connect on cafe Wi‑Fi is swapped
+        // to 192.168.0.6:51820 and browsing blackholes.
+        val chosen = EndpointSelector.choose(
+            current = "170.51.31.139:443",
+            lan = "192.168.0.6:51820",
+            wan = "170.51.31.139:443",
+            underlayIpv4s = listOf("192.168.0.10"),
+        )
+        assertEquals("192.168.0.6:51820", chosen)
+    }
+
+    @Test
     fun replaceEndpointRewritesOnlyThePeerLine() {
         val config = """
             [Interface]
