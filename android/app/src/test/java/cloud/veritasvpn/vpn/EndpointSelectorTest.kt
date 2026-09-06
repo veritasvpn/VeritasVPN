@@ -91,16 +91,47 @@ class EndpointSelectorTest {
     }
 
     @Test
-    fun cafeSlash24SelectsLanIfAskedSoServiceMustNotCallChooseOnFirstBind() {
+    fun cafeSlash24SelectsLanIfAskedSoServiceMustNotUpgradeToLan() {
         // choose() cannot tell the node LAN from any other 192.168.0.0/24.
-        // VeritasVpnService must not call this until the underlay fingerprint
-        // actually changes; otherwise a WAN connect on cafe Wi‑Fi is swapped
-        // to 192.168.0.6:51820 and browsing blackholes.
+        // Path-adapt must pass allowSwitchToLan=false so B→A on cafe Wi‑Fi
+        // keeps WAN :443 instead of blackholing on 192.168.0.6:51820.
         val chosen = EndpointSelector.choose(
             current = "170.51.31.139:443",
             lan = "192.168.0.6:51820",
             wan = "170.51.31.139:443",
             underlayIpv4s = listOf("192.168.0.10"),
+        )
+        assertEquals("192.168.0.6:51820", chosen)
+        val pathAdapt = EndpointSelector.choose(
+            current = "170.51.31.139:443",
+            lan = "192.168.0.6:51820",
+            wan = "170.51.31.139:443",
+            underlayIpv4s = listOf("192.168.0.10"),
+            allowSwitchToLan = false,
+        )
+        assertEquals("170.51.31.139:443", pathAdapt)
+    }
+
+    @Test
+    fun pathAdaptStillLeavesLanForWan() {
+        val chosen = EndpointSelector.choose(
+            current = "192.168.0.6:51820",
+            lan = "192.168.0.6:51820",
+            wan = "170.51.31.139:443",
+            underlayIpv4s = listOf("10.64.0.2"),
+            allowSwitchToLan = false,
+        )
+        assertEquals("170.51.31.139:443", chosen)
+    }
+
+    @Test
+    fun pathAdaptKeepsLanWhenAlreadyOnLan() {
+        val chosen = EndpointSelector.choose(
+            current = "192.168.0.6:51820",
+            lan = "192.168.0.6:51820",
+            wan = "170.51.31.139:443",
+            underlayIpv4s = listOf("192.168.0.14"),
+            allowSwitchToLan = false,
         )
         assertEquals("192.168.0.6:51820", chosen)
     }

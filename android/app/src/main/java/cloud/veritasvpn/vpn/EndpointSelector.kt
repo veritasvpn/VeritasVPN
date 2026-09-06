@@ -68,12 +68,18 @@ object EndpointSelector {
     /**
      * Prefer the exact API LAN endpoint when any underlay IPv4 shares its /24.
      * Otherwise use the exact API WAN endpoint. Never invent a port.
+     *
+     * [allowSwitchToLan] must be false for live path-adapt. Same-/24 is not
+     * proof of the node LAN (cafe Wi‑Fi is often `192.168.0.0/24`), and switching
+     * WAN `:443` → LAN `:51820` on B→A blackholes browse. Path-adapt may still
+     * switch LAN → WAN when leaving that /24.
      */
     fun choose(
         current: String,
         lan: String?,
         wan: String?,
         underlayIpv4s: List<String>,
+        allowSwitchToLan: Boolean = true,
     ): String {
         val currentEp = current.trim()
         val wanEp = wan?.trim().orEmpty()
@@ -87,8 +93,10 @@ object EndpointSelector {
         val lanHost = host(lanEp)
         val onLan = lanHost.isNotEmpty() &&
             underlayIpv4s.any { sameIpv4Slash24(it, lanHost) }
+        val keepLan = lanEp.isNotEmpty() &&
+            (currentEp == lanEp || currentEp.isEmpty())
         return when {
-            onLan && lanEp.isNotEmpty() -> lanEp
+            onLan && lanEp.isNotEmpty() && (allowSwitchToLan || keepLan) -> lanEp
             wanEp.isNotEmpty() -> wanEp
             else -> currentEp
         }

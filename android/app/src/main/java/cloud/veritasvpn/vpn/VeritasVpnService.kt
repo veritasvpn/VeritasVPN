@@ -12,6 +12,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import java.net.Inet4Address
 import androidx.core.app.NotificationCompat
@@ -53,6 +54,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var lastUnderlayFingerprint: String? = null
     private var lastChosenEndpoint: String? = null
     private val tunnelOpLock = Any()
+    @Volatile private var tunKeeper: ParcelFileDescriptor? = null
     private val underlayCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = scheduleUnderlayAdapt(network)
         override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) =
@@ -215,6 +217,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     runCatching {
                         applyBackendState(Tunnel.State.DOWN, null)
                     }
+                    closeTunKeeper()
                     runCatching { setUnderlyingNetworks(null) }
                     broadcastState(false, null)
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -292,6 +295,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         validationJob?.cancel()
         stopStatsPolling()
         runCatching { applyBackendState(Tunnel.State.DOWN, null) }
+        closeTunKeeper()
         runCatching { setUnderlyingNetworks(null) }
         synchronized(tunnelOpLock) {
             vpnStatePrefs().edit()
@@ -317,6 +321,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         // START_STICKY / Always-on will restart and restore from KEY_CONFIG.
         if (!sessionIntended()) {
             runCatching { applyBackendState(Tunnel.State.DOWN, null) }
+            closeTunKeeper()
             runCatching { setUnderlyingNetworks(null) }
         }
         scope.cancel()
@@ -324,6 +329,28 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     override fun getName(): String = TUNNEL_NAME
+
+    /**
+     * Keep a dup of the VpnService tun so path-adapt can restart userspace
+     * WireGuard without Builder.establish(). Closing the last tun fd is what
+     * drops the status-bar VPN key.
+     */
+    override fun getBuilder(): Builder {
+        return object : Builder() {
+            override fun establish(): ParcelFileDescriptor? {
+                val pfd = super.establish() ?: return null
+                val dup = runCatching { pfd.dup() }.getOrNull()
+                if (dup != null) {
+                    synchronized(tunnelOpLock) {
+                        val old = tunKeeper
+                        tunKeeper = dup
+                        runCatching { old?.close() }
+                    }
+                }
+                return pfd
+            }
+        }
+    }
 
     override fun onStateChange(newState: Tunnel.State) {
         when (newState) {
@@ -550,7 +577,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         }
     }
 
-    private fun adaptUnderlay(preferred: Network?, gen: Long) {
+    private suspend fun adaptUnderlay(preferred: Network?, gen: Long) {
         if (gen != sessionGeneration || !sessionIntended()) return
         val config = vpnStatePrefs().getString(KEY_CONFIG, null) ?: return
         val picked = bestUnderlay(preferred) ?: return
@@ -572,57 +599,112 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (gen != sessionGeneration || !sessionIntended()) return
         runCatching { setUnderlyingNetworks(arrayOf(network)) }
         val current = EndpointSelector.endpointFromConfig(config)
+        val wan = vpnStatePrefs().getString(KEY_ENDPOINT_WAN, null)
         val chosen = EndpointSelector.choose(
             current = current,
             lan = vpnStatePrefs().getString(KEY_ENDPOINT_LAN, null),
-            wan = vpnStatePrefs().getString(KEY_ENDPOINT_WAN, null),
+            wan = wan,
             underlayIpv4s = ipv4s,
+            allowSwitchToLan = false,
         )
         if (chosen.isEmpty()) return
-        val updated = EndpointSelector.replaceEndpoint(config, chosen)
-        val parsed = runCatching {
-            Config.parse(ByteArrayInputStream(updated.toByteArray(Charsets.UTF_8)))
+        var liveEndpoint = chosen
+        var liveConfig = EndpointSelector.replaceEndpoint(config, liveEndpoint)
+        var parsed = runCatching {
+            Config.parse(ByteArrayInputStream(liveConfig.toByteArray(Charsets.UTF_8)))
         }.getOrElse { error ->
             Log.e(TAG, "path-adapt config parse failed", error)
             return
         }
         if (gen != sessionGeneration || !sessionIntended()) return
-        var rebound = false
-        try {
-            rebound = rebindLiveTunnel(parsed, gen)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "path-adapt rebound failed; retrying", e)
-            rebound = runCatching { rebindLiveTunnel(parsed, gen) }
-                .onFailure { retryError ->
-                    Log.e(TAG, "path-adapt rebound retry failed", retryError)
-                }
-                .getOrDefault(false)
-        }
-        if (gen != sessionGeneration || !sessionIntended()) return
-        if (!rebound) {
+        val reboundAt = System.currentTimeMillis()
+        if (!rebindWithRetry(parsed, gen)) {
             restoreSavedSessionIfNeeded()
             startStatsPolling()
             return
         }
         synchronized(tunnelOpLock) {
             if (gen != sessionGeneration || !sessionIntended()) return
-            vpnStatePrefs().edit().putString(KEY_CONFIG, updated).apply()
+            vpnStatePrefs().edit().putString(KEY_CONFIG, liveConfig).apply()
             lastUnderlayFingerprint = fingerprint
-            lastChosenEndpoint = chosen
+            lastChosenEndpoint = liveEndpoint
         }
         runCatching { setUnderlyingNetworks(arrayOf(network)) }
         reprotectBackendSockets()
         startStatsPolling()
-        startBackgroundEgressValidation()
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            buildNotification("Connected · checking route…"),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        )
-        Log.i(TAG, "path-adapt rebound endpoint=$chosen underlay=$fingerprint")
+        Log.i(TAG, "path-adapt rebound endpoint=$liveEndpoint underlay=$fingerprint")
+        if (waitForHandshake(gen, reboundAt, HANDSHAKE_CONFIRM_MS)) {
+            startBackgroundEgressValidation()
+            return
+        }
+        if (gen != sessionGeneration || !sessionIntended()) return
+        val wanEp = wan?.trim().orEmpty()
+        if (wanEp.isNotEmpty() && wanEp != liveEndpoint) {
+            Log.w(TAG, "path-adapt no handshake on $liveEndpoint; falling back to WAN")
+            liveEndpoint = wanEp
+            liveConfig = EndpointSelector.replaceEndpoint(liveConfig, liveEndpoint)
+            parsed = runCatching {
+                Config.parse(ByteArrayInputStream(liveConfig.toByteArray(Charsets.UTF_8)))
+            }.getOrElse { error ->
+                Log.e(TAG, "path-adapt WAN fallback parse failed", error)
+                return
+            }
+            val fallbackAt = System.currentTimeMillis()
+            if (rebindWithRetry(parsed, gen)) {
+                synchronized(tunnelOpLock) {
+                    if (gen != sessionGeneration || !sessionIntended()) return
+                    vpnStatePrefs().edit().putString(KEY_CONFIG, liveConfig).apply()
+                    lastChosenEndpoint = liveEndpoint
+                }
+                runCatching { setUnderlyingNetworks(arrayOf(network)) }
+                reprotectBackendSockets()
+                startStatsPolling()
+                if (waitForHandshake(gen, fallbackAt, HANDSHAKE_CONFIRM_MS)) {
+                    startBackgroundEgressValidation()
+                }
+                Log.i(TAG, "path-adapt WAN fallback endpoint=$liveEndpoint")
+            }
+        } else {
+            Log.w(TAG, "path-adapt handshake not confirmed; keeping $liveEndpoint")
+            startBackgroundEgressValidation()
+        }
+    }
+
+    private fun rebindWithRetry(parsed: Config, gen: Long): Boolean {
+        return try {
+            rebindLiveTunnel(parsed, gen)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "path-adapt rebound failed; retrying", e)
+            runCatching { rebindLiveTunnel(parsed, gen) }
+                .onFailure { retryError ->
+                    Log.e(TAG, "path-adapt rebound retry failed", retryError)
+                }
+                .getOrDefault(false)
+        }
+    }
+
+    private suspend fun waitForHandshake(gen: Long, afterMs: Long, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (gen != sessionGeneration || !sessionIntended()) return false
+            if (latestHandshakeMs() > afterMs) return true
+            delay(400)
+        }
+        return gen == sessionGeneration && sessionIntended() && latestHandshakeMs() > afterMs
+    }
+
+    private fun latestHandshakeMs(): Long {
+        val stats = runCatching { backend.getStatistics(this) }.getOrNull() ?: return 0L
+        var handshakeMs = 0L
+        for (key in stats.peers()) {
+            val peer = stats.peer(key) ?: continue
+            if (peer.latestHandshakeEpochMillis > handshakeMs) {
+                handshakeMs = peer.latestHandshakeEpochMillis
+            }
+        }
+        return handshakeMs
     }
 
     private fun applyBackendState(state: Tunnel.State, config: Config?): Tunnel.State {
@@ -631,32 +713,65 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         }
     }
 
+    private fun closeTunKeeper() {
+        synchronized(tunnelOpLock) {
+            val old = tunKeeper
+            tunKeeper = null
+            runCatching { old?.close() }
+        }
+    }
+
     /**
-     * Restart userspace WireGuard on a new underlay without GoBackend.setState().
-     * Public setState(UP) always DOWN→UPs and then VpnService.stopSelf(), which
-     * destroys this service, drops the status-bar VPN key, and cancels stats.
+     * Restart userspace WireGuard on the existing tun fd. Do not call
+     * GoBackend.setState() / setStateInternal(): those establish() a new tun
+     * (VPN key flicker) and DOWN calls stopSelf().
      * @return false if the user disconnected during the rebound.
      */
     private fun rebindLiveTunnel(parsed: Config, gen: Long): Boolean {
         synchronized(tunnelOpLock) {
             if (gen != sessionGeneration || !sessionIntended()) return false
             try {
-                val handleField = GoBackend::class.java.getDeclaredField("currentTunnelHandle")
-                handleField.isAccessible = true
-                val tunnelField = GoBackend::class.java.getDeclaredField("currentTunnel")
-                tunnelField.isAccessible = true
-                val configField = GoBackend::class.java.getDeclaredField("currentConfig")
-                configField.isAccessible = true
+                val handleField = goField("currentTunnelHandle")
+                val tunnelField = goField("currentTunnel")
+                val configField = goField("currentConfig")
                 val handle = handleField.getInt(backend)
                 if (handle >= 0) {
-                    val turnOff = GoBackend::class.java.getDeclaredMethod("wgTurnOff", Integer.TYPE)
-                    turnOff.isAccessible = true
-                    turnOff.invoke(null, handle)
+                    goNative("wgTurnOff", Integer.TYPE).invoke(null, handle)
                     handleField.setInt(backend, -1)
                 }
                 tunnelField.set(backend, null)
                 configField.set(backend, null)
                 if (gen != sessionGeneration || !sessionIntended()) return false
+                val keeper = tunKeeper
+                if (keeper != null) {
+                    val goConfig = userspaceConfigOrThrow(parsed)
+                    val dup = keeper.dup()
+                    val fd = dup.detachFd()
+                    val newHandle = try {
+                        goNative(
+                            "wgTurnOn",
+                            String::class.java,
+                            Integer.TYPE,
+                            String::class.java,
+                        ).invoke(null, TUNNEL_NAME, fd, goConfig) as Int
+                    } catch (e: Exception) {
+                        runCatching { ParcelFileDescriptor.adoptFd(fd).close() }
+                        throw e
+                    }
+                    if (newHandle < 0) {
+                        runCatching { ParcelFileDescriptor.adoptFd(fd).close() }
+                        throw BackendException(
+                            BackendException.Reason.GO_ACTIVATION_ERROR_CODE,
+                            newHandle,
+                        )
+                    }
+                    handleField.setInt(backend, newHandle)
+                    tunnelField.set(backend, this)
+                    configField.set(backend, parsed)
+                    reprotectBackendSocketsLocked(newHandle)
+                    return true
+                }
+                Log.w(TAG, "path-adapt missing tun keeper; falling back to setStateInternal")
                 val setStateInternal = GoBackend::class.java.getDeclaredMethod(
                     "setStateInternal",
                     Tunnel::class.java,
@@ -672,6 +787,30 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 throw e
             }
         }
+    }
+
+    private fun userspaceConfigOrThrow(parsed: Config): String {
+        for (peer in parsed.peers) {
+            val ep = peer.endpoint.orElse(null) ?: continue
+            if (!ep.resolved.isPresent) {
+                throw BackendException(BackendException.Reason.DNS_RESOLUTION_FAILURE, ep.host)
+            }
+        }
+        return parsed.toWgUserspaceString()
+    }
+
+    private fun goField(name: String) =
+        GoBackend::class.java.getDeclaredField(name).apply { isAccessible = true }
+
+    private fun goNative(name: String, vararg types: Class<*>) =
+        GoBackend::class.java.getDeclaredMethod(name, *types).apply { isAccessible = true }
+
+    private fun reprotectBackendSocketsLocked(handle: Int) {
+        if (handle < 0) return
+        val fd4 = goNative("wgGetSocketV4", Integer.TYPE).invoke(null, handle) as Int
+        val fd6 = goNative("wgGetSocketV6", Integer.TYPE).invoke(null, handle) as Int
+        if (fd4 >= 0) protect(fd4)
+        if (fd6 >= 0) protect(fd6)
     }
 
     private fun reprotectBackendSockets() {
@@ -767,6 +906,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val KEY_ENDPOINT_LAN = "endpoint_lan"
         const val KEY_ENDPOINT_WAN = "endpoint_wan"
         private const val UNDERLAY_ADAPT_DEBOUNCE_MS = 1_200L
+        private const val HANDSHAKE_CONFIRM_MS = 6_000L
         private const val TAG = "VeritasVpnService"
         private val EGRESS_ENDPOINTS = listOf(
             "https://api.ipify.org",

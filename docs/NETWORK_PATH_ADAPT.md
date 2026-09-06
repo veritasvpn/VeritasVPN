@@ -7,16 +7,17 @@ After the user taps **Connect now**, the session must stay up until they tap
 auto-disconnect, delete the peer, or flip the UI to “Connecting…” on underlay
 flaps, sticky service restarts, or transient tunnel DOWN events.
 
-## Android (`VeritasVpnService` / `MainActivity`) — 0.2.34+
+## Android (`VeritasVpnService` / `MainActivity`) — 0.2.35+
 
 **2-minute loop note:** WireGuard rekeys around 120s. Older builds treated handshake age > 120s as stale and called reconnect (or soft-adapted DOWN→UP). Never reconnect on handshake age; the Handshake “2m ago” UI label alone is not a failure.
 
 1. **Underlay NetworkCallback path-adapt.** Watch `INTERNET` + `NOT_VPN` networks. Debounce ~1.2s. Do **not** delete the peer, flip the UI to Connecting, or reconnect on handshake age.
 2. First callback after connect **records the underlay fingerprint only** and binds `setUnderlyingNetworks` to that validated non-VPN network. Do not swap the API endpoint (0.2.31 swapped WAN `:443` → LAN `:51820` on any `192.168.0.0/24` Wi‑Fi and blackholed browse).
-3. Later callbacks, when the fingerprint **changes** (real A→B): bind the new underlay, persist the exact API LAN (`:51820`) or WAN (`:443`) into `KEY_CONFIG`, then rebind userspace WireGuard **without** `GoBackend.setState()`. Public `setState(UP)` internally DOWN→UPs and calls `VpnService.stopSelf()`, which destroys the service and drops the status-bar VPN key. Path-adapt instead `wgTurnOff` + `setStateInternal(UP)` so sockets follow the new path while this VpnService stays alive.
-4. After rebound: `setUnderlyingNetworks(newNetwork)`, re-`protect()` WG sockets, keep stats polling, keep the foreground notification.
-5. `sessionGeneration` increments on Connect and Disconnect. Path-adapt/restore abort if the generation changed. Real Disconnect is the only path that should `stopSelf()` (returns `START_NOT_STICKY`).
-6. MainActivity ignores `EXTRA_CONNECTED=true` when `userWantsConnected` is false, and ignores unintended disconnect broadcasts after a session is established. No automatic peer-delete reconnect.
+3. Later callbacks, when the fingerprint **changes** (A→B or B→A): bind the new underlay and rebind userspace WireGuard **on the existing tun fd**. Public `GoBackend.setState` / `setStateInternal` call `Builder.establish()`, which replaces the tun and drops the status-bar VPN key for about a second. Path-adapt keeps a dup of the tun (`getBuilder().establish()`), `wgTurnOff` + `wgTurnOn` on that dup, and never `stopSelf()`.
+4. Path-adapt **must not switch WAN → LAN** just because the underlay is the same `/24` as the node (`allowSwitchToLan=false`). That `/24` is not proof of the node LAN (cafe Wi‑Fi), and B→A was blackholing on LAN `:51820`. Leaving a matching `/24` still switches LAN → WAN. If a handshake does not complete within ~6s, fall back to the exact API WAN endpoint.
+5. After rebound: `setUnderlyingNetworks(newNetwork)`, re-`protect()` WG sockets, keep stats polling, keep the foreground notification and VPN key. Persist the new endpoint only after a successful rebound.
+6. `sessionGeneration` increments on Connect and Disconnect. Path-adapt/restore abort if the generation changed. Real Disconnect closes the tun keeper and is the only path that should `stopSelf()` (returns `START_NOT_STICKY`).
+7. MainActivity ignores `EXTRA_CONNECTED=true` when `userWantsConnected` is false, and ignores unintended disconnect broadcasts after a session is established. No automatic peer-delete reconnect.
 
 ## Linux desktop (`refresh_endpoint_route`)
 
@@ -96,5 +97,5 @@ No WireGuard host route; TCP to the proxy reopens on the new path. No change req
 
 1. Connect on Wi‑Fi.
 2. Leave the session alone for several minutes — UI must stay Connected; VPN icon must stay.
-3. Switch Wi‑Fi ↔ cellular without tapping Disconnect — stay Connected (browsing may pause briefly while WireGuard roams).
+3. Switch Wi‑Fi ↔ cellular without tapping Disconnect — stay Connected, VPN key stays visible, browsing resumes after a short pause. Repeat B→A as well as A→B.
 4. Only **Disconnect** clears the VPN icon / session.
