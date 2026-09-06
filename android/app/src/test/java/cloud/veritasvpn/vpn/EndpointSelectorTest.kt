@@ -137,7 +137,7 @@ class EndpointSelectorTest {
     }
 
     @Test
-    fun probeOrderOnMatchingSlash24TriesLanThenWan() {
+    fun probeOrderAlwaysTriesWanBeforeLanEvenOnMatchingSlash24() {
         val order = EndpointSelector.probeOrder(
             current = "170.51.31.139:443",
             lan = "192.168.0.6:51820",
@@ -145,7 +145,7 @@ class EndpointSelectorTest {
             underlayIpv4s = listOf("192.168.0.10"),
         )
         assertEquals(
-            listOf("192.168.0.6:51820", "170.51.31.139:443"),
+            listOf("170.51.31.139:443", "192.168.0.6:51820"),
             order,
         )
     }
@@ -157,6 +157,20 @@ class EndpointSelectorTest {
             lan = "192.168.0.6:51820",
             wan = "170.51.31.139:443",
             underlayIpv4s = listOf("10.64.0.2"),
+        )
+        assertEquals(
+            listOf("170.51.31.139:443", "192.168.0.6:51820"),
+            order,
+        )
+    }
+
+    @Test
+    fun probeOrderKeepsLanAsFallbackWhenCurrentIsLan() {
+        val order = EndpointSelector.probeOrder(
+            current = "192.168.0.6:51820",
+            lan = "192.168.0.6:51820",
+            wan = "170.51.31.139:443",
+            underlayIpv4s = listOf("192.168.0.5"),
         )
         assertEquals(
             listOf("170.51.31.139:443", "192.168.0.6:51820"),

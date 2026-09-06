@@ -66,13 +66,16 @@ object EndpointSelector {
     }
 
     /**
-     * Ordered endpoints to probe after an underlay change. Same-/24 is only a
-     * hint (cafe Wi‑Fi is often `192.168.0.0/24`). Handshake decides which
-     * exact API LAN/WAN pair actually works. Never invent a port.
+     * Ordered endpoints to probe after an underlay change. Never invent a port.
      *
-     * On a matching /24 try LAN first then WAN (home return cannot hairpin
-     * WAN `:443`). Otherwise try WAN first then LAN (leaving the node LAN).
+     * Always try WAN first. Arbitrary Wi‑Fi/cellular pairs must keep using the
+     * public endpoint. LAN (`:51820` on the node) is only a fallback when WAN
+     * does not handshake — typically the node LAN, where `:443` cannot hairpin.
+     * Same-/24 is not the node LAN (cafe/home `192.168.0.0/24` is common).
+     *
+     * [underlayIpv4s] is unused; kept so callers do not need a signature change.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun probeOrder(
         current: String,
         lan: String?,
@@ -85,15 +88,10 @@ object EndpointSelector {
         if (lanEp.isEmpty() && isRfc1918(host(currentEp))) {
             lanEp = currentEp
         }
-        val lanHost = host(lanEp)
-        val onLanHint = lanHost.isNotEmpty() &&
-            underlayIpv4s.any { sameIpv4Slash24(it, lanHost) }
-        val ordered = if (onLanHint) {
-            listOf(lanEp, wanEp, currentEp)
-        } else {
-            listOf(wanEp, currentEp, lanEp)
-        }
-        return ordered.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        return listOf(wanEp, currentEp, lanEp)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
     }
 
     /**

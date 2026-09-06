@@ -593,77 +593,83 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private suspend fun adaptUnderlay(preferred: Network?, gen: Long) {
         if (gen != sessionGeneration || !sessionIntended()) return
         val config = vpnStatePrefs().getString(KEY_CONFIG, null) ?: return
-        val cm = connectivityManager()
-        // Wait for a *new* preferred underlay to validate. Do not score that
-        // callback as preferred when picking: leftover Wi‑Fi callbacks were
-        // winning over foreground cellular and A→B never rebound.
-        if (lastUnderlayFingerprint != null && preferred != null) {
-            val pCaps = cm.getNetworkCapabilities(preferred)
-            val pLink = cm.getLinkProperties(preferred)
-            if (pCaps != null && pLink != null && isUsableUnderlay(pCaps)) {
-                val pId = underlayIdentity(preferred, pLink)
-                if (pId != lastUnderlayIdentity) {
-                    if (!pCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ||
-                        ipv4Addresses(pLink).isEmpty()
-                    ) {
-                        Log.i(TAG, "path-adapt waiting for preferred underlay $pId")
-                        return
-                    }
-                }
-            }
-        }
-        val picked = bestUnderlay(null, requireValidated = lastUnderlayFingerprint != null)
-            ?: return
-        val (network, link) = picked
-        val ipv4s = ipv4Addresses(link)
-        if (ipv4s.isEmpty()) return
-        val fingerprint = underlayFingerprint(network, link, ipv4s)
-        // First callback after connect: record only. Never swap the API endpoint
-        // (0.2.31 swapped WAN :443 → LAN :51820 on any 192.168.0.0/24 Wi-Fi).
-        if (lastUnderlayFingerprint == null) {
-            runCatching { setUnderlyingNetworks(arrayOf(network)) }
-            reprotectBackendSockets()
-            lastUnderlayFingerprint = fingerprint
-            lastUnderlayIdentity = underlayIdentity(network, link)
-            lastChosenEndpoint = EndpointSelector.endpointFromConfig(config)
-            Log.i(TAG, "path-adapt record underlay=$fingerprint endpoint=$lastChosenEndpoint")
-            return
-        }
-        val identity = underlayIdentity(network, link)
-        val sameUnderlay = identity == lastUnderlayIdentity
+        val callback = snapshotUnderlay(preferred)
+        val foreground = foregroundUnderlay()
         val handshakeOk = latestHandshakeMs() > 0L &&
             (lastRebindAtMs == 0L || latestHandshakeMs() > lastRebindAtMs)
-        if (sameUnderlay && (handshakeOk || lastRebindAtMs == 0L)) {
-            // First-connect chatter (DHCP, VALIDATED) must not probe.
-            lastUnderlayFingerprint = fingerprint
-            lastUnderlayIdentity = identity
+
+        if (lastUnderlayFingerprint == null) {
+            val record = foreground ?: callback ?: bestUnderlaySnap(requireValidated = false)
+                ?: return
+            val ipv4s = ipv4Addresses(record.link)
+            if (ipv4s.isEmpty()) return
+            attachUnderlay(record.network)
+            lastUnderlayFingerprint = underlayFingerprint(record.network, record.link, ipv4s)
+            lastUnderlayIdentity = record.identity
+            lastChosenEndpoint = EndpointSelector.endpointFromConfig(config)
+            Log.i(TAG, "path-adapt record underlay=$lastUnderlayFingerprint endpoint=$lastChosenEndpoint")
+            return
+        }
+
+        val roam = UnderlayRoam.action(
+            callbackIdentity = callback?.identity,
+            callbackValidated = callback?.validated == true,
+            callbackHasIpv4 = callback != null && ipv4Addresses(callback.link).isNotEmpty(),
+            callbackForeground = callback?.foreground == true,
+            lastIdentity = lastUnderlayIdentity,
+            foregroundIdentity = foreground?.identity,
+            handshakeOk = handshakeOk,
+        )
+        val picked = when (roam) {
+            UnderlayRoam.Action.WAIT -> {
+                Log.i(TAG, "path-adapt waiting for underlay ${callback?.identity}")
+                return
+            }
+            UnderlayRoam.Action.SKIP -> {
+                callback?.let { snap ->
+                    val ipv4s = ipv4Addresses(snap.link)
+                    if (ipv4s.isNotEmpty() && snap.identity == lastUnderlayIdentity) {
+                        lastUnderlayFingerprint = underlayFingerprint(snap.network, snap.link, ipv4s)
+                    }
+                }
+                return
+            }
+            UnderlayRoam.Action.USE_CALLBACK -> callback
+            UnderlayRoam.Action.USE_FOREGROUND -> foreground ?: callback
+        } ?: return
+
+        val ipv4s = ipv4Addresses(picked.link)
+        if (ipv4s.isEmpty()) return
+        if (picked.identity == lastUnderlayIdentity && handshakeOk) {
+            lastUnderlayFingerprint = underlayFingerprint(picked.network, picked.link, ipv4s)
+            lastUnderlayIdentity = picked.identity
             return
         }
         if (gen != sessionGeneration || !sessionIntended()) return
-        // Do not pin a Network during roam. Pinning the previous underlay (or
-        // an unvalidated Wi‑Fi object) blackholes B→A until Disconnect.
+
+        // Unpin the previous underlay, then pin the live one so probes (WAN
+        // first, LAN only if WAN does not handshake) leave this network —
+        // not leftover cell/Wi‑Fi. Same-/24 is not the node LAN.
         runCatching { setUnderlyingNetworks(null) }
-        val current = EndpointSelector.endpointFromConfig(config)
+        attachUnderlay(picked.network)
         val probes = EndpointSelector.probeOrder(
-            current = current,
+            current = EndpointSelector.endpointFromConfig(config),
             lan = vpnStatePrefs().getString(KEY_ENDPOINT_LAN, null),
             wan = vpnStatePrefs().getString(KEY_ENDPOINT_WAN, null),
             underlayIpv4s = ipv4s,
         )
         if (probes.isEmpty()) return
-        Log.i(TAG, "path-adapt probe underlay=$fingerprint endpoints=$probes")
+        Log.i(TAG, "path-adapt roam=$roam underlay=${picked.identity} endpoints=$probes")
         var round = 0
         while (gen == sessionGeneration && sessionIntended() && disconnectJob?.isActive != true) {
-            val livePicked = if (round == 0) {
-                network to ipv4s
+            val live = if (round == 0) {
+                picked
             } else {
-                val again = bestUnderlay(null, requireValidated = true) ?: break
-                val nextIpv4s = ipv4Addresses(again.second)
-                if (nextIpv4s.isEmpty()) break
-                again.first to nextIpv4s
+                foregroundUnderlay() ?: break
             }
-            val liveNetwork = livePicked.first
-            val liveIpv4s = livePicked.second
+            val liveIpv4s = ipv4Addresses(live.link)
+            if (liveIpv4s.isEmpty()) break
+            attachUnderlay(live.network)
             val liveProbes = if (round == 0) probes else EndpointSelector.probeOrder(
                 current = EndpointSelector.endpointFromConfig(
                     vpnStatePrefs().getString(KEY_CONFIG, null) ?: config
@@ -672,14 +678,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 wan = vpnStatePrefs().getString(KEY_ENDPOINT_WAN, null),
                 underlayIpv4s = liveIpv4s,
             )
-            val liveFp = underlayFingerprint(
-                liveNetwork,
-                connectivityManager().getLinkProperties(liveNetwork) ?: link,
-                liveIpv4s,
-            )
+            val liveFp = underlayFingerprint(live.network, live.link, liveIpv4s)
             for (endpoint in liveProbes) {
                 if (gen != sessionGeneration || !sessionIntended()) return
-                runCatching { setUnderlyingNetworks(null) }
                 val liveConfig = EndpointSelector.replaceEndpoint(
                     vpnStatePrefs().getString(KEY_CONFIG, null) ?: config,
                     endpoint,
@@ -695,7 +696,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 val recreateTun = round >= 1
                 if (!rebindWithRetry(parsed, gen, recreateTun)) continue
                 lastRebindAtMs = reboundAt
-                reprotectBackendSockets()
+                attachUnderlay(live.network)
                 startStatsPolling()
                 Log.i(TAG, "path-adapt rebound endpoint=$endpoint underlay=$liveFp")
                 if (waitForHandshake(gen, reboundAt, HANDSHAKE_CONFIRM_MS)) {
@@ -703,14 +704,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         if (gen != sessionGeneration || !sessionIntended()) return
                         vpnStatePrefs().edit().putString(KEY_CONFIG, liveConfig).apply()
                         lastUnderlayFingerprint = liveFp
-                        lastUnderlayIdentity = underlayIdentity(
-                            liveNetwork,
-                            connectivityManager().getLinkProperties(liveNetwork) ?: link,
-                        )
+                        lastUnderlayIdentity = live.identity
                         lastChosenEndpoint = endpoint
                     }
-                    runCatching { setUnderlyingNetworks(arrayOf(liveNetwork)) }
-                    reprotectBackendSockets()
+                    attachUnderlay(live.network)
                     startBackgroundEgressValidation()
                     Log.i(TAG, "path-adapt handshake ok endpoint=$endpoint")
                     return
@@ -821,6 +818,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     tunnelField.set(backend, this)
                     configField.set(backend, parsed)
                     reprotectBackendSocketsLocked(newHandle)
+                    // Caller attachUnderlay() binds these fds to the roam target.
                     return true
                 }
                 if (recreateTun) {
@@ -863,57 +861,117 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun reprotectBackendSocketsLocked(handle: Int) {
         if (handle < 0) return
-        val fd4 = goNative("wgGetSocketV4", Integer.TYPE).invoke(null, handle) as Int
-        val fd6 = goNative("wgGetSocketV6", Integer.TYPE).invoke(null, handle) as Int
-        if (fd4 >= 0) protect(fd4)
-        if (fd6 >= 0) protect(fd6)
+        bindProtectedSocket(goNative("wgGetSocketV4", Integer.TYPE).invoke(null, handle) as Int, null)
+        bindProtectedSocket(goNative("wgGetSocketV6", Integer.TYPE).invoke(null, handle) as Int, null)
     }
 
-    private fun reprotectBackendSockets() {
+    private fun attachUnderlay(network: Network) {
+        runCatching { setUnderlyingNetworks(arrayOf(network)) }
+        reprotectBackendSockets(network)
+    }
+
+    private fun reprotectBackendSockets(bindTo: Network? = null) {
         runCatching {
-            val handleField = GoBackend::class.java.getDeclaredField("currentTunnelHandle")
-            handleField.isAccessible = true
+            val handleField = goField("currentTunnelHandle")
             val handle = handleField.getInt(backend)
             if (handle < 0) return
-            val v4 = GoBackend::class.java.getDeclaredMethod("wgGetSocketV4", Integer.TYPE)
-            v4.isAccessible = true
-            val v6 = GoBackend::class.java.getDeclaredMethod("wgGetSocketV6", Integer.TYPE)
-            v6.isAccessible = true
-            val fd4 = v4.invoke(null, handle) as Int
-            val fd6 = v6.invoke(null, handle) as Int
-            if (fd4 >= 0) protect(fd4)
-            if (fd6 >= 0) protect(fd6)
+            bindProtectedSocket(
+                goNative("wgGetSocketV4", Integer.TYPE).invoke(null, handle) as Int,
+                bindTo,
+            )
+            bindProtectedSocket(
+                goNative("wgGetSocketV6", Integer.TYPE).invoke(null, handle) as Int,
+                bindTo,
+            )
         }.onFailure { error ->
             Log.w(TAG, "Could not reprotect WireGuard sockets", error)
         }
     }
 
+    private fun bindProtectedSocket(fd: Int, bindTo: Network?) {
+        if (fd < 0) return
+        protect(fd)
+        if (bindTo == null) return
+        runCatching {
+            val pfd = ParcelFileDescriptor.fromFd(fd)
+            try {
+                bindTo.bindSocket(pfd.fileDescriptor)
+            } finally {
+                pfd.close()
+            }
+        }.onFailure { error ->
+            Log.w(TAG, "Could not bind WireGuard socket to underlay", error)
+        }
+    }
+
+    private data class UnderlaySnap(
+        val network: Network,
+        val link: LinkProperties,
+        val caps: NetworkCapabilities,
+    ) {
+        val identity: String
+            get() = listOf(
+                network.networkHandle.toString(),
+                link.interfaceName.orEmpty(),
+            ).joinToString("|")
+        val validated: Boolean
+            get() = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        val foreground: Boolean
+            get() = Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_FOREGROUND)
+    }
+
+    private fun snapshotUnderlay(network: Network?): UnderlaySnap? {
+        if (network == null) return null
+        val caps = connectivityManager().getNetworkCapabilities(network) ?: return null
+        if (!isUsableUnderlay(caps)) return null
+        val link = connectivityManager().getLinkProperties(network) ?: return null
+        return UnderlaySnap(network, link, caps)
+    }
+
     @Suppress("DEPRECATION")
-    private fun bestUnderlay(
-        preferred: Network?,
-        requireValidated: Boolean = false,
-    ): Pair<Network, LinkProperties>? {
+    private fun foregroundUnderlay(): UnderlaySnap? {
         val cm = connectivityManager()
-        val seen = linkedSetOf<Network>()
-        if (preferred != null) seen.add(preferred)
-        cm.allNetworks.forEach { seen.add(it) }
-        var bestValidated: Pair<Network, LinkProperties>? = null
+        var best: UnderlaySnap? = null
+        var bestScore = Int.MIN_VALUE
+        for (network in cm.allNetworks) {
+            val caps = cm.getNetworkCapabilities(network) ?: continue
+            if (!isUsableUnderlay(caps)) continue
+            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) continue
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && !isForegroundUnderlay(caps)) {
+                continue
+            }
+            val link = cm.getLinkProperties(network) ?: continue
+            if (ipv4Addresses(link).isEmpty()) continue
+            val score = underlayScore(network, caps, null)
+            if (score > bestScore) {
+                best = UnderlaySnap(network, link, caps)
+                bestScore = score
+            }
+        }
+        return best
+    }
+
+    @Suppress("DEPRECATION")
+    private fun bestUnderlaySnap(requireValidated: Boolean): UnderlaySnap? {
+        val cm = connectivityManager()
+        var bestValidated: UnderlaySnap? = null
         var bestValidatedScore = Int.MIN_VALUE
-        var bestAny: Pair<Network, LinkProperties>? = null
+        var bestAny: UnderlaySnap? = null
         var bestAnyScore = Int.MIN_VALUE
-        for (network in seen) {
+        for (network in cm.allNetworks) {
             val caps = cm.getNetworkCapabilities(network) ?: continue
             if (!isUsableUnderlay(caps)) continue
             val link = cm.getLinkProperties(network) ?: continue
-            val pair = network to link
-            val score = underlayScore(network, caps, preferred)
+            val snap = UnderlaySnap(network, link, caps)
+            val score = underlayScore(network, caps, null)
             if (score > bestAnyScore) {
-                bestAny = pair
+                bestAny = snap
                 bestAnyScore = score
             }
-            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) continue
+            if (!snap.validated) continue
             if (score > bestValidatedScore) {
-                bestValidated = pair
+                bestValidated = snap
                 bestValidatedScore = score
             }
         }
@@ -946,17 +1004,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 delay(HEALTH_WATCH_MS)
                 if (!sessionIntended() || lastUnderlayIdentity == null) continue
                 if (disconnectJob?.isActive == true || adaptJob?.isActive == true) continue
-                val fg = bestUnderlay(null, requireValidated = true) ?: continue
-                val id = underlayIdentity(fg.first, fg.second)
-                if (id == lastUnderlayIdentity) continue
-                Log.w(TAG, "path-adapt health: underlay moved $lastUnderlayIdentity -> $id")
-                scheduleUnderlayAdapt(fg.first)
+                val fg = foregroundUnderlay() ?: continue
+                if (fg.identity == lastUnderlayIdentity) continue
+                Log.w(TAG, "path-adapt health: underlay moved $lastUnderlayIdentity -> ${fg.identity}")
+                scheduleUnderlayAdapt(fg.network)
             }
         }
     }
 
     private fun isForegroundUnderlay(caps: NetworkCapabilities): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return true
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_FOREGROUND)
     }
 
@@ -965,9 +1022,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             val inet = addr.address as? Inet4Address ?: return@mapNotNull null
             if (inet.isLoopbackAddress) null else inet.hostAddress?.takeIf { it.isNotBlank() }
         }
-
-    private fun underlayIdentity(network: Network, link: LinkProperties): String =
-        listOf(network.networkHandle.toString(), link.interfaceName.orEmpty()).joinToString("|")
 
     private fun underlayFingerprint(
         network: Network,

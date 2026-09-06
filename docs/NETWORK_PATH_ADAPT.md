@@ -7,15 +7,15 @@ After the user taps **Connect now**, the session must stay up until they tap
 auto-disconnect, delete the peer, or flip the UI to “Connecting…” on underlay
 flaps, sticky service restarts, or transient tunnel DOWN events.
 
-## Android (`VeritasVpnService` / `MainActivity`) — 0.2.39+
+## Android (`VeritasVpnService` / `MainActivity`) — 0.2.40+
 
 **2-minute loop note:** WireGuard rekeys around 120s. Older builds treated handshake age > 120s as stale and called reconnect (or soft-adapted DOWN→UP). Never reconnect on handshake age; the Handshake “2m ago” UI label alone is not a failure.
 
 1. **Underlay NetworkCallback path-adapt.** Watch `INTERNET` + `NOT_VPN` networks. Debounce ~1.2s. Do **not** delete the peer, flip the UI to Connecting, or reconnect on handshake age.
 2. First callback after connect **records the underlay fingerprint only** and binds `setUnderlyingNetworks` to that validated non-VPN network. Do not swap the API endpoint (0.2.31 swapped WAN `:443` → LAN `:51820` on any `192.168.0.0/24` Wi‑Fi and blackholed browse).
-3. Later callbacks: unpin (`setUnderlyingNetworks(null)`), then rebind userspace WireGuard **on the existing tun fd**. Public `GoBackend.setState` / `setStateInternal` call `Builder.establish()`, which replaces the tun and drops the status-bar VPN key. Path-adapt keeps a dup of the tun, `wgTurnOff` + `wgTurnOn` on that dup, and never `stopSelf()`.
-4. Same `/24` is only a probe hint, not a decision. Path-adapt tries the exact API LAN (`:51820`) and WAN (`:443`) until a **new handshake** succeeds, then persists that endpoint. Home B→A needs LAN (WAN `:443` often cannot hairpin). Cafe B→A needs WAN (LAN is the node, not the cafe). If the first pair fails, keep probing — do not sit on a dead endpoint.
-5. After handshake: pin the validated underlay, re-`protect()` WG sockets, keep stats polling, keep the VPN key. Same-underlay callbacks (DHCP, VALIDATED) after Connect must **not** probe. Probe when the **foreground** underlay identity changes. Rank **foreground first**, then Wi‑Fi vs cell as a tiebreaker — leftover Wi‑Fi must not beat cellular on A→B (0.2.38), and leftover cell must not beat Wi‑Fi on B→A. If keeper rebind gets no handshake, recreate the tun via `setStateInternal`. A health watch re-runs adapt if the foreground underlay moved.
+3. Later callbacks: unpin the previous underlay, pin the **foreground** network the device is on, then rebind userspace WireGuard **on the existing tun fd**. Public `GoBackend.setState` / `setStateInternal` call `Builder.establish()`, which replaces the tun and drops the status-bar VPN key. Path-adapt keeps a dup of the tun, `wgTurnOff` + `wgTurnOn` on that dup, and never `stopSelf()`. Leftover background Wi‑Fi or cell must not steal the session.
+4. Endpoint probe is **WAN first, LAN only if WAN does not handshake**. Same `/24` is not the node LAN (cafe/home `192.168.0.0/24` is common). Arbitrary A↔B switches keep the public endpoint. LAN `:51820` is only a fallback for the node LAN, where WAN `:443` often cannot hairpin. Persist an endpoint only after a **new handshake**.
+5. After handshake: pin that underlay, `protect()` and `Network.bindSocket` the WG UDP fds, keep stats polling, keep the VPN key. Same-underlay callbacks (DHCP, VALIDATED) after Connect must **not** probe. A health watch re-runs adapt if the foreground underlay moved. If keeper rebind gets no handshake, recreate the tun via `setStateInternal`.
 6. `sessionGeneration` increments on Connect and Disconnect. Path-adapt/restore abort if the generation changed. Real Disconnect closes the tun keeper and is the only path that should `stopSelf()` (returns `START_NOT_STICKY`).
 7. MainActivity ignores `EXTRA_CONNECTED=true` when `userWantsConnected` is false, and ignores unintended disconnect broadcasts after a session is established. No automatic peer-delete reconnect.
 
@@ -97,5 +97,5 @@ No WireGuard host route; TCP to the proxy reopens on the new path. No change req
 
 1. Connect on Wi‑Fi.
 2. Leave the session alone for several minutes — UI must stay Connected; VPN icon must stay.
-3. Switch Wi‑Fi ↔ cellular without tapping Disconnect — stay Connected, VPN key stays visible, browsing resumes after a short pause. Repeat B→A as well as A→B.
+3. Switch Wi‑Fi ↔ cellular (or any two networks) without tapping Disconnect — stay Connected, VPN key stays visible, browsing resumes after a short pause. Repeat in both directions, including networks that are not the node LAN.
 4. Only **Disconnect** clears the VPN icon / session.
