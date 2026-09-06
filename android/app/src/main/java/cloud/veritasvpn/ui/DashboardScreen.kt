@@ -181,14 +181,6 @@ fun DashboardScreen(
                     fontWeight = FontWeight.Bold,
                     fontSize = 22.sp
                 )
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    text = "Kill switch on",
-                    color = CyanHover,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.6.sp
-                )
             }
 
             Spacer(Modifier.height(24.dp))

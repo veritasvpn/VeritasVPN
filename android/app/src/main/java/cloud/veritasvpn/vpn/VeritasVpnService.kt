@@ -49,7 +49,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var restoreJob: Job? = null
     private var validationGeneration = 0L
     @Volatile private var sessionGeneration = 0L
-    @Volatile private var adapting = false
     @Volatile private var underlayWatchRegistered = false
     private var lastUnderlayFingerprint: String? = null
     private var lastChosenEndpoint: String? = null
@@ -342,17 +341,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 )
             }
             else -> {
-                if (!adapting) {
-                    stopStatsPolling()
-                }
                 // Product rule: never treat an unintended DOWN as Disconnect.
-                // Keep KEY_CONFIG and tell the UI we are still connected while
-                // sticky restore / path-adapt brings the tunnel back.
+                // Keep KEY_CONFIG, the system VPN icon (do not stopForeground),
+                // and live stats while the session is still intended.
                 if (sessionIntended()) {
                     Log.w(TAG, "Tunnel DOWN while session intended; UI stays connected")
                     broadcastState(true, null)
+                    startStatsPolling()
                     return
                 }
+                stopStatsPolling()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 broadcastState(false, null)
             }
@@ -361,7 +359,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun startStatsPolling() {
         if (!sessionIntended()) return
-        statsJob?.cancel()
+        if (statsJob?.isActive == true) return
         statsJob = scope.launch {
             while (sessionIntended()) {
                 broadcastStats()
@@ -578,39 +576,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             underlayIpv4s = ipv4s,
         )
         if (chosen.isEmpty()) return
+        // Never bounce GoBackend here. setState(UP, newConfig) internally
+        // DOWN→UP, which drops the system VPN icon and kills live stats.
+        // WireGuard roaming keeps the live tun; persist the chosen endpoint
+        // so sticky restore uses the right path after a later restart.
         val updated = EndpointSelector.replaceEndpoint(config, chosen)
-        val parsed = runCatching {
-            Config.parse(ByteArrayInputStream(updated.toByteArray(Charsets.UTF_8)))
-        }.getOrElse { error ->
-            Log.e(TAG, "path-adapt config parse failed", error)
-            return
-        }
-        adapting = true
-        try {
-            if (gen != sessionGeneration || !sessionIntended()) return
-            val state = backend.setState(this, Tunnel.State.UP, parsed)
-            if (gen != sessionGeneration || !sessionIntended()) {
-                runCatching { backend.setState(this, Tunnel.State.DOWN, null) }
-                return
-            }
-            if (state != Tunnel.State.UP) {
-                Log.w(TAG, "path-adapt backend state=$state")
-                return
-            }
-            vpnStatePrefs().edit().putString(KEY_CONFIG, updated).apply()
-            lastUnderlayFingerprint = fingerprint
-            lastChosenEndpoint = chosen
-            runCatching { setUnderlyingNetworks(null) }
-            startStatsPolling()
-            startBackgroundEgressValidation()
-            Log.i(TAG, "path-adapt endpoint=$chosen underlay=$fingerprint")
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "path-adapt failed; keeping session intended", e)
-        } finally {
-            adapting = false
-        }
+        if (gen != sessionGeneration || !sessionIntended()) return
+        vpnStatePrefs().edit().putString(KEY_CONFIG, updated).apply()
+        lastUnderlayFingerprint = fingerprint
+        lastChosenEndpoint = chosen
+        startStatsPolling()
+        Log.i(TAG, "path-adapt persist endpoint=$chosen underlay=$fingerprint")
     }
 
     @Suppress("DEPRECATION")
