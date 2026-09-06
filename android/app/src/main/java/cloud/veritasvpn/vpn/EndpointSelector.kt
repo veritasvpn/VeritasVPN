@@ -66,13 +66,43 @@ object EndpointSelector {
     }
 
     /**
+     * Ordered endpoints to probe after an underlay change. Same-/24 is only a
+     * hint (cafe Wi‑Fi is often `192.168.0.0/24`). Handshake decides which
+     * exact API LAN/WAN pair actually works. Never invent a port.
+     *
+     * On a matching /24 try LAN first then WAN (home return cannot hairpin
+     * WAN `:443`). Otherwise try WAN first then LAN (leaving the node LAN).
+     */
+    fun probeOrder(
+        current: String,
+        lan: String?,
+        wan: String?,
+        underlayIpv4s: List<String>,
+    ): List<String> {
+        val currentEp = current.trim()
+        val wanEp = wan?.trim().orEmpty()
+        var lanEp = lan?.trim().orEmpty()
+        if (lanEp.isEmpty() && isRfc1918(host(currentEp))) {
+            lanEp = currentEp
+        }
+        val lanHost = host(lanEp)
+        val onLanHint = lanHost.isNotEmpty() &&
+            underlayIpv4s.any { sameIpv4Slash24(it, lanHost) }
+        val ordered = if (onLanHint) {
+            listOf(lanEp, wanEp, currentEp)
+        } else {
+            listOf(wanEp, currentEp, lanEp)
+        }
+        return ordered.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    }
+
+    /**
      * Prefer the exact API LAN endpoint when any underlay IPv4 shares its /24.
      * Otherwise use the exact API WAN endpoint. Never invent a port.
      *
-     * [allowSwitchToLan] must be false for live path-adapt. Same-/24 is not
-     * proof of the node LAN (cafe Wi‑Fi is often `192.168.0.0/24`), and switching
-     * WAN `:443` → LAN `:51820` on B→A blackholes browse. Path-adapt may still
-     * switch LAN → WAN when leaving that /24.
+     * Live path-adapt must not call this to pick a single endpoint. Same-/24
+     * is not proof of the node LAN; probe LAN and WAN and keep the one that
+     * handshakes.
      */
     fun choose(
         current: String,

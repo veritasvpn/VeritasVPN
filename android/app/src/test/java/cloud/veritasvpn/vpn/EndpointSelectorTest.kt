@@ -137,6 +137,34 @@ class EndpointSelectorTest {
     }
 
     @Test
+    fun probeOrderOnMatchingSlash24TriesLanThenWan() {
+        val order = EndpointSelector.probeOrder(
+            current = "170.51.31.139:443",
+            lan = "192.168.0.6:51820",
+            wan = "170.51.31.139:443",
+            underlayIpv4s = listOf("192.168.0.10"),
+        )
+        assertEquals(
+            listOf("192.168.0.6:51820", "170.51.31.139:443"),
+            order,
+        )
+    }
+
+    @Test
+    fun probeOrderOffLanTriesWanFirst() {
+        val order = EndpointSelector.probeOrder(
+            current = "192.168.0.6:51820",
+            lan = "192.168.0.6:51820",
+            wan = "170.51.31.139:443",
+            underlayIpv4s = listOf("10.64.0.2"),
+        )
+        assertEquals(
+            listOf("170.51.31.139:443", "192.168.0.6:51820"),
+            order,
+        )
+    }
+
+    @Test
     fun replaceEndpointRewritesOnlyThePeerLine() {
         val config = """
             [Interface]
