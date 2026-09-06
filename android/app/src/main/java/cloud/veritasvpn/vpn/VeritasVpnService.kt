@@ -52,6 +52,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     @Volatile private var sessionGeneration = 0L
     @Volatile private var underlayWatchRegistered = false
     private var lastUnderlayFingerprint: String? = null
+    private var lastUnderlayIdentity: String? = null
     private var lastChosenEndpoint: String? = null
     private var lastRebindAtMs = 0L
     private val tunnelOpLock = Any()
@@ -85,6 +86,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 val endpointWan = intent.getStringExtra(EXTRA_ENDPOINT_WAN).orEmpty()
                 val connectGen = ++sessionGeneration
                 lastUnderlayFingerprint = null
+                lastUnderlayIdentity = null
                 lastChosenEndpoint = null
                 lastRebindAtMs = 0L
                 vpnStatePrefs().edit()
@@ -205,6 +207,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
                 unregisterUnderlayWatch()
                 lastUnderlayFingerprint = null
+                lastUnderlayIdentity = null
                 lastChosenEndpoint = null
                 lastRebindAtMs = 0L
                 adaptJob?.cancel()
@@ -291,6 +294,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         adaptJob?.cancel()
         unregisterUnderlayWatch()
         lastUnderlayFingerprint = null
+        lastUnderlayIdentity = null
         lastChosenEndpoint = null
         lastRebindAtMs = 0L
         transitionJob?.cancel()
@@ -596,12 +600,25 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             runCatching { setUnderlyingNetworks(arrayOf(network)) }
             reprotectBackendSockets()
             lastUnderlayFingerprint = fingerprint
+            lastUnderlayIdentity = underlayIdentity(network, link)
             lastChosenEndpoint = EndpointSelector.endpointFromConfig(config)
             Log.i(TAG, "path-adapt record underlay=$fingerprint endpoint=$lastChosenEndpoint")
             return
         }
-        val handshakeFresh = lastRebindAtMs > 0L && latestHandshakeMs() > lastRebindAtMs
-        if (fingerprint == lastUnderlayFingerprint && handshakeFresh) return
+        val identity = underlayIdentity(network, link)
+        val sameUnderlay = identity == lastUnderlayIdentity
+        val handshakeOk = latestHandshakeMs() > 0L &&
+            (lastRebindAtMs == 0L || latestHandshakeMs() > lastRebindAtMs)
+        if (sameUnderlay && (handshakeOk || lastRebindAtMs == 0L)) {
+            // First-connect chatter (DHCP, VALIDATED) must not probe. 0.2.36
+            // treated that as a failed roam, wgTurnOff'd the live tunnel, and
+            // left download stats at 0B.
+            lastUnderlayFingerprint = fingerprint
+            lastUnderlayIdentity = identity
+            runCatching { setUnderlyingNetworks(arrayOf(network)) }
+            reprotectBackendSockets()
+            return
+        }
         if (gen != sessionGeneration || !sessionIntended()) return
         // Do not pin a Network during roam. Pinning the previous underlay (or
         // an unvalidated Wi‑Fi object) blackholes B→A until Disconnect.
@@ -665,6 +682,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         if (gen != sessionGeneration || !sessionIntended()) return
                         vpnStatePrefs().edit().putString(KEY_CONFIG, liveConfig).apply()
                         lastUnderlayFingerprint = liveFp
+                        lastUnderlayIdentity = underlayIdentity(
+                            liveNetwork,
+                            connectivityManager().getLinkProperties(liveNetwork) ?: link,
+                        )
                         lastChosenEndpoint = endpoint
                     }
                     runCatching { setUnderlyingNetworks(arrayOf(liveNetwork)) }
@@ -885,6 +906,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             val inet = addr.address as? Inet4Address ?: return@mapNotNull null
             if (inet.isLoopbackAddress) null else inet.hostAddress?.takeIf { it.isNotBlank() }
         }
+
+    private fun underlayIdentity(network: Network, link: LinkProperties): String =
+        listOf(network.networkHandle.toString(), link.interfaceName.orEmpty()).joinToString("|")
 
     private fun underlayFingerprint(
         network: Network,
