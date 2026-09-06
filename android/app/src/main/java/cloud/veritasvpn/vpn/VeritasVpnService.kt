@@ -644,7 +644,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             val record = live ?: bestUnderlaySnap(requireValidated = false) ?: return
             val ipv4s = ipv4Addresses(record.link)
             if (ipv4s.isEmpty()) return
-            attachUnderlay(record.network)
+            followSystemDefault()
             lastUnderlayFingerprint = underlayFingerprint(record.network, record.link, ipv4s)
             lastUnderlayIdentity = record.identity
             lastChosenEndpoint = EndpointSelector.endpointFromConfig(config)
@@ -666,8 +666,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (gen != sessionGeneration || !sessionIntended()) return
 
         Log.i(TAG, "path-adapt roam ${lastUnderlayIdentity} -> ${live.identity}")
-        runCatching { setUnderlyingNetworks(null) }
-        attachUnderlay(live.network)
+        followSystemDefault()
         val rxBefore = totalRx()
         val attachedAt = System.currentTimeMillis()
         if (waitForTraffic(gen, rxBefore, attachedAt, SOFT_ATTACH_MS)) {
@@ -692,7 +691,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             val currentLive = liveUnderlay() ?: break
             val liveIpv4s = ipv4Addresses(currentLive.link)
             if (liveIpv4s.isEmpty()) break
-            attachUnderlay(currentLive.network)
+            followSystemDefault()
             val liveProbes = if (round == 0) probes else EndpointSelector.probeOrder(
                 current = EndpointSelector.endpointFromConfig(
                     vpnStatePrefs().getString(KEY_CONFIG, null) ?: config
@@ -719,7 +718,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 val recreateTun = round >= 1
                 if (!rebindWithRetry(parsed, gen, recreateTun)) continue
                 lastRebindAtMs = reboundAt
-                attachUnderlay(currentLive.network)
+                followSystemDefault()
                 startStatsPolling()
                 Log.i(TAG, "path-adapt rebound endpoint=$endpoint underlay=$liveFp")
                 if (waitForHandshake(gen, reboundAt, HANDSHAKE_CONFIRM_MS)) {
@@ -730,7 +729,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         lastUnderlayIdentity = currentLive.identity
                         lastChosenEndpoint = endpoint
                     }
-                    attachUnderlay(currentLive.network)
+                    followSystemDefault()
                     startBackgroundEgressValidation()
                     Log.i(TAG, "path-adapt handshake ok endpoint=$endpoint")
                     return
@@ -860,7 +859,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     tunnelField.set(backend, this)
                     configField.set(backend, parsed)
                     reprotectBackendSocketsLocked(newHandle)
-                    // Caller attachUnderlay() binds these fds to the roam target.
                     return true
                 }
                 if (recreateTun) {
@@ -903,47 +901,38 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun reprotectBackendSocketsLocked(handle: Int) {
         if (handle < 0) return
-        bindProtectedSocket(goNative("wgGetSocketV4", Integer.TYPE).invoke(null, handle) as Int, null)
-        bindProtectedSocket(goNative("wgGetSocketV6", Integer.TYPE).invoke(null, handle) as Int, null)
+        protectSocket(goNative("wgGetSocketV4", Integer.TYPE).invoke(null, handle) as Int)
+        protectSocket(goNative("wgGetSocketV6", Integer.TYPE).invoke(null, handle) as Int)
     }
 
-    private fun attachUnderlay(network: Network) {
-        runCatching { setUnderlyingNetworks(arrayOf(network)) }
-        reprotectBackendSockets(network)
+    /**
+     * Keep the WireGuard UDP sockets on whatever network the system is using.
+     *
+     * Never `setUnderlyingNetworks(arrayOf(...))` and never `Network.bindSocket`
+     * here: both pin the session to one Network object, so the next switch
+     * leaves the sockets on the network the device already left (0.2.40/0.2.41
+     * lost browse that way). A protected, unpinned UDP socket re-resolves its
+     * route per packet, which is what lets the tunnel roam.
+     */
+    private fun followSystemDefault() {
+        runCatching { setUnderlyingNetworks(null) }
+        reprotectBackendSockets()
     }
 
-    private fun reprotectBackendSockets(bindTo: Network? = null) {
+    private fun reprotectBackendSockets() {
         runCatching {
-            val handleField = goField("currentTunnelHandle")
-            val handle = handleField.getInt(backend)
+            val handle = goField("currentTunnelHandle").getInt(backend)
             if (handle < 0) return
-            bindProtectedSocket(
-                goNative("wgGetSocketV4", Integer.TYPE).invoke(null, handle) as Int,
-                bindTo,
-            )
-            bindProtectedSocket(
-                goNative("wgGetSocketV6", Integer.TYPE).invoke(null, handle) as Int,
-                bindTo,
-            )
+            protectSocket(goNative("wgGetSocketV4", Integer.TYPE).invoke(null, handle) as Int)
+            protectSocket(goNative("wgGetSocketV6", Integer.TYPE).invoke(null, handle) as Int)
         }.onFailure { error ->
             Log.w(TAG, "Could not reprotect WireGuard sockets", error)
         }
     }
 
-    private fun bindProtectedSocket(fd: Int, bindTo: Network?) {
+    private fun protectSocket(fd: Int) {
         if (fd < 0) return
         protect(fd)
-        if (bindTo == null) return
-        runCatching {
-            val pfd = ParcelFileDescriptor.fromFd(fd)
-            try {
-                bindTo.bindSocket(pfd.fileDescriptor)
-            } finally {
-                pfd.close()
-            }
-        }.onFailure { error ->
-            Log.w(TAG, "Could not bind WireGuard socket to underlay", error)
-        }
     }
 
     private data class UnderlaySnap(
@@ -1105,7 +1094,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val KEY_ENDPOINT_LAN = "endpoint_lan"
         const val KEY_ENDPOINT_WAN = "endpoint_wan"
         private const val UNDERLAY_ADAPT_DEBOUNCE_MS = 400L
-        private const val SOFT_ATTACH_MS = 1_800L
+        private const val SOFT_ATTACH_MS = 6_000L
         private const val HANDSHAKE_CONFIRM_MS = 3_500L
         private const val PROBE_RETRY_DELAY_MS = 1_200L
         private const val HEALTH_WATCH_MS = 2_000L

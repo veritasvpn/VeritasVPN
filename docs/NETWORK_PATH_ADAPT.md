@@ -7,13 +7,13 @@ After the user taps **Connect now**, the session must stay up until they tap
 auto-disconnect, delete the peer, or flip the UI to “Connecting…” on underlay
 flaps, sticky service restarts, or transient tunnel DOWN events.
 
-## Android (`VeritasVpnService` / `MainActivity`) — 0.2.41+
+## Android (`VeritasVpnService` / `MainActivity`) — 0.2.42+
 
 **2-minute loop note:** WireGuard rekeys around 120s. Older builds treated handshake age > 120s as stale and called reconnect (or soft-adapted DOWN→UP). Never reconnect on handshake age; the Handshake “2m ago” UI label alone is not a failure.
 
 1. **Underlay NetworkCallback path-adapt.** Watch `INTERNET` + `NOT_VPN` networks. On Android 12+ also `registerBestMatchingNetworkCallback` so leftover Wi‑Fi/cell cannot steal the session. Debounce ~400ms. Do **not** delete the peer, flip the UI to Connecting, or reconnect on handshake age.
 2. First callback after connect **records the underlay fingerprint only** and binds `setUnderlyingNetworks` to that validated non-VPN network. Do not swap the API endpoint (0.2.31 swapped WAN `:443` → LAN `:51820` on any `192.168.0.0/24` Wi‑Fi and blackholed browse).
-3. On roam: pin the **best-matching** underlay, `protect()` + `bindSocket` the existing WG UDP fds, and wait for RX or a new handshake. Only if traffic does not resume, `wgTurnOff` + `wgTurnOn` on the tun keeper (never public `setState` / `stopSelf()`).
+3. On roam: **never pin a Network.** `setUnderlyingNetworks(null)` and only `protect()` the existing WG UDP fds, then wait for RX or a new handshake. `setUnderlyingNetworks(arrayOf(n))` and `Network.bindSocket` both tie the session to one Network object, so the next switch leaves the sockets on the network the device already left — that is how 0.2.40/0.2.41 lost browse. A protected, unpinned UDP socket re-resolves its route per packet and roams on its own. Only if traffic does not resume, `wgTurnOff` + `wgTurnOn` on the tun keeper (never public `setState` / `stopSelf()`).
 4. Endpoint probe is **WAN first, LAN only if WAN does not handshake**. Same `/24` is not the node LAN. Arbitrary A↔B switches keep the public endpoint. LAN `:51820` is only a fallback for the node LAN, where WAN `:443` often cannot hairpin. Persist an endpoint only after a **new handshake**.
 5. Same-underlay callbacks (DHCP, VALIDATED) after Connect must **not** probe. A health watch re-runs adapt if the best-matching underlay moved. If keeper rebind gets no handshake, recreate the tun via `setStateInternal`.
 6. `sessionGeneration` increments on Connect and Disconnect. Path-adapt/restore abort if the generation changed. Real Disconnect closes the tun keeper and is the only path that should `stopSelf()` (returns `START_NOT_STICKY`).
