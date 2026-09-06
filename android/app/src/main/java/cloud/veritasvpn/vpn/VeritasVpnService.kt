@@ -48,6 +48,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var statsJob: Job? = null
     private var adaptJob: Job? = null
     private var restoreJob: Job? = null
+    private var healthJob: Job? = null
     private var validationGeneration = 0L
     @Volatile private var sessionGeneration = 0L
     @Volatile private var underlayWatchRegistered = false
@@ -211,6 +212,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 lastChosenEndpoint = null
                 lastRebindAtMs = 0L
                 adaptJob?.cancel()
+                healthJob?.cancel()
                 restoreJob?.cancel()
                 transitionJob?.cancel()
                 disconnectJob?.cancel()
@@ -557,6 +559,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         runCatching {
             connectivityManager().registerNetworkCallback(request, underlayCallback)
             underlayWatchRegistered = true
+            startHealthWatch()
         }.onFailure { error ->
             Log.w(TAG, "Could not watch underlay networks", error)
         }
@@ -566,6 +569,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (!underlayWatchRegistered) return
         runCatching { connectivityManager().unregisterNetworkCallback(underlayCallback) }
         underlayWatchRegistered = false
+        healthJob?.cancel()
+        healthJob = null
     }
 
     private fun scheduleUnderlayAdapt(preferred: Network?) {
@@ -588,6 +593,25 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private suspend fun adaptUnderlay(preferred: Network?, gen: Long) {
         if (gen != sessionGeneration || !sessionIntended()) return
         val config = vpnStatePrefs().getString(KEY_CONFIG, null) ?: return
+        val cm = connectivityManager()
+        // A new preferred underlay (Wi‑Fi after cellular) must win even while
+        // leftover cell is still validated. Picking cell and skipping froze
+        // download at 0B on B→A.
+        if (lastUnderlayFingerprint != null && preferred != null) {
+            val pCaps = cm.getNetworkCapabilities(preferred)
+            val pLink = cm.getLinkProperties(preferred)
+            if (pCaps != null && pLink != null && isUsableUnderlay(pCaps)) {
+                val pId = underlayIdentity(preferred, pLink)
+                if (pId != lastUnderlayIdentity) {
+                    if (!pCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ||
+                        ipv4Addresses(pLink).isEmpty()
+                    ) {
+                        Log.i(TAG, "path-adapt waiting for preferred underlay $pId")
+                        return
+                    }
+                }
+            }
+        }
         val picked = bestUnderlay(preferred, requireValidated = lastUnderlayFingerprint != null)
             ?: return
         val (network, link) = picked
@@ -610,13 +634,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val handshakeOk = latestHandshakeMs() > 0L &&
             (lastRebindAtMs == 0L || latestHandshakeMs() > lastRebindAtMs)
         if (sameUnderlay && (handshakeOk || lastRebindAtMs == 0L)) {
-            // First-connect chatter (DHCP, VALIDATED) must not probe. 0.2.36
-            // treated that as a failed roam, wgTurnOff'd the live tunnel, and
-            // left download stats at 0B.
+            // First-connect chatter (DHCP, VALIDATED) must not probe.
             lastUnderlayFingerprint = fingerprint
             lastUnderlayIdentity = identity
-            runCatching { setUnderlyingNetworks(arrayOf(network)) }
-            reprotectBackendSockets()
             return
         }
         if (gen != sessionGeneration || !sessionIntended()) return
@@ -672,7 +692,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     continue
                 }
                 val reboundAt = System.currentTimeMillis()
-                if (!rebindWithRetry(parsed, gen)) continue
+                val recreateTun = round >= 1
+                if (!rebindWithRetry(parsed, gen, recreateTun)) continue
                 lastRebindAtMs = reboundAt
                 reprotectBackendSockets()
                 startStatsPolling()
@@ -701,14 +722,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         }
     }
 
-    private fun rebindWithRetry(parsed: Config, gen: Long): Boolean {
+    private fun rebindWithRetry(parsed: Config, gen: Long, recreateTun: Boolean = false): Boolean {
         return try {
-            rebindLiveTunnel(parsed, gen)
+            rebindLiveTunnel(parsed, gen, recreateTun)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "path-adapt rebound failed; retrying", e)
-            runCatching { rebindLiveTunnel(parsed, gen) }
+            runCatching { rebindLiveTunnel(parsed, gen, recreateTun) }
                 .onFailure { retryError ->
                     Log.e(TAG, "path-adapt rebound retry failed", retryError)
                 }
@@ -758,7 +779,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      * (VPN key flicker) and DOWN calls stopSelf().
      * @return false if the user disconnected during the rebound.
      */
-    private fun rebindLiveTunnel(parsed: Config, gen: Long): Boolean {
+    private fun rebindLiveTunnel(parsed: Config, gen: Long, recreateTun: Boolean = false): Boolean {
         synchronized(tunnelOpLock) {
             if (gen != sessionGeneration || !sessionIntended()) return false
             try {
@@ -774,7 +795,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 configField.set(backend, null)
                 if (gen != sessionGeneration || !sessionIntended()) return false
                 val keeper = tunKeeper
-                if (keeper != null) {
+                if (keeper != null && !recreateTun) {
                     val goConfig = userspaceConfigOrThrow(parsed)
                     val dup = keeper.dup()
                     val fd = dup.detachFd()
@@ -802,7 +823,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     reprotectBackendSocketsLocked(newHandle)
                     return true
                 }
-                Log.w(TAG, "path-adapt missing tun keeper; falling back to setStateInternal")
+                if (recreateTun) {
+                    Log.w(TAG, "path-adapt recreating tun after keeper rebound failed")
+                } else {
+                    Log.w(TAG, "path-adapt missing tun keeper; falling back to setStateInternal")
+                }
                 val setStateInternal = GoBackend::class.java.getDeclaredMethod(
                     "setStateInternal",
                     Tunnel::class.java,
@@ -873,27 +898,61 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (preferred != null) seen.add(preferred)
         cm.allNetworks.forEach { seen.add(it) }
         var bestValidated: Pair<Network, LinkProperties>? = null
+        var bestValidatedScore = Int.MIN_VALUE
         var bestAny: Pair<Network, LinkProperties>? = null
+        var bestAnyScore = Int.MIN_VALUE
         for (network in seen) {
             val caps = cm.getNetworkCapabilities(network) ?: continue
-            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
-            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) continue
+            if (!isUsableUnderlay(caps)) continue
             val link = cm.getLinkProperties(network) ?: continue
             val pair = network to link
-            if (bestAny == null) bestAny = pair
-            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) continue
-            if (bestValidated == null) {
-                bestValidated = pair
-                continue
+            val score = underlayScore(network, caps, preferred)
+            if (score > bestAnyScore) {
+                bestAny = pair
+                bestAnyScore = score
             }
-            val currentCaps = cm.getNetworkCapabilities(bestValidated.first)
-            val candidateForeground = isForegroundUnderlay(caps)
-            val currentForeground = currentCaps != null && isForegroundUnderlay(currentCaps)
-            if (candidateForeground && !currentForeground) {
+            if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) continue
+            if (score > bestValidatedScore) {
                 bestValidated = pair
+                bestValidatedScore = score
             }
         }
         return if (requireValidated) bestValidated else (bestValidated ?: bestAny)
+    }
+
+    private fun isUsableUnderlay(caps: NetworkCapabilities): Boolean =
+        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+
+    private fun underlayScore(
+        network: Network,
+        caps: NetworkCapabilities,
+        preferred: Network?,
+    ): Int = UnderlayRank.score(
+        preferred = preferred != null && network == preferred,
+        validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+        foreground = isForegroundUnderlay(caps),
+        wifiOrEthernet = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_USB)),
+        cellular = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
+    )
+
+    private fun startHealthWatch() {
+        if (healthJob?.isActive == true) return
+        healthJob = scope.launch {
+            while (sessionIntended()) {
+                delay(HEALTH_WATCH_MS)
+                if (!sessionIntended() || lastUnderlayIdentity == null) continue
+                if (disconnectJob?.isActive == true || adaptJob?.isActive == true) continue
+                val fg = bestUnderlay(null, requireValidated = true) ?: continue
+                val id = underlayIdentity(fg.first, fg.second)
+                if (id == lastUnderlayIdentity) continue
+                Log.w(TAG, "path-adapt health: underlay moved $lastUnderlayIdentity -> $id")
+                scheduleUnderlayAdapt(fg.first)
+            }
+        }
     }
 
     private fun isForegroundUnderlay(caps: NetworkCapabilities): Boolean {
@@ -942,9 +1001,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val KEY_CONFIG = "last_approved_config"
         const val KEY_ENDPOINT_LAN = "endpoint_lan"
         const val KEY_ENDPOINT_WAN = "endpoint_wan"
-        private const val UNDERLAY_ADAPT_DEBOUNCE_MS = 1_200L
-        private const val HANDSHAKE_CONFIRM_MS = 3_000L
-        private const val PROBE_RETRY_DELAY_MS = 2_000L
+        private const val UNDERLAY_ADAPT_DEBOUNCE_MS = 800L
+        private const val HANDSHAKE_CONFIRM_MS = 5_000L
+        private const val PROBE_RETRY_DELAY_MS = 1_500L
+        private const val HEALTH_WATCH_MS = 4_000L
         private const val TAG = "VeritasVpnService"
         private val EGRESS_ENDPOINTS = listOf(
             "https://api.ipify.org",

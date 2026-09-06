@@ -7,7 +7,7 @@ After the user taps **Connect now**, the session must stay up until they tap
 auto-disconnect, delete the peer, or flip the UI to “Connecting…” on underlay
 flaps, sticky service restarts, or transient tunnel DOWN events.
 
-## Android (`VeritasVpnService` / `MainActivity`) — 0.2.37+
+## Android (`VeritasVpnService` / `MainActivity`) — 0.2.38+
 
 **2-minute loop note:** WireGuard rekeys around 120s. Older builds treated handshake age > 120s as stale and called reconnect (or soft-adapted DOWN→UP). Never reconnect on handshake age; the Handshake “2m ago” UI label alone is not a failure.
 
@@ -15,7 +15,7 @@ flaps, sticky service restarts, or transient tunnel DOWN events.
 2. First callback after connect **records the underlay fingerprint only** and binds `setUnderlyingNetworks` to that validated non-VPN network. Do not swap the API endpoint (0.2.31 swapped WAN `:443` → LAN `:51820` on any `192.168.0.0/24` Wi‑Fi and blackholed browse).
 3. Later callbacks: unpin (`setUnderlyingNetworks(null)`), then rebind userspace WireGuard **on the existing tun fd**. Public `GoBackend.setState` / `setStateInternal` call `Builder.establish()`, which replaces the tun and drops the status-bar VPN key. Path-adapt keeps a dup of the tun, `wgTurnOff` + `wgTurnOn` on that dup, and never `stopSelf()`.
 4. Same `/24` is only a probe hint, not a decision. Path-adapt tries the exact API LAN (`:51820`) and WAN (`:443`) until a **new handshake** succeeds, then persists that endpoint. Home B→A needs LAN (WAN `:443` often cannot hairpin). Cafe B→A needs WAN (LAN is the node, not the cafe). If the first pair fails, keep probing — do not sit on a dead endpoint.
-5. After handshake: pin the validated underlay, re-`protect()` WG sockets, keep stats polling, keep the VPN key. Same-underlay callbacks (DHCP, VALIDATED) after Connect must **not** probe — 0.2.36 did, tore userspace WireGuard, and stuck download at 0B. Probe only on a real underlay identity change (network handle / iface) or a roam that has no handshake.
+5. After handshake: pin the validated underlay, re-`protect()` WG sockets, keep stats polling, keep the VPN key. Same-underlay callbacks (DHCP, VALIDATED) after Connect must **not** probe. Probe on a real underlay identity change (the callback’s network, not leftover cellular). Rank Wi‑Fi/ethernet above leftover cell so B→A cannot skip and re-pin cell (that froze download at 0B). If keeper rebind gets no handshake, recreate the tun via `setStateInternal`. A health watch re-runs adapt if the foreground underlay moved.
 6. `sessionGeneration` increments on Connect and Disconnect. Path-adapt/restore abort if the generation changed. Real Disconnect closes the tun keeper and is the only path that should `stopSelf()` (returns `START_NOT_STICKY`).
 7. MainActivity ignores `EXTRA_CONNECTED=true` when `userWantsConnected` is false, and ignores unintended disconnect broadcasts after a session is established. No automatic peer-delete reconnect.
 
