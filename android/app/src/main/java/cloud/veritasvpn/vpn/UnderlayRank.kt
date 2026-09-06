@@ -1,8 +1,9 @@
 package cloud.veritasvpn.vpn
 
 /**
- * Scores a candidate underlay so leftover cellular cannot beat the Wi‑Fi
- * the user just switched to (that skip + pin path froze download at 0B).
+ * Scores a candidate underlay. Foreground (the network the user is on) must
+ * beat leftover transports: leftover Wi‑Fi must not beat cellular on A→B,
+ * and leftover cell must not beat Wi‑Fi on B→A.
  */
 object UnderlayRank {
 
@@ -15,10 +16,10 @@ object UnderlayRank {
     ): Int {
         var score = 0
         if (preferred) score += 1_000
+        if (foreground) score += 200
         if (validated) score += 100
-        if (foreground) score += 50
-        if (wifiOrEthernet) score += 40
-        if (cellular) score -= 15
+        if (wifiOrEthernet) score += 20
+        if (cellular) score -= 5
         return score
     }
 }

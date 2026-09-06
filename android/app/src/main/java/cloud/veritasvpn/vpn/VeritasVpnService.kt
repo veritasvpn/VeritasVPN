@@ -594,9 +594,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (gen != sessionGeneration || !sessionIntended()) return
         val config = vpnStatePrefs().getString(KEY_CONFIG, null) ?: return
         val cm = connectivityManager()
-        // A new preferred underlay (Wi‑Fi after cellular) must win even while
-        // leftover cell is still validated. Picking cell and skipping froze
-        // download at 0B on B→A.
+        // Wait for a *new* preferred underlay to validate. Do not score that
+        // callback as preferred when picking: leftover Wi‑Fi callbacks were
+        // winning over foreground cellular and A→B never rebound.
         if (lastUnderlayFingerprint != null && preferred != null) {
             val pCaps = cm.getNetworkCapabilities(preferred)
             val pLink = cm.getLinkProperties(preferred)
@@ -612,7 +612,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
             }
         }
-        val picked = bestUnderlay(preferred, requireValidated = lastUnderlayFingerprint != null)
+        val picked = bestUnderlay(null, requireValidated = lastUnderlayFingerprint != null)
             ?: return
         val (network, link) = picked
         val ipv4s = ipv4Addresses(link)

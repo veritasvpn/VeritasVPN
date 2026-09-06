@@ -25,6 +25,25 @@ class UnderlayRankTest {
     }
 
     @Test
+    fun foregroundCellularBeatsLeftoverValidatedWifi() {
+        val cell = UnderlayRank.score(
+            preferred = false,
+            validated = true,
+            foreground = true,
+            wifiOrEthernet = false,
+            cellular = true,
+        )
+        val wifi = UnderlayRank.score(
+            preferred = false,
+            validated = true,
+            foreground = false,
+            wifiOrEthernet = true,
+            cellular = false,
+        )
+        assertTrue(cell > wifi)
+    }
+
+    @Test
     fun preferredWifiBeatsValidatedCellularEvenIfCellIsForeground() {
         val wifi = UnderlayRank.score(
             preferred = true,
