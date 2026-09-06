@@ -4,14 +4,10 @@ import android.content.Context
 import android.provider.Settings
 
 /**
- * Android system Always-on VPN + lockdown ("Block connections without VPN").
+ * Detects Android system Always-on VPN + lockdown ("Block connections without VPN").
  *
- * Third-party apps cannot flip these switches programmatically; the OS requires
- * the user to enable them once. VeritasVPN treats lockdown as mandatory and
- * never exposes an in-app off toggle.
- *
- * Secure setting names are not always in the public SDK stubs, so we use the
- * platform string keys (same approach as WireGuard Android).
+ * Third-party apps cannot enable those OS toggles. Connect does not wait on them;
+ * while the tunnel is up, all device traffic uses the WireGuard VPN (no in-app off).
  */
 object VpnKillSwitch {
     private const val ALWAYS_ON_VPN_APP = "always_on_vpn_app"
