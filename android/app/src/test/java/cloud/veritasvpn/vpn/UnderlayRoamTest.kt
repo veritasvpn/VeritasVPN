@@ -6,100 +6,52 @@ import org.junit.Test
 class UnderlayRoamTest {
 
     @Test
-    fun newForegroundUnderlayIsUsedEvenIfLeftoverCellExists() {
+    fun newLiveUnderlayRoamsRegardlessOfLeftoverCallbacks() {
         val action = UnderlayRoam.action(
-            callbackIdentity = "wifi",
-            callbackValidated = true,
-            callbackHasIpv4 = true,
-            callbackForeground = true,
+            liveIdentity = "wifi",
+            liveReady = true,
             lastIdentity = "cell",
-            foregroundIdentity = "wifi",
-            handshakeOk = true,
         )
-        assertEquals(UnderlayRoam.Action.USE_CALLBACK, action)
+        assertEquals(UnderlayRoam.Action.ROAM, action)
     }
 
     @Test
-    fun leftoverBackgroundWifiDoesNotStealCellularSession() {
+    fun leftoverIsIgnoredWhenLiveUnderlayDidNotChange() {
         val action = UnderlayRoam.action(
-            callbackIdentity = "wifi",
-            callbackValidated = true,
-            callbackHasIpv4 = true,
-            callbackForeground = false,
+            liveIdentity = "cell",
+            liveReady = true,
             lastIdentity = "cell",
-            foregroundIdentity = "cell",
-            handshakeOk = true,
         )
         assertEquals(UnderlayRoam.Action.SKIP, action)
     }
 
     @Test
-    fun leftoverBackgroundCellDoesNotStealWifiSession() {
+    fun waitsUntilLiveUnderlayIsReady() {
         val action = UnderlayRoam.action(
-            callbackIdentity = "cell",
-            callbackValidated = true,
-            callbackHasIpv4 = true,
-            callbackForeground = false,
-            lastIdentity = "wifi",
-            foregroundIdentity = "wifi",
-            handshakeOk = true,
-        )
-        assertEquals(UnderlayRoam.Action.SKIP, action)
-    }
-
-    @Test
-    fun newUnderlayWaitsUntilValidated() {
-        val action = UnderlayRoam.action(
-            callbackIdentity = "wifi",
-            callbackValidated = false,
-            callbackHasIpv4 = false,
-            callbackForeground = true,
+            liveIdentity = "wifi",
+            liveReady = false,
             lastIdentity = "cell",
-            foregroundIdentity = "cell",
-            handshakeOk = true,
         )
         assertEquals(UnderlayRoam.Action.WAIT, action)
     }
 
     @Test
-    fun leftoverChatterOnOldUnderlayFollowsForegroundMove() {
+    fun waitsWhenNoLiveUnderlay() {
         val action = UnderlayRoam.action(
-            callbackIdentity = "cell",
-            callbackValidated = true,
-            callbackHasIpv4 = true,
-            callbackForeground = false,
+            liveIdentity = null,
+            liveReady = false,
             lastIdentity = "cell",
-            foregroundIdentity = "wifi",
-            handshakeOk = true,
         )
-        assertEquals(UnderlayRoam.Action.USE_FOREGROUND, action)
+        assertEquals(UnderlayRoam.Action.WAIT, action)
     }
 
     @Test
-    fun sameForegroundUnderlayWithHandshakeSkips() {
+    fun cellToWifiRoams() {
         val action = UnderlayRoam.action(
-            callbackIdentity = "wifi",
-            callbackValidated = true,
-            callbackHasIpv4 = true,
-            callbackForeground = true,
-            lastIdentity = "wifi",
-            foregroundIdentity = "wifi",
-            handshakeOk = true,
-        )
-        assertEquals(UnderlayRoam.Action.SKIP, action)
-    }
-
-    @Test
-    fun onLostMovesToNewForeground() {
-        val action = UnderlayRoam.action(
-            callbackIdentity = null,
-            callbackValidated = false,
-            callbackHasIpv4 = false,
-            callbackForeground = false,
+            liveIdentity = "wifi",
+            liveReady = true,
             lastIdentity = "cell",
-            foregroundIdentity = "wifi",
-            handshakeOk = false,
         )
-        assertEquals(UnderlayRoam.Action.USE_FOREGROUND, action)
+        assertEquals(UnderlayRoam.Action.ROAM, action)
     }
 }

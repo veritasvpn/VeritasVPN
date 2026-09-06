@@ -7,15 +7,15 @@ After the user taps **Connect now**, the session must stay up until they tap
 auto-disconnect, delete the peer, or flip the UI to “Connecting…” on underlay
 flaps, sticky service restarts, or transient tunnel DOWN events.
 
-## Android (`VeritasVpnService` / `MainActivity`) — 0.2.40+
+## Android (`VeritasVpnService` / `MainActivity`) — 0.2.41+
 
 **2-minute loop note:** WireGuard rekeys around 120s. Older builds treated handshake age > 120s as stale and called reconnect (or soft-adapted DOWN→UP). Never reconnect on handshake age; the Handshake “2m ago” UI label alone is not a failure.
 
-1. **Underlay NetworkCallback path-adapt.** Watch `INTERNET` + `NOT_VPN` networks. Debounce ~1.2s. Do **not** delete the peer, flip the UI to Connecting, or reconnect on handshake age.
+1. **Underlay NetworkCallback path-adapt.** Watch `INTERNET` + `NOT_VPN` networks. On Android 12+ also `registerBestMatchingNetworkCallback` so leftover Wi‑Fi/cell cannot steal the session. Debounce ~400ms. Do **not** delete the peer, flip the UI to Connecting, or reconnect on handshake age.
 2. First callback after connect **records the underlay fingerprint only** and binds `setUnderlyingNetworks` to that validated non-VPN network. Do not swap the API endpoint (0.2.31 swapped WAN `:443` → LAN `:51820` on any `192.168.0.0/24` Wi‑Fi and blackholed browse).
-3. Later callbacks: unpin the previous underlay, pin the **foreground** network the device is on, then rebind userspace WireGuard **on the existing tun fd**. Public `GoBackend.setState` / `setStateInternal` call `Builder.establish()`, which replaces the tun and drops the status-bar VPN key. Path-adapt keeps a dup of the tun, `wgTurnOff` + `wgTurnOn` on that dup, and never `stopSelf()`. Leftover background Wi‑Fi or cell must not steal the session.
-4. Endpoint probe is **WAN first, LAN only if WAN does not handshake**. Same `/24` is not the node LAN (cafe/home `192.168.0.0/24` is common). Arbitrary A↔B switches keep the public endpoint. LAN `:51820` is only a fallback for the node LAN, where WAN `:443` often cannot hairpin. Persist an endpoint only after a **new handshake**.
-5. After handshake: pin that underlay, `protect()` and `Network.bindSocket` the WG UDP fds, keep stats polling, keep the VPN key. Same-underlay callbacks (DHCP, VALIDATED) after Connect must **not** probe. A health watch re-runs adapt if the foreground underlay moved. If keeper rebind gets no handshake, recreate the tun via `setStateInternal`.
+3. On roam: pin the **best-matching** underlay, `protect()` + `bindSocket` the existing WG UDP fds, and wait for RX or a new handshake. Only if traffic does not resume, `wgTurnOff` + `wgTurnOn` on the tun keeper (never public `setState` / `stopSelf()`).
+4. Endpoint probe is **WAN first, LAN only if WAN does not handshake**. Same `/24` is not the node LAN. Arbitrary A↔B switches keep the public endpoint. LAN `:51820` is only a fallback for the node LAN, where WAN `:443` often cannot hairpin. Persist an endpoint only after a **new handshake**.
+5. Same-underlay callbacks (DHCP, VALIDATED) after Connect must **not** probe. A health watch re-runs adapt if the best-matching underlay moved. If keeper rebind gets no handshake, recreate the tun via `setStateInternal`.
 6. `sessionGeneration` increments on Connect and Disconnect. Path-adapt/restore abort if the generation changed. Real Disconnect closes the tun keeper and is the only path that should `stopSelf()` (returns `START_NOT_STICKY`).
 7. MainActivity ignores `EXTRA_CONNECTED=true` when `userWantsConnected` is false, and ignores unintended disconnect broadcasts after a session is established. No automatic peer-delete reconnect.
 
