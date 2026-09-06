@@ -1,7 +1,7 @@
 import { withSecurityHeaders, textResponse } from "../_lib/security.js";
 
 const APK_URL =
-  "https://github.com/veritasvpn/VeritasVPN/releases/download/v0.2.53/veritasvpn-android.apk";
+  "https://github.com/veritasvpn/VeritasVPN/releases/download/v0.2.54/veritasvpn-android.apk";
 
 function downloadHeaders(upstream) {
   const headers = withSecurityHeaders({
