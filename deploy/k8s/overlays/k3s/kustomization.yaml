@@ -27,7 +27,7 @@ images:
     digest: sha256:3e2ec490696d13fdef3a326281432e3d81905e2acaa2f0ee660f15cf695bdfd3
   - name: localhost:31500/telegram-notifier
     newName: localhost:31500/telegram-notifier
-    digest: sha256:dbb8587bfd81060e12b8f21f890954e046521da511603b9d0c25786ae08f8cf2
+    digest: sha256:c65ec535ef7e6e6aaec053520b0807a9aa7a8ab53b4a717d6aa69522d46d69af
 
 
 patches:
