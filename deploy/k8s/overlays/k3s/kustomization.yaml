@@ -9,13 +9,13 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:b4d66791304fee2266e0f27e15d6bfdf2a9bd115069f62e5555f972460458685
+    digest: sha256:dc33e029c00316129e4d598b17875f2b61dcd8458d64a2ba0a7b864dcc38eb7b
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    digest: sha256:601a5dffc830eb75c478c3a652c409741df9b3de9096772926a3753aa9adda45
+    digest: sha256:e071c5f2020abec78a10c1df062de22ae43e50396b7984a85fd0507152b67cfd
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    digest: sha256:55a8deefb9f0357209eaa071ef0b2d8c80baebb102fff0e35f907b032336b649
+    digest: sha256:9011eb0db740829fa4c3c134c28837f15ce93c74a7e26c60c80a749d078c8da1
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     digest: sha256:37b603547781fea9e4eb477f5ee1b9e4ed8ece5779b7fd8325ebc9899be90b5a
