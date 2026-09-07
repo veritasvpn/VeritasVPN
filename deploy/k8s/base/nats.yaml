@@ -41,6 +41,29 @@ spec:
           args:
             - -c
             - /etc/nats/nats-server.conf
+          # nats-server.conf references these as $VAR; without them every
+          # connection would be rejected at startup.
+          env:
+            - name: NATS_USER
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_USER
+            - name: NATS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_PASSWORD
+            - name: NATS_NOTIFIER_USER
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_NOTIFIER_USER
+            - name: NATS_NOTIFIER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_NOTIFIER_PASSWORD
           ports:
             - containerPort: 4222
             - containerPort: 8222

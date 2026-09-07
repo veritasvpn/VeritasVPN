@@ -26,10 +26,17 @@ type accountTeardownResponse struct {
 }
 
 // requestAccountTeardown asks wg-manager to REMOVE live peers/port-forwards
-// before the account row is deleted. Fail-closed when NATS is connected so a
-// deleted account cannot leave an active tunnel.
+// before the account row is deleted. It fails closed: unless wg-manager
+// acknowledges, the caller must not delete the account, or the user would be
+// told their account is gone while their tunnel keeps working.
 func (s *AuthService) requestAccountTeardown(ctx context.Context, accountID string) error {
 	if s.nats == nil {
+		// Production refuses to start without NATS, so reaching this in
+		// production means the wiring is broken; deleting anyway would strand a
+		// live peer. Local development has no VPN plane to tear down.
+		if s.cfg.IsProduction() {
+			return fmt.Errorf("vpn teardown unavailable: no NATS connection")
+		}
 		s.log.Warn("NATS unavailable; skipping VPN teardown on account delete",
 			zap.String("account_hash", logging.HashIdentifier(accountID)))
 		return nil

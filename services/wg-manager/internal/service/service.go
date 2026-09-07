@@ -212,28 +212,101 @@ func mintAgentToken() (plaintext, hash string, err error) {
 	return plaintext, tokenhash.Hash(plaintext), nil
 }
 
+// ErrAgentUnauthorized is returned when agent credentials do not authorize the
+// requested operation. Handlers map it to a bare 401 so probing the endpoint
+// cannot reveal which credential was wrong, or whether a hostname is enrolled.
+var ErrAgentUnauthorized = errors.New("unauthorized")
+
+// agentTokenMatches compares a presented plaintext agent token against a stored
+// hash in constant time. An empty token or an empty stored hash never matches.
+func agentTokenMatches(presented, storedHash string) bool {
+	if presented == "" || storedHash == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(tokenhash.Hash(presented)), []byte(storedHash)) == 1
+}
+
+// applyServerIdentity copies the identity fields an agent reports at
+// registration onto srv. Empty location fields leave the stored value alone.
+func applyServerIdentity(srv *model.Server, publicKey, publicIP string, wgPort int32, region, city, country string) {
+	srv.PublicIP = publicIP
+	srv.WGPort = wgPort
+	srv.PublicKey = publicKey
+	srv.Status = "online"
+	if region != "" {
+		srv.Region = region
+	}
+	if city != "" {
+		srv.City = city
+	}
+	if country != "" {
+		srv.Country = country
+	}
+}
+
 // VerifyAgentToken checks Bearer against the per-server stored hash (constant-time).
 func (s *Service) VerifyAgentToken(ctx context.Context, serverID, token string) error {
 	if serverID == "" || token == "" {
-		return fmt.Errorf("unauthorized")
+		return ErrAgentUnauthorized
 	}
 	stored, err := s.postgres.GetServerAgentTokenHash(ctx, serverID)
 	if err != nil {
-		return fmt.Errorf("unauthorized")
+		return ErrAgentUnauthorized
 	}
-	if stored == "" {
-		return fmt.Errorf("unauthorized")
-	}
-	provided := tokenhash.Hash(token)
-	if subtle.ConstantTimeCompare([]byte(provided), []byte(stored)) != 1 {
-		return fmt.Errorf("unauthorized")
+	if !agentTokenMatches(token, stored) {
+		return ErrAgentUnauthorized
 	}
 	return nil
 }
 
-func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publicIP string, wgPort int32, region, city, country, authToken string) (*model.Server, string, error) {
+// RegisterServer enrolls a new VPN node, or refreshes the identity of one that
+// is already enrolled.
+//
+// Enrollment is authorized by the shared bootstrap token and mints that node's
+// own agent token, returned exactly once. Re-registration of a hostname that is
+// already enrolled additionally requires the node to present that agent token,
+// and does not rotate it. Without that second factor, anyone holding the
+// bootstrap secret — which every agent pod shares — could re-register an
+// existing hostname, be issued a fresh token, and take over the node's peer
+// stream along with its subscriber preshared keys.
+//
+// A node that has genuinely lost its token file cannot re-enrol itself by
+// design. Recovery requires an operator to clear agent_token_hash for that row;
+// see docs/RUNBOOK_AGENT_ENROLLMENT.md.
+func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publicIP string, wgPort int32, region, city, country, authToken, presentedAgentToken string) (*model.Server, string, error) {
 	if s.authToken == "" || subtle.ConstantTimeCompare([]byte(authToken), []byte(s.authToken)) != 1 {
-		return nil, "", fmt.Errorf("invalid agent auth token")
+		return nil, "", ErrAgentUnauthorized
+	}
+
+	existing, err := s.postgres.GetServerByHostname(ctx, hostname)
+	if err != nil && !strings.Contains(err.Error(), "no rows") {
+		return nil, "", fmt.Errorf("lookup server: %w", err)
+	}
+
+	// Already enrolled: the caller must prove it is the node that holds the
+	// current agent token, and the token stays as it is.
+	if existing != nil && existing.AgentTokenHash != "" {
+		if !agentTokenMatches(presentedAgentToken, existing.AgentTokenHash) {
+			s.log.Warn("rejected re-registration without a valid agent token",
+				"hostname", hostname,
+				"server_id", existing.ID,
+				"public_ip", publicIP,
+			)
+			return nil, "", ErrAgentUnauthorized
+		}
+		applyServerIdentity(existing, publicKey, publicIP, wgPort, region, city, country)
+		if err := s.postgres.UpdateServerIdentity(ctx, existing); err != nil {
+			return nil, "", fmt.Errorf("update server: %w", err)
+		}
+		if err := s.postgres.MarkDuplicateServersOffline(ctx, existing.ID, publicIP, publicKey); err != nil {
+			s.log.Warn("failed to mark duplicate servers offline", "error", err)
+		}
+		s.log.Info("server re-registered",
+			"server_id", existing.ID,
+			"hostname", hostname,
+			"subnet", existing.WGSubnet,
+		)
+		return existing, "", nil
 	}
 
 	plaintext, tokenHash, err := mintAgentToken()
@@ -242,34 +315,19 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 	}
 	issuedAt := time.Now().UTC()
 
-	existing, err := s.postgres.GetServerByHostname(ctx, hostname)
-	if err != nil && !strings.Contains(err.Error(), "no rows") {
-		return nil, "", fmt.Errorf("lookup server: %w", err)
-	}
-
+	// Known hostname that has never been issued a token (pre-enrollment row, or
+	// an operator-cleared one). The bootstrap token adopts it.
 	if existing != nil {
-		existing.PublicIP = publicIP
-		existing.WGPort = wgPort
-		existing.PublicKey = publicKey
-		existing.Status = "online"
+		applyServerIdentity(existing, publicKey, publicIP, wgPort, region, city, country)
 		existing.AgentTokenHash = tokenHash
 		existing.AgentTokenIssuedAt = &issuedAt
-		if region != "" {
-			existing.Region = region
-		}
-		if city != "" {
-			existing.City = city
-		}
-		if country != "" {
-			existing.Country = country
-		}
 		if err := s.postgres.UpdateServerIdentity(ctx, existing); err != nil {
 			return nil, "", fmt.Errorf("update server: %w", err)
 		}
 		if err := s.postgres.MarkDuplicateServersOffline(ctx, existing.ID, publicIP, publicKey); err != nil {
 			s.log.Warn("failed to mark duplicate servers offline", "error", err)
 		}
-		s.log.Info("server re-registered",
+		s.log.Info("server enrolled on existing record",
 			"server_id", existing.ID,
 			"hostname", hostname,
 			"subnet", existing.WGSubnet,

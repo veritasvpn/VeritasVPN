@@ -156,6 +156,16 @@ spec:
               port: 8080
             initialDelaySeconds: 15
             periodSeconds: 10
+          # This pod holds JWT_ED25519_PRIVATE_KEY, so a compromise here means
+          # token forgery for every account. Keep the blast radius minimal.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
               cpu: 50m

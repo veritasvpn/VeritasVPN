@@ -17,3 +17,58 @@ data:
     max_connections: 100
     max_payload: 1MB
     max_subscriptions: 1000
+
+    # Without this block NATS accepts any connection reachable on 4222, so any
+    # compromised pod could publish account.teardown and delete another
+    # account's VPN peers. Credentials come from the veritas-secrets Secret via
+    # the StatefulSet environment; $VAR is expanded by nats-server at startup.
+    authorization {
+      # Shared by auth-svc, wg-manager and billing-svc. Scoped to the subjects
+      # those services actually use so a compromise cannot publish arbitrary
+      # traffic. Splitting this into one credential per service is the next
+      # step; see docs/RUNBOOK_NATS_AUTH.md.
+      SERVICE_PERMS = {
+        publish = {
+          allow = [
+            "account.registered",
+            "account.teardown",
+            "subscription.renewed",
+            "subscription.expired",
+            "subscription.canceled",
+            "server.registered",
+            "server.heartbeat",
+            "peer.created",
+            "peer.deleted",
+            "peer.expired",
+            "_INBOX.>"
+          ]
+        }
+        subscribe = {
+          allow = [
+            "account.teardown",
+            "subscription.renewed",
+            "subscription.expired",
+            "subscription.canceled",
+            "_INBOX.>"
+          ]
+        }
+      }
+
+      # telegram-notifier only reads two event streams. It never needs to write.
+      NOTIFIER_PERMS = {
+        publish = {
+          deny = [">"]
+        }
+        subscribe = {
+          allow = [
+            "account.registered",
+            "subscription.renewed"
+          ]
+        }
+      }
+
+      users = [
+        { user: $NATS_USER, password: $NATS_PASSWORD, permissions: $SERVICE_PERMS },
+        { user: $NATS_NOTIFIER_USER, password: $NATS_NOTIFIER_PASSWORD, permissions: $NOTIFIER_PERMS }
+      ]
+    }

@@ -152,6 +152,15 @@ spec:
               port: 8080
             initialDelaySeconds: 15
             periodSeconds: 10
+          # This pod holds AGENT_AUTH_TOKEN and brokers peer keys to every node.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
               cpu: 50m

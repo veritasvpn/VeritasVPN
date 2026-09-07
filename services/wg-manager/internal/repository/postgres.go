@@ -16,20 +16,28 @@ func NewPostgres(pool *pgxpool.Pool) *Postgres {
 	return &Postgres{pool: pool}
 }
 
+// GetServerByHostname returns the server row including its agent token hash,
+// which RegisterServer needs to authorize re-registration of an enrolled node.
 func (p *Postgres) GetServerByHostname(ctx context.Context, hostname string) (*model.Server, error) {
 	query := `SELECT id, hostname, region, city, country, public_ip, wg_port,
 	           public_key, status, capacity, load_factor, wg_subnet, dns_server,
+	           agent_token_hash, agent_token_issued_at,
 	           created_at, updated_at FROM servers WHERE hostname = $1`
 
 	srv := &model.Server{}
+	var agentTokenHash *string
 	err := p.pool.QueryRow(ctx, query, hostname).Scan(
 		&srv.ID, &srv.Hostname, &srv.Region, &srv.City, &srv.Country,
 		&srv.PublicIP, &srv.WGPort, &srv.PublicKey, &srv.Status,
 		&srv.Capacity, &srv.LoadFactor, &srv.WGSubnet, &srv.DNSServer,
+		&agentTokenHash, &srv.AgentTokenIssuedAt,
 		&srv.CreatedAt, &srv.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get server by hostname: %w", err)
+	}
+	if agentTokenHash != nil {
+		srv.AgentTokenHash = *agentTokenHash
 	}
 	return srv, nil
 }

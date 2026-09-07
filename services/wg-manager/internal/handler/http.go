@@ -143,6 +143,9 @@ type registerRequest struct {
 	City      string `json:"city"`
 	Country   string `json:"country"`
 	AuthToken string `json:"auth_token"`
+	// AgentToken is the node's own token from a previous enrollment. Required to
+	// re-register a hostname that is already enrolled; empty on first enrollment.
+	AgentToken string `json:"agent_token"`
 }
 
 func (h *HTTPHandler) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
@@ -173,10 +176,14 @@ func (h *HTTPHandler) handleAgentRegister(w http.ResponseWriter, r *http.Request
 		req.Country = "XX"
 	}
 
-	srv, agentToken, err := h.svc.RegisterServer(r.Context(), req.Hostname, req.PublicKey, req.PublicIP, req.WGPort, req.Region, req.City, req.Country, req.AuthToken)
+	srv, agentToken, err := h.svc.RegisterServer(r.Context(), req.Hostname, req.PublicKey, req.PublicIP, req.WGPort, req.Region, req.City, req.Country, req.AuthToken, req.AgentToken)
 	if err != nil {
-		h.log.Error("agent register failed", "error", err)
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		h.log.Error("agent register failed", "hostname", req.Hostname, "error", err)
+		if errors.Is(err, service.ErrAgentUnauthorized) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "registration failed"})
 		return
 	}
 

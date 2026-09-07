@@ -38,6 +38,9 @@ type RegisterServerRequest struct {
 	City      string `json:"city"`
 	Country   string `json:"country"`
 	AuthToken string `json:"auth_token"`
+	// AgentToken proves we are the node already enrolled under this hostname.
+	// Empty on first enrollment; wg-manager then mints one and returns it.
+	AgentToken string `json:"agent_token,omitempty"`
 }
 
 type RegisterServerResponse struct {
@@ -599,9 +602,12 @@ func (a *Agent) registerWithManager(ctx context.Context) (*RegisterServerRespons
 		Region:    a.cfg.ServerRegion,
 		City:      a.cfg.ServerCity,
 		Country:   a.cfg.ServerCountry,
-		// Bootstrap always uses the global AGENT_AUTH_TOKEN; per-server token
-		// is minted by wg-manager and returned once in the response.
-		AuthToken: a.cfg.AuthToken,
+		// First enrollment uses the global AGENT_AUTH_TOKEN; wg-manager mints a
+		// per-server token and returns it once. Every later registration must
+		// also present that token, so the bootstrap secret alone cannot be used
+		// to take this node over.
+		AuthToken:  a.cfg.AuthToken,
+		AgentToken: a.loadPersistedAgentToken(),
 	}
 
 	return a.managerClient.RegisterServer(ctx, req)

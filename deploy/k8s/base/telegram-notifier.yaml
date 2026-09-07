@@ -17,8 +17,14 @@ spec:
           imagePullPolicy: IfNotPresent
           ports: [{containerPort: 8080}]
           env:
+            # Credential vars must precede NATS_URL — k8s only expands $(VAR)
+            # from earlier env entries.
+            - name: NATS_NOTIFIER_USER
+              valueFrom: {secretKeyRef: {name: veritas-secrets, key: NATS_NOTIFIER_USER}}
+            - name: NATS_NOTIFIER_PASSWORD
+              valueFrom: {secretKeyRef: {name: veritas-secrets, key: NATS_NOTIFIER_PASSWORD}}
             - name: NATS_URL
-              value: "nats://nats.veritas.svc.cluster.local:4222"
+              value: "nats://$(NATS_NOTIFIER_USER):$(NATS_NOTIFIER_PASSWORD)@nats.veritas.svc.cluster.local:4222"
             - name: TELEGRAM_BOT_TOKEN
               valueFrom: {secretKeyRef: {name: telegram-notifier-secrets, key: BOT_TOKEN}}
             - name: TELEGRAM_ACTIVITY_CHAT_ID

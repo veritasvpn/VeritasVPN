@@ -92,6 +92,13 @@ func main() {
 	authHandler := handler.NewAuthHandler(log, svc)
 	authInterceptor := middleware.NewAuthInterceptor(log, jwtMgr, redisClient)
 
+	// Account deletion tears down live WireGuard peers over NATS and fails
+	// closed, so without NATS a user could delete their account and keep a
+	// working tunnel. Refuse to serve production traffic in that state.
+	if cfg.IsProduction() && strings.TrimSpace(cfg.NatsURL) == "" {
+		log.Fatal("NATS_URL is required in production")
+	}
+
 	var natsConn *nats.Conn
 	if cfg.NatsURL != "" {
 		nc, err := nats.Connect(cfg.NatsURL,
@@ -110,6 +117,9 @@ func main() {
 			}),
 		)
 		if err != nil {
+			if cfg.IsProduction() {
+				log.Fatal("failed to connect to NATS", zap.Error(err))
+			}
 			log.Warn("failed to connect to NATS; tier sync disabled", zap.Error(err))
 		} else {
 			natsConn = nc
