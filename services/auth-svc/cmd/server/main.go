@@ -110,7 +110,7 @@ func main() {
 				log.Warn("NATS connection interrupted; reconnecting", zap.Error(err))
 			}),
 			nats.ReconnectHandler(func(nc *nats.Conn) {
-				log.Info("NATS connection restored", zap.String("url", nc.ConnectedUrl()))
+				log.Info("NATS connection restored", zap.String("url", logging.RedactURL(nc.ConnectedUrl())))
 			}),
 			nats.ClosedHandler(func(_ *nats.Conn) {
 				log.Warn("NATS connection closed")

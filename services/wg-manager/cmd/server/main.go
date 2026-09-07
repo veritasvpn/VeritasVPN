@@ -71,7 +71,7 @@ func main() {
 		log.Fatal("failed to connect to nats", "error", err)
 	}
 	defer nc.Close()
-	log.Info("connected to nats", "url", cfg.NatsURL)
+	log.Info("connected to nats", "url", logging.RedactURL(cfg.NatsURL))
 
 	pgRepo := repository.NewPostgres(pool)
 	sched := scheduler.New(pgRepo, log)
