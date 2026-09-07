@@ -23,10 +23,18 @@ spec:
   selector:
     app: registry
 ---
-# Host pushes: from the node, forward loopback only then docker push:
-#   kubectl -n veritas port-forward svc/registry 31500:5000
-#   docker tag … localhost:31500/<image>:<tag> && docker push localhost:31500/<image>:<tag>
-# Do not expose an unauthenticated NodePort; ClusterIP stays in-cluster only.
+# The registry is published on the node at 127.0.0.1:31500 via a loopback
+# hostPort. Workload images are pinned to localhost:31500/<image>@sha256:…, so
+# containerd must be able to resolve that address on its own: a manual
+# `kubectl port-forward` does not survive a reboot, and without it every
+# imagePullPolicy: Always workload lands in ImagePullBackOff until an operator
+# intervenes.
+#
+# hostIP pins the bind to loopback, so this is reachable only from the node
+# itself. That is deliberately not a NodePort, which would publish an
+# unauthenticated registry on every interface.
+#
+# Host pushes: docker tag … localhost:31500/<image>:<tag> && docker push …
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -65,6 +73,8 @@ spec:
           image: registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
           ports:
             - containerPort: 5000
+              hostPort: 31500
+              hostIP: 127.0.0.1
           volumeMounts:
             - name: data
               mountPath: /var/lib/registry
