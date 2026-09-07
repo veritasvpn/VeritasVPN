@@ -184,6 +184,12 @@ func (s *Service) useLANEndpoint(clientIP, publicIP string) bool {
 	return c4[0] == l4[0] && c4[1] == l4[1] && c4[2] == l4[2]
 }
 
+// ResolveTier returns the authoritative tier for an account, for callers
+// outside this package that must not gate on the JWT's advisory tier claim.
+func (s *Service) ResolveTier(ctx context.Context, accountID, jwtTier string) string {
+	return s.resolveTier(ctx, accountID, jwtTier)
+}
+
 func (s *Service) resolveTier(ctx context.Context, accountID, jwtTier string) string {
 	_ = jwtTier // JWT tier is advisory only; never trusted on cache miss.
 	if s.tierCache != nil {

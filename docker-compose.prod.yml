@@ -151,7 +151,10 @@ services:
 
   veritas-proxy:
     ports:
-      - "0.0.0.0:1080:1080"
+      # Loopback by default. The proxy authenticates every request, but binding
+      # it to every interface puts it in front of the whole network, so
+      # exposing it has to be a deliberate act: set PROXY_BIND=0.0.0.0.
+      - "${PROXY_BIND:-127.0.0.1}:1080:1080"
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

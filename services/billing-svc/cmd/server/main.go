@@ -91,6 +91,11 @@ func main() {
 		}
 		redisStore = rs
 		log.Info("connected to Redis for token blacklist")
+	} else if cfg.IsProduction() {
+		// Without Redis this service cannot see the revocation list, so a token
+		// revoked at sign-out or account deletion would still buy subscription
+		// changes until it expired.
+		log.Fatal("REDIS_URL is required in production so revoked access tokens are rejected")
 	} else {
 		log.Warn("REDIS_URL empty — revoked access tokens will not be rejected by billing-svc")
 	}
@@ -163,11 +168,12 @@ func main() {
 
 	addr := cfg.ServerAddr()
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      securityHeaders(mux),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              addr,
+		Handler:           limitRequestBody(securityHeaders(mux)),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {
@@ -215,6 +221,19 @@ func connectDatabase(databaseURL string, log *logging.Logger) (*pgxpool.Pool, er
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// maxRequestBody bounds any single request body, including the public BTCPay
+// webhook, which reads the whole payload before it can verify the signature.
+const maxRequestBody = 1 << 20 // 1 MiB
+
+func limitRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func securityHeaders(next http.Handler) http.Handler {

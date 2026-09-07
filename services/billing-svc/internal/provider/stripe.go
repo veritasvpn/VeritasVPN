@@ -120,8 +120,11 @@ func (s *StripeProvider) HandleWebhook(payload []byte, signature string) error {
 }
 
 func (s *StripeProvider) verifySignature(payload []byte, signature string) bool {
+	// No secret means we cannot authenticate the caller, so the only safe
+	// answer is to reject. Returning true here would let anyone who can reach
+	// the webhook endpoint forge subscription events.
 	if s.webhookSecret == "" {
-		return true
+		return false
 	}
 
 	parts := strings.Split(signature, ",")

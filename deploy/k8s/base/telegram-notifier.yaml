@@ -11,6 +11,9 @@ spec:
   template:
     metadata: {labels: {app: telegram-notifier}}
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: telegram-notifier
           image: localhost:31500/telegram-notifier@sha256:df9540aaa1f516075c360efb19b0a1c12ba20b370fc10da765b5a534dbca8698

@@ -91,6 +91,10 @@ func peerIDPath() string {
 	return filepath.Join(configDir(), "peer_id")
 }
 
+func credentialsPath() string {
+	return filepath.Join(configDir(), "credentials.env")
+}
+
 func cmdRegister() {
 	fmt.Println("Registering new account...")
 
@@ -113,13 +117,25 @@ func cmdRegister() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("\nIMPORTANT — Save these credentials:\n")
-	fmt.Printf("Account ID:    %s\n", result.AccountID)
-	fmt.Printf("Access Token:  %s\n", result.AccessToken)
-	fmt.Printf("Refresh Token: %s\n", result.RefreshToken)
-	fmt.Printf("\nSet environment variables:\n")
-	fmt.Printf("  export VERITAS_ACCOUNT_ID=%s\n", result.AccountID)
-	fmt.Printf("  export VERITAS_ACCESS_TOKEN=%s\n", result.AccessToken)
+	// Tokens go to a 0600 file rather than stdout, which is routinely captured
+	// by shell history, terminal scrollback, CI logs and screen shares.
+	if err := os.MkdirAll(configDir(), 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "could not create %s: %v\n", configDir(), err)
+		os.Exit(1)
+	}
+	creds := fmt.Sprintf(
+		"VERITAS_ACCOUNT_ID=%s\nVERITAS_ACCESS_TOKEN=%s\nVERITAS_REFRESH_TOKEN=%s\n",
+		result.AccountID, result.AccessToken, result.RefreshToken,
+	)
+	if err := os.WriteFile(credentialsPath(), []byte(creds), 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "could not write %s: %v\n", credentialsPath(), err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\nAccount ID: %s\n", result.AccountID)
+	fmt.Printf("Credentials written to %s (owner-readable only).\n", credentialsPath())
+	fmt.Printf("\nLoad them into your shell with:\n")
+	fmt.Printf("  set -a; . %s; set +a\n", credentialsPath())
 }
 
 func cmdListServers() {

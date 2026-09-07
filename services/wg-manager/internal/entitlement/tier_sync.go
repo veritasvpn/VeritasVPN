@@ -1,6 +1,7 @@
 package entitlement
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"time"
@@ -16,30 +17,76 @@ type BillingEvent struct {
 	PeriodEnd *time.Time `json:"period_end"`
 }
 
+// TierTTL bounds how long a NATS-derived tier is trusted. The cache is a
+// latency optimisation over the database, which is authoritative; an entry that
+// outlives its TTL falls back to a database read. Without this, a
+// subscription.expired event dropped during a NATS or wg-manager restart would
+// leave a paid tier cached for the lifetime of the process.
+const TierTTL = 10 * time.Minute
+
+type tierEntry struct {
+	tier     string
+	storedAt time.Time
+}
+
 type TierCache struct {
 	mu   sync.RWMutex
-	data map[string]string // accountID -> tier
+	data map[string]tierEntry // accountID -> tier
+	now  func() time.Time     // overridable in tests
 	log  *logging.Logger
 }
 
 func NewTierCache(log *logging.Logger) *TierCache {
 	return &TierCache{
-		data: make(map[string]string),
+		data: make(map[string]tierEntry),
+		now:  time.Now,
 		log:  log,
 	}
 }
 
 func (c *TierCache) Lookup(accountID string) (tier string, ok bool) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	tier, ok = c.data[accountID]
-	return
+	entry, found := c.data[accountID]
+	c.mu.RUnlock()
+	if !found || c.now().Sub(entry.storedAt) >= TierTTL {
+		return "", false
+	}
+	return entry.tier, true
 }
 
 func (c *TierCache) Set(accountID, tier string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.data[accountID] = NormalizeTier(tier)
+	c.data[accountID] = tierEntry{tier: NormalizeTier(tier), storedAt: c.now()}
+}
+
+// prune drops expired entries so the map does not grow without bound for the
+// lifetime of the process.
+func (c *TierCache) prune() {
+	cutoff := c.now().Add(-TierTTL)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, entry := range c.data {
+		if entry.storedAt.Before(cutoff) {
+			delete(c.data, id)
+		}
+	}
+}
+
+// StartPruning reclaims expired entries until ctx is cancelled.
+func (c *TierCache) StartPruning(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(TierTTL)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				c.prune()
+			}
+		}
+	}()
 }
 
 func (c *TierCache) StartSync(nc *nats.Conn) error {

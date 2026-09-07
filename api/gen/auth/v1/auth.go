@@ -46,6 +46,7 @@ type GetAccountResponse struct {
 
 type DeleteAccountRequest struct {
 	AccountId string
+	Password  string
 }
 
 type DeleteAccountResponse struct {

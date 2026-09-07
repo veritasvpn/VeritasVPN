@@ -219,7 +219,16 @@ bitcoin_chain{chain=%q} 1
 	})
 	addr := env("LISTEN_ADDR", ":8080")
 	log.Printf("bitcoin readiness listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	// Explicit deadlines: the default http.Server has none, so a slow client
+	// can hold a connection open indefinitely.
+	srv := &http.Server{
+		Addr:              addr,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	log.Fatal(srv.ListenAndServe())
 }
 
 func required(name string) string {

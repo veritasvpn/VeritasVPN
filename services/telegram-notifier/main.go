@@ -98,7 +98,20 @@ func main() {
 		}
 		http.Error(w, "nats disconnected", http.StatusServiceUnavailable)
 	})
-	go http.ListenAndServe(":8080", nil)
+	// Explicit deadlines: the default http.Server has none, so a slow client
+	// can hold a connection open indefinitely.
+	healthSrv := &http.Server{
+		Addr:              ":8080",
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	go func() {
+		if err := healthSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("health server stopped: %v", err)
+		}
+	}()
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig

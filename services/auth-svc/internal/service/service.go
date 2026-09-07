@@ -329,10 +329,17 @@ func (s *AuthService) SignInWithEmail(ctx context.Context, email, password strin
 
 	acc, err := s.db.GetAccountByEmail(ctx, email)
 	if err != nil {
+		// Spend the same bcrypt time an existing account would, so the
+		// response does not time out faster for unregistered addresses.
+		libcrypto.BurnPasswordCheck(password)
 		return "", "", "", 0, fmt.Errorf("invalid email or password: %w", err)
 	}
 
-	if acc.PasswordHash == nil || !libcrypto.CheckPassword(password, *acc.PasswordHash) {
+	if acc.PasswordHash == nil {
+		libcrypto.BurnPasswordCheck(password)
+		return "", "", "", 0, fmt.Errorf("invalid email or password")
+	}
+	if !libcrypto.CheckPassword(password, *acc.PasswordHash) {
 		return "", "", "", 0, fmt.Errorf("invalid email or password")
 	}
 	if acc.EmailVerifiedAt == nil {

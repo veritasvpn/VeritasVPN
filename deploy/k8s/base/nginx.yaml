@@ -34,6 +34,9 @@ spec:
       labels:
         app: nginx
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       # Website content is a hostPath on the control-plane node only.
       nodeSelector:
         kubernetes.io/arch: amd64

@@ -83,6 +83,7 @@ func main() {
 	if err := tierCache.StartSync(nc); err != nil {
 		log.Fatal("failed to start tier sync", "error", err)
 	}
+	tierCache.StartPruning(ctx)
 
 	svc := service.New(pgRepo, redisRepo, sched, comm, nc, cfg.AgentAuthToken, tierCache, log)
 	if err := svc.StartAccountTeardownSync(nc); err != nil {
@@ -141,9 +142,13 @@ func main() {
 
 	httpAddr := cfg.HTTPServerAddr()
 	httpSrv := &http.Server{
-		Addr:              httpAddr,
-		Handler:           securityHeaders(httpHandler.Routes()),
+		Addr:    httpAddr,
+		Handler: limitRequestBody(securityHeaders(httpHandler.Routes())),
+		// No WriteTimeout: the agent peer-update stream is a long-lived SSE
+		// response and any write deadline would sever it.
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
@@ -219,6 +224,20 @@ func connectDatabase(ctx context.Context, databaseURL string, log *logging.Logge
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// maxRequestBody bounds any single request body. Every handler here decodes
+// JSON straight from r.Body, so without a cap one request can make the process
+// allocate as much memory as the client is willing to send.
+const maxRequestBody = 1 << 20 // 1 MiB
+
+func limitRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func securityHeaders(next http.Handler) http.Handler {

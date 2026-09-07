@@ -30,6 +30,11 @@ func validatePassword(password string) error {
 	if !hasUpper || !hasLower || !hasNumber {
 		return userErrorf("password must include uppercase, lowercase, and a number")
 	}
+	// bcrypt ignores anything past 72 bytes, so a longer password is not
+	// stronger; rejecting it also keeps oversized input out of the hash path.
+	if len(password) > libcrypto.MaxPasswordBytes {
+		return userErrorf("password must be at most %d bytes", libcrypto.MaxPasswordBytes)
+	}
 	return nil
 }
 

@@ -31,6 +31,9 @@ spec:
       labels:
         app: auth-svc
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: auth-svc
           image: localhost:31500/auth-svc@sha256:ac52a7c5c996c1cccc605d3a6e6f861f8eef35057696e5bdf158aa83628632bb

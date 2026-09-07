@@ -104,6 +104,21 @@ func (h *AuthHandler) DeleteAccount(ctx context.Context, req *authv1.DeleteAccou
 		return nil, status.Error(codes.PermissionDenied, "permission denied")
 	}
 
+	// Same bar as the HTTP endpoint: for an account with a password, a stolen
+	// access token must not be enough to destroy it irreversibly.
+	acc, err := h.service.GetAccount(ctx, accountID)
+	if err != nil {
+		return nil, status.Error(codes.NotFound, "account not found")
+	}
+	if acc.PasswordHash != nil && strings.TrimSpace(*acc.PasswordHash) != "" {
+		if strings.TrimSpace(req.Password) == "" {
+			return nil, status.Error(codes.InvalidArgument, "password required to delete account")
+		}
+		if err := h.service.ConfirmPassword(ctx, accountID, req.Password); err != nil {
+			return nil, status.Error(codes.PermissionDenied, "incorrect password")
+		}
+	}
+
 	accessToken, _ := middleware.AccessTokenFromContext(ctx)
 	if err := h.service.DeleteAccount(ctx, accountID, accessToken); err != nil {
 		h.log.Error("delete account failed", zap.Error(err))

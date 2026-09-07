@@ -137,7 +137,11 @@ func main() {
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
 	)
 	authv1.RegisterAuthServiceServer(grpcServer, authHandler)
-	reflection.Register(grpcServer)
+	// Reflection publishes the full service and message schema to any caller
+	// that can reach the port. Useful locally, free reconnaissance in prod.
+	if !cfg.IsProduction() {
+		reflection.Register(grpcServer)
+	}
 
 	lis, err := net.Listen("tcp", cfg.GRPCServerAddr())
 	if err != nil {
@@ -156,11 +160,12 @@ func main() {
 	httpHandler.RegisterRoutes(mux)
 
 	httpSrv := &http.Server{
-		Addr:         cfg.ServerAddr(),
-		Handler:      securityHeaders(mux),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              cfg.ServerAddr(),
+		Handler:           limitRequestBody(securityHeaders(mux)),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {
@@ -210,6 +215,20 @@ func connectDatabase(databaseURL string, log *logging.Logger) (*pgxpool.Pool, er
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// maxRequestBody bounds any single request body. The handlers decode JSON
+// straight from r.Body, so without a cap one unauthenticated request can make
+// the process allocate as much memory as the client is willing to send.
+const maxRequestBody = 1 << 20 // 1 MiB
+
+func limitRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func securityHeaders(next http.Handler) http.Handler {

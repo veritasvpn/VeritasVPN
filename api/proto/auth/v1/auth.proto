@@ -58,6 +58,9 @@ message GetAccountResponse {
 
 message DeleteAccountRequest {
   string account_id = 1;
+  // Required for accounts that have a password. Deleting an account is
+  // irreversible, so an access token alone must not be enough.
+  string password = 2;
 }
 
 message DeleteAccountResponse {

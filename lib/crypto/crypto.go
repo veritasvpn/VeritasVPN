@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"sync"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -41,7 +42,15 @@ func GenerateAccountID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// MaxPasswordBytes is bcrypt's own input limit. Anything longer is silently
+// ignored by the algorithm, so accepting it buys no security and only gives a
+// caller a way to push large buffers through the hashing path.
+const MaxPasswordBytes = 72
+
 func HashPassword(password string) (string, error) {
+	if len(password) > MaxPasswordBytes {
+		return "", fmt.Errorf("password exceeds %d bytes", MaxPasswordBytes)
+	}
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", fmt.Errorf("hash password: %w", err)
@@ -52,6 +61,24 @@ func HashPassword(password string) (string, error) {
 func CheckPassword(password, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
+}
+
+// Derived once at first use rather than hardcoded so it tracks DefaultCost.
+var decoyHash = sync.OnceValue(func() []byte {
+	hash, err := bcrypt.GenerateFromPassword([]byte("veritas decoy"), bcrypt.DefaultCost)
+	if err != nil {
+		return nil
+	}
+	return hash
+})
+
+// BurnPasswordCheck spends the same time as CheckPassword without a stored
+// hash to compare against. Sign-in paths call it when no account matched, so
+// the response time does not reveal whether an address is registered.
+func BurnPasswordCheck(password string) {
+	if hash := decoyHash(); hash != nil {
+		_ = bcrypt.CompareHashAndPassword(hash, []byte(password))
+	}
 }
 
 func GenerateResetToken() (string, error) {

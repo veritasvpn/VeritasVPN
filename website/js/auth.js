@@ -20,7 +20,9 @@ export function isLoggedIn() {
 }
 
 function getAccessToken() {
-  return memoryAccessToken || sessionStorage.getItem(STORAGE_KEYS.accessToken);
+  // Memory only. Nothing writes the access token to web storage any more, so a
+  // fallback read could only surface a stale value that XSS could also reach.
+  return memoryAccessToken;
 }
 
 function getRefreshToken() {
@@ -67,7 +69,9 @@ function restoreSession() {
       sessionStorage.getItem(STORAGE_KEYS.refreshToken);
     if (legacyAccess || localStorage.getItem(STORAGE_KEYS.refreshToken)) {
       const user = JSON.parse(raw);
-      setSession(user, legacyAccess, legacyRefresh);
+      // Discard rather than adopt the legacy access token: setSession wipes it
+      // from storage, and getIdToken mints a fresh one from the refresh cookie.
+      setSession(user, null, legacyRefresh);
       return user;
     }
     return JSON.parse(raw);

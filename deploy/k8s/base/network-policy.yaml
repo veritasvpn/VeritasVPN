@@ -107,14 +107,11 @@ spec:
       ports:
         - port: 4222
           protocol: TCP
-      # Allow monitoring from within namespace
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: veritas
-      ports:
-        - port: 8222
-          protocol: TCP
+      # The monitoring endpoint (8222) is deliberately not reachable over the
+      # pod network: /varz, /connz and /subsz expose connected usernames,
+      # subjects and server config. Prometheus lives in the monitoring
+      # namespace and does not scrape it, and the runbook queries it over
+      # loopback via `kubectl exec nats-0`, which NetworkPolicy does not gate.
 ---
 # auth-svc gRPC (HTTP port + 1000) is intentionally not published via Service.
 # deny-all-ingress already blocks it; allow only in-cluster callers that need it.

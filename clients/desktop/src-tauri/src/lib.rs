@@ -98,7 +98,42 @@ pub(crate) fn state_dir() -> Result<PathBuf, String> {
     #[cfg(not(target_os = "macos"))]
     let dir = home.join(".veritasvpn");
     fs::create_dir_all(&dir).map_err(|e| format!("create config dir: {e}"))?;
+    // The directory holds WireGuard private keys. Tighten on every call so
+    // directories left behind by earlier versions get repaired too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("secure config dir: {e}"))?;
+    }
     Ok(dir)
+}
+
+/// Write a file holding key material so only the owner can read it.
+///
+/// `wg.conf`, `uapi.txt` and `last-config.json` all embed the WireGuard private
+/// key; the default umask leaves them group- and world-readable on most Linux
+/// distributions.
+pub(crate) fn write_secret_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        // .mode() only applies when creating, so set it again to fix files a
+        // previous version already wrote with looser permissions.
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(contents)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, contents)
+    }
 }
 
 fn conf_path() -> Result<PathBuf, String> {
@@ -750,7 +785,7 @@ pub(crate) fn write_last_config_json(dir: &Path, config: &network_switch::SavedT
     let path = dir.join("last-config.json");
     let raw = serde_json::to_string(config)
         .map_err(|e| format!("serialize last-config: {e}"))?;
-    fs::write(&path, raw).map_err(|e| format!("write last-config: {e}"))
+    write_secret_file(&path, raw.as_bytes()).map_err(|e| format!("write last-config: {e}"))
 }
 
 pub(crate) fn reapply_dns_from_saved() -> Result<RouteRefreshResult, String> {
@@ -1495,8 +1530,9 @@ fn bring_up_wireguard_linux_full(app: &AppHandle, config: &WgTunnelConfig) -> Re
     let pid_file = pid_path()?;
     let stealth_pid = stealth_pid_path()?;
 
-    fs::write(&uapi_path, &uapi).map_err(|e| format!("write uapi: {e}"))?;
-    fs::write(&wg_conf_path, &wg_conf).map_err(|e| format!("write wg.conf: {e}"))?;
+    write_secret_file(&uapi_path, uapi.as_bytes()).map_err(|e| format!("write uapi: {e}"))?;
+    write_secret_file(&wg_conf_path, wg_conf.as_bytes())
+        .map_err(|e| format!("write wg.conf: {e}"))?;
     fs::write(
         conf_path()?,
         format!(

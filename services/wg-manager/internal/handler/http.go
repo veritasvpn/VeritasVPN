@@ -95,12 +95,15 @@ func (h *HTTPHandler) handleBrowserGateway(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	_, tier, err := h.accountFromRequest(r)
+	accountID, tier, err := h.accountFromRequest(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
 		return
 	}
-	if entitlement.NormalizeTier(tier) != "premium" {
+	// The tier claim in the JWT is advisory and outlives a cancelled
+	// subscription until the token expires, so resolve it against the
+	// authoritative source the same way peer creation does.
+	if h.svc.ResolveTier(r.Context(), accountID, tier) != "premium" {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "premium subscription required"})
 		return
 	}
@@ -365,7 +368,7 @@ func (h *HTTPHandler) handlePeerExpired(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := h.svc.ExpirePeer(r.Context(), req.ServerID, req.PeerID); err != nil {
-		h.writeError(w, http.StatusConflict, "stale peer expiry failed", err, "peer_id", req.PeerID, "server_id", req.ServerID)
+		h.writeError(w, http.StatusConflict, "stale peer expiry failed", err, "peer_hash", logging.HashIdentifier(req.PeerID), "server_id", req.ServerID)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -392,7 +395,7 @@ func (h *HTTPHandler) handlePeerApplied(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := h.svc.MarkPeerActive(r.Context(), req.PeerID, req.ServerID); err != nil {
-		h.writeError(w, http.StatusBadRequest, "mark peer active failed", err, "peer_id", req.PeerID)
+		h.writeError(w, http.StatusBadRequest, "mark peer active failed", err, "peer_hash", logging.HashIdentifier(req.PeerID))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -427,11 +430,11 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			var planErr *entitlement.PlanError
 			if errors.As(err, &planErr) {
-				h.log.Warn("create peer denied by plan", "account_id", accountID, "tier", tier, "code", planErr.Code)
+				h.log.Warn("create peer denied by plan", "account_hash", logging.HashIdentifier(accountID), "tier", tier, "code", planErr.Code)
 				writeJSON(w, http.StatusForbidden, map[string]string{"error": planErr.Message, "code": planErr.Code})
 				return
 			}
-			h.writeError(w, http.StatusBadRequest, "create peer failed", err, "account_id", accountID)
+			h.writeError(w, http.StatusBadRequest, "create peer failed", err, "account_hash", logging.HashIdentifier(accountID))
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -458,7 +461,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		peers, err := h.svc.ListPeers(r.Context(), accountID)
 		if err != nil {
-			h.writeError(w, http.StatusInternalServerError, "list peers failed", err, "account_id", accountID)
+			h.writeError(w, http.StatusInternalServerError, "list peers failed", err, "account_hash", logging.HashIdentifier(accountID))
 			return
 		}
 		out := make([]map[string]interface{}, 0, len(peers))
@@ -505,7 +508,7 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodDelete:
 		if err := h.svc.DeletePeer(r.Context(), peerID, accountID); err != nil {
-			h.writeError(w, http.StatusBadRequest, "delete peer failed", err, "peer_id", peerID, "account_id", accountID)
+			h.writeError(w, http.StatusBadRequest, "delete peer failed", err, "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -523,7 +526,7 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 		}
 		peer, err := h.svc.UpdateShieldPreset(r.Context(), peerID, accountID, req.ShieldPreset)
 		if err != nil {
-			h.writeError(w, http.StatusBadRequest, "update shield preset failed", err, "peer_id", peerID, "account_id", accountID)
+			h.writeError(w, http.StatusBadRequest, "update shield preset failed", err, "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -534,7 +537,7 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		peer, srv, err := h.svc.GetPeer(r.Context(), peerID, accountID)
 		if err != nil {
-			h.writeError(w, http.StatusNotFound, "peer not found", err, "peer_id", peerID, "account_id", accountID)
+			h.writeError(w, http.StatusNotFound, "peer not found", err, "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
 			return
 		}
 		clientIP := clientIPFromRequest(r)
@@ -633,7 +636,7 @@ func (h *HTTPHandler) handlePortForwards(w http.ResponseWriter, r *http.Request)
 	case http.MethodGet:
 		forwards, err := h.svc.ListPortForwards(r.Context(), accountID)
 		if err != nil {
-			h.writeError(w, http.StatusInternalServerError, "list port forwards failed", err, "account_id", accountID)
+			h.writeError(w, http.StatusInternalServerError, "list port forwards failed", err, "account_hash", logging.HashIdentifier(accountID))
 			return
 		}
 		out := make([]map[string]interface{}, 0, len(forwards))
@@ -683,7 +686,7 @@ func (h *HTTPHandler) handlePortForwards(w http.ResponseWriter, r *http.Request)
 				writeJSON(w, status, map[string]string{"error": planErr.Message, "code": planErr.Code})
 				return
 			}
-			h.writeError(w, http.StatusBadRequest, "create port forward failed", err, "account_id", accountID)
+			h.writeError(w, http.StatusBadRequest, "create port forward failed", err, "account_hash", logging.HashIdentifier(accountID))
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
@@ -720,7 +723,7 @@ func (h *HTTPHandler) handlePortForwardByID(w http.ResponseWriter, r *http.Reque
 	switch r.Method {
 	case http.MethodDelete:
 		if err := h.svc.DeletePortForward(r.Context(), id, accountID); err != nil {
-			h.writeError(w, http.StatusBadRequest, "delete port forward failed", err, "id", id, "account_id", accountID)
+			h.writeError(w, http.StatusBadRequest, "delete port forward failed", err, "port_forward_hash", logging.HashIdentifier(id), "account_hash", logging.HashIdentifier(accountID))
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
