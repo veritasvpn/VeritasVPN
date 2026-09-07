@@ -11,6 +11,12 @@ import java.net.NoRouteToHostException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
+// No certificate pinning here yet. Pinning would stop a user-installed or
+// enterprise MITM CA from reading bearer tokens, but a pin that outlives its
+// certificate bricks the API for every installed copy of the app until users
+// update, and there is no cert rotation runbook with backup pins to make that
+// safe. Deliberately deferred 2026-09 until that runbook exists; until then the
+// app relies on the system trust store. See CertificatePinner when revisiting.
 object ApiClient {
     private const val BASE_URL = "https://api.veritasvpn.cloud"
     private val JSON = "application/json; charset=utf-8".toMediaType()

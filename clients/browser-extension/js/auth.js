@@ -15,6 +15,14 @@ const STORAGE_KEYS = {
   clientLocation: 'veritas_client_location',
 };
 
+// Access tokens live in chrome.storage.session so they die with the browser.
+// The refresh token deliberately stays in chrome.storage.local: session storage
+// would sign the user out on every browser restart, which is not a trade we are
+// willing to make for a VPN people expect to stay connected. chrome.storage.local
+// is not reachable from web pages, so the exposure is an extension compromise or
+// someone with read access to the browser profile on disk — at which point the
+// session cookie jar is equally readable. Reviewed 2026-09; revisit if the API
+// grows an HttpOnly refresh path usable from extensions.
 async function getStorage(keys) {
   const persistentKeys = keys.filter(key => key !== STORAGE_KEYS.accessToken);
   const [persistent, ephemeral] = await Promise.all([
