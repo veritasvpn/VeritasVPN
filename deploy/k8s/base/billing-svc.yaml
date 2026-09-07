@@ -53,12 +53,12 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: veritas-secrets
-                  key: NATS_USER
+                  key: NATS_BILLING_USER
             - name: NATS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: veritas-secrets
-                  key: NATS_PASSWORD
+                  key: NATS_BILLING_PASSWORD
             - name: NATS_URL
               value: "nats://$(NATS_USER):$(NATS_PASSWORD)@nats:4222"
             - name: JWT_ED25519_PUBLIC_KEYS

@@ -58,6 +58,36 @@ spec:
                 secretKeyRef:
                   name: veritas-secrets
                   key: NATS_PASSWORD
+            - name: NATS_AUTH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_AUTH_USER
+            - name: NATS_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_AUTH_PASSWORD
+            - name: NATS_WG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_WG_USER
+            - name: NATS_WG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_WG_PASSWORD
+            - name: NATS_BILLING_USER
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_BILLING_USER
+            - name: NATS_BILLING_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: NATS_BILLING_PASSWORD
             - name: NATS_NOTIFIER_USER
               valueFrom:
                 secretKeyRef:

@@ -55,12 +55,12 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: veritas-secrets
-                  key: NATS_USER
+                  key: NATS_WG_USER
             - name: NATS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: veritas-secrets
-                  key: NATS_PASSWORD
+                  key: NATS_WG_PASSWORD
             - name: REDIS_URL
               value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
             - name: NATS_URL

@@ -10,8 +10,15 @@ restricts each credential to the subjects it actually needs.
 
 | Secret key | Used by | Rights |
 |---|---|---|
-| `NATS_USER` / `NATS_PASSWORD` | auth-svc, wg-manager, billing-svc | Publish and subscribe on the account, subscription, server and peer subjects |
+| `NATS_AUTH_USER` / `NATS_AUTH_PASSWORD` | auth-svc | Publish `account.registered`, `account.teardown`; subscribe to the three `subscription.*` events |
+| `NATS_WG_USER` / `NATS_WG_PASSWORD` | wg-manager | Publish `server.*` and `peer.*`; subscribe to `account.teardown`, `subscription.renewed`, `subscription.expired`. Cannot publish `account.teardown` |
+| `NATS_BILLING_USER` / `NATS_BILLING_PASSWORD` | billing-svc | Publish the three `subscription.*` events only. No subscriptions |
 | `NATS_NOTIFIER_USER` / `NATS_NOTIFIER_PASSWORD` | telegram-notifier | Subscribe only, and only to `account.registered` and `subscription.renewed` |
+| `NATS_USER` / `NATS_PASSWORD` | *(none — legacy)* | Transitional shared credential, removed after the split lands |
+
+Only `account.teardown` deletes live VPN peers, and now only auth-svc can
+publish it. Previously any of the three services could, so a compromise of
+billing-svc was enough to destroy another account's tunnels.
 
 Both live in the `veritas-secrets` Secret. The NATS StatefulSet reads them as
 environment variables; `nats-server.conf` expands `$VAR` at startup. The client
@@ -99,11 +106,36 @@ Restart NATS first, then the clients. There is a brief window where clients
 cannot connect; auth-svc will refuse account deletions during it, which is the
 intended fail-closed behaviour.
 
-## Known gap
+## Splitting the shared credential
 
-auth-svc, wg-manager and billing-svc share one credential, so its permission set
-is the union of what the three need. A compromise of billing-svc could therefore
-publish `account.teardown`. Splitting this into one credential per service, each
-scoped to its own subjects, is the remaining hardening step: add
-`NATS_AUTH_*`, `NATS_WG_*` and `NATS_BILLING_*` keys, give each its own `users`
-entry in `nats-server.conf`, and point each Deployment at its own keys.
+The three services used to share one credential whose permissions were the union
+of what all three needed. They now have one each. Adding them takes six new
+Secret keys, which must exist before NATS restarts or the server will fail to
+expand `$NATS_AUTH_USER` and refuse to start:
+
+```sh
+kubectl -n veritas patch secret veritas-secrets -p "$(cat <<EOF
+{"stringData":{
+  "NATS_AUTH_USER":"auth-svc",       "NATS_AUTH_PASSWORD":"$(openssl rand -hex 24)",
+  "NATS_WG_USER":"wg-manager",       "NATS_WG_PASSWORD":"$(openssl rand -hex 24)",
+  "NATS_BILLING_USER":"billing-svc", "NATS_BILLING_PASSWORD":"$(openssl rand -hex 24)"
+}}
+EOF
+)"
+```
+
+`nats-server.conf` deliberately keeps the old shared `$NATS_USER` entry valid for
+one deploy. NATS and the Deployments do not restart in a guaranteed order, so
+without it a pod that has not rolled yet would be rejected. Once every service
+logs a connection as its own user, remove the `SHARED_LEGACY_PERMS` block and its
+`users` entry, redeploy, and drop `NATS_USER` / `NATS_PASSWORD` from the Secret.
+
+Confirm who is actually connected:
+
+```sh
+kubectl -n veritas exec nats-0 -- wget -qO- 'http://localhost:8222/connz?auth=1' \
+  | grep -o '"authorized_user":"[^"]*"' | sort | uniq -c
+```
+
+Expect one connection each for `auth-svc`, `wg-manager`, `billing-svc` and
+`notifier`, and none for the legacy shared user.

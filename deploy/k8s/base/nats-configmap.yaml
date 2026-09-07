@@ -23,18 +23,38 @@ data:
     # account's VPN peers. Credentials come from the veritas-secrets Secret via
     # the StatefulSet environment; $VAR is expanded by nats-server at startup.
     authorization {
-      # Shared by auth-svc, wg-manager and billing-svc. Scoped to the subjects
-      # those services actually use so a compromise cannot publish arbitrary
-      # traffic. Splitting this into one credential per service is the next
-      # step; see docs/RUNBOOK_NATS_AUTH.md.
-      SERVICE_PERMS = {
+      # One credential per service, each scoped to the subjects that service
+      # actually uses. A single shared credential meant a compromise of any one
+      # service could publish every event in the system — most importantly
+      # account.teardown, which deletes another account's VPN peers.
+      # See docs/RUNBOOK_NATS_AUTH.md.
+
+      # auth-svc announces new accounts and requests teardown on deletion. It
+      # reads subscription events to keep the account tier in sync.
+      AUTH_PERMS = {
         publish = {
           allow = [
             "account.registered",
             "account.teardown",
+            "_INBOX.>"
+          ]
+        }
+        subscribe = {
+          allow = [
             "subscription.renewed",
             "subscription.expired",
             "subscription.canceled",
+            "_INBOX.>"
+          ]
+        }
+      }
+
+      # wg-manager reports server and peer lifecycle. It consumes teardown
+      # requests (queue group "wg-manager") and tier changes. It must NOT be
+      # able to publish account.teardown.
+      WG_PERMS = {
+        publish = {
+          allow = [
             "server.registered",
             "server.heartbeat",
             "peer.created",
@@ -48,9 +68,23 @@ data:
             "account.teardown",
             "subscription.renewed",
             "subscription.expired",
+            "_INBOX.>"
+          ]
+        }
+      }
+
+      # billing-svc only emits subscription state changes.
+      BILLING_PERMS = {
+        publish = {
+          allow = [
+            "subscription.renewed",
+            "subscription.expired",
             "subscription.canceled",
             "_INBOX.>"
           ]
+        }
+        subscribe = {
+          allow = ["_INBOX.>"]
         }
       }
 
@@ -67,8 +101,34 @@ data:
         }
       }
 
+      # TRANSITIONAL: the old shared credential stays valid for one deploy so a
+      # pod that has not rolled yet keeps working no matter what order NATS and
+      # the deployments restart in. Remove it once every service reports
+      # connecting as its own user (docs/RUNBOOK_NATS_AUTH.md).
+      SHARED_LEGACY_PERMS = {
+        publish = {
+          allow = [
+            "account.registered", "account.teardown",
+            "subscription.renewed", "subscription.expired", "subscription.canceled",
+            "server.registered", "server.heartbeat",
+            "peer.created", "peer.deleted", "peer.expired",
+            "_INBOX.>"
+          ]
+        }
+        subscribe = {
+          allow = [
+            "account.teardown",
+            "subscription.renewed", "subscription.expired", "subscription.canceled",
+            "_INBOX.>"
+          ]
+        }
+      }
+
       users = [
-        { user: $NATS_USER, password: $NATS_PASSWORD, permissions: $SERVICE_PERMS },
+        { user: $NATS_USER, password: $NATS_PASSWORD, permissions: $SHARED_LEGACY_PERMS },
+        { user: $NATS_AUTH_USER, password: $NATS_AUTH_PASSWORD, permissions: $AUTH_PERMS },
+        { user: $NATS_WG_USER, password: $NATS_WG_PASSWORD, permissions: $WG_PERMS },
+        { user: $NATS_BILLING_USER, password: $NATS_BILLING_PASSWORD, permissions: $BILLING_PERMS },
         { user: $NATS_NOTIFIER_USER, password: $NATS_NOTIFIER_PASSWORD, permissions: $NOTIFIER_PERMS }
       ]
     }
