@@ -8,7 +8,7 @@ RENDERED="$(mktemp)"
 trap 'rm -f "$RENDERED"' EXIT
 
 case "$OVERLAY" in
-  k3s|prod|dev) ;;
+  site|k3s|prod|dev) ;;
   *) printf 'unsupported overlay: %s\n' "$OVERLAY" >&2; exit 2 ;;
 esac
 

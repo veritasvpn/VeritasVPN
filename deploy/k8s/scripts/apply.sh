@@ -17,9 +17,26 @@ case "$OVERLAY" in
   prod)
     printf 'overlays/prod is a legacy alias; validating it before deployment.\n'
     ;;
+  site)
+    # Untracked overlay holding this node's real addresses; see SITE_LOCAL.md.
+    # The public overlays ship REPLACE_ME placeholders, so applying k3s directly
+    # on the production node would overwrite live config with the placeholder.
+    if [[ ! -f "$CLUSTER_DIR/overlays/site/kustomization.yaml" ]]; then
+      printf 'overlays/site does not exist on this host; see deploy/k8s/overlays/SITE_LOCAL.md.\n' >&2
+      exit 2
+    fi
+    ;;
   k3s|dev) ;;
-  *) printf 'Unknown overlay %s. Use k3s, dev, or prod.\n' "$OVERLAY" >&2; exit 2 ;;
+  *) printf 'Unknown overlay %s. Use site, k3s, dev, or prod.\n' "$OVERLAY" >&2; exit 2 ;;
 esac
+
+if [[ "$OVERLAY" != "dev" ]]; then
+  if kubectl kustomize "$CLUSTER_DIR/overlays/$OVERLAY" | grep -q 'REPLACE_ME'; then
+    printf 'Refusing to apply %s: rendered output still contains REPLACE_ME placeholders.\n' "$OVERLAY" >&2
+    printf 'Use the site overlay described in deploy/k8s/overlays/SITE_LOCAL.md.\n' >&2
+    exit 2
+  fi
+fi
 
 mkdir -p "$SNAPSHOT_DIR"
 chmod 700 "$STATE_ROOT" "$SNAPSHOT_DIR"

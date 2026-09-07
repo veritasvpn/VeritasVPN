@@ -111,3 +111,7 @@ website/downloads/veritasvpn-macos-*.dmg
 website/downloads/veritasvpn-linux.*
 website/downloads/VeritasVPN_*.AppImage
 website/downloads/VeritasVPN_*.deb
+
+# Site-local Kubernetes overlay: holds the node's real public addresses, which
+# the public overlays deliberately carry as REPLACE_ME placeholders.
+deploy/k8s/overlays/site/
