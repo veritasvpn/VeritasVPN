@@ -159,7 +159,7 @@ func (h *BillingHandler) handleSubscribe(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, "failed to create checkout")
 		return
 	}
 
@@ -178,7 +178,8 @@ func (h *BillingHandler) handleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.service.CancelSubscription(r.Context(), uid); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		h.log.Error("cancel subscription failed", zap.Error(err))
+		writeError(w, http.StatusBadRequest, "failed to cancel subscription")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
@@ -215,7 +216,7 @@ func (h *BillingHandler) handleBTCPayWebhook(w http.ResponseWriter, r *http.Requ
 	signature := r.Header.Get("BTCPay-Sig")
 	if err := h.service.ProcessBTCPayWebhook(r.Context(), payload, signature); err != nil {
 		h.log.Error("btcpay webhook failed", zap.Error(err))
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, "webhook rejected")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -252,7 +253,7 @@ func (h *BillingHandler) handleMockSettle(w http.ResponseWriter, r *http.Request
 	}
 	if err := h.service.SettleMockInvoice(r.Context(), invoiceID); err != nil {
 		h.log.Error("mock settle failed", zap.Error(err))
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, "failed to settle invoice")
 		return
 	}
 	http.Redirect(w, r, h.successURL, http.StatusSeeOther)

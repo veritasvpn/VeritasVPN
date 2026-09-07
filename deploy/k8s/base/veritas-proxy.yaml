@@ -55,6 +55,14 @@ spec:
           ports:
             - name: socks5
               containerPort: 1080
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           readinessProbe:
             tcpSocket:
               port: 1080

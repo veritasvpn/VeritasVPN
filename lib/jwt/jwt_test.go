@@ -140,6 +140,52 @@ func TestProductionBlocksHS256Mint(t *testing.T) {
 	}
 }
 
+// TestProductionDropsLegacyHS256Verifier covers a JWT_SECRET that survives (or
+// returns to) a production environment after the EdDSA cutover: the symmetric
+// verifier must stay off unless it is re-enabled on purpose.
+func TestProductionDropsLegacyHS256Verifier(t *testing.T) {
+	secret := "legacy-secret-at-least-32-characters"
+	_, publicJSON := ed25519Material(t)
+	legacy := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, jwtv5.MapClaims{
+		"account_id": "account",
+		"sub":        "account",
+		"iss":        "veritasvpn",
+		"tier":       "premium",
+		"exp":        time.Now().Add(time.Minute).Unix(),
+	})
+	token, err := legacy.SignedString([]byte(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("ENVIRONMENT", "production")
+	verifier, err := NewManagerWithKeys(secret, "", publicJSON, "", DefaultIssuer, DefaultAudience, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifier.ValidateAccessToken(token); err == nil {
+		t.Fatal("production must reject HS256 tokens even when JWT_SECRET is set")
+	}
+
+	t.Setenv("ALLOW_LEGACY_HS256", "true")
+	rollback, err := NewManagerWithKeys(secret, "", publicJSON, "", DefaultIssuer, DefaultAudience, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rollback.ValidateAccessToken(token); err != nil {
+		t.Fatalf("explicit rollback should accept legacy tokens: %v", err)
+	}
+}
+
+// TestProductionWithOnlyLegacySecretFailsClosed ensures dropping the symmetric
+// verifier leaves no key material rather than an accept-everything manager.
+func TestProductionWithOnlyLegacySecretFailsClosed(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	if _, err := NewManagerWithKeys("legacy-secret-at-least-32-characters", "", "", "", DefaultIssuer, DefaultAudience, time.Minute); err == nil {
+		t.Fatal("expected startup failure when only a legacy HS256 secret is configured")
+	}
+}
+
 func TestDualVerifyAcceptsLegacyHS256WhenSecretConfigured(t *testing.T) {
 	secret := "legacy-secret-at-least-32-characters"
 	_, publicJSON := ed25519Material(t)

@@ -35,6 +35,10 @@ spec:
       labels:
         app: nats
     spec:
+      # fsGroup so the nats user owns the PVC mounted at /data.
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: nats
           image: nats@sha256:b83efabe3e7def1e0a4a31ec6e078999bb17c80363f881df35edc70fcb6bb927
@@ -67,6 +71,14 @@ spec:
           ports:
             - containerPort: 4222
             - containerPort: 8222
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: nats-config
               mountPath: /etc/nats

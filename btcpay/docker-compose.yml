@@ -7,7 +7,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: btcpay
-      POSTGRES_PASSWORD: ${BTCPAY_POSTGRES_PASSWORD:-change-me-set-in-btcpay-env}
+      POSTGRES_PASSWORD: ${BTCPAY_POSTGRES_PASSWORD:?BTCPAY_POSTGRES_PASSWORD must be set}
       POSTGRES_DB: btcpay
     volumes:
       - btcpay_pgdata:/var/lib/postgresql/data
@@ -26,7 +26,7 @@ services:
       BITCOIN_EXTRA_ARGS: |
         prune=10000
         rpcuser=btcpay_rpc
-        rpcpassword=${BTC_RPC_PASSWORD:-change-me-set-in-btcpay-env}
+        rpcpassword=${BTC_RPC_PASSWORD:?BTC_RPC_PASSWORD must be set}
         rpcallowip=172.16.0.0/12
         rpcallowip=127.0.0.1
         rpcbind=0.0.0.0
@@ -47,12 +47,12 @@ services:
       NBXPLORER_NETWORK: ${BTC_NETWORK:-mainnet}
       NBXPLORER_BTCRPCURL: http://bitcoind:${BTC_RPC_PORT:-8332}/
       NBXPLORER_BTCRPCUSER: btcpay_rpc
-      NBXPLORER_BTCRPCPASSWORD: ${BTC_RPC_PASSWORD:-change-me-set-in-btcpay-env}
+      NBXPLORER_BTCRPCPASSWORD: ${BTC_RPC_PASSWORD:?BTC_RPC_PASSWORD must be set}
       NBXPLORER_BTCNODEENDPOINT: bitcoind:${BTC_P2P_PORT:-8333}
       NBXPLORER_CHAINS: btc
       NBXPLORER_BIND: 0.0.0.0:32838
       NBXPLORER_NOAUTH: "true"
-      NBXPLORER_POSTGRES: User ID=btcpay;Password=${BTCPAY_POSTGRES_PASSWORD:-change-me-set-in-btcpay-env};Host=postgres-btcpay;Port=5432;Database=nbxplorer
+      NBXPLORER_POSTGRES: User ID=btcpay;Password=${BTCPAY_POSTGRES_PASSWORD:?BTCPAY_POSTGRES_PASSWORD must be set};Host=postgres-btcpay;Port=5432;Database=nbxplorer
       NBXPLORER_AUTOMIGRATE: "true"
     volumes:
       - btcpay_nbxplorer:/home/nbxplorer/.nbxplorer
@@ -69,7 +69,7 @@ services:
     image: btcpayserver/btcpayserver:2.3.9
     environment:
       BTCPAY_NETWORK: ${BTC_NETWORK:-mainnet}
-      BTCPAY_POSTGRES: User ID=btcpay;Password=${BTCPAY_POSTGRES_PASSWORD:-change-me-set-in-btcpay-env};Host=postgres-btcpay;Port=5432;Database=btcpay
+      BTCPAY_POSTGRES: User ID=btcpay;Password=${BTCPAY_POSTGRES_PASSWORD:?BTCPAY_POSTGRES_PASSWORD must be set};Host=postgres-btcpay;Port=5432;Database=btcpay
       BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838
       BTCPAY_CHAINS: btc
       BTCPAY_PLUGINDIR: /datadir/Plugins

@@ -28,7 +28,7 @@ func (h *AuthHandler) Register(ctx context.Context, req *authv1.RegisterRequest)
 	accessToken, refreshToken, accountID, expiresAt, err := h.service.Register(ctx, req.DeviceId, req.PublicKey)
 	if err != nil {
 		h.log.Error("register failed", zap.Error(err))
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, status.Error(codes.Internal, "registration failed")
 	}
 
 	return &authv1.RegisterResponse{

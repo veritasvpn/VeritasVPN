@@ -424,7 +424,7 @@ func (s *AuthService) ResetPassword(ctx context.Context, resetToken, newPassword
 
 	acc, err := s.db.GetAccountByResetToken(ctx, hashInput(resetToken))
 	if err != nil {
-		return fmt.Errorf("invalid or expired reset token")
+		return userErrorf("invalid or expired reset token")
 	}
 
 	passwordHash, err := libcrypto.HashPassword(newPassword)

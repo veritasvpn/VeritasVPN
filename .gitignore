@@ -115,3 +115,8 @@ website/downloads/VeritasVPN_*.deb
 # Site-local Kubernetes overlay: holds the node's real public addresses, which
 # the public overlays deliberately carry as REPLACE_ME placeholders.
 deploy/k8s/overlays/site/
+
+# Binaries produced by "go build ./..." inside a module directory.
+/services/bitcoin-readiness/bitcoin-readiness
+/services/browser-proxy/browser-proxy
+/services/telegram-notifier/telegram-notifier

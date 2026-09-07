@@ -19,7 +19,7 @@ const verificationTTL = time.Hour
 
 func validatePassword(password string) error {
 	if utf8.RuneCountInString(password) < 10 {
-		return fmt.Errorf("password must be at least 10 characters")
+		return userErrorf("password must be at least 10 characters")
 	}
 	var hasUpper, hasLower, hasNumber bool
 	for _, character := range password {
@@ -28,7 +28,7 @@ func validatePassword(password string) error {
 		hasNumber = hasNumber || unicode.IsNumber(character)
 	}
 	if !hasUpper || !hasLower || !hasNumber {
-		return fmt.Errorf("password must include uppercase, lowercase, and a number")
+		return userErrorf("password must include uppercase, lowercase, and a number")
 	}
 	return nil
 }
@@ -37,7 +37,7 @@ func normalizeEmail(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	parsed, err := mail.ParseAddress(value)
 	if err != nil || parsed.Address != value || len(value) > 254 {
-		return "", fmt.Errorf("invalid email address")
+		return "", userErrorf("invalid email address")
 	}
 	return value, nil
 }
@@ -51,7 +51,7 @@ func (s *AuthService) RegisterPendingEmail(ctx context.Context, emailAddr, passw
 		return "", err
 	}
 	if s.email == nil {
-		return "", fmt.Errorf("email delivery is temporarily unavailable")
+		return "", userErrorf("email delivery is temporarily unavailable")
 	}
 	passwordHash, err := libcrypto.HashPassword(password)
 	if err != nil {
@@ -74,7 +74,7 @@ func (s *AuthService) RegisterPendingEmail(ctx context.Context, emailAddr, passw
 		Email: &emailAddr, PasswordHash: &passwordHash, SubscriptionTier: "free",
 		VerificationTokenHash: stringPtr(hashInput(token)), VerificationTokenExpiry: &expiry}
 	if err := s.db.CreatePendingEmailAccount(ctx, acc); err != nil {
-		return "", fmt.Errorf("an account with this email already exists")
+		return "", userErrorf("an account with this email already exists")
 	}
 	if err := s.sendVerificationEmail(ctx, emailAddr, token); err != nil {
 		return "", fmt.Errorf("send verification email: %w", err)

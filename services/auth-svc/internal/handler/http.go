@@ -133,7 +133,7 @@ func (h *HTTPHandler) handleRegister(w http.ResponseWriter, r *http.Request) {
 	emailAddr, err := h.service.RegisterPendingEmail(r.Context(), req.Email, req.Password)
 	if err != nil {
 		h.log.Warn("register failed", zap.Error(err))
-		writeHTTPError(w, http.StatusBadRequest, err.Error())
+		writeHTTPError(w, http.StatusBadRequest, service.ClientMessage(err, "registration failed"))
 		return
 	}
 	writeHTTPJSON(w, http.StatusCreated, map[string]interface{}{
@@ -420,7 +420,8 @@ func (h *HTTPHandler) handleCompleteReset(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.service.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
-		writeHTTPError(w, http.StatusBadRequest, err.Error())
+		h.log.Warn("reset password failed", zap.Error(err))
+		writeHTTPError(w, http.StatusBadRequest, service.ClientMessage(err, "failed to reset password"))
 		return
 	}
 

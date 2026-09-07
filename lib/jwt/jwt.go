@@ -52,7 +52,8 @@ func NewManager(secret string, accessTTL, _ time.Duration) *Manager {
 
 // NewManagerWithKeys configures Ed25519 signing/verification. publicKeysJSON
 // is a JSON object whose values are PEM-encoded PKIX public keys. secret is an
-// optional migration verifier for access tokens issued before the key rollout.
+// optional migration verifier for access tokens issued before the key rollout;
+// production drops it unless legacy HS256 is explicitly re-enabled.
 func NewManagerWithKeys(secret, privateKeyPEM, publicKeysJSON, activeKeyID, issuer, audience string, accessTTL time.Duration) (*Manager, error) {
 	if strings.TrimSpace(issuer) == "" {
 		issuer = DefaultIssuer
@@ -61,7 +62,7 @@ func NewManagerWithKeys(secret, privateKeyPEM, publicKeysJSON, activeKeyID, issu
 		audience = DefaultAudience
 	}
 	m := &Manager{
-		hmacSecret:     []byte(strings.TrimSpace(secret)),
+		hmacSecret:     []byte(legacyHMACSecret(secret)),
 		activeKeyID:    strings.TrimSpace(activeKeyID),
 		issuer:         issuer,
 		audience:       audience,
@@ -102,6 +103,25 @@ func NewManagerWithKeys(secret, privateKeyPEM, publicKeysJSON, activeKeyID, issu
 		return nil, fmt.Errorf("no JWT signing or verification key configured")
 	}
 	return m, nil
+}
+
+// legacyHMACSecret gates the pre-rollout HS256 verifier. The EdDSA cutover is
+// finished, so a JWT_SECRET that reappears in production is a stale config
+// rather than an intentional one, and honouring it would quietly restore
+// symmetric tokens that skip the audience and purpose checks. Emergency
+// rollback (deploy/k8s/SECRETS.md) sets ALLOW_LEGACY_HS256=true.
+func legacyHMACSecret(secret string) string {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("ENVIRONMENT")), "production") {
+		return secret
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ALLOW_LEGACY_HS256")), "true") {
+		return secret
+	}
+	return ""
 }
 
 func parsePrivateKey(value string) (ed25519.PrivateKey, error) {

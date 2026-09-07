@@ -274,9 +274,17 @@ spec:
       app: registry
   policyTypes:
     - Ingress
+  # Both real callers reach the registry from the node, not over the pod
+  # network: containerd pulls images, and pushes arrive through
+  # `kubectl port-forward svc/registry`. Node-sourced traffic is not subject to
+  # this policy, so scoping ingress to veritas costs nothing and stops a pod in
+  # any other namespace (default and kube-public have no egress rules of their
+  # own) from pushing an image that every node here would then run.
   ingress:
     - from:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: veritas
       ports:
         - port: 5000
           protocol: TCP

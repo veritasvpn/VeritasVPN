@@ -31,6 +31,10 @@ public key to the JSON key set, changing `JWT_ACTIVE_KEY_ID` and the private key
 in `auth-svc`, waiting for old access tokens to expire, then removing the old
 public key.
 
+Production ignores `JWT_SECRET` even if it reappears, so a stale value cannot
+quietly re-enable symmetric tokens. Re-enabling it takes `ALLOW_LEGACY_HS256=true`
+alongside the mount.
+
 **Rollback (emergency):** restore a temporary `JWT_SECRET` mount on verifiers
 *before* reverting auth mint to HS256. Prefer fixing Ed25519 material instead.
 

@@ -38,7 +38,13 @@ type proxy struct {
 }
 
 func main() {
-	secret := os.Getenv("JWT_SECRET") // optional legacy HS256; omit in production
+	// Legacy HS256 verifier from before the EdDSA cutover. Production drops it
+	// so a stale JWT_SECRET cannot re-enable symmetric tokens; the emergency
+	// rollback in deploy/k8s/SECRETS.md sets ALLOW_LEGACY_HS256=true.
+	secret := os.Getenv("JWT_SECRET")
+	if isProduction() && !strings.EqualFold(strings.TrimSpace(os.Getenv("ALLOW_LEGACY_HS256")), "true") {
+		secret = ""
+	}
 	publicKeys, err := parsePublicKeys(os.Getenv("JWT_ED25519_PUBLIC_KEYS"))
 	if err != nil {
 		log.Fatalf("invalid JWT_ED25519_PUBLIC_KEYS: %v", err)
@@ -90,6 +96,10 @@ func (p *proxy) authorized(header string) bool {
 	}
 	parts := strings.SplitN(string(raw), ":", 2)
 	return len(parts) == 2 && parts[0] == "veritas" && validateJWT(parts[1], p.secret, p.publicKeys, p.issuer, p.audience)
+}
+
+func isProduction() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("ENVIRONMENT")), "production")
 }
 
 func parsePublicKeys(value string) (map[string]ed25519.PublicKey, error) {

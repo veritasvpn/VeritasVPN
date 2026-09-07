@@ -55,8 +55,10 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
-		ServerPort:     envOrDefault("SERVER_PORT", "8080"),
-		DatabaseURL:    envOrDefault("DATABASE_URL", "postgres://veritas:change-me@localhost:5432/veritas?sslmode=disable"),
+		ServerPort: envOrDefault("SERVER_PORT", "8080"),
+		// No default: a fallback here silently connects every service to a
+		// well-known account/password pair instead of failing loudly.
+		DatabaseURL:    envRequired("DATABASE_URL"),
 		RedisURL:       envOrDefault("REDIS_URL", "redis://localhost:6379/0"),
 		NatsURL:        envOrDefault("NATS_URL", "nats://localhost:4222"),
 		// Legacy HS256; optional during EdDSA cutover (may be unset in production).
