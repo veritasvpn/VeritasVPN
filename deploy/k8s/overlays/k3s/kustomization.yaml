@@ -9,13 +9,13 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:3ad58f7381a203d746d1c8dae106435760e4450e5e96ae3c5e7fcfe6a9e63035
+    digest: sha256:b4d66791304fee2266e0f27e15d6bfdf2a9bd115069f62e5555f972460458685
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    digest: sha256:a9b3786a68eceaf69f086c5ee3f3f2968fc74da01a8f8cb53bcfa79c1e5622e6
+    digest: sha256:601a5dffc830eb75c478c3a652c409741df9b3de9096772926a3753aa9adda45
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    digest: sha256:7310e888750962f3c39eaf167c53679e5ec32586d8d71f47a126e3c4a0c039f2
+    digest: sha256:55a8deefb9f0357209eaa071ef0b2d8c80baebb102fff0e35f907b032336b649
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     digest: sha256:37b603547781fea9e4eb477f5ee1b9e4ed8ece5779b7fd8325ebc9899be90b5a
@@ -24,7 +24,7 @@ images:
     digest: sha256:54ed252229d1e29505d2b59e3bf05b77c7038939a87646c27f4267853a4a8f3b
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
-    digest: sha256:d109615c29a383fe5c7c2de0632da9984edec7b812f0d04309b58e8022897eed
+    digest: sha256:3e2ec490696d13fdef3a326281432e3d81905e2acaa2f0ee660f15cf695bdfd3
   - name: localhost:31500/telegram-notifier
     newName: localhost:31500/telegram-notifier
     digest: sha256:dbb8587bfd81060e12b8f21f890954e046521da511603b9d0c25786ae08f8cf2
