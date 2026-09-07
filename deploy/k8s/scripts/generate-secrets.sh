@@ -32,9 +32,20 @@ need JWT_ED25519_PUBLIC_KEYS
 need JWT_ACTIVE_KEY_ID
 need AGENT_AUTH_TOKEN
 
-REDIS_PASSWORD="${REDIS_PASSWORD:-$DB_PASSWORD}"
-NATS_USER="${NATS_USER:-veritas}"
-NATS_PASSWORD="${NATS_PASSWORD:-$DB_PASSWORD}"
+# Independent values rather than reusing DB_PASSWORD: sharing one password
+# across Postgres, Redis and NATS means one leak unlocks all three.
+REDIS_PASSWORD="${REDIS_PASSWORD:-$(openssl rand -hex 24)}"
+
+# One NATS credential per service. nats-server.conf scopes each to the subjects
+# that service uses, and refuses to start if any of them is missing.
+NATS_AUTH_USER="${NATS_AUTH_USER:-auth-svc}"
+NATS_AUTH_PASSWORD="${NATS_AUTH_PASSWORD:-$(openssl rand -hex 24)}"
+NATS_WG_USER="${NATS_WG_USER:-wg-manager}"
+NATS_WG_PASSWORD="${NATS_WG_PASSWORD:-$(openssl rand -hex 24)}"
+NATS_BILLING_USER="${NATS_BILLING_USER:-billing-svc}"
+NATS_BILLING_PASSWORD="${NATS_BILLING_PASSWORD:-$(openssl rand -hex 24)}"
+NATS_NOTIFIER_USER="${NATS_NOTIFIER_USER:-notifier}"
+NATS_NOTIFIER_PASSWORD="${NATS_NOTIFIER_PASSWORD:-$(openssl rand -hex 24)}"
 RESEND_API_KEY="${RESEND_API_KEY:-}"
 BTCPAY_API_KEY="${BTCPAY_API_KEY:-}"
 BTCPAY_STORE_ID="${BTCPAY_STORE_ID:-}"
@@ -69,13 +80,17 @@ BTC_RPC_USER="${BTC_RPC_USER:-btcpay_rpc}"
 umask 077
 python3 - <<'PY' "$OUT_BASE" \
   "$DB_PASSWORD" "$JWT_ED25519_PRIVATE_KEY" "$JWT_ED25519_PUBLIC_KEYS" "$JWT_ACTIVE_KEY_ID" \
-  "$AGENT_AUTH_TOKEN" "$REDIS_PASSWORD" "$NATS_USER" "$NATS_PASSWORD" \
+  "$AGENT_AUTH_TOKEN" "$REDIS_PASSWORD" \
+  "$NATS_AUTH_USER" "$NATS_AUTH_PASSWORD" "$NATS_WG_USER" "$NATS_WG_PASSWORD" \
+  "$NATS_BILLING_USER" "$NATS_BILLING_PASSWORD" "$NATS_NOTIFIER_USER" "$NATS_NOTIFIER_PASSWORD" \
   "$RESEND_API_KEY" "$BTCPAY_API_KEY" "$BTCPAY_STORE_ID" "$BTCPAY_WEBHOOK_SECRET"
 import pathlib, sys, urllib.parse
 
 out = pathlib.Path(sys.argv[1])
 (
-    db_password, jwt_private, jwt_public, jwt_kid, agent, redis_pw, nats_user, nats_pw,
+    db_password, jwt_private, jwt_public, jwt_kid, agent, redis_pw,
+    nats_auth_user, nats_auth_pw, nats_wg_user, nats_wg_pw,
+    nats_billing_user, nats_billing_pw, nats_notifier_user, nats_notifier_pw,
     resend, btcpay_key, btcpay_store, btcpay_wh,
 ) = sys.argv[2:]
 
@@ -104,8 +119,14 @@ stringData:
   AGENT_AUTH_TOKEN: {q(agent)}
   REDIS_PASSWORD: {q(redis_pw)}
   REDIS_URL: {q(redis_url)}
-  NATS_USER: {q(nats_user)}
-  NATS_PASSWORD: {q(nats_pw)}
+  NATS_AUTH_USER: {q(nats_auth_user)}
+  NATS_AUTH_PASSWORD: {q(nats_auth_pw)}
+  NATS_WG_USER: {q(nats_wg_user)}
+  NATS_WG_PASSWORD: {q(nats_wg_pw)}
+  NATS_BILLING_USER: {q(nats_billing_user)}
+  NATS_BILLING_PASSWORD: {q(nats_billing_pw)}
+  NATS_NOTIFIER_USER: {q(nats_notifier_user)}
+  NATS_NOTIFIER_PASSWORD: {q(nats_notifier_pw)}
   RESEND_API_KEY: {q(resend)}
   BTCPAY_API_KEY: {q(btcpay_key)}
   BTCPAY_STORE_ID: {q(btcpay_store)}
@@ -146,7 +167,9 @@ except ImportError:
     raise SystemExit(0)
 
 for path, keys in [
-    (sys.argv[1], ["DB_PASSWORD", "JWT_ED25519_PRIVATE_KEY", "JWT_ED25519_PUBLIC_KEYS", "JWT_ACTIVE_KEY_ID", "AGENT_AUTH_TOKEN", "REDIS_PASSWORD", "NATS_USER", "NATS_PASSWORD"]),
+    (sys.argv[1], ["DB_PASSWORD", "JWT_ED25519_PRIVATE_KEY", "JWT_ED25519_PUBLIC_KEYS", "JWT_ACTIVE_KEY_ID", "AGENT_AUTH_TOKEN", "REDIS_PASSWORD",
+                   "NATS_AUTH_USER", "NATS_AUTH_PASSWORD", "NATS_WG_USER", "NATS_WG_PASSWORD",
+                   "NATS_BILLING_USER", "NATS_BILLING_PASSWORD", "NATS_NOTIFIER_USER", "NATS_NOTIFIER_PASSWORD"]),
     (sys.argv[2], ["BTCPAY_POSTGRES_PASSWORD", "BTC_RPC_PASSWORD", "BTC_RPC_USER"]),
 ]:
     doc = yaml.safe_load(open(path))

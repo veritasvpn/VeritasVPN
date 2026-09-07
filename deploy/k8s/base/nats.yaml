@@ -48,16 +48,6 @@ spec:
           # nats-server.conf references these as $VAR; without them every
           # connection would be rejected at startup.
           env:
-            - name: NATS_USER
-              valueFrom:
-                secretKeyRef:
-                  name: veritas-secrets
-                  key: NATS_USER
-            - name: NATS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: veritas-secrets
-                  key: NATS_PASSWORD
             - name: NATS_AUTH_USER
               valueFrom:
                 secretKeyRef:
