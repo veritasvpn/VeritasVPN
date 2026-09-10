@@ -34,6 +34,6 @@ for unit in veritas-backup.service veritas-backup.timer veritas-backup-verify.se
   install -o root -g root -m 0644 "$ROOT/deploy/systemd/$unit" "/etc/systemd/system/$unit"
 done
 systemctl daemon-reload
-systemctl enable veritas-backup.timer veritas-backup-verify.timer veritas-backup-restore-rehearsal.timer
+systemctl enable --now veritas-backup.timer veritas-backup-verify.timer veritas-backup-restore-rehearsal.timer
 printf 'Installed immutable backup programs in %s
 ' "$LIBEXEC"
