@@ -19,7 +19,7 @@ else
 fi
 
 if ip link show wg0 >/dev/null 2>&1 && wg show wg0 >/dev/null 2>&1; then ok 'WireGuard interface wg0 available'; else bad 'WireGuard interface wg0 missing'; fi
-if ss -H -lun | awk '{print $5}' | grep -Eq '(^|:)51820$'; then ok 'WireGuard UDP 51820 listening'; else bad 'WireGuard UDP 51820 not listening'; fi
+if [[ "$(wg show wg0 listen-port 2>/dev/null)" == '51820' ]]; then ok 'WireGuard UDP 51820 listening'; else bad 'WireGuard UDP 51820 not listening'; fi
 if [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" == '1' ]]; then ok 'IPv4 forwarding enabled'; else bad 'IPv4 forwarding disabled'; fi
 if nft list table inet veritas_filter >/dev/null 2>&1 && nft list table inet veritas >/dev/null 2>&1; then ok 'host and VPN firewall tables loaded'; else bad 'required nftables tables missing'; fi
 
