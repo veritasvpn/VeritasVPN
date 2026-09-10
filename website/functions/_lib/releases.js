@@ -11,7 +11,7 @@ const RELEASE_BASE = "https://github.com/veritasvpn/VeritasVPN/releases/download
 
 export const DOWNLOADS = {
   "veritasvpn-android.apk": {
-    tag: "v0.2.57",
+    tag: "v0.2.58",
     contentType: "application/vnd.android.package-archive",
     unavailable: "Android APK is temporarily unavailable.",
   },
