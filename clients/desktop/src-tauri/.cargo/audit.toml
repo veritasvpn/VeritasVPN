@@ -1,0 +1,4 @@
+[advisories]
+# VE-2026-001 in docs/SECURITY_EXCEPTIONS.md. Remove this ignore no later
+# than 2026-12-10 or when Tauri/Wry can resolve glib >=0.20.0.
+ignore = ["RUSTSEC-2024-0429"]

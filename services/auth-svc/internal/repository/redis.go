@@ -67,3 +67,25 @@ func (r *Redis) IsTokenBlacklisted(ctx context.Context, tokenHash string) (bool,
 	exists, err := r.client.Exists(ctx, key).Result()
 	return exists > 0, err
 }
+
+// GetAccountSessionVersion returns the account-wide JWT revocation generation.
+// Missing keys are generation zero for accounts created before this control.
+func (r *Redis) GetAccountSessionVersion(ctx context.Context, accountID string) (int64, error) {
+	key := fmt.Sprintf("account-session-version:%s", accountID)
+	value, err := r.client.Get(ctx, key).Int64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return value, err
+}
+
+// IncrementAccountSessionVersion invalidates every access JWT already issued
+// for the account. The TTL exceeds both refresh and access token lifetimes.
+func (r *Redis) IncrementAccountSessionVersion(ctx context.Context, accountID string, ttl time.Duration) error {
+	key := fmt.Sprintf("account-session-version:%s", accountID)
+	pipe := r.client.TxPipeline()
+	pipe.Incr(ctx, key)
+	pipe.Expire(ctx, key, ttl)
+	_, err := pipe.Exec(ctx)
+	return err
+}

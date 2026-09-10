@@ -32,3 +32,47 @@ updates:
     directory: /services/browser-proxy
     schedule: { interval: weekly }
     labels: [dependencies, security]
+  - package-ecosystem: gomod
+    directory: /android/wireguard
+    schedule: { interval: weekly }
+    labels: [dependencies, security]
+  - package-ecosystem: gomod
+    directory: /api
+    schedule: { interval: weekly }
+    labels: [dependencies, security]
+  - package-ecosystem: gomod
+    directory: /clients/cli
+    schedule: { interval: weekly }
+    labels: [dependencies, security]
+  - package-ecosystem: gomod
+    directory: /lib/config
+    schedule: { interval: weekly }
+    labels: [dependencies, security]
+  - package-ecosystem: gomod
+    directory: /lib/crypto
+    schedule: { interval: weekly }
+    labels: [dependencies, security]
+  - package-ecosystem: gomod
+    directory: /lib/jwt
+    schedule: { interval: weekly }
+    labels: [dependencies, security]
+  - package-ecosystem: gomod
+    directory: /lib/logging
+    schedule: { interval: weekly }
+    labels: [dependencies, security]
+  - package-ecosystem: gomod
+    directory: /lib/tokenhash
+    schedule: { interval: weekly }
+    labels: [dependencies, security]
+  - package-ecosystem: gomod
+    directory: /services/bitcoin-readiness
+    schedule: { interval: weekly }
+    labels: [dependencies, security]
+  - package-ecosystem: gomod
+    directory: /services/telegram-notifier
+    schedule: { interval: weekly }
+    labels: [dependencies, security]
+  - package-ecosystem: gomod
+    directory: /services/veritas-agent
+    schedule: { interval: weekly }
+    labels: [dependencies, security]

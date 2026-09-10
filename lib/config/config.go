@@ -47,6 +47,8 @@ type Config struct {
 
 	ResendAPIKey       string
 	TurnstileSecretKey string
+	E2EAuthSecret      string
+	E2EAuthAccountID   string
 	PublicBaseURL      string
 
 	AccessTokenTTL  time.Duration
@@ -58,9 +60,9 @@ func Load() *Config {
 		ServerPort: envOrDefault("SERVER_PORT", "8080"),
 		// No default: a fallback here silently connects every service to a
 		// well-known account/password pair instead of failing loudly.
-		DatabaseURL:    envRequired("DATABASE_URL"),
-		RedisURL:       envOrDefault("REDIS_URL", "redis://localhost:6379/0"),
-		NatsURL:        envOrDefault("NATS_URL", "nats://localhost:4222"),
+		DatabaseURL: envRequired("DATABASE_URL"),
+		RedisURL:    envOrDefault("REDIS_URL", "redis://localhost:6379/0"),
+		NatsURL:     envOrDefault("NATS_URL", "nats://localhost:4222"),
 		// Legacy HS256; optional during EdDSA cutover (may be unset in production).
 		JWTSecret: strings.TrimSpace(os.Getenv("JWT_SECRET")),
 		// Private key + active kid are required only by auth mint (auth-svc checks).
@@ -99,6 +101,8 @@ func Load() *Config {
 
 		ResendAPIKey:       os.Getenv("RESEND_API_KEY"),
 		TurnstileSecretKey: os.Getenv("TURNSTILE_SECRET_KEY"),
+		E2EAuthSecret:      strings.TrimSpace(os.Getenv("E2E_AUTH_SECRET")),
+		E2EAuthAccountID:   strings.TrimSpace(os.Getenv("VERITAS_E2E_ACCOUNT_ID")),
 		PublicBaseURL:      envOrDefault("PUBLIC_BASE_URL", "https://veritasvpn.cloud"),
 
 		AccessTokenTTL:  durationEnvOrDefault("ACCESS_TOKEN_TTL", 1*time.Hour),

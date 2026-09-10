@@ -30,11 +30,13 @@ type claims struct {
 	TokenUse string          `json:"token_use"`
 }
 type proxy struct {
-	secret     []byte
-	publicKeys map[string]ed25519.PublicKey
-	issuer     string
-	audience   string
-	transport  *http.Transport
+	secret      []byte
+	publicKeys  map[string]ed25519.PublicKey
+	issuer      string
+	audience    string
+	validateURL string
+	authClient  *http.Client
+	transport   *http.Transport
 }
 
 func main() {
@@ -60,20 +62,28 @@ func main() {
 	if audience == "" {
 		audience = "veritasvpn-api"
 	}
-	p := &proxy{secret: []byte(secret), publicKeys: publicKeys, issuer: issuer, audience: audience, transport: &http.Transport{
-		Proxy:               nil,
-		DialContext:         dialPublic,
-		ForceAttemptHTTP2:   false,
-		IdleConnTimeout:     60 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
-	}}
+	validateURL := strings.TrimSpace(os.Getenv("AUTH_VALIDATE_URL"))
+	if validateURL == "" {
+		if isProduction() {
+			log.Fatal("AUTH_VALIDATE_URL is required in production")
+		}
+		validateURL = "http://127.0.0.1:8080/api/v1/auth/validate"
+	}
+	p := &proxy{secret: []byte(secret), publicKeys: publicKeys, issuer: issuer, audience: audience,
+		validateURL: validateURL, authClient: &http.Client{Timeout: 3 * time.Second}, transport: &http.Transport{
+			Proxy:               nil,
+			DialContext:         dialPublic,
+			ForceAttemptHTTP2:   false,
+			IdleConnTimeout:     60 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+		}}
 	server := &http.Server{Addr: ":1080", Handler: p, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second}
 	log.Printf("authenticated browser proxy listening on %s", server.Addr)
 	log.Fatal(server.ListenAndServe())
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !p.authorized(r.Header.Get("Proxy-Authorization")) {
+	if !p.authorized(r.Context(), r.Header.Get("Proxy-Authorization")) {
 		w.Header().Set("Proxy-Authenticate", `Basic realm="VeritasVPN"`)
 		http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
 		return
@@ -86,7 +96,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.forward(w, r)
 }
 
-func (p *proxy) authorized(header string) bool {
+func (p *proxy) authorized(ctx context.Context, header string) bool {
 	if !strings.HasPrefix(header, "Basic ") {
 		return false
 	}
@@ -95,7 +105,34 @@ func (p *proxy) authorized(header string) bool {
 		return false
 	}
 	parts := strings.SplitN(string(raw), ":", 2)
-	return len(parts) == 2 && parts[0] == "veritas" && validateJWT(parts[1], p.secret, p.publicKeys, p.issuer, p.audience)
+	if len(parts) != 2 || parts[0] != "veritas" || !validateJWT(parts[1], p.secret, p.publicKeys, p.issuer, p.audience) {
+		return false
+	}
+	return p.activeToken(ctx, parts[1])
+}
+
+func (p *proxy) activeToken(ctx context.Context, token string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.validateURL, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := p.authClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var result struct {
+		Valid bool   `json:"valid"`
+		Tier  string `json:"tier"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result); err != nil {
+		return false
+	}
+	return result.Valid && result.Tier == "premium"
 }
 
 func isProduction() bool {

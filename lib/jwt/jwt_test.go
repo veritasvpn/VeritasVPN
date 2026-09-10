@@ -212,3 +212,26 @@ func TestDualVerifyAcceptsLegacyHS256WhenSecretConfigured(t *testing.T) {
 		t.Fatalf("unexpected account: %q", claims.AccountID)
 	}
 }
+
+func TestSessionVersionRoundTrip(t *testing.T) {
+	privatePEM, publicJSON := ed25519Material(t)
+	signer, err := NewManagerWithKeys("", privatePEM, publicJSON, "2026-08", DefaultIssuer, DefaultAudience, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := NewManagerWithKeys("", "", publicJSON, "", DefaultIssuer, DefaultAudience, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := signer.GenerateAccessTokenWithSessionVersion("account", "premium", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := verifier.ValidateAccessToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.SessionVersion != 7 {
+		t.Fatalf("session version = %d, want 7", claims.SessionVersion)
+	}
+}

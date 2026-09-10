@@ -134,6 +134,18 @@ spec:
                 secretKeyRef:
                   name: veritas-secrets
                   key: TURNSTILE_SECRET_KEY
+            - name: E2E_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: E2E_AUTH_SECRET
+                  optional: true
+            - name: VERITAS_E2E_ACCOUNT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: VERITAS_E2E_ACCOUNT_ID
+                  optional: true
             - name: PUBLIC_BASE_URL
               valueFrom:
                 configMapKeyRef:

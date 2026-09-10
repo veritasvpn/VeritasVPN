@@ -519,17 +519,24 @@ func (h *HTTPHandler) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusNotFound, "account not found")
 		return
 	}
-	if acc.Email != nil && strings.TrimSpace(*acc.Email) != "" {
-		if strings.TrimSpace(req.Password) == "" {
-			writeHTTPError(w, http.StatusBadRequest, "password required to sign out all sessions")
+	e2eAuthorized := h.service.VerifyE2EAuth(
+		claims.AccountID,
+		r.Header.Get("X-Veritas-E2E-Timestamp"),
+		r.Header.Get("X-Veritas-E2E-Signature"),
+	)
+	if !e2eAuthorized {
+		if acc.Email != nil && strings.TrimSpace(*acc.Email) != "" {
+			if strings.TrimSpace(req.Password) == "" {
+				writeHTTPError(w, http.StatusBadRequest, "password required to sign out all sessions")
+				return
+			}
+			if err := h.service.ConfirmPassword(r.Context(), claims.AccountID, req.Password); err != nil {
+				writeHTTPError(w, http.StatusUnauthorized, "incorrect password")
+				return
+			}
+		} else if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
 			return
 		}
-		if err := h.service.ConfirmPassword(r.Context(), claims.AccountID, req.Password); err != nil {
-			writeHTTPError(w, http.StatusUnauthorized, "incorrect password")
-			return
-		}
-	} else if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
-		return
 	}
 
 	if err := h.service.LogoutAllSessions(r.Context(), claims.AccountID, token); err != nil {
@@ -589,7 +596,12 @@ func (h *HTTPHandler) handleSignInAccount(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
+	e2eAuthorized := h.service.VerifyE2EAuth(
+		req.AccountID,
+		r.Header.Get("X-Veritas-E2E-Timestamp"),
+		r.Header.Get("X-Veritas-E2E-Signature"),
+	)
+	if !e2eAuthorized && !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
 		return
 	}
 

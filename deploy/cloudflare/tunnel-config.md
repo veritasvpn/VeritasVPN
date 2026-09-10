@@ -4,7 +4,7 @@
 
 - `veritasvpn.cloud` and `www.veritasvpn.cloud` are served by Cloudflare Pages; they do not route to the Dell.
 - `api.veritasvpn.cloud` routes through the K3s Cloudflare connector to ingress-nginx.
-- `btcpay-mainnet.veritasvpn.cloud` routes to the mainnet BTCPay Kubernetes Service and is Access-gated.
+- `btcpay-mainnet.veritasvpn.cloud` routes to the mainnet BTCPay Kubernetes Service. Customer checkout is public; BTCPay authentication protects administration.
 - `analytics.veritasvpn.cloud` routes to Grafana and is Access-gated.
 - The retired `btcpay.veritasvpn.cloud` testnet route must not be used by clients.
 
@@ -27,7 +27,8 @@ Apply Cloudflare Access policies to administrative routes:
 ```
 # Protected routes (require authentication)
 analytics.veritasvpn.cloud       → Allow: named administrator identity
-btcpay-mainnet.veritasvpn.cloud  → Allow: named administrator identity
+
+The BTCPay hostname must remain public for customer invoice and checkout paths. Before release, disable public registration and require MFA for every BTCPay account. If Cloudflare Access is added to BTCPay paths, explicitly bypass every customer checkout, static asset, and client API route and test payment clients end to end.
 ```
 
 ## WAF Rules (configured in Cloudflare dashboard)

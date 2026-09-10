@@ -8,7 +8,12 @@ TMP="$(mktemp -d)"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
-git clone --depth 1 https://git.zx2c4.com/wireguard-go "$TMP/wg-go"
+WIREGUARD_GO_COMMIT="ecfc5a8d54462e18e13c72173e2623d16d8e25a0"
+git init -q "$TMP/wg-go"
+git -C "$TMP/wg-go" remote add origin https://git.zx2c4.com/wireguard-go
+git -C "$TMP/wg-go" fetch -q --depth 1 origin "$WIREGUARD_GO_COMMIT"
+git -C "$TMP/wg-go" checkout -q --detach FETCH_HEAD
+test "$(git -C "$TMP/wg-go" rev-parse HEAD)" = "$WIREGUARD_GO_COMMIT"
 cd "$TMP/wg-go"
 go build -o wireguard-go -ldflags=-s
 cp wireguard-go "$ROOT/wireguard-go"

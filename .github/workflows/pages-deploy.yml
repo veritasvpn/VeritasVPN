@@ -14,6 +14,7 @@ jobs:
   deploy:
     name: Deploy to Cloudflare Pages
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       contents: read
       deployments: write

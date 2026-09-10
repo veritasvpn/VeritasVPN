@@ -1019,12 +1019,10 @@ function renderUser(user) {
     }
   });
 
-  signOutAllBtn?.addEventListener('click', async (e) => {
+  signOutAllBtn?.addEventListener('click', (e) => {
     e.preventDefault();
-    if (!confirm('Sign out of VeritasVPN on all devices and browsers?')) return;
-    await logoutAllSessions();
-    renderUser(null);
-    window.location.href = '/';
+    if (!confirm('Continue to Security to confirm signing out on all devices?')) return;
+    window.location.href = '/account/#/security';
   });
 
   if (params.get('signin') === '1') {
@@ -1060,19 +1058,25 @@ export async function signOutHandler() {
   notifyListeners(null);
 }
 
-export async function logoutAllSessions() {
+export async function logoutAllSessions({ password = '', turnstileToken = '' } = {}) {
   const token = getAccessToken();
-  if (token) {
-    await fetch(`${AUTH_API}/api/v1/auth/logout-all`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'X-Veritas-Client': 'web',
-      },
-      body: '{}',
-    }).catch(() => undefined);
+  if (!token) throw new Error('Your session has expired. Sign in again.');
+  const response = await fetch(`${AUTH_API}/api/v1/auth/logout-all`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'X-Veritas-Client': 'web',
+    },
+    body: JSON.stringify({
+      ...(password ? { password } : {}),
+      ...(turnstileToken ? { turnstile_token: turnstileToken } : {}),
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'Could not sign out all sessions.');
   }
   clearSession();
   currentUser = null;

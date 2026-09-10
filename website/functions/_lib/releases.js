@@ -16,12 +16,12 @@ export const DOWNLOADS = {
     unavailable: "Android APK is temporarily unavailable.",
   },
   "veritasvpn-linux.deb": {
-    tag: "v0.2.44",
+    tag: "v0.2.58",
     contentType: "application/vnd.debian.binary-package",
     unavailable: "Linux .deb is temporarily unavailable.",
   },
   "veritasvpn-linux.AppImage": {
-    tag: "v0.2.44",
+    tag: "v0.2.58",
     contentType: "application/octet-stream",
     unavailable: "Linux AppImage is temporarily unavailable.",
   },

@@ -32,9 +32,9 @@ this directory or the repository.
    invoice-view permissions, then configure the billing service during a
    deliberate production cutover.
 6. **Public checkout:** customer invoice pages (`/i/*` and static assets) must
-   be reachable **without** Cloudflare Access. Keep Access on the BTCPay admin UI
-   if desired, but add a **Bypass** policy for checkout paths (or the whole
-   hostname — BTCPay login still protects the dashboard). If checkout is gated
+   be reachable **without** Cloudflare Access. Require MFA for every BTCPay account and keep public registration disabled.
+   If Access is applied to administrative paths, add a **Bypass** policy for every
+   checkout, static asset, and client API path. If checkout is gated
    by Access, Android and web clients will show a blank page or a login screen
    instead of the payment QR code.
 
@@ -47,3 +47,9 @@ kubectl -n btcpay-mainnet get pods,pvc
 
 The mainnet environment is the only supported payment stack. Keep checkout
 gated whenever Bitcoin readiness, NBXplorer, or the BTCPay service is unhealthy.
+
+Before release, verify both controls from the production node:
+
+```sh
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash deploy/verify/btcpay-admin-security.sh
+```

@@ -21,13 +21,22 @@ if [[ ! -f "$E2E_ENV" ]]; then
   cat >"$E2E_ENV" <<'EOF'
 # Premium synthetic account used by tunnel-hold + optional local smoke.
 # Populate once: VERITAS_E2E_ACCOUNT_ID=...
-# Match GitHub Actions secret VERITAS_E2E_ACCOUNT_ID.
+# Match GitHub Actions and Kubernetes secret values.
 VERITAS_E2E_ACCOUNT_ID=
+VERITAS_E2E_AUTH_SECRET=
 EOF
   chmod 0600 "$E2E_ENV"
   chown root:root "$E2E_ENV"
-  printf 'Created %s — set VERITAS_E2E_ACCOUNT_ID before enabling tunnel-hold.\n' "$E2E_ENV"
+  printf 'Created %s — set the E2E account ID and auth secret before enabling tunnel-hold.\n' "$E2E_ENV"
 fi
+if ! grep -q '^VERITAS_E2E_AUTH_SECRET=' "$E2E_ENV"; then
+  printf '\nVERITAS_E2E_AUTH_SECRET=\n' >> "$E2E_ENV"
+fi
+if ! grep -q '^VERITAS_E2E_ACCOUNT_ID=' "$E2E_ENV"; then
+  printf '\nVERITAS_E2E_ACCOUNT_ID=\n' >> "$E2E_ENV"
+fi
+chmod 0600 "$E2E_ENV"
+chown root:root "$E2E_ENV"
 
 CUTOVER_FILE=/etc/veritasvpn/jwt-cutover-at
 if [[ ! -f "$CUTOVER_FILE" ]]; then
@@ -74,12 +83,13 @@ sed "s|/opt/veritasvpn|${REPO_ROOT}|g" \
 systemctl daemon-reload
 systemctl enable --now veritas-jwt-secret-cleanup.timer
 
-if grep -qE '^VERITAS_E2E_ACCOUNT_ID=.+' "$E2E_ENV"; then
+if grep -qE '^VERITAS_E2E_ACCOUNT_ID=.+' "$E2E_ENV" &&
+   grep -qE '^VERITAS_E2E_AUTH_SECRET=.{32,}' "$E2E_ENV"; then
   systemctl enable --now veritas-tunnel-hold.timer
   printf 'Enabled veritas-tunnel-hold.timer\n'
 else
   systemctl disable --now veritas-tunnel-hold.timer 2>/dev/null || true
-  printf 'Tunnel-hold timer NOT enabled — set VERITAS_E2E_ACCOUNT_ID in %s then:\n' "$E2E_ENV"
+  printf 'Tunnel-hold timer NOT enabled — set both E2E values in %s then:\n' "$E2E_ENV"
   printf '  systemctl enable --now veritas-tunnel-hold.timer\n'
 fi
 

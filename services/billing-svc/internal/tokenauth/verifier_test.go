@@ -21,6 +21,10 @@ func (s stubBlacklist) IsTokenBlacklisted(_ context.Context, _ string) (bool, er
 	return s.blacklisted, nil
 }
 
+func (s stubBlacklist) GetAccountSessionVersion(_ context.Context, _ string) (int64, error) {
+	return 0, nil
+}
+
 func ed25519VerifierMaterial(t *testing.T) (token string, publicJSON string) {
 	t.Helper()
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -87,5 +90,40 @@ func TestAllowedTargetPolicy(t *testing.T) {
 	}
 	if _, err := allowedTarget("example.com:443"); err != nil {
 		t.Fatalf("public HTTPS target rejected: %v", err)
+	}
+}
+
+func TestActiveTokenFailsClosedAndRequiresPremium(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{name: "active premium", status: http.StatusOK, body: `{"valid":true,"tier":"premium"}`, want: true},
+		{name: "revoked", status: http.StatusUnauthorized, body: `{"valid":false}`, want: false},
+		{name: "free tier", status: http.StatusOK, body: `{"valid":true,"tier":"free"}`, want: false},
+		{name: "malformed response", status: http.StatusOK, body: `{`, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer access-token" {
+					t.Fatalf("missing bearer forwarding")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			p := &proxy{validateURL: server.URL, authClient: server.Client()}
+			if got := p.activeToken(context.Background(), "access-token"); got != tc.want {
+				t.Fatalf("activeToken() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	p := &proxy{validateURL: "http://127.0.0.1:1", authClient: &http.Client{Timeout: 50 * time.Millisecond}}
+	if p.activeToken(context.Background(), "access-token") {
+		t.Fatal("unreachable auth service must fail closed")
 	}
 }

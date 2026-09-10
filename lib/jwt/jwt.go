@@ -32,9 +32,10 @@ type Manager struct {
 
 type Claims struct {
 	jwt.RegisteredClaims
-	AccountID string `json:"account_id"`
-	Tier      string `json:"tier"`
-	TokenUse  string `json:"token_use,omitempty"`
+	AccountID      string `json:"account_id"`
+	Tier           string `json:"tier"`
+	TokenUse       string `json:"token_use,omitempty"`
+	SessionVersion int64  `json:"session_version"`
 }
 
 // NewManager retains the HMAC-only constructor for development and tests.
@@ -157,6 +158,10 @@ func parsePublicKey(value string) (ed25519.PublicKey, error) {
 }
 
 func (m *Manager) GenerateAccessToken(accountID, tier string) (string, int64, error) {
+	return m.GenerateAccessTokenWithSessionVersion(accountID, tier, 0)
+}
+
+func (m *Manager) GenerateAccessTokenWithSessionVersion(accountID, tier string, sessionVersion int64) (string, int64, error) {
 	now := time.Now()
 	expires := now.Add(m.accessTokenTTL)
 	claims := &Claims{
@@ -169,9 +174,10 @@ func (m *Manager) GenerateAccessToken(accountID, tier string) (string, int64, er
 			ExpiresAt: jwt.NewNumericDate(expires),
 			ID:        generateJTI(),
 		},
-		AccountID: accountID,
-		Tier:      tier,
-		TokenUse:  AccessTokenUse,
+		AccountID:      accountID,
+		Tier:           tier,
+		TokenUse:       AccessTokenUse,
+		SessionVersion: sessionVersion,
 	}
 
 	if len(m.privateKey) > 0 {

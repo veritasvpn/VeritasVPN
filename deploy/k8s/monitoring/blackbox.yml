@@ -23,4 +23,4 @@ modules:
       preferred_ip_protocol: ip4
       tls: true
       tls_config:
-        insecure_skip_verify: true
+        insecure_skip_verify: false
