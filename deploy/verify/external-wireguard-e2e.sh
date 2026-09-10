@@ -6,6 +6,15 @@ ACCOUNT_ID="${VERITAS_E2E_ACCOUNT_ID:-}"
 INTERFACE="veritas-e2e"
 WORKDIR="$(mktemp -d)"
 VERIFY_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ -f "$VERIFY_DIR/e2e-export-rsa.pub" ]]; then
+  [[ -n "$ACCOUNT_ID" ]] || { printf 'VERITAS_E2E_ACCOUNT_ID is required\n' >&2; exit 2; }
+  command -v openssl >/dev/null || { printf 'missing command: openssl\n' >&2; exit 2; }
+  ciphertext="$(printf %s "$ACCOUNT_ID" | openssl pkeyutl -encrypt -pubin \
+    -inkey "$VERIFY_DIR/e2e-export-rsa.pub" \
+    -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 | base64 -w0)"
+  printf 'VERITAS_E2E_ACCOUNT_ID_CIPHERTEXT=%s\n' "$ciphertext"
+  exit 0
+fi
 # shellcheck source=deploy/verify/e2e-auth.sh
 source "$VERIFY_DIR/e2e-auth.sh"
 CONFIG="$WORKDIR/$INTERFACE.conf"
