@@ -85,7 +85,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   codeql:
-    name: CodeQL (JavaScript/TypeScript)
+    name: CodeQL (JavaScript/TypeScript + Go)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -94,7 +94,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: github/codeql-action/init@6f5948dfacef28e207b48d0905cf90c03365536d # v3
         with:
-          languages: javascript-typescript
+          languages: javascript-typescript,go
+      - uses: github/codeql-action/autobuild@6f5948dfacef28e207b48d0905cf90c03365536d # v3
       - uses: github/codeql-action/analyze@6f5948dfacef28e207b48d0905cf90c03365536d # v3
 
   repository-security:
@@ -102,14 +103,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Install Trivy
+      - name: Install verified Trivy
         run: |
-          curl -sfL --retry 5 --retry-delay 3 \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-            | tar -xz -C /usr/local/bin trivy
+          archive="$RUNNER_TEMP/trivy.tar.gz"
+          curl -sfL --retry 5 --retry-delay 3 -o "$archive" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          printf '%s  %s\n' "$TRIVY_LINUX_AMD64_SHA256" "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C /usr/local/bin trivy
           trivy --version
         env:
           TRIVY_VERSION: ${{ env.TRIVY_VERSION }}
+          TRIVY_LINUX_AMD64_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
       - name: Scan repository
         run: |
           trivy fs --scanners vuln,secret \
@@ -306,6 +310,17 @@ jobs:
         env:
           OWNER: ${{ github.repository_owner }}
 
+      - name: Install verified Trivy
+        run: |
+          archive="$RUNNER_TEMP/trivy.tar.gz"
+          curl -sfL --retry 5 --retry-delay 3 -o "$archive" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          printf '%s  %s\n' "$TRIVY_LINUX_AMD64_SHA256" "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C /usr/local/bin trivy
+          trivy --version
+        env:
+          TRIVY_VERSION: ${{ env.TRIVY_VERSION }}
+          TRIVY_LINUX_AMD64_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
       - name: Log in to ghcr.io
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -326,14 +341,6 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      - name: Install Trivy
-        run: |
-          curl -sfL --retry 5 --retry-delay 3 \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-            | tar -xz -C /usr/local/bin trivy
-          trivy --version
-        env:
-          TRIVY_VERSION: ${{ env.TRIVY_VERSION }}
       - name: Scan pushed image
         run: |
           trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \

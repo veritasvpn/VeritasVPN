@@ -29,6 +29,7 @@ jobs:
       - name: Sign-in, Premium, EdDSA JWT, download SHA
         env:
           VERITAS_E2E_ACCOUNT_ID: ${{ secrets.VERITAS_E2E_ACCOUNT_ID }}
+          VERITAS_E2E_AUTH_SECRET: ${{ secrets.VERITAS_E2E_AUTH_SECRET }}
           RELEASE_TAG: ${{ github.event.inputs.release_tag || github.event.release.tag_name || '' }}
           REQUIRE_EDDSA: "true"
         run: |
