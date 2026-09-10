@@ -9,7 +9,6 @@ import (
 
 	"github.com/veritasvpn/lib/jwt"
 	"github.com/veritasvpn/lib/logging"
-	jwtlib "github.com/veritasvpn/lib/jwt"
 	"github.com/veritasvpn/services/auth-svc/internal/repository"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -25,12 +24,12 @@ const TierKey contextKey = "tier"
 const AccessTokenKey contextKey = "access_token"
 
 type AuthInterceptor struct {
-	log    *logging.Logger
-	jwt    *jwtlib.Manager
-	redis  *repository.Redis
+	log   *logging.Logger
+	jwt   *jwt.Manager
+	redis *repository.Redis
 }
 
-func NewAuthInterceptor(log *logging.Logger, jwt *jwtlib.Manager, redis *repository.Redis) *AuthInterceptor {
+func NewAuthInterceptor(log *logging.Logger, jwt *jwt.Manager, redis *repository.Redis) *AuthInterceptor {
 	return &AuthInterceptor{log: log, jwt: jwt, redis: redis}
 }
 
@@ -87,6 +86,10 @@ func (i *AuthInterceptor) authorize(ctx context.Context, method string) (context
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "invalid or expired token")
 	}
+	version, err := i.redis.GetAccountSessionVersion(ctx, claims.AccountID)
+	if err != nil || version != claims.SessionVersion {
+		return nil, status.Error(codes.Unauthenticated, "account sessions have been revoked")
+	}
 
 	newCtx := context.WithValue(ctx, AccountIDKey, claims.AccountID)
 	newCtx = context.WithValue(newCtx, TierKey, claims.Tier)
@@ -136,6 +139,10 @@ func ValidateTokenMiddleware(jwtMgr *jwt.Manager, redis *repository.Redis, log *
 		claims, err := jwtMgr.ValidateAccessToken(token)
 		if err != nil {
 			return nil, err
+		}
+		version, err := redis.GetAccountSessionVersion(ctx, claims.AccountID)
+		if err != nil || version != claims.SessionVersion {
+			return nil, fmt.Errorf("account sessions have been revoked")
 		}
 		return claims, nil
 	}

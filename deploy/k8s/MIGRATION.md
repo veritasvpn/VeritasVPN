@@ -91,6 +91,6 @@ kubectl -n veritas rollout restart deploy/auth-svc
 | Path | Purpose |
 |------|---------|
 | `/var/lib/rancher/k3s/server/manifests/` | Auto-deploy manifests |
-| `/etc/rancher/k3s/k3s.yaml` | kubeconfig (copy to ~/.kube/config) |
+| `/etc/rancher/k3s/k3s.yaml` | root-only cluster-admin kubeconfig |
 | `/var/lib/rancher/k3s/storage/` | local-path provisioner PVC data |
 | `/opt/veritasvpn/data/wireguard/` | WireGuard keys (hostPath mount) |

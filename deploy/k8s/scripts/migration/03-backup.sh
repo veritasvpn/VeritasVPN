@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+umask 077
 set -euo pipefail
 
 echo "=== STEP 3: Full backup ==="

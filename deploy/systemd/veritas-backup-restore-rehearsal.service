@@ -5,5 +5,14 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/veritasvpn/deploy/backup/restore-test.sh
-
+ExecStart=/usr/local/libexec/veritasvpn-backup/restore-test.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/veritasvpn/metrics /run/lock

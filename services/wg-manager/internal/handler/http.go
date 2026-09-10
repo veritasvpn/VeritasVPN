@@ -749,6 +749,10 @@ func (h *HTTPHandler) accountFromRequest(r *http.Request) (accountID, tier strin
 		if blacklisted {
 			return "", "", errUnauthorized("token revoked")
 		}
+		version, versionErr := h.redis.GetAccountSessionVersion(r.Context(), c.AccountID)
+		if versionErr != nil || version != c.SessionVersion {
+			return "", "", errUnauthorized("account sessions revoked")
+		}
 	}
 	return c.AccountID, entitlement.NormalizeTier(c.Tier), nil
 }

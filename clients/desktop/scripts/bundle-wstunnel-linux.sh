@@ -13,6 +13,12 @@ trap cleanup EXIT
 
 echo "Downloading wstunnel v${VERSION} (${ARCH})…"
 curl -fL --retry 5 -o "$TMP/wst.tar.gz" "$URL"
+case "$ARCH" in
+  linux_amd64) EXPECTED_SHA256=db6064cca0515b67f8652e201cff8e27553b8cbb7216b2e19241311e34868e6e ;;
+  linux_arm64) EXPECTED_SHA256=26bb36b856948255bec7cd71a39df5f8912acdd7a47a9ccd4044a9b80ced108d ;;
+  *) echo "unsupported wstunnel architecture: $ARCH" >&2; exit 1 ;;
+esac
+printf '%s  %s\n' "$EXPECTED_SHA256" "$TMP/wst.tar.gz" | sha256sum --check --strict
 tar -xzf "$TMP/wst.tar.gz" -C "$TMP"
 BIN="$(find "$TMP" -type f -name 'wstunnel' | head -1)"
 if [[ -z "$BIN" ]]; then

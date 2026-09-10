@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +39,22 @@ func New(log *logging.Logger, db *repository.Postgres, redis *repository.Redis, 
 }
 
 func (s *AuthService) SetNATS(nc *nats.Conn) { s.nats = nc }
+
+func (s *AuthService) generateAccessToken(ctx context.Context, accountID, tier string) (string, int64, error) {
+	version, err := s.redis.GetAccountSessionVersion(ctx, accountID)
+	if err != nil {
+		return "", 0, fmt.Errorf("get account session version: %w", err)
+	}
+	return s.jwt.GenerateAccessTokenWithSessionVersion(accountID, tier, version)
+}
+
+func (s *AuthService) revokeAllAccessTokens(ctx context.Context, accountID string) error {
+	ttl := s.cfg.RefreshTokenTTL + s.cfg.AccessTokenTTL
+	if err := s.redis.IncrementAccountSessionVersion(ctx, accountID, ttl); err != nil {
+		return fmt.Errorf("increment account session version: %w", err)
+	}
+	return nil
+}
 
 func (s *AuthService) publishEvent(subject string, payload map[string]interface{}) {
 	if s.nats == nil {
@@ -91,7 +109,7 @@ func (s *AuthService) Register(ctx context.Context, deviceID, publicKey string) 
 		return "", "", "", 0, fmt.Errorf("create account: %w", err)
 	}
 
-	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	accessToken, expiresAt, err := s.generateAccessToken(ctx, acc.ID, acc.SubscriptionTier)
 	if err != nil {
 		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
 	}
@@ -138,7 +156,7 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (st
 		return "", "", 0, fmt.Errorf("email_not_verified")
 	}
 
-	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	accessToken, expiresAt, err := s.generateAccessToken(ctx, acc.ID, acc.SubscriptionTier)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("generate access token: %w", err)
 	}
@@ -177,6 +195,13 @@ func (s *AuthService) ValidateToken(ctx context.Context, accessToken string) (*j
 	if err != nil {
 		return nil, fmt.Errorf("validate token: %w", err)
 	}
+	version, err := s.redis.GetAccountSessionVersion(ctx, claims.AccountID)
+	if err != nil {
+		return nil, fmt.Errorf("check account session version: %w", err)
+	}
+	if claims.SessionVersion != version {
+		return nil, fmt.Errorf("account sessions have been revoked")
+	}
 	if _, err := s.db.GetAccountByID(ctx, claims.AccountID); err != nil {
 		return nil, fmt.Errorf("account is no longer active: %w", err)
 	}
@@ -188,13 +213,13 @@ func (s *AuthService) GetAccount(ctx context.Context, accountID string) (*model.
 	return s.db.GetAccountByID(ctx, accountID)
 }
 
-// DeleteAccount tears down live VPN resources, revokes the caller's access JWT,
-// then permanently deletes the account and related rows.
-func (s *AuthService) DeleteAccount(ctx context.Context, accountID, accessToken string) error {
-	if err := s.requestAccountTeardown(ctx, accountID); err != nil {
+// DeleteAccount revokes every session, tears down live VPN resources, then
+// permanently deletes the account and related rows.
+func (s *AuthService) DeleteAccount(ctx context.Context, accountID, _ string) error {
+	if err := s.revokeAllAccessTokens(ctx, accountID); err != nil {
 		return fmt.Errorf("delete account: %w", err)
 	}
-	if err := s.blacklistAccessToken(ctx, accessToken); err != nil {
+	if err := s.requestAccountTeardown(ctx, accountID); err != nil {
 		return fmt.Errorf("delete account: %w", err)
 	}
 	if err := s.db.DeleteAccount(ctx, accountID); err != nil {
@@ -217,14 +242,14 @@ func (s *AuthService) ConfirmPassword(ctx context.Context, accountID, password s
 	return nil
 }
 
-// LogoutAllSessions revokes every refresh token for the account and blacklists
-// the caller's current access token so it cannot be reused until it expires.
-func (s *AuthService) LogoutAllSessions(ctx context.Context, accountID, accessToken string) error {
+// LogoutAllSessions increments the account session version so every access JWT
+// is rejected, then deletes every refresh token for the account.
+func (s *AuthService) LogoutAllSessions(ctx context.Context, accountID, _ string) error {
+	if err := s.revokeAllAccessTokens(ctx, accountID); err != nil {
+		return err
+	}
 	if err := s.db.DeleteAllRefreshTokens(ctx, accountID); err != nil {
 		return fmt.Errorf("delete refresh tokens: %w", err)
-	}
-	if err := s.blacklistAccessToken(ctx, accessToken); err != nil {
-		return err
 	}
 
 	s.log.Info("all sessions logged out", zap.String("account_hash", logging.HashIdentifier(accountID)))
@@ -288,7 +313,7 @@ func (s *AuthService) RegisterWithEmail(ctx context.Context, email, password str
 		return "", "", "", 0, fmt.Errorf("create account: %w", err)
 	}
 
-	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	accessToken, expiresAt, err := s.generateAccessToken(ctx, acc.ID, acc.SubscriptionTier)
 	if err != nil {
 		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
 	}
@@ -346,7 +371,7 @@ func (s *AuthService) SignInWithEmail(ctx context.Context, email, password strin
 		return "", "", "", 0, fmt.Errorf("email_not_verified")
 	}
 
-	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	accessToken, expiresAt, err := s.generateAccessToken(ctx, acc.ID, acc.SubscriptionTier)
 	if err != nil {
 		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
 	}
@@ -439,6 +464,12 @@ func (s *AuthService) ResetPassword(ctx context.Context, resetToken, newPassword
 		return fmt.Errorf("hash password: %w", err)
 	}
 
+	if err := s.revokeAllAccessTokens(ctx, acc.ID); err != nil {
+		return fmt.Errorf("revoke sessions before password reset: %w", err)
+	}
+	if err := s.db.DeleteAllRefreshTokens(ctx, acc.ID); err != nil {
+		return fmt.Errorf("delete refresh tokens before password reset: %w", err)
+	}
 	if err := s.db.UpdateAccountPassword(ctx, acc.ID, passwordHash); err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
@@ -477,7 +508,7 @@ func (s *AuthService) RegisterAnonymous(ctx context.Context) (string, string, st
 		return "", "", "", 0, fmt.Errorf("create account: %w", err)
 	}
 
-	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	accessToken, expiresAt, err := s.generateAccessToken(ctx, acc.ID, acc.SubscriptionTier)
 	if err != nil {
 		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
 	}
@@ -525,7 +556,7 @@ func (s *AuthService) SignInWithAccountID(ctx context.Context, accountID string)
 		return "", "", "", 0, fmt.Errorf("use email and password to sign in to this account")
 	}
 
-	accessToken, expiresAt, err := s.jwt.GenerateAccessToken(acc.ID, acc.SubscriptionTier)
+	accessToken, expiresAt, err := s.generateAccessToken(ctx, acc.ID, acc.SubscriptionTier)
 	if err != nil {
 		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
 	}
@@ -551,6 +582,33 @@ func (s *AuthService) SignInWithAccountID(ctx context.Context, accountID string)
 	)
 
 	return accessToken, refreshToken, acc.ID, expiresAt, nil
+}
+
+// VerifyE2EAuth permits the dedicated synthetic account to pass the browser
+// challenge without creating a general Turnstile bypass. The shared secret is
+// never accepted in the body, signatures are scoped to one account and expire
+// after two minutes, and hmac.Equal provides constant-time comparison.
+func (s *AuthService) VerifyE2EAuth(accountID, timestamp, signature string) bool {
+	secret := []byte(strings.TrimSpace(s.cfg.E2EAuthSecret))
+	configuredAccountID := strings.TrimSpace(s.cfg.E2EAuthAccountID)
+	if len(secret) < 32 || configuredAccountID == "" || accountID != configuredAccountID {
+		return false
+	}
+	ts, err := strconv.ParseInt(strings.TrimSpace(timestamp), 10, 64)
+	if err != nil {
+		return false
+	}
+	age := time.Since(time.Unix(ts, 0))
+	if age < -2*time.Minute || age > 2*time.Minute {
+		return false
+	}
+	provided, err := hex.DecodeString(strings.TrimSpace(signature))
+	if err != nil || len(provided) != sha256.Size {
+		return false
+	}
+	mac := hmac.New(sha256.New, secret)
+	_, _ = fmt.Fprintf(mac, "%s\n%s", timestamp, accountID)
+	return hmac.Equal(provided, mac.Sum(nil))
 }
 
 func (s *AuthService) TurnstileEnabled() bool {

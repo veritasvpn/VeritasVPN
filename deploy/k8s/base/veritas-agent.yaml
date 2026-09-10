@@ -49,11 +49,16 @@ spec:
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: false
+            runAsUser: 0
+            readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
             capabilities:
+              drop: ["ALL"]
               add:
                 - NET_ADMIN
-                - NET_RAW
+                - NET_BIND_SERVICE
           env:
             - name: AGENT_AUTH_TOKEN
               valueFrom:
@@ -196,6 +201,8 @@ spec:
               mountPath: /var/lib/veritasvpn/dns
             - name: agent-state
               mountPath: /var/lib/veritasvpn/agent
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 50m
@@ -216,3 +223,6 @@ spec:
           hostPath:
             path: /var/lib/veritasvpn/agent
             type: DirectoryOrCreate
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

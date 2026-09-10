@@ -15,8 +15,8 @@ fi
 confirm "Install k3s on this node?"
 
 echo "Installing k3s..."
-curl -sfL https://get.k3s.io | sh -s - \
-  --write-kubeconfig-mode 644 \
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='v1.36.3+k3s1' sh -s - \
+  --write-kubeconfig-mode 600 \
   --disable servicelb \
   --disable traefik
 
@@ -25,13 +25,12 @@ sleep 10
 kubectl wait --for=condition=ready node --all --timeout=120s
 kubectl get nodes
 
-echo "Setting up kubeconfig for the current user..."
-mkdir -p ~/.kube
-cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
-chmod 600 ~/.kube/config
+# Keep the cluster-admin kubeconfig root-only and use it explicitly.
+chmod 600 /etc/rancher/k3s/k3s.yaml
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
 echo "Installing ingress-nginx controller..."
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/baremetal/deploy.yaml
+kubectl apply -k deploy/k8s/ingress-nginx/
 
 echo "Waiting for ingress-nginx..."
 kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=120s

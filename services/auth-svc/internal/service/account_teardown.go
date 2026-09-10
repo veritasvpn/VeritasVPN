@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -77,26 +76,5 @@ func (s *AuthService) requestAccountTeardown(ctx context.Context, accountID stri
 		zap.String("account_hash", logging.HashIdentifier(accountID)),
 		zap.Int("peers_removed", resp.PeersRemoved),
 	)
-	return nil
-}
-
-// blacklistAccessToken revokes the caller's access JWT for the remainder of its TTL.
-func (s *AuthService) blacklistAccessToken(ctx context.Context, accessToken string) error {
-	accessToken = strings.TrimSpace(accessToken)
-	if accessToken == "" {
-		return nil
-	}
-	ttl := s.cfg.AccessTokenTTL
-	if claims, err := s.jwt.ValidateAccessToken(accessToken); err == nil && claims.ExpiresAt != nil {
-		if remaining := time.Until(claims.ExpiresAt.Time); remaining > 0 {
-			ttl = remaining
-		}
-	}
-	if ttl <= 0 {
-		return nil
-	}
-	if err := s.redis.BlacklistToken(ctx, hashInput(accessToken), ttl); err != nil {
-		return fmt.Errorf("blacklist access token: %w", err)
-	}
 	return nil
 }

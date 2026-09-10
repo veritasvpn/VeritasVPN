@@ -4,4 +4,14 @@ After=veritas-backup.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/veritas-backup-verify
+ExecStart=/usr/local/libexec/veritasvpn-backup/verify-backup.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/run/lock

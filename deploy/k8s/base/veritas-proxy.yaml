@@ -40,6 +40,8 @@ spec:
           image: localhost:31500/veritas-proxy@sha256:ab5ddbef3fd013a62a1cbe067d796819de1cdcdd8128f3ab8be3f57bb41d060d
           imagePullPolicy: IfNotPresent
           env:
+            - name: AUTH_VALIDATE_URL
+              value: "http://auth-svc:8080/api/v1/auth/validate"
             - name: JWT_ED25519_PUBLIC_KEYS
               valueFrom:
                 secretKeyRef:

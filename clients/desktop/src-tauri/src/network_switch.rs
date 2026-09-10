@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    reapply_dns_from_saved, refresh_endpoint_route_linux, state_dir, tunnel_is_healthy,
-    write_last_config_json,
+    privileged_state_dir, reapply_dns_from_saved, refresh_endpoint_route_linux, state_dir,
+    tunnel_is_healthy, write_last_config_json,
 };
 
 /// Last successful tunnel config so soft reconnect can re-bring the peer up.
@@ -73,8 +73,7 @@ static LAST_FINGERPRINT: Mutex<Option<String>> = Mutex::new(None);
 static REBIND_IN_FLIGHT: Mutex<bool> = Mutex::new(false);
 
 fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
-    let dir = state_dir()?;
-    let meta_path = dir.join("iface.meta");
+    let meta_path = privileged_state_dir()?.join("iface.meta");
     if !meta_path.exists() {
         return Ok(NetworkRecoverResult {
             changed: false,
@@ -163,7 +162,7 @@ fn detect_underlay_fingerprint() -> Option<String> {
         .arg("-c")
         .arg(
             r#"
-IFACE="$(cat "${HOME}/.veritasvpn/iface" 2>/dev/null || echo veritas0)"
+IFACE="veritas0"
 gw=""; gif=""; src=""
 if command -v nmcli >/dev/null 2>&1; then
   while IFS=: read -r dev type state; do
@@ -218,7 +217,6 @@ printf '%s|%s|%s\n' "$gw" "$gif" "$src"
 pub fn load_last_config() -> Result<SavedTunnelConfig, String> {
     let dir = state_dir().map_err(|e| e)?;
     let path = dir.join("last-config.json");
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| format!("read last-config: {e}"))?;
+    let raw = fs::read_to_string(&path).map_err(|e| format!("read last-config: {e}"))?;
     serde_json::from_str(&raw).map_err(|e| format!("parse last-config: {e}"))
 }

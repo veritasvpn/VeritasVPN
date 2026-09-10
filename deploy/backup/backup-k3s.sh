@@ -9,19 +9,25 @@ R2_UPLOAD_REQUIRED="${R2_UPLOAD_REQUIRED:-false}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 WORK="$(mktemp -d)"
 TEXTFILE_DIR="${TEXTFILE_DIR:-/var/lib/veritasvpn/metrics}"
+WG_PRIVATE_KEY_FILE="${WG_PRIVATE_KEY_FILE:-/etc/wireguard/private.key}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 
-install -d -m 700 "$BACKUP_ROOT" "$(dirname "$KEY_FILE")"
-if [ ! -s "$KEY_FILE" ]; then
-  umask 077
-  openssl rand -hex 32 > "$KEY_FILE"
+install -d -m 700 "$BACKUP_ROOT"
+if [[ ! -f "$KEY_FILE" || -L "$KEY_FILE" ]]; then
+  echo "[backup] ERROR: backup key is missing or is a symlink: $KEY_FILE" >&2
+  exit 1
 fi
 
 kubectl -n veritas exec postgres-0 -- pg_dumpall -U veritas | gzip -9 > "$WORK/veritas.sql.gz"
 kubectl -n btcpay-mainnet exec postgres-btcpay-mainnet-0 -- pg_dumpall -U btcpay | gzip -9 > "$WORK/btcpay.sql.gz"
 kubectl -n veritas get configmap,secret -o yaml > "$WORK/veritas-k8s.yaml"
 kubectl -n btcpay-mainnet get configmap,secret -o yaml > "$WORK/btcpay-k8s.yaml"
-install -m 600 /opt/veritasvpn/data/wireguard/private.key "$WORK/wireguard-private.key"
+if [[ ! -f "$WG_PRIVATE_KEY_FILE" || -L "$WG_PRIVATE_KEY_FILE" ]]; then
+  echo "[backup] ERROR: WireGuard private key is missing or is a symlink: $WG_PRIVATE_KEY_FILE" >&2
+  exit 1
+fi
+install -m 600 -- "$WG_PRIVATE_KEY_FILE" "$WORK/wireguard-private.key"
 wg show all dump > "$WORK/wireguard-state.txt"
 # The Android signing identity is an irreplaceable release credential. Include
 # it only inside this already encrypted and authenticated off-site backup.
@@ -51,7 +57,7 @@ openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$KEY_FILE" -in "$archive" | tar 
 
 offsite_success=0
 if [[ -n "${R2_ENDPOINT:-}" && -n "${R2_BUCKET:-}" && -n "${R2_ACCESS_KEY_ID:-}" && -n "${R2_SECRET_ACCESS_KEY:-}" ]]; then
-  python3 /opt/veritasvpn/deploy/backup/r2-upload.py \
+  python3 "$SCRIPT_DIR/r2-upload.py" \
     --prefix "${R2_PREFIX:-veritasvpn/backups}/$STAMP" \
     --file "$archive" --file "$archive.hmac" --file "$archive.sha256"
   offsite_success=1

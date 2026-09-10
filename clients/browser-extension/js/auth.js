@@ -246,8 +246,10 @@ export async function resendVerification(email) {
 export async function signInWithAccountId(accountId) {
   const id = String(accountId || '').trim();
   if (!id) throw new Error('Enter your account ID.');
+  const turnstileToken = await obtainTurnstileToken();
   const data = await authAPI('/api/v1/auth/signin-account', {
     account_id: id,
+    turnstile_token: turnstileToken,
   });
   const user = { account_id: data.account_id, is_anonymous: true };
   await setStorage({

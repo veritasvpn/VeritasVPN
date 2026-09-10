@@ -1,13 +1,25 @@
 [Unit]
 Description=Encrypted VeritasVPN Kubernetes backup
-After=k3s.service
+After=k3s.service network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/veritasvpn/r2-backup.env
 Environment=R2_UPLOAD_REQUIRED=true
 Environment=R2_RETENTION_DAYS=60
-ExecStart=/opt/veritasvpn/deploy/backup/backup-k3s.sh
+Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+ExecStart=/usr/local/libexec/veritasvpn-backup/backup-k3s.sh
+UMask=0077
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/backups/veritasvpn /var/lib/veritasvpn/metrics /run/lock

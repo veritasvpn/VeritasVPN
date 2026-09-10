@@ -10,6 +10,8 @@ Include the affected component and version, reproduction conditions, security im
 
 Security fixes target the current release of each platform that is listed as available on `veritasvpn.cloud/downloads.html`. Experimental builds and platforms labeled Coming soon are not production releases.
 
+Time-limited release exceptions are recorded in [docs/SECURITY_EXCEPTIONS.md](docs/SECURITY_EXCEPTIONS.md).
+
 ## Scope
 
 The public website, account/API services, WireGuard provisioning and egress, protected DNS, supported clients, and release pipeline are in scope. Social engineering, denial-of-service traffic, automated scanning that degrades service, and accessing another user's data are prohibited.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # HMAC-signed BTCPay InvoiceSettled smoke (no mock billing, no mainnet payment).
-# Dell/ops only: needs BTCPAY_WEBHOOK_SECRET and a non-Premium (or cancelable) account.
+# Dell/ops only: needs BTCPAY_WEBHOOK_SECRET and the configured E2E account.
 #
 # Flow:
 #   1) sign-in
@@ -13,10 +13,13 @@
 set -euo pipefail
 
 API_BASE="${API_BASE:-https://api.veritasvpn.cloud}"
-ACCOUNT_ID="${VERITAS_WEBHOOK_SMOKE_ACCOUNT_ID:-${VERITAS_E2E_ACCOUNT_ID:-}}"
+ACCOUNT_ID="${VERITAS_E2E_ACCOUNT_ID:-}"
 WEBHOOK_SECRET="${BTCPAY_WEBHOOK_SECRET:-}"
 SMOKE_INVOICE_ID="${SMOKE_INVOICE_ID:-}"
 WORKDIR="$(mktemp -d)"
+VERIFY_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=deploy/verify/e2e-auth.sh
+source "$VERIFY_DIR/e2e-auth.sh"
 ACCESS_TOKEN=""
 
 cleanup() {
@@ -24,8 +27,11 @@ cleanup() {
   trap - EXIT INT TERM
   set +e
   if [[ -n "$ACCESS_TOKEN" ]]; then
+    e2e_auth_init "$ACCOUNT_ID"
     curl --silent --show-error --max-time 15 -X POST \
       -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "X-Veritas-E2E-Timestamp: $E2E_AUTH_TIMESTAMP" \
+      -H "X-Veritas-E2E-Signature: $E2E_AUTH_SIGNATURE" \
       "$API_BASE/api/v1/auth/logout-all" >/dev/null || true
   fi
   rm -rf "$WORKDIR"
@@ -34,7 +40,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if [[ -z "$ACCOUNT_ID" ]]; then
-  printf 'VERITAS_WEBHOOK_SMOKE_ACCOUNT_ID (or VERITAS_E2E_ACCOUNT_ID) is required\n' >&2
+  printf 'VERITAS_E2E_ACCOUNT_ID is required\n' >&2
   exit 2
 fi
 if [[ -z "$WEBHOOK_SECRET" ]]; then
@@ -46,9 +52,12 @@ for command in curl jq openssl; do
 done
 
 printf '[1/5] authenticating\n'
+e2e_auth_init "$ACCOUNT_ID"
 signin_code="$(curl --silent --show-error --max-time 20 \
   -o "$WORKDIR/signin.json" -w '%{http_code}' \
   -H 'Content-Type: application/json' \
+  -H "X-Veritas-E2E-Timestamp: $E2E_AUTH_TIMESTAMP" \
+  -H "X-Veritas-E2E-Signature: $E2E_AUTH_SIGNATURE" \
   --data "$(jq -nc --arg account_id "$ACCOUNT_ID" '{account_id:$account_id}')" \
   "$API_BASE/api/v1/auth/signin-account")"
 [[ "$signin_code" == "200" ]] || { printf 'sign-in failed HTTP %s\n' "$signin_code" >&2; exit 1; }

@@ -12,6 +12,7 @@ import (
 
 type TokenBlacklist interface {
 	IsTokenBlacklisted(ctx context.Context, tokenHash string) (bool, error)
+	GetAccountSessionVersion(ctx context.Context, accountID string) (int64, error)
 }
 
 type Verifier struct {
@@ -51,6 +52,13 @@ func (v *Verifier) Verify(ctx context.Context, tokenStr string) (string, string,
 		}
 		if blacklisted {
 			return "", "", errors.New("token revoked")
+		}
+		version, err := v.blacklist.GetAccountSessionVersion(ctx, claims.AccountID)
+		if err != nil {
+			return "", "", fmt.Errorf("session version check: %w", err)
+		}
+		if version != claims.SessionVersion {
+			return "", "", errors.New("account sessions revoked")
 		}
 	}
 

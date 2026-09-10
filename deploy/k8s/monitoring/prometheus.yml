@@ -85,7 +85,8 @@ scrape_configs:
     scheme: https
     bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
     tls_config:
-      insecure_skip_verify: true
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      insecure_skip_verify: false
     kubernetes_sd_configs:
       - role: node
     relabel_configs:

@@ -9,6 +9,9 @@ ACCOUNT_ID="${VERITAS_E2E_ACCOUNT_ID:-}"
 RELEASE_TAG="${RELEASE_TAG:-}"
 REQUIRE_EDDSA="${REQUIRE_EDDSA:-true}"
 WORKDIR="$(mktemp -d)"
+VERIFY_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=deploy/verify/e2e-auth.sh
+source "$VERIFY_DIR/e2e-auth.sh"
 ACCESS_TOKEN=""
 
 cleanup() {
@@ -16,8 +19,11 @@ cleanup() {
   trap - EXIT INT TERM
   set +e
   if [[ -n "$ACCESS_TOKEN" ]]; then
+    e2e_auth_init "$ACCOUNT_ID"
     curl --silent --show-error --max-time 15 -X POST \
       -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "X-Veritas-E2E-Timestamp: $E2E_AUTH_TIMESTAMP" \
+      -H "X-Veritas-E2E-Signature: $E2E_AUTH_SIGNATURE" \
       "$API_BASE/api/v1/auth/logout-all" >/dev/null || true
   fi
   rm -rf "$WORKDIR"
@@ -34,9 +40,12 @@ for command in curl jq sha256sum; do
 done
 
 printf '[1/6] authenticating\n'
+e2e_auth_init "$ACCOUNT_ID"
 signin_code="$(curl --silent --show-error --max-time 20 \
   -o "$WORKDIR/signin.json" -w '%{http_code}' \
   -H 'Content-Type: application/json' \
+  -H "X-Veritas-E2E-Timestamp: $E2E_AUTH_TIMESTAMP" \
+  -H "X-Veritas-E2E-Signature: $E2E_AUTH_SIGNATURE" \
   --data "$(jq -nc --arg account_id "$ACCOUNT_ID" '{account_id:$account_id}')" \
   "$API_BASE/api/v1/auth/signin-account")"
 if [[ "$signin_code" != "200" ]]; then

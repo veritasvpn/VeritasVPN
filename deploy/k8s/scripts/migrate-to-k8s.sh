@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+umask 077
 # Non-interactive Compose → k3s production cutover for this host.
 # Usage:
 #   sudo -E bash deploy/k8s/scripts/migrate-to-k8s.sh
@@ -78,24 +79,16 @@ step "Install k3s (if needed)"
 if systemctl is-active --quiet k3s 2>/dev/null; then
   echo "k3s already running"
 else
-  curl -sfL https://get.k3s.io | sh -s - \
-    --write-kubeconfig-mode 644 \
+  curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='v1.36.3+k3s1' sh -s - \
+    --write-kubeconfig-mode 600 \
     --disable servicelb \
     --disable traefik \
     --kubelet-arg=max-pods=250
   sleep 5
 fi
-# kubeconfig for root + invoking user
-mkdir -p /root/.kube
-cp /etc/rancher/k3s/k3s.yaml /root/.kube/config
-chmod 600 /root/.kube/config
-if [ -n "${SUDO_USER:-}" ]; then
-  USER_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
-  mkdir -p "$USER_HOME/.kube"
-  cp /etc/rancher/k3s/k3s.yaml "$USER_HOME/.kube/config"
-  chown -R "$SUDO_USER:$SUDO_USER" "$USER_HOME/.kube"
-  chmod 600 "$USER_HOME/.kube/config"
-fi
+# Keep the cluster-admin kubeconfig root-only. Operators run the migration as
+# root and explicitly point kubectl at the node-owned credential.
+chmod 600 /etc/rancher/k3s/k3s.yaml
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 kubectl wait --for=condition=ready node --all --timeout=180s
 kubectl get nodes -o wide
