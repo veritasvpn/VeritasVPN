@@ -70,41 +70,15 @@ func (c *Communicator) PublishUpdate(serverID string, update hub.PeerUpdate) boo
 			"server_id", serverID,
 			"action", update.Action,
 			"peer_id", update.PeerID,
-			"forward_id", update.ForwardID,
 		)
 	} else {
 		c.log.Warn("no agent connected for update",
 			"server_id", serverID,
 			"action", update.Action,
 			"peer_id", update.PeerID,
-			"forward_id", update.ForwardID,
 		)
 	}
 	return ok
-}
-
-func (c *Communicator) PushPortForwardAdd(serverID string, pf *model.PortForward) bool {
-	return c.PublishUpdate(serverID, hub.PeerUpdate{
-		Action:       "PORT_FORWARD_ADD",
-		PeerID:       pf.PeerID,
-		ForwardID:    pf.ID,
-		Protocol:     pf.Protocol,
-		ExternalPort: pf.ExternalPort,
-		InternalPort: pf.InternalPort,
-		AssignedIP:   pf.AssignedIP,
-	})
-}
-
-func (c *Communicator) PushPortForwardRemove(serverID string, pf *model.PortForward) bool {
-	return c.PublishUpdate(serverID, hub.PeerUpdate{
-		Action:       "PORT_FORWARD_REMOVE",
-		PeerID:       pf.PeerID,
-		ForwardID:    pf.ID,
-		Protocol:     pf.Protocol,
-		ExternalPort: pf.ExternalPort,
-		InternalPort: pf.InternalPort,
-		AssignedIP:   pf.AssignedIP,
-	})
 }
 
 func (c *Communicator) pushWithBackoff(ctx context.Context, serverID, action, peerID, pubkey, psk string, allowedIPs []string, shieldPreset string) error {

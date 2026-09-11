@@ -26,8 +26,6 @@ import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.BillingStatus
 import cloud.veritasvpn.api.PeerListResponse
 import cloud.veritasvpn.api.PeerResponse
-import cloud.veritasvpn.api.PortForwardInfo
-import cloud.veritasvpn.api.PortForwardListResponse
 import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.auth.AuthenticatedApi
 import cloud.veritasvpn.auth.SessionExpiredException
@@ -36,7 +34,6 @@ import java.io.IOException
 import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.DashboardScreen
 import cloud.veritasvpn.ui.PlansScreen
-import cloud.veritasvpn.ui.PortForwardsScreen
 import cloud.veritasvpn.ui.PaymentCheckoutScreen
 import cloud.veritasvpn.ui.TunnelSettingsScreen
 import cloud.veritasvpn.ui.theme.VeritasVPNTheme
@@ -117,13 +114,7 @@ class MainActivity : ComponentActivity() {
                 var statusMsg by remember { mutableStateOf<String?>(null) }
                 var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
-                var showPortForwards by remember { mutableStateOf(false) }
                 var showTunnelSettings by remember { mutableStateOf(false) }
-                var portForwards by remember { mutableStateOf<List<PortForwardInfo>>(emptyList()) }
-                var portForwardsLoading by remember { mutableStateOf(false) }
-                var portForwardsError by remember { mutableStateOf<String?>(null) }
-                var portForwardCreating by remember { mutableStateOf(false) }
-                var deletingForwardId by remember { mutableStateOf<String?>(null) }
                 var rxBytes by remember { mutableStateOf(0L) }
                 var txBytes by remember { mutableStateOf(0L) }
                 var handshakeMs by remember { mutableStateOf(0L) }
@@ -206,7 +197,6 @@ class MainActivity : ComponentActivity() {
                         billingError = null
                         checkoutMethod = null
                         showPlans = false
-                        showPortForwards = false
                         showTunnelSettings = false
                         user = null
                     }
@@ -255,32 +245,6 @@ class MainActivity : ComponentActivity() {
                             }
                         } finally {
                             billingRefreshing = false
-                        }
-                    }
-                }
-
-                fun loadPortForwards() {
-                    portForwardsLoading = true
-                    portForwardsError = null
-                    scope.launch {
-                        try {
-                            val forwardList = withContext(Dispatchers.IO) {
-                                AuthenticatedApi.execute(authRepo, { token ->
-                                    ApiClient.get("/api/v1/wg/port-forwards", token)
-                                }) { res ->
-                                    if (!res.isSuccessful) {
-                                        val err = ApiClient.parse<PortForwardListResponse>(res)?.error
-                                        throw IllegalStateException(err ?: "Could not load port forwards (${res.code})")
-                                    }
-                                    ApiClient.parse<PortForwardListResponse>(res)?.portForwards.orEmpty()
-                                }
-                            }
-                            portForwards = forwardList
-                        } catch (e: Exception) {
-                            portForwardsError = e.message ?: "Could not load port forwards."
-                            if (e is SessionExpiredException) handleSessionExpired()
-                        } finally {
-                            portForwardsLoading = false
                         }
                     }
                 }
@@ -725,81 +689,6 @@ class MainActivity : ComponentActivity() {
                         },
                         onBack = { showTunnelSettings = false }
                     )
-                } else if (showPortForwards) {
-                    LaunchedEffect(Unit) { loadPortForwards() }
-                    PortForwardsScreen(
-                        forwards = portForwards,
-                        loading = portForwardsLoading,
-                        creating = portForwardCreating,
-                        deletingId = deletingForwardId,
-                        error = portForwardsError,
-                        currentPeerId = currentPeerId ?: VpnSettings.currentPeerId(context),
-                        onBack = { showPortForwards = false },
-                        onRefresh = { loadPortForwards() },
-                        onCreate = { peerId, protocol, externalPort, internalPort ->
-                            if (portForwardCreating) return@PortForwardsScreen
-                            portForwardCreating = true
-                            portForwardsError = null
-                            scope.launch {
-                                try {
-                                    val created = withContext(Dispatchers.IO) {
-                                        val body = mutableMapOf<String, Any>(
-                                            "peer_id" to peerId,
-                                            "protocol" to protocol,
-                                            "external_port" to externalPort
-                                        )
-                                        if (internalPort != null) body["internal_port"] = internalPort
-                                        AuthenticatedApi.execute(authRepo, { token ->
-                                            ApiClient.post("/api/v1/wg/port-forwards", body, token)
-                                        }) { res ->
-                                            val parsed = ApiClient.parse<PortForwardInfo>(res)
-                                            if (!res.isSuccessful) {
-                                                throw IllegalStateException(parsed?.error ?: "Could not create port forward (${res.code})")
-                                            }
-                                            parsed ?: throw IllegalStateException("Empty create response")
-                                        }
-                                    }
-                                    portForwards = listOf(created) + portForwards.filterNot { it.id == created.id }
-                                } catch (e: Exception) {
-                                    if (e is SessionExpiredException) {
-                                        handleSessionExpired()
-                                        return@launch
-                                    }
-                                    portForwardsError = e.message ?: "Could not create port forward."
-                                } finally {
-                                    portForwardCreating = false
-                                }
-                            }
-                        },
-                        onDelete = { pf ->
-                            if (deletingForwardId != null) return@PortForwardsScreen
-                            deletingForwardId = pf.id
-                            portForwardsError = null
-                            scope.launch {
-                                try {
-                                    withContext(Dispatchers.IO) {
-                                        AuthenticatedApi.execute(authRepo, { token ->
-                                            ApiClient.delete("/api/v1/wg/port-forwards/${pf.id}", token)
-                                        }) { res ->
-                                            if (!res.isSuccessful) {
-                                                val err = ApiClient.parse<PortForwardInfo>(res)?.error
-                                                throw IllegalStateException(err ?: "Delete failed (${res.code})")
-                                            }
-                                        }
-                                    }
-                                    portForwards = portForwards.filterNot { it.id == pf.id }
-                                } catch (e: Exception) {
-                                    if (e is SessionExpiredException) {
-                                        handleSessionExpired()
-                                        return@launch
-                                    }
-                                    portForwardsError = e.message ?: "Could not delete port forward."
-                                } finally {
-                                    deletingForwardId = null
-                                }
-                            }
-                        }
-                    )
                 } else if (showPlans) {
                     PlansScreen(
                         billingStatus = billingStatus,
@@ -846,7 +735,6 @@ class MainActivity : ComponentActivity() {
                                 disconnectVpnService()
                                 billingStatus = null
                                 showPlans = false
-                                showPortForwards = false
                                 showTunnelSettings = false
                                 user = null
                             }
@@ -854,10 +742,6 @@ class MainActivity : ComponentActivity() {
                         onPlans = {
                             showPlans = true
                             if (billingStatus == null) refreshBilling()
-                        },
-                        onPortForwards = {
-                            showPortForwards = true
-                            loadPortForwards()
                         },
                         onTunnelSettings = { showTunnelSettings = true },
                         isPremium = billingStatus?.isPremium == true,

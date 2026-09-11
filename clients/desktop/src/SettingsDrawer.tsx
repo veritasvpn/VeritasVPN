@@ -15,7 +15,6 @@ export type SettingsDrawerProps = {
   onOpenPlans: () => void;
   onOpenNetworkMap: () => void;
   onOpenDevices: () => void;
-  onOpenPortForwards: () => void;
   onOpenTunnelSettings: () => void;
   onToggleStealthMode: () => void;
   onSignOutEverywhere: () => void;
@@ -40,7 +39,6 @@ export function SettingsDrawer({
   onOpenPlans,
   onOpenNetworkMap,
   onOpenDevices,
-  onOpenPortForwards,
   onOpenTunnelSettings,
   onToggleStealthMode,
   onSignOutEverywhere,
@@ -151,7 +149,6 @@ export function SettingsDrawer({
             </button>
             <button type="button" className="settings-nav-item" onClick={onOpenNetworkMap}>Network map</button>
             <button type="button" className="settings-nav-item" onClick={onOpenDevices}>Devices</button>
-            <button type="button" className="settings-nav-item" onClick={onOpenPortForwards}>Port forwarding</button>
           </section>
 
           <section className="settings-drawer-section" aria-label="Connection">

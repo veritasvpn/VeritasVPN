@@ -66,10 +66,6 @@ type PeerUpdate struct {
 	PublicKey    string   `json:"public_key"`
 	PresharedKey string   `json:"preshared_key"`
 	AllowedIPs   []string `json:"allowed_ips"`
-	ForwardID    string   `json:"forward_id"`
-	Protocol     string   `json:"protocol"`
-	ExternalPort int      `json:"external_port"`
-	InternalPort int      `json:"internal_port"`
 	AssignedIP   string   `json:"assigned_ip"`
 	ShieldPreset string   `json:"shield_preset,omitempty"`
 }
@@ -287,30 +283,30 @@ func urlQueryEscape(s string) string {
 }
 
 type AgentConfig struct {
-	AuthToken   string
+	AuthToken string
 	// AgentTokenFile stores the per-server token returned once at register.
 	AgentTokenFile string
 	WGInterface    string
 	// WGPort is the local listener; WGPublicPort is advertised to clients.
 	// They differ when the router forwards public UDP 443 to Dell UDP 51820.
-	WGPort                int
-	WGPublicPort          int
-	WGSubnet              string
-	ManagerEndpoint       string
-	MetricsPort           string
-	MetricsBind           string
-	ServerHostname        string
-	ServerRegion          string
-	ServerCity            string
-	ServerCountry         string
-	DNSListen             string
-	DNSUpstream           string
-	DNSBlocklistURLs      string
-	DNSShieldCategories   []string
-	DNSShieldURLs         map[string][]string
-	DNSBlocklistRefresh   time.Duration
-	DNSBlocklistStateFile string
-	BandwidthLimitMbps    int
+	WGPort                   int
+	WGPublicPort             int
+	WGSubnet                 string
+	ManagerEndpoint          string
+	MetricsPort              string
+	MetricsBind              string
+	ServerHostname           string
+	ServerRegion             string
+	ServerCity               string
+	ServerCountry            string
+	DNSListen                string
+	DNSUpstream              string
+	DNSBlocklistURLs         string
+	DNSShieldCategories      []string
+	DNSShieldURLs            map[string][]string
+	DNSBlocklistRefresh      time.Duration
+	DNSBlocklistStateFile    string
+	BandwidthLimitMbps       int
 	PeerNoHandshakeGrace     time.Duration
 	PeerStaleAfter           time.Duration
 	RegisterRetryInitial     time.Duration
@@ -389,11 +385,11 @@ type Agent struct {
 	managerClient AgentManagerClient
 	serverID      string
 	// agentToken is the per-server Bearer used after register (not the bootstrap secret).
-	agentToken string
-	publicKey  string
-	startTime  time.Time
-	prevRXBytes   int64
-	prevTXBytes   int64
+	agentToken  string
+	publicKey   string
+	startTime   time.Time
+	prevRXBytes int64
+	prevTXBytes int64
 }
 
 func NewAgent(cfg *AgentConfig, logger *logging.Logger) (*Agent, error) {
@@ -561,11 +557,8 @@ func (a *Agent) setupFirewall() error {
 	if err := enableIPForward(); err != nil {
 		a.logger.Warn("ip_forward enable failed (non-fatal)", zap.Error(err))
 	}
-
-	// Port-forward table must exist before Reconcile so DNAT state can survive
-	// veritas table rebuilds.
-	if err := a.fwManager.EnsurePortForwardTable(a.cfg.WGInterface); err != nil {
-		return fmt.Errorf("ensure port-forward nftables table: %w", err)
+	if err := a.fwManager.RemoveLegacyPortForwardTable(); err != nil {
+		return fmt.Errorf("remove retired port-forward nftables table: %w", err)
 	}
 
 	// nftables owns NAT + fail-closed forward isolation. Host tc owns bandwidth.
@@ -688,11 +681,11 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		loadFactor := getLoadFactor()
 
 		req := &HeartbeatRequest{
-			ServerID:       a.serverID,
-			PeerCount:      count,
-			LoadFactor:     loadFactor,
-			RXBytes:        rx,
-			TXBytes:        tx,
+			ServerID:   a.serverID,
+			PeerCount:  count,
+			LoadFactor: loadFactor,
+			RXBytes:    rx,
+			TXBytes:    tx,
 			DNSBlockedByIP: func() map[string]uint64 {
 				if a.dnsForwarder == nil {
 					return nil
@@ -819,31 +812,6 @@ func (a *Agent) handlePeerUpdate(update *PeerUpdate) {
 		a.logger.Info("Shield preset updated",
 			zap.String("peer_id", update.PeerID),
 			zap.String("shield_preset", dnssvc.NormalizePreset(update.ShieldPreset)))
-	case "PORT_FORWARD_ADD":
-		if err := a.fwManager.AddPortForward(firewall.PortForward{
-			ID:           update.ForwardID,
-			Protocol:     update.Protocol,
-			ExternalPort: update.ExternalPort,
-			InternalPort: update.InternalPort,
-			AssignedIP:   firewall.StripCIDR(update.AssignedIP),
-		}); err != nil {
-			a.logger.Error("Failed to add port forward",
-				zap.String("forward_id", update.ForwardID), zap.Error(err))
-			return
-		}
-		a.logger.Info("Port forward added",
-			zap.String("forward_id", update.ForwardID),
-			zap.String("protocol", update.Protocol),
-			zap.Int("external_port", update.ExternalPort),
-			zap.Int("internal_port", update.InternalPort),
-			zap.String("assigned_ip", firewall.StripCIDR(update.AssignedIP)))
-	case "PORT_FORWARD_REMOVE":
-		if err := a.fwManager.RemovePortForward(update.ForwardID); err != nil {
-			a.logger.Error("Failed to remove port forward",
-				zap.String("forward_id", update.ForwardID), zap.Error(err))
-			return
-		}
-		a.logger.Info("Port forward removed", zap.String("forward_id", update.ForwardID))
 	default:
 		a.logger.Warn("Unknown peer update action",
 			zap.String("action", update.Action))

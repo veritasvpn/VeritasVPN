@@ -29,8 +29,6 @@ func TestCheckCreatePeerRequiresPaidSubscription(t *testing.T) {
 	}
 }
 
-// Reconnect of an existing device must pass currentPeerCount-1 so a Premium
-// account already at 5 devices can still rotate that device's pubkey.
 func TestCheckCreatePeerReconnectAtCap(t *testing.T) {
 	if err := CheckCreatePeer(TierPremium, 4, "", nil); err != nil {
 		t.Fatalf("reconnect at cap (5 existing -> count 4): %v", err)
@@ -54,41 +52,5 @@ func TestCheckSelectedRegion(t *testing.T) {
 	}
 	if err := CheckSelectedRegion(TierFree, "ams", nil); err != nil {
 		t.Fatal("empty allow-list should allow any")
-	}
-}
-
-func TestCheckCreatePortForward(t *testing.T) {
-	if err := CheckCreatePortForward(TierFree, 0); err == nil {
-		t.Fatal("expected subscription required")
-	}
-	if err := CheckCreatePortForward(TierPremium, 0); err != nil {
-		t.Fatal(err)
-	}
-	if err := CheckCreatePortForward(TierPremium, 2); err == nil {
-		t.Fatal("expected port-forward limit")
-	}
-}
-
-func TestValidateExternalPort(t *testing.T) {
-	if err := ValidateExternalPort(40000); err != nil {
-		t.Fatal(err)
-	}
-	if err := ValidateExternalPort(49999); err != nil {
-		t.Fatal(err)
-	}
-	if err := ValidateExternalPort(51820); err == nil {
-		t.Fatal("expected out of range")
-	}
-	if err := ValidateExternalPort(20050); err == nil {
-		t.Fatal("expected out of range")
-	}
-	if err := ValidateExternalPort(80); err == nil {
-		t.Fatal("expected out of range")
-	}
-	if err := ValidateExternalPort(39999); err == nil {
-		t.Fatal("expected out of range")
-	}
-	if err := ValidateExternalPort(50000); err == nil {
-		t.Fatal("expected out of range")
 	}
 }

@@ -2,7 +2,7 @@
 
 > **Tagline:** *Privacy is truth.*
 > **Approach:** WireGuard-only, source-available clients, radical transparency, solo-founder execution.
-> **Status (2026-08):** Production on k3s (Dell node). Shipped: WireGuard Linux/Android/Chrome, BTCPay Bitcoin Premium **$3/mo · $30/yr**, kill switch, DNS protection, devices, port forwarding, Linux Stealth. See `docs/FEATURES_SHIPPED.md`. This file retains historical design notes; prefer FEATURES_SHIPPED for “what exists today.”
+> **Status (2026-08):** Production on k3s (Dell node). Shipped: WireGuard Linux/Android/Chrome, BTCPay Bitcoin Premium **$3/mo · $30/yr**, kill switch, DNS protection, devices, Linux Stealth. See `docs/FEATURES_SHIPPED.md`. This file retains historical design notes; prefer FEATURES_SHIPPED for “what exists today.”
 
 ---
 
