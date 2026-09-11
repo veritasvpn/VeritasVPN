@@ -45,7 +45,6 @@ fun DashboardScreen(
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
     onPlans: () -> Unit,
-    onDevices: () -> Unit,
     onPortForwards: () -> Unit,
     onTunnelSettings: () -> Unit,
     isPremium: Boolean,
@@ -243,7 +242,6 @@ fun DashboardScreen(
         isPremium = isPremium,
         onPlans = onPlans,
         onNetworkMap = { showNetworkMap = true },
-        onDevices = onDevices,
         onPortForwards = onPortForwards,
         onTunnelSettings = onTunnelSettings,
         onSignOut = {
