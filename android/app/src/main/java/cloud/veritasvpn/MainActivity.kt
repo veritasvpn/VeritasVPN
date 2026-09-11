@@ -24,7 +24,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.BillingStatus
-import cloud.veritasvpn.api.PeerInfo
 import cloud.veritasvpn.api.PeerListResponse
 import cloud.veritasvpn.api.PeerResponse
 import cloud.veritasvpn.api.PortForwardInfo
@@ -36,7 +35,6 @@ import cloud.veritasvpn.billing.BillingRepository
 import java.io.IOException
 import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.DashboardScreen
-import cloud.veritasvpn.ui.DevicesScreen
 import cloud.veritasvpn.ui.PlansScreen
 import cloud.veritasvpn.ui.PortForwardsScreen
 import cloud.veritasvpn.ui.PaymentCheckoutScreen
@@ -119,13 +117,8 @@ class MainActivity : ComponentActivity() {
                 var statusMsg by remember { mutableStateOf<String?>(null) }
                 var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
-                var showDevices by remember { mutableStateOf(false) }
                 var showPortForwards by remember { mutableStateOf(false) }
                 var showTunnelSettings by remember { mutableStateOf(false) }
-                var devices by remember { mutableStateOf<List<PeerInfo>>(emptyList()) }
-                var devicesLoading by remember { mutableStateOf(false) }
-                var devicesError by remember { mutableStateOf<String?>(null) }
-                var revokingPeerId by remember { mutableStateOf<String?>(null) }
                 var portForwards by remember { mutableStateOf<List<PortForwardInfo>>(emptyList()) }
                 var portForwardsLoading by remember { mutableStateOf(false) }
                 var portForwardsError by remember { mutableStateOf<String?>(null) }
@@ -213,7 +206,6 @@ class MainActivity : ComponentActivity() {
                         billingError = null
                         checkoutMethod = null
                         showPlans = false
-                        showDevices = false
                         showPortForwards = false
                         showTunnelSettings = false
                         user = null
@@ -267,49 +259,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                fun loadDevices() {
-                    devicesLoading = true
-                    devicesError = null
-                    scope.launch {
-                        try {
-                            val list = withContext(Dispatchers.IO) {
-                                AuthenticatedApi.execute(authRepo, { token ->
-                                    ApiClient.get("/api/v1/wg/peers", token)
-                                }) { res ->
-                                    if (!res.isSuccessful) {
-                                        throw IllegalStateException("Could not load devices (${res.code})")
-                                    }
-                                    ApiClient.parse<PeerListResponse>(res)?.peers.orEmpty()
-                                }
-                            }
-                            devices = list
-                        } catch (e: Exception) {
-                            if (e is SessionExpiredException) {
-                                handleSessionExpired()
-                                return@launch
-                            }
-                            devicesError = e.message ?: "Could not load devices."
-                        } finally {
-                            devicesLoading = false
-                        }
-                    }
-                }
-
                 fun loadPortForwards() {
                     portForwardsLoading = true
                     portForwardsError = null
                     scope.launch {
                         try {
-                            val (peerList, forwardList) = withContext(Dispatchers.IO) {
-                                val peersResult = AuthenticatedApi.execute(authRepo, { token ->
-                                    ApiClient.get("/api/v1/wg/peers", token)
-                                }) { res ->
-                                    if (!res.isSuccessful) {
-                                        throw IllegalStateException("Could not load devices (${res.code})")
-                                    }
-                                    ApiClient.parse<PeerListResponse>(res)?.peers.orEmpty()
-                                }
-                                val forwardsResult = AuthenticatedApi.execute(authRepo, { token ->
+                            val forwardList = withContext(Dispatchers.IO) {
+                                AuthenticatedApi.execute(authRepo, { token ->
                                     ApiClient.get("/api/v1/wg/port-forwards", token)
                                 }) { res ->
                                     if (!res.isSuccessful) {
@@ -318,9 +274,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                     ApiClient.parse<PortForwardListResponse>(res)?.portForwards.orEmpty()
                                 }
-                                peersResult to forwardsResult
                             }
-                            devices = peerList
                             portForwards = forwardList
                         } catch (e: Exception) {
                             portForwardsError = e.message ?: "Could not load port forwards."
@@ -771,56 +725,10 @@ class MainActivity : ComponentActivity() {
                         },
                         onBack = { showTunnelSettings = false }
                     )
-                } else if (showDevices) {
-                    LaunchedEffect(Unit) { loadDevices() }
-                    DevicesScreen(
-                        peers = devices,
-                        loading = devicesLoading,
-                        error = devicesError,
-                        currentPeerId = currentPeerId ?: VpnSettings.currentPeerId(context),
-                        revokingId = revokingPeerId,
-                        onBack = { showDevices = false },
-                        onRefresh = { loadDevices() },
-                        onRevoke = { peer ->
-                            if (revokingPeerId != null) return@DevicesScreen
-                            revokingPeerId = peer.id
-                            scope.launch {
-                                try {
-                                    val isCurrent = peer.id == (currentPeerId ?: VpnSettings.currentPeerId(context))
-                                    if (isCurrent) {
-                                        userWantsConnected = false
-                                        hadEstablishedSession = false
-                                        cancelReconnect()
-                                        disconnectVpnService()
-                                        peerIdForDisconnect()
-                                    }
-                                    withContext(Dispatchers.IO) {
-                                        AuthenticatedApi.execute(authRepo, { token ->
-                                            ApiClient.delete("/api/v1/wg/peers/${peer.id}", token)
-                                        }) { res ->
-                                            if (!res.isSuccessful) {
-                                                throw IllegalStateException("Revoke failed (${res.code})")
-                                            }
-                                        }
-                                    }
-                                    devices = devices.filterNot { it.id == peer.id }
-                                } catch (e: Exception) {
-                                    if (e is SessionExpiredException) {
-                                        handleSessionExpired()
-                                        return@launch
-                                    }
-                                    devicesError = e.message ?: "Could not revoke device."
-                                } finally {
-                                    revokingPeerId = null
-                                }
-                            }
-                        }
-                    )
                 } else if (showPortForwards) {
                     LaunchedEffect(Unit) { loadPortForwards() }
                     PortForwardsScreen(
                         forwards = portForwards,
-                        peers = devices,
                         loading = portForwardsLoading,
                         creating = portForwardCreating,
                         deletingId = deletingForwardId,
@@ -938,7 +846,6 @@ class MainActivity : ComponentActivity() {
                                 disconnectVpnService()
                                 billingStatus = null
                                 showPlans = false
-                                showDevices = false
                                 showPortForwards = false
                                 showTunnelSettings = false
                                 user = null
@@ -948,13 +855,7 @@ class MainActivity : ComponentActivity() {
                             showPlans = true
                             if (billingStatus == null) refreshBilling()
                         },
-                        onDevices = {
-                            showPortForwards = false
-                            showDevices = true
-                            loadDevices()
-                        },
                         onPortForwards = {
-                            showDevices = false
                             showPortForwards = true
                             loadPortForwards()
                         },

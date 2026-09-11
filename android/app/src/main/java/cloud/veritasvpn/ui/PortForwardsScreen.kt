@@ -20,7 +20,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import cloud.veritasvpn.api.PeerInfo
 import cloud.veritasvpn.api.PortForwardInfo
 import cloud.veritasvpn.ui.theme.*
 import java.util.Locale
@@ -28,7 +27,6 @@ import java.util.Locale
 @Composable
 fun PortForwardsScreen(
     forwards: List<PortForwardInfo>,
-    peers: List<PeerInfo>,
     loading: Boolean,
     creating: Boolean,
     deletingId: String?,
@@ -40,19 +38,10 @@ fun PortForwardsScreen(
     onDelete: (PortForwardInfo) -> Unit
 ) {
     var confirmForward by remember { mutableStateOf<PortForwardInfo?>(null) }
-    var peerId by remember { mutableStateOf(currentPeerId.orEmpty()) }
     var protocol by remember { mutableStateOf("tcp") }
     var externalPort by remember { mutableStateOf("") }
     var internalPort by remember { mutableStateOf("") }
-    var peerMenuOpen by remember { mutableStateOf(false) }
     var protocolMenuOpen by remember { mutableStateOf(false) }
-
-    LaunchedEffect(currentPeerId) {
-        if (!currentPeerId.isNullOrBlank()) peerId = currentPeerId
-    }
-    LaunchedEffect(peers, peerId) {
-        if (peerId.isBlank() && peers.size == 1) peerId = peers.first().id
-    }
 
     confirmForward?.let { pf ->
         AlertDialog(
@@ -87,9 +76,8 @@ fun PortForwardsScreen(
 
     val busy = loading || creating || deletingId != null
     val atLimit = forwards.size >= 2
-    val selectedPeerLabel = peers.find { it.id == peerId }?.let {
-        "${shortPeerId(it.id)}${if (it.id == currentPeerId) " (this device)" else ""} · ${it.assignedIp.ifBlank { "—" }}"
-    } ?: if (peers.isEmpty()) "No devices — connect first" else "Select a device…"
+    val selectedPeerLabel = currentPeerId?.let { "This device · ${shortPeerId(it)}" }
+        ?: "Connect this device before creating a port forward."
 
     Column(
         Modifier
@@ -162,40 +150,16 @@ fun PortForwardsScreen(
                         Text("Create forward", color = Paper, fontWeight = FontWeight.Bold, fontSize = 15.sp)
 
                         Text("Device", color = PaperDim, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        Box {
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .border(1.dp, LineStrong, RoundedCornerShape(10.dp))
-                                    .background(CardElevated, RoundedCornerShape(10.dp))
-                                    .clickable(enabled = !busy && peers.isNotEmpty()) { peerMenuOpen = true }
-                                    .padding(horizontal = 12.dp, vertical = 14.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(selectedPeerLabel, color = Paper, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                                Text("▾", color = CyanHover)
-                            }
-                            DropdownMenu(
-                                expanded = peerMenuOpen,
-                                onDismissRequest = { peerMenuOpen = false },
-                                containerColor = CardElevated
-                            ) {
-                                peers.forEach { peer ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                "${shortPeerId(peer.id)}${if (peer.id == currentPeerId) " (this device)" else ""} · ${peer.assignedIp.ifBlank { "—" }}",
-                                                color = Paper
-                                            )
-                                        },
-                                        onClick = {
-                                            peerId = peer.id
-                                            peerMenuOpen = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
+                        Text(
+                            selectedPeerLabel,
+                            color = if (currentPeerId == null) WarningOrange else Paper,
+                            fontSize = 14.sp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, LineStrong, RoundedCornerShape(10.dp))
+                                .background(CardElevated, RoundedCornerShape(10.dp))
+                                .padding(horizontal = 12.dp, vertical = 14.dp)
+                        )
 
                         Text("Protocol", color = PaperDim, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         Box {
@@ -255,12 +219,12 @@ fun PortForwardsScreen(
                             onClick = {
                                 val ext = externalPort.toIntOrNull() ?: return@Button
                                 val internal = internalPort.toIntOrNull()
-                                if (peerId.isBlank()) return@Button
+                                val peerId = currentPeerId ?: return@Button
                                 onCreate(peerId, protocol, ext, internal)
                                 externalPort = ""
                                 internalPort = ""
                             },
-                            enabled = !busy && !atLimit && peers.isNotEmpty() && peerId.isNotBlank() && externalPort.isNotBlank(),
+                            enabled = !busy && !atLimit && currentPeerId != null && externalPort.isNotBlank(),
                             modifier = Modifier.fillMaxWidth().height(46.dp),
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = CyanHover)
