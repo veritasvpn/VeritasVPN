@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -16,30 +15,13 @@ const cmdTimeout = 10 * time.Second
 
 const defaultBandwidthMbps = 150 // matches PEER_BANDWIDTH_LIMIT_MBPS default
 
-const pfTableName = "veritas_pf"
-
-// PortForward describes an inbound DNAT mapping applied on the node.
-type PortForward struct {
-	ID           string
-	Protocol     string
-	ExternalPort int
-	InternalPort int
-	AssignedIP   string
-}
-
 type Manager struct {
 	tableName string
-
-	pfMu     sync.Mutex
-	pfEgress string
-	pfWG     string
-	forwards map[string]PortForward
 }
 
 func New() *Manager {
 	return &Manager{
 		tableName: "veritas",
-		forwards:  make(map[string]PortForward),
 	}
 }
 
@@ -74,12 +56,14 @@ func (m *Manager) runScript(script string) error {
 	return nil
 }
 
-// StripCIDR returns the host part of an address like "10.0.0.2/32".
-func StripCIDR(ip string) string {
-	if i := strings.IndexByte(ip, '/'); i >= 0 {
-		return ip[:i]
+// RemoveLegacyPortForwardTable removes the retired DNAT table left by older
+// agents. It is safe to call on every startup and ensures old mappings cannot
+// survive the product feature being removed.
+func (m *Manager) RemoveLegacyPortForwardTable() error {
+	if err := m.run("list", "table", "inet", "veritas_pf"); err != nil {
+		return nil
 	}
-	return ip
+	return m.run("delete", "table", "inet", "veritas_pf")
 }
 
 func detectEgressInterface() (string, error) {
@@ -97,183 +81,12 @@ func detectEgressInterface() (string, error) {
 	return egress, nil
 }
 
-// EnsurePortForwardTable creates inet veritas_pf DNAT chain if missing.
-// Reconcile never destroys this table. Forward accepts live in the fail-closed
-// veritas table (re-applied after Reconcile) — do not hook a policy-accept
-// forward chain here or VPN isolation is bypassed.
-func (m *Manager) EnsurePortForwardTable(wgIface string) error {
-	if !validInterfaceName(wgIface) {
-		return fmt.Errorf("invalid WireGuard interface %q", wgIface)
-	}
-	egress, err := detectEgressInterface()
-	if err != nil {
-		return err
-	}
-
-	m.pfMu.Lock()
-	m.pfEgress = egress
-	m.pfWG = wgIface
-	m.pfMu.Unlock()
-
-	script := fmt.Sprintf(`
-add table inet %s
-add chain inet %s prerouting { type nat hook prerouting priority dstnat; policy accept; }
-`, pfTableName, pfTableName)
-	if err := m.runScript(script); err != nil {
-		if listErr := m.run("list", "table", "inet", pfTableName); listErr != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// AddPortForward installs DNAT + forward accept rules for one mapping.
-func (m *Manager) AddPortForward(f PortForward) error {
-	f.Protocol = strings.ToLower(strings.TrimSpace(f.Protocol))
-	f.AssignedIP = StripCIDR(f.AssignedIP)
-	if f.ID == "" || (f.Protocol != "tcp" && f.Protocol != "udp") {
-		return fmt.Errorf("invalid port forward")
-	}
-	if ip := net.ParseIP(f.AssignedIP); ip == nil || ip.To4() == nil {
-		return fmt.Errorf("invalid assigned_ip %q", f.AssignedIP)
-	}
-	if f.ExternalPort < 1 || f.ExternalPort > 65535 || f.InternalPort < 1 || f.InternalPort > 65535 {
-		return fmt.Errorf("invalid ports")
-	}
-
-	m.pfMu.Lock()
-	defer m.pfMu.Unlock()
-	if m.pfEgress == "" || m.pfWG == "" {
-		return fmt.Errorf("port-forward table not initialized")
-	}
-	if _, exists := m.forwards[f.ID]; exists {
-		if err := m.removePortForwardLocked(f.ID); err != nil {
-			return err
-		}
-	}
-	if err := m.applyPortForwardLocked(f); err != nil {
-		return err
-	}
-	m.forwards[f.ID] = f
-	return nil
-}
-
-// RemovePortForward deletes nft rules for a previously added forward.
-func (m *Manager) RemovePortForward(id string) error {
-	m.pfMu.Lock()
-	defer m.pfMu.Unlock()
-	return m.removePortForwardLocked(id)
-}
-
-// ReapplyPortForwards restores DNAT/accept rules after Reconcile rebuilds veritas.
-func (m *Manager) ReapplyPortForwards() error {
-	m.pfMu.Lock()
-	defer m.pfMu.Unlock()
-	if m.pfEgress == "" || m.pfWG == "" {
-		return nil
-	}
-	for id, f := range m.forwards {
-		_ = m.deleteRulesByComment(pfTableName, `comment "pf:`+id+`"`)
-		_ = m.deleteRulesByComment(m.tableName, `comment "pf:`+id+`"`)
-		if err := m.applyPortForwardLocked(f); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m *Manager) applyPortForwardLocked(f PortForward) error {
-	q := strconv.Quote
-	comment := "pf:" + f.ID
-	egress := q(m.pfEgress)
-	wg := q(m.pfWG)
-	// DNAT in veritas_pf; accept NEW DNATed flows in fail-closed veritas forward.
-	script := fmt.Sprintf(`
-add rule inet %s prerouting iifname %s %s dport %d dnat to %s:%d comment %s
-add rule inet %s forward iifname %s oifname %s ip daddr %s %s dport %d accept comment %s
-`,
-		pfTableName, egress, f.Protocol, f.ExternalPort, f.AssignedIP, f.InternalPort, q(comment),
-		m.tableName, egress, wg, f.AssignedIP, f.Protocol, f.InternalPort, q(comment),
-	)
-	return m.runScript(script)
-}
-
-func (m *Manager) removePortForwardLocked(id string) error {
-	delete(m.forwards, id)
-	marker := `comment "pf:` + id + `"`
-	_ = m.deleteRulesByComment(pfTableName, marker)
-	_ = m.deleteRulesByComment(m.tableName, marker)
-	return nil
-}
-
-func (m *Manager) deleteRulesByComment(table, marker string) error {
-	out, err := exec.Command("nft", "-a", "list", "table", "inet", table).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("list %s: %s: %w", table, strings.TrimSpace(string(out)), err)
-	}
-	var handles []string
-	var chain string
-	for _, line := range strings.Split(string(out), "\n") {
-		trim := strings.TrimSpace(line)
-		if strings.HasPrefix(trim, "chain ") {
-			fields := strings.Fields(trim)
-			if len(fields) >= 2 {
-				chain = fields[1]
-			}
-			continue
-		}
-		if !strings.Contains(line, marker) {
-			continue
-		}
-		idx := strings.LastIndex(line, "# handle ")
-		if idx < 0 {
-			continue
-		}
-		handle := strings.TrimSpace(line[idx+len("# handle "):])
-		if handle != "" && chain != "" {
-			handles = append(handles, chain+"|"+handle)
-		}
-	}
-	for _, ch := range handles {
-		parts := strings.SplitN(ch, "|", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		_ = m.run("delete", "rule", "inet", table, parts[0], "handle", parts[1])
-	}
-	return nil
-}
-
-// reapplyForwardAccepts restores veritas-table accept rules after Reconcile.
-func (m *Manager) reapplyForwardAccepts() error {
-	m.pfMu.Lock()
-	defer m.pfMu.Unlock()
-	if m.pfEgress == "" || m.pfWG == "" {
-		return nil
-	}
-	q := strconv.Quote
-	egress := q(m.pfEgress)
-	wg := q(m.pfWG)
-	var b strings.Builder
-	for _, f := range m.forwards {
-		comment := q("pf:" + f.ID)
-		fmt.Fprintf(&b,
-			"add rule inet %s forward iifname %s oifname %s ip daddr %s %s dport %d accept comment %s\n",
-			m.tableName, egress, wg, f.AssignedIP, f.Protocol, f.InternalPort, comment,
-		)
-	}
-	if b.Len() == 0 {
-		return nil
-	}
-	return m.runScript(b.String())
-}
-
 // Reconcile atomically rebuilds the agent-owned nftables table.
 // Forward is fail-closed: VPN clients may only reach the public internet via
 // the egress interface. Client-to-client, LAN, link-local, and Kubernetes
 // ranges are dropped. Bandwidth shaping is owned by the host tc service.
 // Cleanup intentionally does not remove this table so a restart never opens a
-// window without NAT/isolation. Table veritas_pf is never destroyed here.
+// window without NAT/isolation.
 func (m *Manager) Reconcile(wgIface string, wgPort, mbps int) error {
 	if !validInterfaceName(wgIface) {
 		return fmt.Errorf("invalid WireGuard interface %q", wgIface)
@@ -287,11 +100,6 @@ func (m *Manager) Reconcile(wgIface string, wgPort, mbps int) error {
 	if err != nil {
 		return err
 	}
-	m.pfMu.Lock()
-	m.pfEgress = egress
-	m.pfWG = wgIface
-	m.pfMu.Unlock()
-
 	podCIDR, serviceCIDR, err := detectKubernetesCIDRs()
 	if err != nil {
 		return err
@@ -318,7 +126,7 @@ func (m *Manager) Reconcile(wgIface string, wgPort, mbps int) error {
 	if err := m.runScript(buildRuleset(m.tableName, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP, wgPort, dohV4, dohV6)); err != nil {
 		return err
 	}
-	return m.reapplyForwardAccepts()
+	return nil
 }
 
 func detectKubernetesCIDRs() (string, string, error) {
@@ -405,8 +213,6 @@ func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP 
 		// VPN path: established return traffic first.
 		"add rule inet "+table+" forward ct state established,related accept",
 
-		// Port-forward NEW accepts are appended after Reconcile (comment pf:<id>).
-
 		// No client-to-client, no hairpin onto the tunnel.
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(wgIface)+" counter drop",
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip daddr "+wgSubnet+" counter drop",
@@ -470,11 +276,17 @@ func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP 
 }
 
 // Compatibility wrappers for callers that used the older split setup API.
-func (m *Manager) SetupNAT(iface string) error { return m.Reconcile(iface, 51820, defaultBandwidthMbps) }
+func (m *Manager) SetupNAT(iface string) error {
+	return m.Reconcile(iface, 51820, defaultBandwidthMbps)
+}
 
-func (m *Manager) SetupKillSwitch(iface string, port int) error { return m.Reconcile(iface, port, defaultBandwidthMbps) }
+func (m *Manager) SetupKillSwitch(iface string, port int) error {
+	return m.Reconcile(iface, port, defaultBandwidthMbps)
+}
 
-func (m *Manager) SetupMSSClamp(iface string) error { return m.Reconcile(iface, 51820, defaultBandwidthMbps) }
+func (m *Manager) SetupMSSClamp(iface string) error {
+	return m.Reconcile(iface, 51820, defaultBandwidthMbps)
+}
 
 func (m *Manager) SetupBandwidth(iface string, mbps int) error {
 	return m.Reconcile(iface, 51820, mbps)

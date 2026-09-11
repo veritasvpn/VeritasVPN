@@ -34,13 +34,9 @@ func TestBuildRulesetIsFailClosedAndConvergent(t *testing.T) {
 			t.Fatalf("ruleset missing %q:\n%s", want, rules)
 		}
 	}
-	if strings.Contains(rules, "destroy table inet veritas_pf") {
-		t.Fatalf("Reconcile must not destroy veritas_pf:\n%s", rules)
-	}
 	if strings.Contains(rules, "meter vpn_upload") {
 		t.Fatalf("agent must not install bandwidth meters; host tc owns caps:\n%s", rules)
 	}
-	// Final VPN accept must not be a bare iifname wg0 accept.
 	if strings.Contains(rules, "forward iifname \"wg0\" accept\n") {
 		t.Fatalf("bare wg0 accept would allow LAN/peer lateral movement:\n%s", rules)
 	}
@@ -50,15 +46,6 @@ func TestBuildRulesetOmitsDoHSetWhenDisabled(t *testing.T) {
 	rules := buildRuleset("veritas", "wg0", "enp1s0", "10.42.0.0/24", "10.43.0.0/16", "10.0.0.0/24", "10.0.0.1", 51820, nil, nil)
 	if strings.Contains(rules, "doh_v4") || strings.Contains(rules, "doh_v6") {
 		t.Fatalf("expected no doh sets when IP lists empty:\n%s", rules)
-	}
-}
-
-func TestStripCIDR(t *testing.T) {
-	if got := StripCIDR("10.0.0.2/32"); got != "10.0.0.2" {
-		t.Fatalf("got %q", got)
-	}
-	if got := StripCIDR("10.0.0.2"); got != "10.0.0.2" {
-		t.Fatalf("got %q", got)
 	}
 }
 

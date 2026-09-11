@@ -66,8 +66,6 @@ func (h *HTTPHandler) Routes() http.Handler {
 	mux.HandleFunc("/api/v1/agents/peers/expired", h.handlePeerExpired)
 	mux.HandleFunc("/api/v1/wg/peers", h.handlePeers)
 	mux.HandleFunc("/api/v1/wg/peers/", h.handlePeerByID)
-	mux.HandleFunc("/api/v1/wg/port-forwards", h.handlePortForwards)
-	mux.HandleFunc("/api/v1/wg/port-forwards/", h.handlePortForwardByID)
 	mux.HandleFunc("/api/v1/wg/servers", h.handleListServers)
 	mux.HandleFunc("/api/v1/wg/browser-gateway", h.handleBrowserGateway)
 	return mux
@@ -84,8 +82,6 @@ func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/agents/peers/expired", h.handlePeerExpired)
 	mux.HandleFunc("/api/v1/wg/peers", h.handlePeers)
 	mux.HandleFunc("/api/v1/wg/peers/", h.handlePeerByID)
-	mux.HandleFunc("/api/v1/wg/port-forwards", h.handlePortForwards)
-	mux.HandleFunc("/api/v1/wg/port-forwards/", h.handlePortForwardByID)
 	mux.HandleFunc("/api/v1/wg/servers", h.handleListServers)
 	mux.HandleFunc("/api/v1/wg/browser-gateway", h.handleBrowserGateway)
 }
@@ -281,29 +277,6 @@ func (h *HTTPHandler) handlePeerStream(w http.ResponseWriter, r *http.Request) {
 				PresharedKey: psk,
 				AllowedIPs:   p.AllowedIPs,
 				ShieldPreset: entitlement.NormalizeShieldPreset(p.ShieldPreset),
-			}
-			line, encErr := hub.EncodeSSE(update)
-			if encErr != nil {
-				continue
-			}
-			_, _ = w.Write(line)
-			flusher.Flush()
-		}
-	}
-
-	forwards, err := h.svc.ListPortForwardsForServer(r.Context(), serverID)
-	if err != nil {
-		h.log.Warn("failed listing port forwards for stream catch-up", "server_id", serverID, "error", err)
-	} else {
-		for _, pf := range forwards {
-			update := hub.PeerUpdate{
-				Action:       "PORT_FORWARD_ADD",
-				PeerID:       pf.PeerID,
-				ForwardID:    pf.ID,
-				Protocol:     pf.Protocol,
-				ExternalPort: pf.ExternalPort,
-				InternalPort: pf.InternalPort,
-				AssignedIP:   pf.AssignedIP,
 			}
 			line, encErr := hub.EncodeSSE(update)
 			if encErr != nil {
@@ -616,120 +589,6 @@ func (h *HTTPHandler) handleListServers(w http.ResponseWriter, r *http.Request) 
 		))
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"servers": out})
-}
-
-type createPortForwardRequest struct {
-	PeerID       string `json:"peer_id"`
-	Protocol     string `json:"protocol"`
-	ExternalPort int    `json:"external_port"`
-	InternalPort int    `json:"internal_port"`
-}
-
-func (h *HTTPHandler) handlePortForwards(w http.ResponseWriter, r *http.Request) {
-	accountID, tier, err := h.accountFromRequest(r)
-	if err != nil {
-		h.writeError(w, http.StatusUnauthorized, "unauthorized", err)
-		return
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		forwards, err := h.svc.ListPortForwards(r.Context(), accountID)
-		if err != nil {
-			h.writeError(w, http.StatusInternalServerError, "list port forwards failed", err, "account_hash", logging.HashIdentifier(accountID))
-			return
-		}
-		out := make([]map[string]interface{}, 0, len(forwards))
-		for _, pf := range forwards {
-			out = append(out, map[string]interface{}{
-				"id":              pf.ID,
-				"peer_id":         pf.PeerID,
-				"server_id":       pf.ServerID,
-				"protocol":        pf.Protocol,
-				"external_port":   pf.ExternalPort,
-				"internal_port":   pf.InternalPort,
-				"status":          pf.Status,
-				"assigned_ip":     pf.AssignedIP,
-				"egress_endpoint": pf.EgressEndpoint,
-				"created_at":      pf.CreatedAt.Unix(),
-			})
-		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"port_forwards": out})
-	case http.MethodPost:
-		var req createPortForwardRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
-			return
-		}
-		if req.PeerID == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer_id is required"})
-			return
-		}
-		if req.Protocol == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "protocol is required"})
-			return
-		}
-		if req.ExternalPort == 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "external_port is required"})
-			return
-		}
-		pf, err := h.svc.CreatePortForward(r.Context(), accountID, tier, req.PeerID, req.Protocol, req.ExternalPort, req.InternalPort)
-		if err != nil {
-			var planErr *entitlement.PlanError
-			if errors.As(err, &planErr) {
-				status := http.StatusForbidden
-				switch planErr.Code {
-				case "invalid_external_port", "invalid_internal_port", "invalid_protocol",
-					"external_port_taken", "reserved_external_port":
-					status = http.StatusBadRequest
-				}
-				writeJSON(w, status, map[string]string{"error": planErr.Message, "code": planErr.Code})
-				return
-			}
-			h.writeError(w, http.StatusBadRequest, "create port forward failed", err, "account_hash", logging.HashIdentifier(accountID))
-			return
-		}
-		writeJSON(w, http.StatusCreated, map[string]interface{}{
-			"id":              pf.ID,
-			"peer_id":         pf.PeerID,
-			"server_id":       pf.ServerID,
-			"protocol":        pf.Protocol,
-			"external_port":   pf.ExternalPort,
-			"internal_port":   pf.InternalPort,
-			"status":          pf.Status,
-			"assigned_ip":     pf.AssignedIP,
-			"egress_endpoint": pf.EgressEndpoint,
-			"created_at":      pf.CreatedAt.Unix(),
-		})
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func (h *HTTPHandler) handlePortForwardByID(w http.ResponseWriter, r *http.Request) {
-	accountID, _, err := h.accountFromRequest(r)
-	if err != nil {
-		h.writeError(w, http.StatusUnauthorized, "unauthorized", err)
-		return
-	}
-
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/wg/port-forwards/")
-	id = strings.Trim(id, "/")
-	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
-		return
-	}
-
-	switch r.Method {
-	case http.MethodDelete:
-		if err := h.svc.DeletePortForward(r.Context(), id, accountID); err != nil {
-			h.writeError(w, http.StatusBadRequest, "delete port forward failed", err, "port_forward_hash", logging.HashIdentifier(id), "account_hash", logging.HashIdentifier(accountID))
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
 }
 
 func (h *HTTPHandler) accountFromRequest(r *http.Request) (accountID, tier string, err error) {

@@ -24,7 +24,7 @@ type accountTeardownResponse struct {
 	PeersRemoved int    `json:"peers_removed,omitempty"`
 }
 
-// requestAccountTeardown asks wg-manager to REMOVE live peers/port-forwards
+// requestAccountTeardown asks wg-manager to REMOVE live peers
 // before the account row is deleted. It fails closed: unless wg-manager
 // acknowledges, the caller must not delete the account, or the user would be
 // told their account is gone while their tunnel keeps working.

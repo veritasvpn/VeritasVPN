@@ -69,7 +69,6 @@ fun SettingsDrawer(
     isPremium: Boolean,
     onPlans: () -> Unit,
     onNetworkMap: () -> Unit,
-    onPortForwards: () -> Unit,
     onTunnelSettings: () -> Unit,
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
@@ -193,10 +192,6 @@ fun SettingsDrawer(
                         SettingsDrawerNavItem(
                             label = "Network map",
                             onClick = { navigate(onNetworkMap) },
-                        )
-                        SettingsDrawerNavItem(
-                            label = "Port forwarding",
-                            onClick = { navigate(onPortForwards) },
                         )
                     }
 

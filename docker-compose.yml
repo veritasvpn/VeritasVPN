@@ -166,21 +166,6 @@ services:
       - ALL
     read_only: true
 
-  browser-proxy-port-mapper:
-    build:
-      context: ./containers/port-mapper
-    container_name: browser-proxy-port-mapper
-    network_mode: host
-    environment:
-      INTERNAL_IP: ${BROWSER_PROXY_INTERNAL_IP:?BROWSER_PROXY_INTERNAL_IP must be set}
-      INTERNAL_PORT: "1080"
-      EXTERNAL_PORT: ${BROWSER_PROXY_EXTERNAL_PORT:-41080}
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-
   nginx:
     image: nginx:1.27-alpine
     ports:

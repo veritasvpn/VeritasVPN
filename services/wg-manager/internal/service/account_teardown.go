@@ -11,8 +11,8 @@ import (
 )
 
 // AccountTeardownSubject is the NATS request-reply subject auth-svc uses before
-// permanently deleting an account. wg-manager removes live peers/port-forwards
-// via the agent so tunnels cannot outlive the account.
+// permanently deleting an account. wg-manager removes live peers via the agent
+// so tunnels cannot outlive the account.
 const AccountTeardownSubject = "account.teardown"
 
 // AccountTeardownRequest is published by auth-svc.
@@ -27,8 +27,7 @@ type AccountTeardownResponse struct {
 	PeersRemoved int    `json:"peers_removed,omitempty"`
 }
 
-// TeardownAccount removes every non-removed peer (and its port-forwards) for
-// the account, notifying the agent with REMOVE / PORT_FORWARD_REMOVE first.
+// TeardownAccount removes every non-removed peer for the account.
 func (s *Service) TeardownAccount(ctx context.Context, accountID string) (int, error) {
 	if accountID == "" {
 		return 0, fmt.Errorf("account_id is required")
