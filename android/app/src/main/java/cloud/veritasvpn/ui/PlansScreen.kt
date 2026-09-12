@@ -44,6 +44,7 @@ fun PlansScreen(
     val periodEnd = remember(billingStatus?.currentPeriodEnd) {
         formatBillingDate(billingStatus?.currentPeriodEnd)
     }
+    val hasPeriodEnd = !billingStatus?.currentPeriodEnd.isNullOrBlank()
     LaunchedEffect(billingStatus?.cancelAtPeriodEnd) {
         if (billingStatus?.cancelAtPeriodEnd == true) showCancelConfirmation = false
     }
@@ -111,6 +112,11 @@ fun PlansScreen(
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
+                if (premium && hasPeriodEnd) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("PREMIUM ACCESS EXPIRES", color = PaperDim, fontSize = 10.sp, letterSpacing = 1.1.sp)
+                    Text("Expires on $periodEnd", color = PaperMuted, fontSize = 13.sp)
+                }
             }
             if (refreshing) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Cyan)
             else TextButton(onClick = onRefresh) { Text("Refresh", color = CyanHover) }
