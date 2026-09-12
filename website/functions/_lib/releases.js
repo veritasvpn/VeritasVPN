@@ -11,17 +11,17 @@ const RELEASE_BASE = "https://github.com/veritasvpn/VeritasVPN/releases/download
 
 export const DOWNLOADS = {
   "veritasvpn-android.apk": {
-    tag: "v0.2.59",
+    tag: "v0.2.61",
     contentType: "application/vnd.android.package-archive",
     unavailable: "Android APK is temporarily unavailable.",
   },
   "veritasvpn-linux.deb": {
-    tag: "v0.2.59",
+    tag: "v0.2.61",
     contentType: "application/vnd.debian.binary-package",
     unavailable: "Linux .deb is temporarily unavailable.",
   },
   "veritasvpn-linux.AppImage": {
-    tag: "v0.2.59",
+    tag: "v0.2.61",
     contentType: "application/octet-stream",
     unavailable: "Linux AppImage is temporarily unavailable.",
   },
