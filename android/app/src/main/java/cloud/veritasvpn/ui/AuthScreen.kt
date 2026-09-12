@@ -72,10 +72,10 @@ fun AuthScreen(
     var turnstileToken by remember { mutableStateOf("") }
     var turnstileResetKey by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
-    // Account creation remains challenge-protected. Existing accounts sign in
-    // immediately and are protected by the server's per-IP and per-account
-    // sign-in limits, avoiding an unnecessary external challenge on every use.
-    val needsTurnstile = mode == AuthMode.SIGN_UP
+    // The same short Turnstile check protects every authentication route. In
+    // managed mode it normally completes without an extra user interaction,
+    // while keeping the app and the API contract consistent.
+    val needsTurnstile = true
 
     LaunchedEffect(mode, method) {
         turnstileToken = ""

@@ -84,7 +84,7 @@ class AuthRepository(context: Context) {
             "email" to normalized,
             "password" to password
         )
-        if (turnstileToken.isNotBlank()) payload["turnstile_token"] = turnstileToken
+        payload["turnstile_token"] = turnstileToken
         val data = ApiClient.post(
             "/api/v1/auth/signin",
             payload
@@ -143,7 +143,7 @@ class AuthRepository(context: Context) {
 
     fun signInWithAccountId(accountId: String, turnstileToken: String): User {
         val payload = mutableMapOf("account_id" to accountId.trim())
-        if (turnstileToken.isNotBlank()) payload["turnstile_token"] = turnstileToken
+        payload["turnstile_token"] = turnstileToken
         val data = ApiClient.post(
             "/api/v1/auth/signin-account",
             payload
