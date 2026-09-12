@@ -1,6 +1,8 @@
 import { useState, useEffect, FormEvent, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { fetch as nativeFetch } from "@tauri-apps/plugin-http";
 import {
+  getStoredToken,
   getStoredUser,
   initializeSecureAuth,
   signIn as doSignIn,
@@ -625,6 +627,7 @@ function App() {
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [deviceLabel, setDeviceLabel] = useState("Current location");
   const connectPeerRef = useRef("");
+  const authBootstrapGenerationRef = useRef(0);
   const userDisconnectedRef = useRef(false);
   const handleDisconnectRef = useRef<() => Promise<void>>(async () => {});
   const clearReconnectTimerRef = useRef<() => void>(() => {});
@@ -643,12 +646,15 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
+    const bootstrapGeneration = authBootstrapGenerationRef.current;
     initializeSecureAuth()
       .then(() => {
-        if (!cancelled) setUser(getStoredUser());
+        if (!cancelled && bootstrapGeneration === authBootstrapGenerationRef.current) {
+          setUser(getStoredUser());
+        }
       })
       .catch(() => {
-        if (!cancelled) setUser(null);
+        if (!cancelled && bootstrapGeneration === authBootstrapGenerationRef.current) setUser(null);
       });
     return () => { cancelled = true; };
   }, []);
@@ -1427,6 +1433,10 @@ function App() {
   }, [linuxDesktop]);
 
   const handleSignOut = useCallback(() => {
+    // Make the app unauthenticated first. Disconnecting the tunnel and deleting
+    // secure credentials can require privileged/native work and must not delay
+    // the visible sign-out transition.
+    authBootstrapGenerationRef.current += 1;
     if (user) clearCachedBillingStatus(user.account_id);
     setSubscriptionActive(false);
     setSubscriptionChecked(false);
@@ -1437,22 +1447,26 @@ function App() {
     userDisconnectedRef.current = true;
     clearReconnectTimer();
     if (connected || connecting) void handleDisconnect();
-    doSignOut();
     setUser(null);
     setNewAccountId("");
     setShowSignOutConfirm(false);
+    void doSignOut().catch(() => undefined);
   }, [connected, connecting, handleDisconnect, user, clearReconnectTimer]);
 
-  const handleSignOutEverywhere = useCallback(async () => {
+  const handleSignOutEverywhere = useCallback(() => {
     setShowSettings(false);
-    try {
-      await fetchWithAuth(`${AUTH_API}/api/v1/auth/logout-all`, {
+    // Capture the current token before local sign-out erases it. The remote
+    // request intentionally does not block the local logout or VPN teardown.
+    const token = getStoredToken();
+    if (token) {
+      void nativeFetch(`${AUTH_API}/api/v1/auth/logout-all`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: "{}",
       }).catch(() => undefined);
-    } catch {
-      // still sign out locally
     }
     handleSignOut();
   }, [handleSignOut]);

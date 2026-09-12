@@ -158,43 +158,38 @@ class MainActivity : ComponentActivity() {
 
                 fun deletePeerBestEffort(peerId: String?) {
                     if (peerId.isNullOrBlank()) return
+                    // Capture the token before a local sign-out clears secure storage.
+                    // Peer revocation is best-effort and must never hold up returning the
+                    // user to the sign-in screen.
+                    val accessToken = authRepo.getAccessToken()?.takeIf { it.isNotBlank() } ?: return
                     peerCleanupJob = scope.launch(Dispatchers.IO) {
                         try {
-                            AuthenticatedApi.execute(authRepo, { token ->
-                                ApiClient.delete("/api/v1/wg/peers/$peerId", token)
-                            }) { it.close() }
+                            ApiClient.delete("/api/v1/wg/peers/$peerId", accessToken).close()
                         } catch (_: Exception) {
                         }
                     }
+                }
+
+                fun clearLocalSessionUi() {
+                    authRepo.signOut()
+                    billingStatus = null
+                    checkoutUrl = null
+                    billingError = null
+                    checkoutMethod = null
+                    showPlans = false
+                    showTunnelSettings = false
+                    user = null
                 }
 
                 fun performLocalSignOut() {
                     userWantsConnected = false
                     hadEstablishedSession = false
                     cancelReconnect()
-                    val peerId = peerIdForDisconnect()
+                    deletePeerBestEffort(peerIdForDisconnect())
                     disconnectVpnService()
-                    // Revoke server peer while auth is still available, then clear local session.
-                    scope.launch {
-                        try {
-                            if (!peerId.isNullOrBlank()) {
-                                withContext(Dispatchers.IO) {
-                                    AuthenticatedApi.execute(authRepo, { token ->
-                                        ApiClient.delete("/api/v1/wg/peers/$peerId", token)
-                                    }) { it.close() }
-                                }
-                            }
-                        } catch (_: Exception) {
-                        }
-                        authRepo.signOut()
-                        billingStatus = null
-                        checkoutUrl = null
-                        billingError = null
-                        checkoutMethod = null
-                        showPlans = false
-                        showTunnelSettings = false
-                        user = null
-                    }
+                    // Local sign-out must be immediate. Network cleanup continues in the
+                    // background so a delayed request cannot leave the app authenticated.
+                    clearLocalSessionUi()
                 }
 
                 fun handleSessionExpired() {
@@ -676,27 +671,23 @@ class MainActivity : ComponentActivity() {
                         },
                         onSignOut = { performLocalSignOut() },
                         onSignOutEverywhere = {
-                            scope.launch {
-                                userWantsConnected = false
-                                hadEstablishedSession = false
-                                cancelReconnect()
-                                val peerId = peerIdForDisconnect()
-                                deletePeerBestEffort(peerId)
-                                peerCleanupJob?.join()
-                                try {
-                                    withContext(Dispatchers.IO) {
-                                        authRepo.logoutAllSessions()
+                            val accessToken = authRepo.getAccessToken()?.takeIf { it.isNotBlank() }
+                            if (accessToken != null) {
+                                scope.launch(Dispatchers.IO) {
+                                    try {
+                                        ApiClient.post("/api/v1/auth/logout-all", emptyMap<String, Any>(), accessToken).close()
+                                    } catch (_: Exception) {
                                     }
-                                } catch (_: Exception) {
-                                    // Still clear local auth even if the API call fails.
-                                    authRepo.signOut()
                                 }
-                                disconnectVpnService()
-                                billingStatus = null
-                                showPlans = false
-                                showTunnelSettings = false
-                                user = null
                             }
+                            userWantsConnected = false
+                            hadEstablishedSession = false
+                            cancelReconnect()
+                            deletePeerBestEffort(peerIdForDisconnect())
+                            disconnectVpnService()
+                            // The local app exits immediately even if the remote session
+                            // revocation is delayed by the network transition.
+                            clearLocalSessionUi()
                         },
                         onPlans = {
                             showPlans = true
