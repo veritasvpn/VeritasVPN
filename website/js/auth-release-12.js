@@ -448,7 +448,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   }
 
   function syncTurnstileForMode() {
-    if (mode === 'signup' || mode === 'anon-signup') {
+    if (mode === 'signin' || mode === 'signup' || mode === 'anon-signin' || mode === 'anon-signup') {
       showTurnstileWidget();
     } else {
       clearTurnstileWidget();
@@ -855,10 +855,14 @@ function renderUser(user) {
         setError('Enter your account ID.');
         return;
       }
+      if (!turnstileToken) {
+        setError('Complete the verification check before continuing.');
+        return;
+      }
       setBusy(true);
       try {
         pendingDashboardRedirect = redirectAfterAuth && shouldRedirectToDashboardAfterAuth();
-        const data = await signInWithAccount(accountId, '');
+        const data = await signInWithAccount(accountId, turnstileToken);
         const user = { account_id: data.account_id, is_anonymous: true };
         setSession(user, data.access_token, data.refresh_token);
         currentUser = user;
@@ -879,7 +883,7 @@ function renderUser(user) {
       setError('Email and password are required.');
       return;
     }
-    if (mode === 'signup' && !turnstileToken) {
+    if (!turnstileToken) {
       setError('Complete the verification check before continuing.');
       return;
     }
@@ -888,9 +892,7 @@ function renderUser(user) {
       pendingDashboardRedirect = redirectAfterAuth && shouldRedirectToDashboardAfterAuth();
       const endpoint = mode === 'signin' ? '/api/v1/auth/signin' : '/api/v1/auth/register';
       const payload = { email, password };
-      if (turnstileToken) {
-        payload.turnstile_token = turnstileToken;
-      }
+      payload.turnstile_token = turnstileToken;
       const data = await api(endpoint, {
         method: 'POST',
         body: JSON.stringify(payload),
