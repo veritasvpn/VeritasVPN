@@ -197,9 +197,8 @@ func (h *HTTPHandler) handleSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
-		return
-	}
+	// Existing-account sign-in relies on the strict per-IP and per-account
+	// limits below. Turnstile remains mandatory for account creation.
 
 	normalizedEmail := strings.ToLower(strings.TrimSpace(req.Email))
 	if h.service.RateLimited(r.Context(), "email-signin-ip:"+clientIP(r), 10, time.Minute) ||
@@ -593,15 +592,6 @@ func (h *HTTPHandler) handleSignInAccount(w http.ResponseWriter, r *http.Request
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeHTTPError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	e2eAuthorized := h.service.VerifyE2EAuth(
-		req.AccountID,
-		r.Header.Get("X-Veritas-E2E-Timestamp"),
-		r.Header.Get("X-Veritas-E2E-Signature"),
-	)
-	if !e2eAuthorized && !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
 		return
 	}
 

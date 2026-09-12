@@ -23,7 +23,12 @@ class BillingRepository(private val auth: AuthRepository) {
         { token ->
             ApiClient.post(
                 "/api/v1/billing/subscribe",
-                mapOf("tier" to "premium", "payment_method" to paymentMethod, "plan_id" to planId),
+                mapOf(
+                    "tier" to "premium",
+                    "payment_method" to paymentMethod,
+                    "plan_id" to planId,
+                    "return_target" to "android"
+                ),
                 token
             )
         }

@@ -470,12 +470,25 @@ function PaymentCheckoutScreen({
   checkoutUrl,
   onClose,
   onRefreshPlan,
+  onCompleted,
 }: {
   checkoutUrl: string;
   onClose: () => void;
   onRefreshPlan: () => void;
+  onCompleted: () => void;
 }) {
   const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== "https://veritasvpn.cloud") return;
+      const data = event.data as { source?: string; status?: string } | null;
+      if (data?.source === "veritas-billing" && data.status === "settled") {
+        onCompleted();
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [onCompleted]);
   return (
     <section className="checkout-screen">
       <div className="checkout-head">
@@ -600,6 +613,7 @@ function App() {
   const [billingError, setBillingError] = useState("");
   const [selectedPlan, setSelectedPlan] = useState<"premium_monthly" | "premium_annual">("premium_monthly");
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  const [checkoutSettlementPending, setCheckoutSettlementPending] = useState(false);
   const [checkoutMethod, setCheckoutMethod] = useState<string | null>(null);
   const [showCancelConfirmation, setShowCancelConfirmation] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -814,18 +828,19 @@ function App() {
   }, [connecting]);
 
   useEffect(() => {
-    if (!checkoutUrl || !user) return;
+    if ((!checkoutUrl && !checkoutSettlementPending) || !user) return;
     const timer = window.setInterval(() => {
       refreshBillingStatus().then((status) => {
         if (status?.is_premium) {
           setCheckoutUrl(null);
-          setShowPlans(false);
+          setCheckoutSettlementPending(false);
+          setShowPlans(checkoutSettlementPending);
           setBillingError("");
         }
       }).catch(() => undefined);
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [checkoutUrl, user, refreshBillingStatus]);
+  }, [checkoutUrl, checkoutSettlementPending, user, refreshBillingStatus]);
 
   const switchMode = useCallback((next: AuthMode) => {
     setMode(next);
@@ -861,8 +876,7 @@ function App() {
     try {
       if (method === "accountId") {
         if (mode === "signin") {
-          const turnstileToken = await obtainTurnstileToken();
-          const u = await doSignInAccountId(accountId, turnstileToken);
+          const u = await doSignInAccountId(accountId);
           setUser(u);
           setAccountId("");
         } else {
@@ -872,8 +886,7 @@ function App() {
           setUser(u);
         }
       } else if (mode === "signin") {
-        const turnstileToken = await obtainTurnstileToken();
-        const u = await doSignIn(email, password, turnstileToken);
+        const u = await doSignIn(email, password);
         setUser(u);
         setEmail("");
         setPassword("");
@@ -969,7 +982,12 @@ function App() {
       const response = await fetchWithAuth(`${AUTH_API}/api/v1/billing/subscribe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier: "premium", payment_method: "btcpay", plan_id: selectedPlan }),
+        body: JSON.stringify({
+          tier: "premium",
+          payment_method: "btcpay",
+          plan_id: selectedPlan,
+          return_target: "desktop",
+        }),
       });
       const data = await response.json() as { checkout_url?: string; error?: string };
       if (!response.ok || !isAllowedBtcpayCheckoutUrl(data.checkout_url)) {
@@ -1623,7 +1641,17 @@ function App() {
   if (checkoutUrl) {
     return (
       <div className="app app-dashboard">
-        <PaymentCheckoutScreen checkoutUrl={checkoutUrl} onClose={() => setCheckoutUrl(null)} onRefreshPlan={() => refreshBillingStatus().catch(() => undefined)} />
+        <PaymentCheckoutScreen
+          checkoutUrl={checkoutUrl}
+          onClose={() => setCheckoutUrl(null)}
+          onRefreshPlan={() => refreshBillingStatus().catch(() => undefined)}
+          onCompleted={() => {
+            setCheckoutUrl(null);
+            setCheckoutSettlementPending(true);
+            setShowPlans(true);
+            void refreshBillingStatus();
+          }}
+        />
       </div>
     );
   }

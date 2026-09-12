@@ -15,11 +15,12 @@ type MockBTCPayProvider struct {
 }
 
 type MockInvoice struct {
-	ID        string
-	AccountID string
-	Tier      string
-	AmountUSD float64
-	Settled   bool
+	ID          string
+	AccountID   string
+	Tier        string
+	AmountUSD   float64
+	RedirectURL string
+	Settled     bool
 }
 
 func NewMockBTCPayProvider(publicBaseURL string) *MockBTCPayProvider {
@@ -29,17 +30,18 @@ func NewMockBTCPayProvider(publicBaseURL string) *MockBTCPayProvider {
 	}
 }
 
-func (m *MockBTCPayProvider) CreateInvoice(accountID, tier, paymentMethod, planID string, amountUSD float64) (string, string, error) {
+func (m *MockBTCPayProvider) CreateInvoice(accountID, tier, paymentMethod, planID string, amountUSD float64, redirectURL string) (string, string, error) {
 	id, err := randomID(16)
 	if err != nil {
 		return "", "", err
 	}
 	m.mu.Lock()
 	m.invoices[id] = MockInvoice{
-		ID:        id,
-		AccountID: accountID,
-		Tier:      tier,
-		AmountUSD: amountUSD,
+		ID:          id,
+		AccountID:   accountID,
+		Tier:        tier,
+		AmountUSD:   amountUSD,
+		RedirectURL: redirectURL,
 	}
 	m.mu.Unlock()
 
@@ -76,5 +78,5 @@ func randomID(nBytes int) (string, error) {
 
 // InvoiceCreator is implemented by real and mock BTCPay providers.
 type InvoiceCreator interface {
-	CreateInvoice(accountID, tier, paymentMethod, planID string, amountUSD float64) (invoiceID, checkoutURL string, err error)
+	CreateInvoice(accountID, tier, paymentMethod, planID string, amountUSD float64, redirectURL string) (invoiceID, checkoutURL string, err error)
 }

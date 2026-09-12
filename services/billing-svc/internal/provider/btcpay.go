@@ -85,7 +85,7 @@ type WebhookEvent struct {
 	PlanID    string
 }
 
-func (b *BTCPayProvider) CreateInvoice(accountID, tier, paymentMethod, planID string, amountUSD float64) (invoiceID, checkoutURL string, err error) {
+func (b *BTCPayProvider) CreateInvoice(accountID, tier, paymentMethod, planID string, amountUSD float64, redirectURL string) (invoiceID, checkoutURL string, err error) {
 	invReq := BTCPayInvoiceRequest{
 		Amount:   fmt.Sprintf("%.2f", amountUSD),
 		Currency: "USD",
@@ -93,7 +93,12 @@ func (b *BTCPayProvider) CreateInvoice(accountID, tier, paymentMethod, planID st
 	invReq.Metadata.AccountID = accountID
 	invReq.Metadata.Tier = tier
 	invReq.Metadata.PlanID = planID
-	invReq.Checkout.RedirectURL = b.redirectURL
+	// The redirect destination is selected by the billing API from a small,
+	// server-owned allowlist. Never accept an arbitrary client supplied URL.
+	invReq.Checkout.RedirectURL = strings.TrimSpace(redirectURL)
+	if invReq.Checkout.RedirectURL == "" {
+		invReq.Checkout.RedirectURL = b.redirectURL
+	}
 	invReq.Checkout.PaymentMethods = []string{"BTC-CHAIN"}
 	invReq.Checkout.DefaultPaymentMethod = "BTC-CHAIN"
 	invReq.Checkout.PaymentTolerance = 5 // percent; covers sat rounding from wallets

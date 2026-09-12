@@ -208,7 +208,7 @@ func (s *BillingService) reconcilePendingPayment(ctx context.Context, accountID 
 }
 
 // CreatePremiumCheckout starts a Bitcoin checkout for premium. Does NOT activate until paid.
-func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, paymentMethod, planID string) (checkoutURL string, err error) {
+func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, paymentMethod, planID, redirectURL string) (checkoutURL string, err error) {
 	if err := s.bitcoinReady(ctx); err != nil {
 		return "", err
 	}
@@ -271,7 +271,7 @@ func (s *BillingService) CreatePremiumCheckout(ctx context.Context, accountID, p
 	amountCents := plan.PriceCents
 	amountUSD := float64(amountCents) / 100.0
 
-	invoiceID, url, err := s.invoices.CreateInvoice(accountID, model.TierPremium, paymentMethod, plan.ID, amountUSD)
+	invoiceID, url, err := s.invoices.CreateInvoice(accountID, model.TierPremium, paymentMethod, plan.ID, amountUSD, redirectURL)
 	if err != nil {
 		if errors.Is(err, provider.ErrStoreWalletNotConfigured) {
 			return "", ErrBitcoinWalletNotConfigured

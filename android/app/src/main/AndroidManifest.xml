@@ -35,6 +35,17 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- A completed BTCPay checkout returns through this exact custom
+                 scheme. No account, token, or invoice data is accepted here. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="veritasvpn"
+                    android:host="billing"
+                    android:path="/success" />
+            </intent-filter>
         </activity>
 
         <service

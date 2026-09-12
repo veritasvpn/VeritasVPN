@@ -91,12 +91,23 @@ class MainActivity : ComponentActivity() {
     private lateinit var authRepo: AuthRepository
     private var peerCleanupJob: Job? = null
     private var reconnectJob: Job? = null
+    private var billingReturnVersion by mutableIntStateOf(0)
+
+    private fun handleBillingReturn(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme == "veritasvpn" && uri.host == "billing" && uri.path == "/success") {
+            // The deep link is intentionally data-free. Entitlement is always
+            // re-read from the authenticated billing API before the UI changes.
+            billingReturnVersion += 1
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         authRepo = AuthRepository(this)
         currentPeerId = VpnSettings.currentPeerId(this)
+        handleBillingReturn(intent)
 
         setContent {
             VeritasVPNTheme {
@@ -131,6 +142,8 @@ class MainActivity : ComponentActivity() {
                 var billingError by remember { mutableStateOf<String?>(null) }
                 var checkoutMethod by remember { mutableStateOf<String?>(null) }
                 var checkoutUrl by remember { mutableStateOf<String?>(null) }
+                var waitingForCheckoutSettlement by remember { mutableStateOf(false) }
+                val observedBillingReturnVersion = billingReturnVersion
 
                 fun disconnectVpnService() {
                     context.startService(
@@ -272,8 +285,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(checkoutUrl) {
-                    while (checkoutUrl != null && user != null) {
+                LaunchedEffect(observedBillingReturnVersion, user?.accountId) {
+                    if (observedBillingReturnVersion > 0 && user != null) {
+                        checkoutUrl = null
+                        waitingForCheckoutSettlement = true
+                        billingError = null
+                        showPlans = true
+                    }
+                }
+
+                LaunchedEffect(checkoutUrl, waitingForCheckoutSettlement) {
+                    while ((checkoutUrl != null || waitingForCheckoutSettlement) && user != null) {
                         kotlinx.coroutines.delay(3000)
                         try {
                             val status = withTimeout(7_000) {
@@ -285,6 +307,8 @@ class MainActivity : ComponentActivity() {
                             writeCachedBillingStatus(context, user!!.accountId, status)
                             if (status.isPremium) {
                                 checkoutUrl = null
+                                waitingForCheckoutSettlement = false
+                                showPlans = true
                                 billingError = null
                             }
                         } catch (e: Exception) {
@@ -849,5 +873,11 @@ class MainActivity : ComponentActivity() {
             appendLine("AllowedIPs = $allowed")
             appendLine("PersistentKeepalive = 25")
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleBillingReturn(intent)
     }
 }

@@ -448,7 +448,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   }
 
   function syncTurnstileForMode() {
-    if (mode === 'signup' || mode === 'anon-signup' || mode === 'signin' || mode === 'anon-signin') {
+    if (mode === 'signup' || mode === 'anon-signup') {
       showTurnstileWidget();
     } else {
       clearTurnstileWidget();
@@ -855,14 +855,10 @@ function renderUser(user) {
         setError('Enter your account ID.');
         return;
       }
-      if (!turnstileToken) {
-        setError('Complete the verification check before continuing.');
-        return;
-      }
       setBusy(true);
       try {
         pendingDashboardRedirect = redirectAfterAuth && shouldRedirectToDashboardAfterAuth();
-        const data = await signInWithAccount(accountId, turnstileToken);
+        const data = await signInWithAccount(accountId, '');
         const user = { account_id: data.account_id, is_anonymous: true };
         setSession(user, data.access_token, data.refresh_token);
         currentUser = user;
@@ -883,7 +879,7 @@ function renderUser(user) {
       setError('Email and password are required.');
       return;
     }
-    if ((mode === 'signup' || mode === 'signin') && !turnstileToken) {
+    if (mode === 'signup' && !turnstileToken) {
       setError('Complete the verification check before continuing.');
       return;
     }

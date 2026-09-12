@@ -38,7 +38,7 @@ export async function fetchBillingStatus() {
 export async function startPremiumCheckout(paymentMethod = 'btcpay', planId = 'premium_monthly') {
   const data = await api('/api/v1/billing/subscribe', {
     method: 'POST',
-    body: JSON.stringify({ tier: 'premium', payment_method: paymentMethod, plan_id: planId }),
+    body: JSON.stringify({ tier: 'premium', payment_method: paymentMethod, plan_id: planId, return_target: 'web' }),
   });
   const checkoutUrl = typeof data.checkout_url === 'string' ? data.checkout_url : '';
   const allowed =
