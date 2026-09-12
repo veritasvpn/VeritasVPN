@@ -382,8 +382,8 @@ function PlansScreen({
           </strong>
           {!billingLoading && premium && billingStatus?.current_period_end && (
             <small className="billing-period-end">
-              {billingStatus.cancel_at_period_end ? "Premium ends" : "Current access ends"}{" "}
-              <time dateTime={billingStatus.current_period_end}>{formatBillingDate(billingStatus.current_period_end)}</time>
+              <span>PREMIUM ACCESS EXPIRES</span>
+              <time dateTime={billingStatus.current_period_end}>Expires on {formatBillingDate(billingStatus.current_period_end)}</time>
             </small>
           )}
         </div>

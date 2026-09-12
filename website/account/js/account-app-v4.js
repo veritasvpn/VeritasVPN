@@ -173,6 +173,18 @@ function planName(status) {
   return status?.is_premium ? 'Veritas Premium' : 'No active subscription';
 }
 
+function renderPlanExpiry(status) {
+  const periodEnd = status?.current_period_end;
+  const end = formatDate(periodEnd);
+  if (!status?.is_premium || !periodEnd || !end) return '';
+  return `
+    <div class="plan-expiration">
+      <span>PREMIUM ACCESS EXPIRES</span>
+      <time datetime="${escapeHtml(periodEnd)}">Expires on ${escapeHtml(end)}</time>
+      ${status.cancel_at_period_end ? '<em>Cancellation scheduled</em>' : ''}
+    </div>`;
+}
+
 async function refreshBilling() {
   billingStatus = await fetchBillingStatus();
   if (upgradeBtn) {
@@ -184,7 +196,6 @@ function renderHome() {
   const premium = Boolean(billingStatus?.is_premium);
   const cancelAtEnd = Boolean(billingStatus?.cancel_at_period_end);
   const showCheckout = !premium || cancelAtEnd;
-  const end = formatDate(billingStatus?.current_period_end);
   return `
     ${renderFlash()}
     <section class="account-section">
@@ -197,15 +208,7 @@ function renderHome() {
       <div class="account-card plan-card">
         <div>
           <div class="plan-card-title">${planName(billingStatus)}</div>
-          <div class="plan-card-meta">
-            ${
-              premium
-                ? `Active until ${end || '—'}${
-                    billingStatus?.cancel_at_period_end ? ' · Cancels at period end' : ''
-                  }`
-                : 'Subscription required · Pay with Bitcoin'
-            }
-          </div>
+          ${premium ? renderPlanExpiry(billingStatus) : '<div class="plan-card-meta">Subscription required · Pay with Bitcoin</div>'}
         </div>
         <div class="plan-limits">
           ${
@@ -262,7 +265,6 @@ function renderSubscription() {
   const premium = Boolean(billingStatus?.is_premium);
   const cancelAtEnd = Boolean(billingStatus?.cancel_at_period_end);
   const showCheckout = !premium || cancelAtEnd;
-  const end = formatDate(billingStatus?.current_period_end);
   return `
     ${renderFlash()}
     <section class="account-section">
@@ -276,9 +278,8 @@ function renderSubscription() {
         <div class="plan-card-title">${planName(billingStatus)}</div>
         <p class="plan-card-meta">
           Status: <strong>${billingStatus?.status || '—'}</strong>
-          ${premium ? ` · Period ends ${end}` : ''}
-          ${cancelAtEnd ? ' · Will cancel at period end' : ''}
         </p>
+        ${premium ? renderPlanExpiry(billingStatus) : ''}
         <div class="account-actions">
           ${showCheckout ? `<div class="account-plan-actions"><button type="button" class="btn btn-outline" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_monthly">$3 monthly</button><button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_annual">$30 annual · save $6</button></div>` : ""}
           ${

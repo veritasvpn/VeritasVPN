@@ -1753,10 +1753,23 @@ input::placeholder { color: var(--paper-dim); }
 }
 
 .billing-period-end {
-  display: block;
+  display: grid;
+  gap: 2px;
   margin-top: 4px;
   color: var(--paper-muted);
   font-size: 12px;
+}
+
+.billing-period-end span {
+  color: var(--paper-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.1px;
+}
+
+.billing-period-end time {
+  color: var(--paper-muted);
+  font-size: 13px;
 }
 
 .plan-card {
