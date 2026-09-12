@@ -80,14 +80,14 @@ class AuthRepository(context: Context) {
 
     fun signIn(email: String, password: String, turnstileToken: String): User {
         val normalized = email.trim().lowercase()
-        if (turnstileToken.isBlank()) throw Error("Complete the security check to continue.")
+        val payload = mutableMapOf<String, String>(
+            "email" to normalized,
+            "password" to password
+        )
+        if (turnstileToken.isNotBlank()) payload["turnstile_token"] = turnstileToken
         val data = ApiClient.post(
             "/api/v1/auth/signin",
-            mapOf(
-                "email" to normalized,
-                "password" to password,
-                "turnstile_token" to turnstileToken
-            )
+            payload
         ).use { res ->
             if (!res.isSuccessful) {
                 val message = extractError(res)
@@ -142,13 +142,11 @@ class AuthRepository(context: Context) {
     }
 
     fun signInWithAccountId(accountId: String, turnstileToken: String): User {
-        if (turnstileToken.isBlank()) throw Error("Complete the security check to continue.")
+        val payload = mutableMapOf("account_id" to accountId.trim())
+        if (turnstileToken.isNotBlank()) payload["turnstile_token"] = turnstileToken
         val data = ApiClient.post(
             "/api/v1/auth/signin-account",
-            mapOf(
-                "account_id" to accountId.trim(),
-                "turnstile_token" to turnstileToken
-            )
+            payload
         ).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))
             ApiClient.parse<AuthResponse>(res)

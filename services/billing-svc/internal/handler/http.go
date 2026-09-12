@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -132,6 +133,7 @@ func (h *BillingHandler) handleSubscribe(w http.ResponseWriter, r *http.Request)
 		Tier          string `json:"tier"`
 		PaymentMethod string `json:"payment_method"`
 		PlanID        string `json:"plan_id"`
+		ReturnTarget  string `json:"return_target"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -152,7 +154,13 @@ func (h *BillingHandler) handleSubscribe(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	checkoutURL, err := h.service.CreatePremiumCheckout(r.Context(), uid, req.PaymentMethod, req.PlanID)
+	redirectURL, err := h.checkoutSuccessURL(req.ReturnTarget)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	checkoutURL, err := h.service.CreatePremiumCheckout(r.Context(), uid, req.PaymentMethod, req.PlanID, redirectURL)
 	if err != nil {
 		h.log.Error("failed to create checkout", zap.Error(err))
 		if errors.Is(err, service.ErrBitcoinNotReady) {
@@ -166,6 +174,30 @@ func (h *BillingHandler) handleSubscribe(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"checkout_url": checkoutURL,
 	})
+}
+
+// checkoutSuccessURL maps a client-declared return target to a URL based on
+// the server's configured success URL. It deliberately never accepts a URL
+// from the client, so BTCPay cannot become an open redirect primitive.
+func (h *BillingHandler) checkoutSuccessURL(target string) (string, error) {
+	target = strings.ToLower(strings.TrimSpace(target))
+	if target == "" {
+		target = "web"
+	}
+	switch target {
+	case "web", "android", "desktop":
+	default:
+		return "", fmt.Errorf("invalid checkout return target")
+	}
+
+	parsed, err := url.Parse(h.successURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return "", fmt.Errorf("checkout success URL is not configured safely")
+	}
+	query := parsed.Query()
+	query.Set("return_target", target)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
 }
 
 func (h *BillingHandler) handleCancel(w http.ResponseWriter, r *http.Request) {
@@ -251,12 +283,21 @@ func (h *BillingHandler) handleMockSettle(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invoice_id required")
 		return
 	}
+	inv, ok := h.service.GetMockInvoice(invoiceID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "invoice not found")
+		return
+	}
 	if err := h.service.SettleMockInvoice(r.Context(), invoiceID); err != nil {
 		h.log.Error("mock settle failed", zap.Error(err))
 		writeError(w, http.StatusBadRequest, "failed to settle invoice")
 		return
 	}
-	http.Redirect(w, r, h.successURL, http.StatusSeeOther)
+	redirectURL := inv.RedirectURL
+	if redirectURL == "" {
+		redirectURL = h.successURL
+	}
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

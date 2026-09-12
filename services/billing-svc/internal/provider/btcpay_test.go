@@ -28,7 +28,7 @@ func TestCreateInvoiceClassifiesWalletNotConfigured(t *testing.T) {
 	defer server.Close()
 
 	b := NewBTCPayProvider(log, server.URL, "key", "store", "secret", "https://ok")
-	_, _, err := b.CreateInvoice("account", "premium", "btcpay", "monthly", 3)
+	_, _, err := b.CreateInvoice("account", "premium", "btcpay", "monthly", 3, "https://veritasvpn.cloud/billing/success.html?return_target=web")
 	if !errors.Is(err, ErrStoreWalletNotConfigured) {
 		t.Fatalf("expected ErrStoreWalletNotConfigured, got %v", err)
 	}
@@ -53,12 +53,15 @@ func TestCreateInvoiceKeepsMinerFeeOutsideRecipientAmount(t *testing.T) {
 		if request.Checkout.PaymentTolerance != 5 {
 			t.Fatalf("expected 5%% satoshi-rounding tolerance, got %v", request.Checkout.PaymentTolerance)
 		}
+		if request.Checkout.RedirectURL != "https://veritasvpn.cloud/billing/success.html?return_target=android" {
+			t.Fatalf("unexpected Android return URL: %q", request.Checkout.RedirectURL)
+		}
 		_, _ = w.Write([]byte(`{"id":"invoice","checkoutLink":"https://btcpay.example/i/invoice","status":"New"}`))
 	}))
 	defer server.Close()
 
 	b := NewBTCPayProvider(log, server.URL, "key", "store", "secret", "https://ok")
-	if _, _, err := b.CreateInvoice("account", "premium", "btcpay", "premium_monthly", 3); err != nil {
+	if _, _, err := b.CreateInvoice("account", "premium", "btcpay", "premium_monthly", 3, "https://veritasvpn.cloud/billing/success.html?return_target=android"); err != nil {
 		t.Fatalf("create invoice: %v", err)
 	}
 }

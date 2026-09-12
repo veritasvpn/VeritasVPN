@@ -254,16 +254,13 @@ export async function refreshSession(): Promise<boolean> {
 export async function signIn(
   email: string,
   password: string,
-  turnstileToken: string
+  turnstileToken = ""
 ): Promise<User> {
   const normalizedEmail = email.trim().toLowerCase();
-  if (!turnstileToken.trim()) throw new Error("Complete the security check to continue.");
+  const payload: Record<string, string> = { email: normalizedEmail, password };
+  if (turnstileToken.trim()) payload.turnstile_token = turnstileToken;
   try {
-    const data = await authAPI("/api/v1/auth/signin", {
-      email: normalizedEmail,
-      password,
-      turnstile_token: turnstileToken,
-    });
+    const data = await authAPI("/api/v1/auth/signin", payload);
     return await persistSession(
       { email: data.email || normalizedEmail, account_id: data.account_id || "" },
       data
@@ -370,15 +367,13 @@ export async function resendVerification(email: string): Promise<void> {
 /** Sign in with an anonymous account ID — no password. Email accounts must use password. */
 export async function signInWithAccountId(
   accountId: string,
-  turnstileToken: string
+  turnstileToken = ""
 ): Promise<User> {
   const id = accountId.trim();
   if (!id) throw new Error("Enter your account ID.");
-  if (!turnstileToken.trim()) throw new Error("Complete the security check to continue.");
-  const data = await authAPI("/api/v1/auth/signin-account", {
-    account_id: id,
-    turnstile_token: turnstileToken,
-  });
+  const payload: Record<string, string> = { account_id: id };
+  if (turnstileToken.trim()) payload.turnstile_token = turnstileToken;
+  const data = await authAPI("/api/v1/auth/signin-account", payload);
   return await persistSession(
     { account_id: data.account_id || "", is_anonymous: true },
     data
