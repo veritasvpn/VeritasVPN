@@ -127,7 +127,10 @@ export function SettingsDrawer({
         onTransitionEnd={handlePanelTransitionEnd}
       >
         <header className="settings-drawer-head">
-          <h2>Settings</h2>
+          <div>
+            <p className="settings-drawer-kicker">CONNECTION CONTROL</p>
+            <h2>Settings</h2>
+          </div>
           <button
             ref={closeBtnRef}
             type="button"
@@ -153,6 +156,13 @@ export function SettingsDrawer({
 
           <section className="settings-drawer-section" aria-label="Connection">
             <p className="settings-drawer-label">Connection</p>
+            <div className={`settings-connection-summary${connected ? " is-protected" : ""}`} role="status">
+              <span className="settings-connection-dot" aria-hidden="true" />
+              <div>
+                <strong>{connected ? "Protected" : "Not connected"}</strong>
+                <span>{connected ? "WireGuard tunnel ready" : "Connect from Home to protect your traffic"}</span>
+              </div>
+            </div>
             {connected ? (
               <div className="settings-dns-status" role="status">
                 <strong>Veritas Shield on</strong>
@@ -263,6 +273,14 @@ export function TunnelSettingsScreen({
 
       <p className="tunnel-section-label">ROUTING</p>
 
+      <div className="tunnel-route-summary">
+        <span className="tunnel-route-dot" aria-hidden="true" />
+        <div>
+          <strong>Route your internet through VeritasVPN</strong>
+          <span>Your browser, apps, and DNS use the encrypted WireGuard tunnel unless you allow a local-network exception.</span>
+        </div>
+      </div>
+
       <button
         type="button"
         className={`tunnel-toggle-card${!excludeLan ? " is-on" : ""}`}
@@ -271,7 +289,7 @@ export function TunnelSettingsScreen({
       >
         <div>
           <strong>Full tunnel</strong>
-          <span>Send all traffic through the VPN (AllowedIPs from server, typically 0.0.0.0/0).</span>
+          <span>Route internet and local-network traffic through VeritasVPN.</span>
         </div>
         <i className={!excludeLan ? "on" : ""} aria-hidden="true" />
       </button>
@@ -283,8 +301,8 @@ export function TunnelSettingsScreen({
         aria-pressed={excludeLan}
       >
         <div>
-          <strong>Exclude private LAN</strong>
-          <span>Replace 0.0.0.0/0 with public prefixes that omit RFC1918 (10/8, 172.16/12, 192.168/16) so local network traffic stays off the VPN.</span>
+          <strong>Allow local network access</strong>
+          <span>Keep devices on your home, office, or hotel network reachable. Internet traffic still uses VeritasVPN.</span>
         </div>
         <i className={excludeLan ? "on" : ""} aria-hidden="true" />
       </button>

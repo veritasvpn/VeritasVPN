@@ -120,16 +120,11 @@ class MainActivity : ComponentActivity() {
                 var handshakeMs by remember { mutableStateOf(0L) }
                 var dnsBlockedCount by remember { mutableStateOf<Long?>(null) }
                 var dnsBlockedBaseline by remember { mutableStateOf<Long?>(null) }
-                var shieldPreset by remember { mutableStateOf("standard") }
                 var dnsGateway by remember { mutableStateOf<String?>(null) }
                 var excludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
-                var bypassAppsText by remember {
-                    mutableStateOf(VpnSettings.bypassApps(context).joinToString("\n"))
-                }
+                var bypassApps by remember { mutableStateOf(VpnSettings.bypassApps(context)) }
                 var appliedExcludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
-                var appliedBypassAppsText by remember {
-                    mutableStateOf(VpnSettings.bypassApps(context).joinToString("\n"))
-                }
+                var appliedBypassApps by remember { mutableStateOf(VpnSettings.bypassApps(context)) }
                 var billingStatus by remember { mutableStateOf<BillingStatus?>(null) }
                 var billingRefreshing by remember { mutableStateOf(false) }
                 var cancellationInProgress by remember { mutableStateOf(false) }
@@ -500,10 +495,9 @@ class MainActivity : ComponentActivity() {
                                         userWantsConnected = true
                                         hadEstablishedSession = true
                                         appliedExcludeLan = VpnSettings.excludeLan(this@MainActivity)
-                                        appliedBypassAppsText =
-                                            VpnSettings.bypassApps(this@MainActivity).joinToString("\n")
+                                        appliedBypassApps = VpnSettings.bypassApps(this@MainActivity)
                                         excludeLan = appliedExcludeLan
-                                        bypassAppsText = appliedBypassAppsText
+                                        bypassApps = appliedBypassApps
                                         statusMsg = null
                                     } else if (error != null && error.contains("revoked", ignoreCase = true)) {
                                         connected = false
@@ -587,9 +581,6 @@ class MainActivity : ComponentActivity() {
                                     val count = peer.dnsBlockedCount
                                     if (dnsBlockedBaseline == null) dnsBlockedBaseline = count
                                     dnsBlockedCount = count
-                                    if (peer.shieldPreset.isNotBlank()) {
-                                        shieldPreset = peer.shieldPreset
-                                    }
                                 }
                             }.onFailure {
                                 if (it is SessionExpiredException) handleSessionExpired()
@@ -627,7 +618,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val tunnelSettingsDirty =
-                    excludeLan != appliedExcludeLan || bypassAppsText != appliedBypassAppsText
+                    excludeLan != appliedExcludeLan || bypassApps != appliedBypassApps
 
                 if (user == null) {
                     AuthScreen(onAuthenticated = {
@@ -643,50 +634,18 @@ class MainActivity : ComponentActivity() {
                         onRefreshPlan = { refreshBilling() }
                     )
                 } else if (showTunnelSettings) {
-                    TunnelSettingsScreen(
-                        excludeLan = excludeLan,
-                        bypassAppsText = bypassAppsText,
-                        showReconnectBanner = connected && tunnelSettingsDirty,
-                        connected = connected,
-                        dnsGateway = dnsGateway,
-                        dnsBlockedThisSession = if (dnsBlockedCount != null && dnsBlockedBaseline != null) {
-                            (dnsBlockedCount!! - dnsBlockedBaseline!!).coerceAtLeast(0)
-                        } else null,
-                        shieldPreset = shieldPreset,
-                        onShieldPresetChange = { next ->
-                            val peerId = currentPeerId ?: VpnSettings.currentPeerId(context) ?: return@TunnelSettingsScreen
-                            shieldPreset = next
-                            scope.launch {
-                                runCatching {
-                                    withContext(Dispatchers.IO) {
-                                        AuthenticatedApi.execute(authRepo, { token ->
-                                            ApiClient.patch(
-                                                "/api/v1/wg/peers/$peerId",
-                                                mapOf("shield_preset" to next),
-                                                token
-                                            )
-                                        }) { res ->
-                                            if (!res.isSuccessful) throw IOException("HTTP ${res.code}")
-                                            true
-                                        }
-                                    }
-                                }.onFailure {
-                                    if (it is SessionExpiredException) handleSessionExpired()
-                                    else statusMsg = "Could not update Veritas Shield preset"
-                                }
-                            }
-                        },
-                        onExcludeLanChange = {
-                            excludeLan = it
-                            VpnSettings.setExcludeLan(context, it)
-                        },
-                        onBypassAppsChange = {
-                            bypassAppsText = it
-                            VpnSettings.setBypassApps(
-                                context,
-                                it.lineSequence().map { line -> line.trim() }.filter { line -> line.isNotEmpty() }.toList()
-                            )
-                        },
+                        TunnelSettingsScreen(
+                            excludeLan = excludeLan,
+                            bypassApps = bypassApps,
+                            showReconnectBanner = connected && tunnelSettingsDirty,
+                            onExcludeLanChange = {
+                                excludeLan = it
+                                VpnSettings.setExcludeLan(context, it)
+                            },
+                            onBypassAppsChange = {
+                                bypassApps = it
+                                VpnSettings.setBypassApps(context, it)
+                            },
                         onBack = { showTunnelSettings = false }
                     )
                 } else if (showPlans) {
