@@ -57,7 +57,9 @@ export async function serveRelease(request, filename) {
   const cf = { cacheEverything: true, cacheTtl: 300 };
 
   if (method === "HEAD") {
-    const upstream = await fetch(url, { method: "HEAD", cf });
+    // GitHub release assets first respond with a redirect to their object store.
+    // Pages Functions must explicitly follow it before judging availability.
+    const upstream = await fetch(url, { method: "HEAD", redirect: "follow", cf });
     if (!upstream.ok) {
       return textResponse(DOWNLOADS[filename].unavailable, 502);
     }
@@ -67,7 +69,7 @@ export async function serveRelease(request, filename) {
     });
   }
 
-  const upstream = await fetch(url, { cf });
+  const upstream = await fetch(url, { redirect: "follow", cf });
   if (!upstream.ok || !upstream.body) {
     return textResponse(DOWNLOADS[filename].unavailable, 502);
   }
