@@ -272,6 +272,31 @@
   font-size: 15px;
 }
 
+.plan-expiration {
+  display: grid;
+  gap: 3px;
+  margin-top: 10px;
+}
+
+.plan-expiration span {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.plan-expiration time {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.plan-expiration em {
+  color: var(--accent-cyan);
+  font-size: 13px;
+  font-style: normal;
+}
+
 .plan-limits {
   display: flex;
   flex-wrap: wrap;
