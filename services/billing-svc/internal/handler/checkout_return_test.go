@@ -9,7 +9,7 @@ func TestCheckoutSuccessURLUsesOnlyTrustedReturnTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("android target: %v", err)
 	}
-	want := "https://veritasvpn.cloud/billing/success.html?campaign=bitcoin&return_target=android"
+	want := "https://veritasvpn.cloud/billing/app-return"
 	if got != want {
 		t.Fatalf("redirect = %q, want %q", got, want)
 	}

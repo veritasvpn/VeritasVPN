@@ -32,8 +32,8 @@ android {
         applicationId = "cloud.veritasvpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 53
-        versionName = "0.2.67"
+        versionCode = 54
+        versionName = "0.2.68"
     }
 
     signingConfigs {

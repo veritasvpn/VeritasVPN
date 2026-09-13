@@ -21,9 +21,9 @@ function openAndroidApp() {
       window.location.assign('veritasvpn://billing/success');
     });
   }
-  // Custom Tabs permits a top-level navigation to a registered custom scheme.
-  // If an OEM browser blocks it, leave the explicit button available.
-  window.setTimeout(() => window.location.assign('veritasvpn://billing/success'), 250);
+  // New invoices return straight to this verified App Link from BTCPay. Keep
+  // this page as a recovery route for invoices created before that change.
+  window.setTimeout(() => window.location.replace('/billing/app-return'), 250);
 }
 
 async function completeReturn() {

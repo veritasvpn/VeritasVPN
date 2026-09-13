@@ -194,6 +194,12 @@ func (h *BillingHandler) checkoutSuccessURL(target string) (string, error) {
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		return "", fmt.Errorf("checkout success URL is not configured safely")
 	}
+	if target == "android" {
+		// This is a verified Android App Link, not a client-provided URL.  BTCPay
+		// follows it after payment and Android brings the already-installed app to
+		// the foreground before the browser can display a web dashboard.
+		return "https://veritasvpn.cloud/billing/app-return", nil
+	}
 	query := parsed.Query()
 	query.Set("return_target", target)
 	parsed.RawQuery = query.Encode()
