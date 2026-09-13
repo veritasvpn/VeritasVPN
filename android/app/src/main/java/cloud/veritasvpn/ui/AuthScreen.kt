@@ -549,7 +549,11 @@ fun AuthScreen(
             )
         }
 
-        if (needsTurnstile) {
+        // Keep the challenge affordance only while it can actually do work.
+        // Once a token is issued, the account-creation request still carries
+        // that token, but the large embedded WebView is removed immediately.
+        // It is recreated if the token expires or a request needs a new one.
+        if (needsTurnstile && turnstileToken.isBlank()) {
             Spacer(Modifier.height(12.dp))
             Text(
                 "Security check",
