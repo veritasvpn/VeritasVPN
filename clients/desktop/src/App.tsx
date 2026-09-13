@@ -25,6 +25,7 @@ import {
   readCachedBillingStatus,
   writeCachedBillingStatus,
   clearCachedBillingStatus,
+  hasPendingBitcoinConfirmation,
   BillingStatus,
 } from "./billing";
 import { AUTH_API } from "./config";
@@ -365,6 +366,7 @@ function PlansScreen({
   onCancelDismiss: () => void;
 }) {
   const premium = billingStatus?.is_premium === true;
+  const paymentPending = hasPendingBitcoinConfirmation(billingStatus);
   const price = selectedPlan === "premium_annual" ? "$30" : "$3";
   const suffix = selectedPlan === "premium_annual" ? "/year" : "/month";
   return (
@@ -381,7 +383,7 @@ function PlansScreen({
         <div>
           <span>CURRENT PLAN</span>
           <strong className={premium ? "premium" : ""}>
-            {billingLoading && !billingStatus ? "Checking subscription…" : premium ? "Premium" : "No active subscription"}
+            {billingLoading && !billingStatus ? "Checking subscription…" : premium ? "Premium" : paymentPending ? "Payment pending" : "No active subscription"}
           </strong>
           {!billingLoading && premium && billingStatus?.current_period_end && (
             <small className="billing-period-end">
@@ -396,6 +398,12 @@ function PlansScreen({
       </div>
 
       {billingError && <div className="billing-error">{billingError}</div>}
+      {paymentPending && (
+        <div className="billing-cancellation-scheduled" role="status">
+          <strong>{billingStatus?.payment_state === "awaiting_confirmation" ? "Payment received" : billingStatus?.payment_state === "awaiting_payment" ? "Waiting for payment" : "Checking payment"}</strong>
+          <span>{billingStatus?.payment_message || "Premium activates automatically after Bitcoin confirms."}</span>
+        </div>
+      )}
 
       <div className="plan-card">
         <div className="plan-card-top">
@@ -411,7 +419,7 @@ function PlansScreen({
         </ul>
       </div>
 
-      {!premium && (
+      {!premium && !paymentPending && (
         <div className="billing-plan-options">
           <button type="button" className={selectedPlan === "premium_monthly" ? "selected" : ""} onClick={() => onSelectPlan("premium_monthly")}>
             <strong>Monthly</strong>
@@ -424,7 +432,7 @@ function PlansScreen({
         </div>
       )}
 
-      {!premium ? (
+      {!premium && !paymentPending ? (
         <>
           <div className="billing-pay-copy">
             <h4>Pay privately</h4>
@@ -436,7 +444,7 @@ function PlansScreen({
             </button>
           </div>
         </>
-      ) : (
+      ) : premium ? (
         <>
           <div className="billing-active">Premium is active</div>
           {billingStatus?.cancel_at_period_end ? (
@@ -462,7 +470,7 @@ function PlansScreen({
             </div>
           )}
         </>
-      )}
+      ) : null}
     </section>
   );
 }

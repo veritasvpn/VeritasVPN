@@ -19,6 +19,16 @@ const (
 	PaymentCompleted = "completed"
 	PaymentFailed    = "failed"
 	PaymentRefunded  = "refunded"
+
+	// PaymentState values are safe, account-scoped checkout progress states
+	// returned by GET /billing/status. They deliberately contain no invoice,
+	// address, or transaction identifiers.
+	PaymentStateNone                 = "none"
+	PaymentStateAwaitingPayment      = "awaiting_payment"
+	PaymentStateAwaitingConfirmation = "awaiting_confirmation"
+	PaymentStateChecking             = "checking"
+	PaymentStateSettled              = "settled"
+	PaymentStateFailed               = "failed"
 )
 
 type Subscription struct {
@@ -65,4 +75,7 @@ type StatusResponse struct {
 	BillingPeriod      string     `json:"billing_period,omitempty"`
 	PriceCents         int64      `json:"price_cents,omitempty"`
 	PeriodDays         int        `json:"period_days,omitempty"`
+	PaymentState       string     `json:"payment_state"`
+	PaymentMessage     string     `json:"payment_message,omitempty"`
+	PollAfterSeconds   int        `json:"poll_after_seconds,omitempty"`
 }

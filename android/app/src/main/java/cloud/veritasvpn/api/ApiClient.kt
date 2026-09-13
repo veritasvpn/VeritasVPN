@@ -148,6 +148,9 @@ data class BillingStatus(
     @SerializedName("current_period_end") val currentPeriodEnd: String? = null,
     @SerializedName("cancel_at_period_end") val cancelAtPeriodEnd: Boolean = false,
     @SerializedName("is_premium") val isPremium: Boolean = false,
+    @SerializedName("payment_state") val paymentState: String = "none",
+    @SerializedName("payment_message") val paymentMessage: String? = null,
+    @SerializedName("poll_after_seconds") val pollAfterSeconds: Int = 0,
     val error: String? = null
 )
 

@@ -35,6 +35,10 @@ export async function fetchBillingStatus() {
   return api('/api/v1/billing/status');
 }
 
+export function hasPendingBitcoinConfirmation(status) {
+  return ['awaiting_payment', 'awaiting_confirmation', 'checking'].includes(status?.payment_state);
+}
+
 export async function startPremiumCheckout(paymentMethod = 'btcpay', planId = 'premium_monthly') {
   const data = await api('/api/v1/billing/subscribe', {
     method: 'POST',
@@ -62,7 +66,7 @@ function setPlanBadge(status) {
     return;
   }
   badge.hidden = false;
-  badge.textContent = status.is_premium ? 'Premium' : 'No subscription';
+  badge.textContent = status.is_premium ? 'Premium' : hasPendingBitcoinConfirmation(status) ? 'Payment pending' : 'No subscription';
   badge.classList.toggle('is-premium', Boolean(status.is_premium));
 }
 
@@ -81,7 +85,7 @@ async function refreshStatus() {
   try {
     const status = await fetchBillingStatus();
     setPlanBadge(status);
-    setUpgradeButtonsVisible(!status.is_premium);
+    setUpgradeButtonsVisible(!status.is_premium && !hasPendingBitcoinConfirmation(status));
   } catch (err) {
     if (String(err.message || '').includes('session expired')) return;
     console.warn('billing status:', err);

@@ -67,7 +67,10 @@ private fun readCachedBillingStatus(context: Context, accountId: String): Billin
         paymentMethod = prefs.getString(billingCacheKey(accountId, "payment_method"), "none") ?: "none",
         currentPeriodEnd = prefs.getString(billingCacheKey(accountId, "period_end"), null),
         cancelAtPeriodEnd = prefs.getBoolean(billingCacheKey(accountId, "cancel_at_end"), false),
-        isPremium = prefs.getBoolean(billingCacheKey(accountId, "premium"), false)
+        isPremium = prefs.getBoolean(billingCacheKey(accountId, "premium"), false),
+        paymentState = prefs.getString(billingCacheKey(accountId, "payment_state"), "none") ?: "none",
+        paymentMessage = prefs.getString(billingCacheKey(accountId, "payment_message"), null),
+        pollAfterSeconds = prefs.getInt(billingCacheKey(accountId, "poll_after_seconds"), 0)
     )
 }
 
@@ -84,6 +87,9 @@ private fun writeCachedBillingStatus(
         .putString(billingCacheKey(accountId, "period_end"), status.currentPeriodEnd)
         .putBoolean(billingCacheKey(accountId, "cancel_at_end"), status.cancelAtPeriodEnd)
         .putBoolean(billingCacheKey(accountId, "premium"), status.isPremium)
+        .putString(billingCacheKey(accountId, "payment_state"), status.paymentState)
+        .putString(billingCacheKey(accountId, "payment_message"), status.paymentMessage)
+        .putInt(billingCacheKey(accountId, "poll_after_seconds"), status.pollAfterSeconds)
         .apply()
 }
 
@@ -221,8 +227,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                fun refreshBilling() {
-                    if (user == null || billingRefreshing) return
+                fun refreshBilling(force: Boolean = false) {
+                    if (user == null || (billingRefreshing && !force)) return
                     billingRefreshing = true
                     billingError = null
                     scope.launch {
@@ -291,16 +297,25 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(observedBillingReturnVersion, user?.accountId) {
                     if (observedBillingReturnVersion > 0 && user != null) {
+                        // A billing deep link is a native completion event, not
+                        // a request to keep displaying the browser checkout.
                         checkoutUrl = null
                         waitingForCheckoutSettlement = true
                         billingError = null
                         showPlans = true
+                        // Do not wait for the polling interval after BTCPay
+                        // returns. Fetch the authoritative account status now.
+                        refreshBilling(force = true)
                     }
                 }
 
-                LaunchedEffect(checkoutUrl, waitingForCheckoutSettlement) {
+                val billingPollDelayMs = (
+                    billingStatus?.pollAfterSeconds?.coerceIn(3, 30) ?: 3
+                ) * 1000L
+
+                LaunchedEffect(checkoutUrl, waitingForCheckoutSettlement, billingPollDelayMs) {
                     while ((checkoutUrl != null || waitingForCheckoutSettlement) && user != null) {
-                        kotlinx.coroutines.delay(3000)
+                        kotlinx.coroutines.delay(billingPollDelayMs)
                         try {
                             val status = withTimeout(7_000) {
                                 withContext(Dispatchers.IO) {
@@ -314,6 +329,9 @@ class MainActivity : ComponentActivity() {
                                 waitingForCheckoutSettlement = false
                                 showPlans = true
                                 billingError = null
+                            } else if (status.paymentState == "failed") {
+                                waitingForCheckoutSettlement = false
+                                billingError = status.paymentMessage
                             }
                         } catch (e: Exception) {
                             if (e is SessionExpiredException) {
@@ -677,6 +695,8 @@ class MainActivity : ComponentActivity() {
                         refreshing = billingRefreshing,
                         cancelling = cancellationInProgress,
                         checkoutMethod = checkoutMethod,
+                        paymentState = billingStatus?.paymentState.orEmpty(),
+                        paymentMessage = billingStatus?.paymentMessage,
                         error = billingError,
                         onBack = { showPlans = false },
                         onRefresh = { refreshBilling() },

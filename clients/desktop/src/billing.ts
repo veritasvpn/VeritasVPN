@@ -5,7 +5,15 @@ export interface BillingStatus {
   payment_method?: string;
   current_period_end?: string;
   cancel_at_period_end?: boolean;
+  payment_state?: 'none' | 'awaiting_payment' | 'awaiting_confirmation' | 'checking' | 'settled' | 'failed';
+  payment_message?: string;
+  poll_after_seconds?: number;
   error?: string;
+}
+
+export function hasPendingBitcoinConfirmation(status: BillingStatus | null): boolean {
+  return status?.payment_state === 'awaiting_payment' ||
+    status?.payment_state === 'awaiting_confirmation' || status?.payment_state === 'checking';
 }
 
 // Billing metadata and account identifiers stay in process memory. The server

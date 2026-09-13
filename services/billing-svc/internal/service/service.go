@@ -143,8 +143,11 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 	// checkout, also ask BTCPay for its authoritative invoice state. This makes
 	// the return-to-app and Refresh flows recover from delayed webhook delivery
 	// without ever activating an unpaid invoice.
+	paymentState := model.PaymentStateNone
 	if sub.Tier != model.TierPremium {
-		if err := s.reconcilePendingPayment(ctx, accountID); err != nil {
+		state, err := s.reconcilePendingPayment(ctx, accountID)
+		paymentState = state
+		if err != nil {
 			s.log.Warn("pending payment reconciliation failed",
 				zap.String("account_hash", logging.HashIdentifier(accountID)),
 				zap.Error(err),
@@ -169,6 +172,9 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 	start := sub.CurrentPeriodStart
 	end := sub.CurrentPeriodEnd
 	isPremium := sub.Tier == model.TierPremium && sub.Status == model.StatusActive && time.Now().UTC().Before(sub.CurrentPeriodEnd)
+	if isPremium && paymentState == model.PaymentStateNone {
+		paymentState = model.PaymentStateSettled
+	}
 
 	return &model.StatusResponse{
 		AccountID:          sub.AccountID,
@@ -183,28 +189,72 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		BillingPeriod:      sub.BillingPeriod,
 		PriceCents:         sub.PriceCents,
 		PeriodDays:         sub.PeriodDays,
+		PaymentState:       paymentState,
+		PaymentMessage:     paymentStateMessage(paymentState),
+		PollAfterSeconds:   paymentStatePollAfter(paymentState),
 	}, nil
 }
 
-func (s *BillingService) reconcilePendingPayment(ctx context.Context, accountID string) error {
+func (s *BillingService) reconcilePendingPayment(ctx context.Context, accountID string) (string, error) {
 	if s.btcpay == nil {
-		return nil
+		return model.PaymentStateNone, nil
 	}
 	payment, err := s.db.GetLatestPendingPayment(ctx, accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		return model.PaymentStateNone, nil
 	}
 	if err != nil {
-		return err
+		return model.PaymentStateChecking, err
 	}
 	status, err := s.btcpay.GetInvoiceStatus(ctx, payment.ProviderTransactionID)
 	if err != nil {
-		return err
+		return model.PaymentStateChecking, err
 	}
-	if strings.EqualFold(status, "settled") {
-		return s.SettleInvoice(ctx, payment.ProviderTransactionID, accountID)
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "settled":
+		if err := s.SettleInvoice(ctx, payment.ProviderTransactionID, accountID); err != nil {
+			return model.PaymentStateChecking, err
+		}
+		return model.PaymentStateSettled, nil
+	case "processing":
+		// A full on-chain payment has been received but still needs the
+		// confirmations configured in BTCPay. Never grant Premium at 0-conf.
+		return model.PaymentStateAwaitingConfirmation, nil
+	case "expired", "invalid":
+		return model.PaymentStateFailed, nil
+	case "new":
+		return model.PaymentStateAwaitingPayment, nil
+	default:
+		return model.PaymentStateChecking, nil
 	}
-	return nil
+}
+
+func paymentStateMessage(state string) string {
+	switch state {
+	case model.PaymentStateAwaitingPayment:
+		return "Waiting for your Bitcoin payment."
+	case model.PaymentStateAwaitingConfirmation:
+		return "Payment received. Premium activates after the required Bitcoin confirmation."
+	case model.PaymentStateChecking:
+		return "Checking your Bitcoin payment status."
+	case model.PaymentStateSettled:
+		return "Payment confirmed. Premium is active."
+	case model.PaymentStateFailed:
+		return "This checkout was not confirmed. Start a new checkout to try again."
+	default:
+		return ""
+	}
+}
+
+func paymentStatePollAfter(state string) int {
+	switch state {
+	case model.PaymentStateAwaitingConfirmation, model.PaymentStateChecking:
+		return 10
+	case model.PaymentStateAwaitingPayment:
+		return 15
+	default:
+		return 0
+	}
 }
 
 // CreatePremiumCheckout starts a Bitcoin checkout for premium. Does NOT activate until paid.

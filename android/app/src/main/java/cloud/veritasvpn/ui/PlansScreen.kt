@@ -33,6 +33,8 @@ fun PlansScreen(
     refreshing: Boolean,
     cancelling: Boolean,
     checkoutMethod: String?,
+    paymentState: String,
+    paymentMessage: String?,
     error: String?,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
@@ -45,6 +47,8 @@ fun PlansScreen(
         formatBillingDate(billingStatus?.currentPeriodEnd)
     }
     val hasPeriodEnd = !billingStatus?.currentPeriodEnd.isNullOrBlank()
+    val paymentPending = paymentState == "awaiting_payment" ||
+        paymentState == "awaiting_confirmation" || paymentState == "checking"
     LaunchedEffect(billingStatus?.cancelAtPeriodEnd) {
         if (billingStatus?.cancelAtPeriodEnd == true) showCancelConfirmation = false
     }
@@ -106,6 +110,7 @@ fun PlansScreen(
                     when {
                         refreshing && billingStatus == null -> "Checking subscription…"
                         premium -> "Premium"
+                        paymentPending -> "Payment pending"
                         else -> "No active subscription"
                     },
                     color = if (premium) CyanHover else Paper,
@@ -126,6 +131,41 @@ fun PlansScreen(
             Spacer(Modifier.height(10.dp))
             Text(it, color = WarningOrange, fontSize = 13.sp)
         }
+        if (paymentPending) {
+            Spacer(Modifier.height(10.dp))
+            Card(
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Cyan.copy(alpha = .08f)),
+                border = BorderStroke(1.dp, Cyan.copy(alpha = .32f))
+            ) {
+                Row(
+                    Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Cyan)
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            when (paymentState) {
+                                "awaiting_confirmation" -> "Payment received"
+                                "awaiting_payment" -> "Waiting for payment"
+                                else -> "Checking payment"
+                            },
+                            color = CyanHover,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            paymentMessage ?: "Premium activates automatically once Bitcoin confirms.",
+                            color = PaperMuted,
+                            fontSize = 13.sp,
+                            lineHeight = 19.sp
+                        )
+                    }
+                }
+            }
+        }
         Spacer(Modifier.height(18.dp))
 
         PlanCard(
@@ -134,7 +174,7 @@ fun PlansScreen(
             features = listOf("Paraguay WireGuard egress", "Up to 5 VPN devices", "Private Bitcoin checkout", "Chrome, Android, and Linux access"),
             emphasized = true
         )
-        if (!premium) {
+        if (!premium && !paymentPending) {
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 PlanChoice("Monthly", "$3 / 30 days", selectedPlan == "premium_monthly", { selectedPlan = "premium_monthly" }, Modifier.weight(1f))
@@ -142,7 +182,7 @@ fun PlansScreen(
             }
         }
 
-        if (!premium) {
+        if (!premium && !paymentPending) {
             Spacer(Modifier.height(18.dp))
             Text("Pay privately", color = Paper, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             Text("Complete checkout in your browser. Premium activates automatically after confirmation.", color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
@@ -154,7 +194,7 @@ fun PlansScreen(
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Royal)
             ) { Text(if (checkoutMethod == "btcpay") "Opening Bitcoin checkout…" else "Pay with Bitcoin", color = Color.White, fontWeight = FontWeight.Bold) }
-        } else {
+        } else if (premium) {
             Spacer(Modifier.height(18.dp))
             Text("Premium is active", color = SuccessGreen, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
             Spacer(Modifier.height(12.dp))
