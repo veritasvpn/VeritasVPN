@@ -1,4 +1,4 @@
-import { getIdToken, requireAuthOrOpenModal, auth, forceSignOutOnExpiry } from './auth.js?v=turnstileall1';
+import { getIdToken, requireAuthOrOpenModal, auth, forceSignOutOnExpiry } from './auth.js?v=turnstilewarm1';
 import { BILLING_API } from './config.js';
 
 async function api(path, options = {}) {

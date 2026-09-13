@@ -1,4 +1,5 @@
 const SITE_KEY = '0x4AAAAAAEcMj2cCveWsarot';
+let widgetId = null;
 
 function requestedReturnOrigin() {
   const value = new URLSearchParams(location.search).get('return_origin') || location.origin;
@@ -36,13 +37,27 @@ function renderWhenReady() {
     setTimeout(renderWhenReady, 50);
     return;
   }
-  window.turnstile.render('#widget', {
+  widgetId = window.turnstile.render('#widget', {
     sitekey: SITE_KEY,
     theme: 'dark',
     callback: token => post({ type: 'token', token }),
-    'expired-callback': () => post({ type: 'expired' }),
+    'expired-callback': () => {
+      post({ type: 'expired' });
+      // Start the replacement token immediately. Tokens are intentionally
+      // single-use, so this avoids making the next submit wait for a reload.
+      try { window.turnstile.reset(widgetId); } catch (_) {}
+    },
     'error-callback': () => post({ type: 'error', message: 'security check failed' }),
   });
 }
 
 renderWhenReady();
+
+// Native clients keep one warm iframe alive. They cannot access the widget
+// directly across origins, so accept a narrowly-scoped reset request only from
+// the origin supplied in return_origin.
+window.addEventListener('message', (event) => {
+  if (event.origin !== requestedReturnOrigin()) return;
+  if (event.data?.source !== 'veritas-turnstile-host' || event.data?.type !== 'reset') return;
+  try { window.turnstile?.reset(widgetId); } catch (_) {}
+});

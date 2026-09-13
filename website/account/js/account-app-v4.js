@@ -4,7 +4,7 @@ import {
   signOutHandler,
   sendPasswordResetEmail,
   apiFetch,
-} from '/js/auth.js?v=turnstileall1';
+} from '/js/auth.js?v=turnstilewarm1';
 import {
   fetchBillingStatus,
   startPremiumCheckout,

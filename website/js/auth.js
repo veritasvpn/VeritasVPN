@@ -396,6 +396,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   let turnstileWidgetId = null;
   let turnstileToken = '';
   let turnstileScriptPromise = null;
+  let waitingForTurnstile = false;
 
   function loadTurnstileScript() {
     if (window.turnstile) return Promise.resolve();
@@ -425,16 +426,28 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
 
   async function showTurnstileWidget() {
     if (!turnstileEl || !TURNSTILE_SITE_KEY) return;
-    clearTurnstileWidget();
+    // A valid Turnstile token is usable regardless of which authentication
+    // method is selected. Keeping this one widget warm removes the extra
+    // challenge round that used to happen after users typed their credentials.
+    if (turnstileWidgetId != null) return;
     turnstileEl.hidden = false;
     try {
       await loadTurnstileScript();
       turnstileWidgetId = window.turnstile.render(turnstileEl, {
         sitekey: TURNSTILE_SITE_KEY,
         theme: 'dark',
-        callback: (token) => { turnstileToken = token; },
+        callback: (token) => {
+          turnstileToken = token;
+          if (waitingForTurnstile) {
+            setWaitingForTurnstile(false);
+            void submitAuth();
+          }
+        },
         'expired-callback': () => { turnstileToken = ''; },
-        'error-callback': () => { turnstileToken = ''; },
+        'error-callback': () => {
+          turnstileToken = '';
+          setWaitingForTurnstile(false);
+        },
       });
     } catch {
       setError('Could not load verification. Refresh the page and try again.');
@@ -446,6 +459,19 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
       try { window.turnstile.reset(turnstileWidgetId); } catch (_) {}
     }
     turnstileToken = '';
+  }
+
+  function defaultSubmitLabel() {
+    if (mode === 'anon-signup') return 'Create anonymous account';
+    if (mode === 'signup') return 'Create account';
+    return 'Sign in';
+  }
+
+  function setWaitingForTurnstile(waiting) {
+    waitingForTurnstile = waiting;
+    if (!submitBtn || busy) return;
+    submitBtn.disabled = waiting;
+    submitBtn.textContent = waiting ? 'Securing your request…' : defaultSubmitLabel();
   }
 
   function syncTurnstileForMode() {
@@ -516,6 +542,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
 
   function setMode(next) {
     mode = next;
+    setWaitingForTurnstile(false);
     const isSignIn = mode === 'signin';
     const isAnon = mode === 'anon-signup' || mode === 'anon-signin';
 
@@ -648,10 +675,10 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   }
 
   function openModal(preferredMode = 'signin') {
-    setMode(preferredMode);
     modal?.classList.add('is-open');
     modal?.setAttribute('aria-hidden', 'false');
     document.body.classList.add('auth-modal-open');
+    setMode(preferredMode);
     setTimeout(() => emailInput?.focus(), 50);
   }
 
@@ -666,7 +693,10 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
 
   function setBusy(next) {
     busy = next;
-    if (submitBtn) submitBtn.disabled = busy;
+    if (submitBtn) {
+      submitBtn.disabled = busy || waitingForTurnstile;
+      submitBtn.textContent = busy ? 'Please wait…' : (waitingForTurnstile ? 'Securing your request…' : defaultSubmitLabel());
+    }
     if (resetBtn) resetBtn.disabled = busy;
     syncResetCooldown();
   }
@@ -803,15 +833,15 @@ function renderUser(user) {
     setMode('anon-signin');
   });
 
-  form?.addEventListener('submit', async (e) => {
-    e.preventDefault();
+  async function submitAuth() {
     if (busy) return;
     if (mode === 'forgot' || mode === 'verify-pending') return;
     setError('');
 
     if (mode === 'anon-signup') {
       if (!turnstileToken) {
-        setError('Complete the verification check before continuing.');
+        setError('Security check is finishing. Your account will continue automatically.');
+        setWaitingForTurnstile(true);
         return;
       }
       setBusy(true);
@@ -859,7 +889,8 @@ function renderUser(user) {
         return;
       }
       if (!turnstileToken) {
-        setError('Complete the verification check before continuing.');
+        setError('Security check is finishing. Your sign-in will continue automatically.');
+        setWaitingForTurnstile(true);
         return;
       }
       setBusy(true);
@@ -887,7 +918,8 @@ function renderUser(user) {
       return;
     }
     if (!turnstileToken) {
-      setError('Complete the verification check before continuing.');
+      setError('Security check is finishing. Your request will continue automatically.');
+      setWaitingForTurnstile(true);
       return;
     }
     setBusy(true);
@@ -921,6 +953,11 @@ function renderUser(user) {
     } finally {
       setBusy(false);
     }
+  }
+
+  form?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    void submitAuth();
   });
 
   errorEl?.addEventListener('click', async (e) => {
@@ -934,6 +971,9 @@ function renderUser(user) {
     } catch { setError('Could not resend the email. Please try again shortly.'); }
   });
 
+  // Fetch Turnstile as soon as this page is interactive. The widget itself is
+  // rendered when the auth dialog opens, while users are filling their form.
+  void loadTurnstileScript().catch(() => undefined);
   syncResetCooldown();
 
   forgotSubmit?.addEventListener('click', async (e) => {
