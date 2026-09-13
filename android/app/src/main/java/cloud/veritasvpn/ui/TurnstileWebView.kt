@@ -26,13 +26,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
 
-private const val TURNSTILE_PAGE = "https://veritasvpn.cloud/turnstile-mobile"
+private const val TURNSTILE_PAGE = "https://veritasvpn.cloud/turnstile-mobile-v2"
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun TurnstileWebView(
     resetKey: Int,
+    executeVersion: Int,
+    showInteractive: Boolean,
     onToken: (String) -> Unit,
+    onReady: () -> Unit,
+    onInteractiveRequired: () -> Unit,
     onError: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -41,6 +45,7 @@ fun TurnstileWebView(
     // every Compose redraw and could interrupt the challenge with a blank/error page.
     key(resetKey) {
         var webViewRef by remember { mutableStateOf<WebView?>(null) }
+        var lastExecuteVersion by remember { mutableStateOf(0) }
         val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
         DisposableEffect(Unit) {
@@ -56,7 +61,10 @@ fun TurnstileWebView(
         AndroidView(
             modifier = modifier
                 .fillMaxWidth()
-                .height(96.dp)
+                // Keep a prewarmed, non-interactive Turnstile page effectively
+                // out of layout. Expand only after Cloudflare explicitly asks
+                // the person to solve an interactive challenge.
+                .height(if (showInteractive) 96.dp else 1.dp)
                 .clip(RoundedCornerShape(12.dp)),
             factory = { context ->
                 WebView(context).apply {
@@ -78,6 +86,8 @@ fun TurnstileWebView(
                                 runCatching {
                                     val json = JSONObject(raw)
                                     when (json.optString("type")) {
+                                        "ready" -> mainHandler.post { onReady() }
+                                        "interactive-required" -> mainHandler.post { onInteractiveRequired() }
                                         "token" -> {
                                             val token = json.optString("token")
                                             if (token.isNotBlank()) mainHandler.post { onToken(token) }
@@ -100,6 +110,19 @@ fun TurnstileWebView(
                     }
                     webViewRef = this
                     loadUrl(TURNSTILE_PAGE)
+                }
+            },
+            update = { view ->
+                // The hosted page ignores execute requests until it reports
+                // ready, so each version is emitted only after that callback.
+                if (executeVersion > lastExecuteVersion) {
+                    lastExecuteVersion = executeVersion
+                    view.postWebMessage(
+                        android.webkit.WebMessage(
+                            "{\"source\":\"veritas-turnstile-host\",\"type\":\"execute\"}"
+                        ),
+                        android.net.Uri.parse("https://veritasvpn.cloud")
+                    )
                 }
             }
         )

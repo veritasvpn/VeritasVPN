@@ -72,7 +72,9 @@ renderWhenReady();
 // the origin supplied in return_origin.
 window.addEventListener('message', (event) => {
   if (event.origin !== requestedReturnOrigin()) return;
-  if (event.data?.source !== 'veritas-turnstile-host' || event.data?.type !== 'reset') return;
-  setStatus('Checking your connection…');
-  try { window.turnstile?.reset(widgetId); } catch (_) {}
+  if (event.data?.source !== 'veritas-turnstile-host') return;
+  if (event.data?.type === 'reset') {
+    setStatus('Checking your connection…');
+    try { window.turnstile?.reset(widgetId); } catch (_) {}
+  }
 });

@@ -71,6 +71,9 @@ fun AuthScreen(
     var accountIdCopied by remember { mutableStateOf(false) }
     var turnstileToken by remember { mutableStateOf("") }
     var turnstileResetKey by remember { mutableIntStateOf(0) }
+    var turnstileReady by remember { mutableStateOf(false) }
+    var turnstileExecuteVersion by remember { mutableIntStateOf(0) }
+    var turnstileInteractive by remember { mutableStateOf(false) }
     var pendingTurnstileSubmit by remember { mutableStateOf(false) }
     var signInTurnstileRequired by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -132,6 +135,8 @@ fun AuthScreen(
                 // complete the request, so start the replacement challenge now.
                 if (needsTurnstile) {
                     turnstileToken = ""
+                    turnstileReady = false
+                    turnstileInteractive = false
                     turnstileResetKey += 1
                 }
             } finally {
@@ -554,18 +559,26 @@ fun AuthScreen(
         // that token, but the large embedded WebView is removed immediately.
         // It is recreated if the token expires or a request needs a new one.
         if (needsTurnstile && turnstileToken.isBlank()) {
-            Spacer(Modifier.height(12.dp))
             TurnstileWebView(
                 resetKey = turnstileResetKey,
+                executeVersion = turnstileExecuteVersion,
+                showInteractive = turnstileInteractive,
                 onToken = { token ->
                     turnstileToken = token
+                    turnstileInteractive = false
                     if (token.isNotBlank() && pendingTurnstileSubmit && !loading) {
                         pendingTurnstileSubmit = false
                         submitWithTurnstileToken()
                     }
                 },
+                onReady = {
+                    turnstileReady = true
+                    if (pendingTurnstileSubmit) turnstileExecuteVersion += 1
+                },
+                onInteractiveRequired = { turnstileInteractive = true },
                 onError = {
                     pendingTurnstileSubmit = false
+                    turnstileInteractive = false
                     error = it
                 }
             )
@@ -604,6 +617,7 @@ fun AuthScreen(
                     // rather than asking the person to press the button again.
                     pendingTurnstileSubmit = true
                     error = null
+                    if (turnstileReady) turnstileExecuteVersion += 1
                 } else {
                     submitWithTurnstileToken()
                 }
