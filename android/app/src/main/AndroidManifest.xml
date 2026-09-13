@@ -35,6 +35,17 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- The billing service uses this verified App Link as BTCPay's
+                 post-payment destination. It has no sensitive query data. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="veritasvpn.cloud"
+                    android:path="/billing/app-return" />
+            </intent-filter>
             <!-- A completed BTCPay checkout returns through this exact custom
                  scheme. No account, token, or invoice data is accepted here. -->
             <intent-filter>

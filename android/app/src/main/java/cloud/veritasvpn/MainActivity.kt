@@ -95,7 +95,11 @@ class MainActivity : ComponentActivity() {
 
     private fun handleBillingReturn(intent: Intent?) {
         val uri = intent?.data ?: return
-        if (uri.scheme == "veritasvpn" && uri.host == "billing" && uri.path == "/success") {
+        val isCustomSchemeReturn =
+            uri.scheme == "veritasvpn" && uri.host == "billing" && uri.path == "/success"
+        val isVerifiedAppLinkReturn =
+            uri.scheme == "https" && uri.host == "veritasvpn.cloud" && uri.path == "/billing/app-return"
+        if (isCustomSchemeReturn || isVerifiedAppLinkReturn) {
             // The deep link is intentionally data-free. Entitlement is always
             // re-read from the authenticated billing API before the UI changes.
             billingReturnVersion += 1

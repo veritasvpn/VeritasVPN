@@ -67,6 +67,9 @@ type BTCPayInvoiceRequest struct {
 		// BTCPay network fee caused Exodus to underpay by a few sats, then
 		// demand a second payment plus another fee.
 		NetworkFeeMode string `json:"networkFeeMode"`
+		// A paid checkout can return directly to its configured destination.
+		// Android uses a verified App Link so this brings VeritasVPN forward.
+		RedirectAutomatically bool `json:"redirectAutomatically"`
 	} `json:"checkout"`
 }
 
@@ -103,6 +106,7 @@ func (b *BTCPayProvider) CreateInvoice(accountID, tier, paymentMethod, planID st
 	invReq.Checkout.DefaultPaymentMethod = "BTC-CHAIN"
 	invReq.Checkout.PaymentTolerance = 5 // percent; covers sat rounding from wallets
 	invReq.Checkout.NetworkFeeMode = "Never"
+	invReq.Checkout.RedirectAutomatically = true
 
 	body, err := json.Marshal(invReq)
 	if err != nil {

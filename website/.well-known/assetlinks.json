@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "cloud.veritasvpn",
+      "sha256_cert_fingerprints": [
+        "6C:D4:B7:17:52:A6:B9:2A:8B:73:29:FA:34:6C:60:22:3A:52:E8:2B:43:65:A0:EF:0E:AD:70:DD:AE:B5:7D:52"
+      ]
+    }
+  }
+]
