@@ -2,6 +2,8 @@ package cloud.veritasvpn.ui
 
 import android.annotation.SuppressLint
 import android.graphics.Color
+import android.os.Handler
+import android.os.Looper
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -39,6 +41,7 @@ fun TurnstileWebView(
     // every Compose redraw and could interrupt the challenge with a blank/error page.
     key(resetKey) {
         var webViewRef by remember { mutableStateOf<WebView?>(null) }
+        val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
         DisposableEffect(Unit) {
             onDispose {
@@ -53,7 +56,7 @@ fun TurnstileWebView(
         AndroidView(
             modifier = modifier
                 .fillMaxWidth()
-                .height(140.dp)
+                .height(96.dp)
                 .clip(RoundedCornerShape(12.dp)),
             factory = { context ->
                 WebView(context).apply {
@@ -77,10 +80,12 @@ fun TurnstileWebView(
                                     when (json.optString("type")) {
                                         "token" -> {
                                             val token = json.optString("token")
-                                            if (token.isNotBlank()) onToken(token)
+                                            if (token.isNotBlank()) mainHandler.post { onToken(token) }
                                         }
-                                        "expired" -> onToken("")
-                                        "error" -> onError(json.optString("message", "Verification failed"))
+                                        "expired" -> mainHandler.post { onToken("") }
+                                        "error" -> mainHandler.post {
+                                            onError(json.optString("message", "Verification failed"))
+                                        }
                                     }
                                 }
                             }

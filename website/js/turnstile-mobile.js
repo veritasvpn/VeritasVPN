@@ -47,8 +47,9 @@ function renderWhenReady() {
     theme: 'dark',
     appearance: 'interaction-only',
     callback: token => {
-      setStatus('Security check complete.');
       post({ type: 'token', token });
+      // Native and desktop hosts remove this frame as soon as the token lands.
+      setStatus('Verified.');
     },
     'expired-callback': () => {
       setStatus('Refreshing security check…');

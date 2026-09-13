@@ -555,14 +555,6 @@ fun AuthScreen(
         // It is recreated if the token expires or a request needs a new one.
         if (needsTurnstile && turnstileToken.isBlank()) {
             Spacer(Modifier.height(12.dp))
-            Text(
-                "Security check",
-                color = PaperDim,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.4.sp
-            )
-            Spacer(Modifier.height(8.dp))
             TurnstileWebView(
                 resetKey = turnstileResetKey,
                 onToken = { token ->
