@@ -27,7 +27,7 @@ import {
   BillingStatus,
 } from "./billing";
 import { AUTH_API } from "./config";
-import { obtainTurnstileToken } from "./turnstile";
+import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
 import { SettingsDrawer, TunnelSettingsScreen } from "./SettingsDrawer";
 import veritasMark from "./assets/veritas-mark.png";
 import "./App.css";
@@ -842,6 +842,10 @@ function App() {
     return () => window.clearInterval(timer);
   }, [checkoutUrl, checkoutSettlementPending, user, refreshBillingStatus]);
 
+  useEffect(() => {
+    if (!user) prewarmTurnstile();
+  }, [user]);
+
   const switchMode = useCallback((next: AuthMode) => {
     setMode(next);
     setMethod("email");
@@ -874,9 +878,10 @@ function App() {
     }
     setLoading(true);
     try {
-      if (method === "accountId") {
-        if (mode === "signin") {
-          const u = await doSignInAccountId(accountId);
+        if (method === "accountId") {
+          if (mode === "signin") {
+          const turnstileToken = await obtainTurnstileToken();
+          const u = await doSignInAccountId(accountId, turnstileToken);
           setUser(u);
           setAccountId("");
         } else {
@@ -886,7 +891,8 @@ function App() {
           setUser(u);
         }
       } else if (mode === "signin") {
-        const u = await doSignIn(email, password);
+        const turnstileToken = await obtainTurnstileToken();
+        const u = await doSignIn(email, password, turnstileToken);
         setUser(u);
         setEmail("");
         setPassword("");

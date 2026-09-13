@@ -71,16 +71,13 @@ fun AuthScreen(
     var accountIdCopied by remember { mutableStateOf(false) }
     var turnstileToken by remember { mutableStateOf("") }
     var turnstileResetKey by remember { mutableIntStateOf(0) }
+    var pendingTurnstileSubmit by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     // The same short Turnstile check protects every authentication route. In
     // managed mode it normally completes without an extra user interaction,
     // while keeping the app and the API contract consistent.
     val needsTurnstile = true
 
-    LaunchedEffect(mode, method) {
-        turnstileToken = ""
-        turnstileResetKey += 1
-    }
     LaunchedEffect(resetCooldown) {
         if (resetCooldown > 0) {
             delay(1000)
@@ -91,6 +88,53 @@ fun AuthScreen(
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val authRepo = remember(context) { cloud.veritasvpn.auth.AuthRepository(context) }
+
+    fun submitWithTurnstileToken() {
+        loading = true
+        scope.launch {
+            try {
+                val user = withContext(Dispatchers.IO) {
+                    when {
+                        method == AuthMethod.EMAIL && mode == AuthMode.SIGN_IN ->
+                            authRepo.signIn(email, password, turnstileToken)
+                        method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP ->
+                            authRepo.signUp(email, password, turnstileToken)
+                        method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN ->
+                            authRepo.signInWithAccountId(accountId, turnstileToken)
+                        else -> authRepo.registerAnonymous(turnstileToken)
+                    }
+                }
+                if (method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_UP) {
+                    newAccountId = user.accountId
+                } else {
+                    onAuthenticated()
+                }
+            } catch (e: cloud.veritasvpn.auth.AuthRepository.VerificationRequired) {
+                if (method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP) {
+                    pendingVerificationEmail = e.email
+                    notice = null
+                    error = null
+                } else {
+                    verificationResendEmail = e.email
+                    error = e.message
+                }
+            } catch (e: cloud.veritasvpn.auth.AuthRepository.AccountAlreadyExists) {
+                error = e.message
+                verificationResendEmail = e.email
+            } catch (e: Exception) {
+                error = e.message?.takeIf { it.isNotBlank() }
+                    ?: "Sign in failed. Check your connection and try again."
+                // The server may have consumed the token even when it could not
+                // complete the request, so start the replacement challenge now.
+                if (needsTurnstile) {
+                    turnstileToken = ""
+                    turnstileResetKey += 1
+                }
+            } finally {
+                loading = false
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -513,8 +557,17 @@ fun AuthScreen(
             Spacer(Modifier.height(8.dp))
             TurnstileWebView(
                 resetKey = turnstileResetKey,
-                onToken = { turnstileToken = it },
-                onError = { error = it }
+                onToken = { token ->
+                    turnstileToken = token
+                    if (token.isNotBlank() && pendingTurnstileSubmit && !loading) {
+                        pendingTurnstileSubmit = false
+                        submitWithTurnstileToken()
+                    }
+                },
+                onError = {
+                    pendingTurnstileSubmit = false
+                    error = it
+                }
             )
         }
 
@@ -542,63 +595,26 @@ fun AuthScreen(
                         "Passwords do not match."
                     method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN && accountId.isBlank() ->
                         "Enter your Account ID."
-                    needsTurnstile && turnstileToken.isBlank() ->
-                        "Complete the security check first."
                     else -> null
                 }
                 if (validationError != null) {
                     error = validationError
+                } else if (needsTurnstile && turnstileToken.isBlank()) {
+                    // Credentials are already valid. Keep the request queued
+                    // rather than asking the person to press the button again.
+                    pendingTurnstileSubmit = true
+                    error = null
                 } else {
-                    loading = true
-                    scope.launch {
-                        try {
-                            val user = withContext(Dispatchers.IO) {
-                                when {
-                                    method == AuthMethod.EMAIL && mode == AuthMode.SIGN_IN ->
-                                        authRepo.signIn(email, password, turnstileToken)
-                                    method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP ->
-                                        authRepo.signUp(email, password, turnstileToken)
-                                    method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN ->
-                                        authRepo.signInWithAccountId(accountId, turnstileToken)
-                                    else -> authRepo.registerAnonymous(turnstileToken)
-                                }
-                            }
-                            if (method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_UP) {
-                                newAccountId = user.accountId
-                            } else {
-                                onAuthenticated()
-                            }
-                        } catch (e: cloud.veritasvpn.auth.AuthRepository.VerificationRequired) {
-                            if (method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP) {
-                                pendingVerificationEmail = e.email
-                                notice = null
-                                error = null
-                            } else {
-                                verificationResendEmail = e.email
-                                error = e.message
-                            }
-                        } catch (e: cloud.veritasvpn.auth.AuthRepository.AccountAlreadyExists) {
-                            error = e.message
-                            verificationResendEmail = e.email
-                        } catch (e: Exception) {
-                            error = e.message?.takeIf { it.isNotBlank() }
-                                ?: "Sign in failed. Check your connection and try again."
-                            if (needsTurnstile) {
-                                turnstileToken = ""
-                                turnstileResetKey += 1
-                            }
-                        } finally {
-                            loading = false
-                        }
-                    }
+                    submitWithTurnstileToken()
                 }
             },            modifier = Modifier.fillMaxWidth().height(50.dp),
             shape = RoundedCornerShape(25.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Royal),
-            enabled = !loading
+            enabled = !loading && !pendingTurnstileSubmit
         ) {
             Text(
                 if (loading) "Please wait..."
+                else if (pendingTurnstileSubmit) "Securing your request…"
                 else if (mode == AuthMode.SIGN_IN) "Sign in"
                 else if (method == AuthMethod.ACCOUNT_ID) "Create anonymous account"
                 else "Create account",
