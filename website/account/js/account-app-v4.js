@@ -7,9 +7,10 @@ import {
 } from '/js/auth.js?v=turnstilewarm1';
 import {
   fetchBillingStatus,
+  hasPendingBitcoinConfirmation,
   startPremiumCheckout,
   cancelSubscription,
-} from '/js/billing.js?v=6';
+} from '/js/billing.js?v=7';
 import { TURNSTILE_SITE_KEY } from '/js/config.js';
 
 const content = document.getElementById('accountContent');
@@ -134,6 +135,7 @@ async function confirmSensitiveAction(label) {
 
 let peersCache = [];
 let peersLoaded = false;
+let billingPollTimer = null;
 
 function route() {
   const hash = window.location.hash.replace(/^#/, '') || '/';
@@ -170,7 +172,19 @@ function renderFlash() {
 }
 
 function planName(status) {
+  if (hasPendingBitcoinConfirmation(status)) return 'Bitcoin payment pending';
   return status?.is_premium ? 'Veritas Premium' : 'No active subscription';
+}
+
+function renderPaymentPending(status) {
+  if (!hasPendingBitcoinConfirmation(status)) return '';
+  return `<p class="plan-card-meta"><strong>Payment status:</strong> ${escapeHtml(status.payment_message || 'Checking your Bitcoin payment confirmation…')}</p>`;
+}
+
+function paymentPendingTitle(status) {
+  if (status?.payment_state === 'awaiting_confirmation') return 'Payment received';
+  if (status?.payment_state === 'awaiting_payment') return 'Waiting for payment';
+  return 'Checking payment';
 }
 
 function renderPlanExpiry(status) {
@@ -188,14 +202,15 @@ function renderPlanExpiry(status) {
 async function refreshBilling() {
   billingStatus = await fetchBillingStatus();
   if (upgradeBtn) {
-    upgradeBtn.hidden = Boolean(billingStatus?.is_premium);
+    upgradeBtn.hidden = Boolean(billingStatus?.is_premium) || hasPendingBitcoinConfirmation(billingStatus);
   }
 }
 
 function renderHome() {
   const premium = Boolean(billingStatus?.is_premium);
+  const paymentPending = hasPendingBitcoinConfirmation(billingStatus);
   const cancelAtEnd = Boolean(billingStatus?.cancel_at_period_end);
-  const showCheckout = !premium || cancelAtEnd;
+  const showCheckout = (!premium && !paymentPending) || cancelAtEnd;
   return `
     ${renderFlash()}
     <section class="account-section">
@@ -208,7 +223,7 @@ function renderHome() {
       <div class="account-card plan-card">
         <div>
           <div class="plan-card-title">${planName(billingStatus)}</div>
-          ${premium ? renderPlanExpiry(billingStatus) : '<div class="plan-card-meta">Subscription required · Pay with Bitcoin</div>'}
+          ${premium ? renderPlanExpiry(billingStatus) : paymentPending ? renderPaymentPending(billingStatus) : '<div class="plan-card-meta">Subscription required · Pay with Bitcoin</div>'}
         </div>
         <div class="plan-limits">
           ${
@@ -217,7 +232,9 @@ function renderHome() {
             <div class="plan-limit">Current network</div>
             <div class="plan-limit">Up to 5 devices</div>
             <div class="plan-limit">Private Bitcoin billing</div>`
-              : `
+              : paymentPending
+                ? `<div class="plan-limit">${escapeHtml(paymentPendingTitle(billingStatus))}</div><div class="plan-limit">${billingStatus?.payment_state === 'awaiting_confirmation' ? 'Awaiting confirmation' : 'Status updating'}</div>`
+                : `
             <div class="plan-limit">Current network</div>
             <div class="plan-limit">Payment required</div>`
           }
@@ -263,8 +280,9 @@ function renderHome() {
 
 function renderSubscription() {
   const premium = Boolean(billingStatus?.is_premium);
+  const paymentPending = hasPendingBitcoinConfirmation(billingStatus);
   const cancelAtEnd = Boolean(billingStatus?.cancel_at_period_end);
-  const showCheckout = !premium || cancelAtEnd;
+  const showCheckout = (!premium && !paymentPending) || cancelAtEnd;
   return `
     ${renderFlash()}
     <section class="account-section">
@@ -280,6 +298,7 @@ function renderSubscription() {
           Status: <strong>${billingStatus?.status || '—'}</strong>
         </p>
         ${premium ? renderPlanExpiry(billingStatus) : ''}
+        ${renderPaymentPending(billingStatus)}
         <div class="account-actions">
           ${showCheckout ? `<div class="account-plan-actions"><button type="button" class="btn btn-outline" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_monthly">$3 monthly</button><button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_annual">$30 annual · save $6</button></div>` : ""}
           ${
@@ -439,6 +458,10 @@ function renderSecurity() {
 }
 
 function render() {
+  if (billingPollTimer !== null) {
+    window.clearTimeout(billingPollTimer);
+    billingPollTimer = null;
+  }
   const path = route();
   setActiveNav(path === '' ? '/' : path);
   const user = auth.currentUser;
@@ -479,6 +502,19 @@ function render() {
   }
   content.innerHTML = html;
   flash = null;
+  if (hasPendingBitcoinConfirmation(billingStatus)) {
+    const seconds = Number(billingStatus?.poll_after_seconds) || 10;
+    const delay = Math.min(Math.max(seconds, 3), 30) * 1000;
+    billingPollTimer = window.setTimeout(async () => {
+      if (!auth.currentUser || !hasPendingBitcoinConfirmation(billingStatus)) return;
+      try {
+        await refreshBilling();
+      } catch {
+        // A transient refresh failure must not discard an already-paid checkout.
+      }
+      render();
+    }, delay);
+  }
 }
 
 async function onAction(action, btn) {
@@ -589,6 +625,10 @@ window.addEventListener('hashchange', () => render());
 
 onAuthStateChanged(async (user) => {
   if (!user) {
+    if (billingPollTimer !== null) {
+      window.clearTimeout(billingPollTimer);
+      billingPollTimer = null;
+    }
     const requestedRoute = route().replace(/^\//, '');
     const next = ['subscription', 'downloads', 'account', 'security', 'devices'].includes(requestedRoute) ? requestedRoute : 'account';
     window.location.replace(`/?signin=1&next=${encodeURIComponent(next)}`);
