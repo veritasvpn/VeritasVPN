@@ -445,15 +445,27 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
         appearance: 'interaction-only',
         callback: (token) => {
           turnstileToken = token;
+          // Cloudflare may leave its "quick security check" copy on screen for
+          // a moment after issuing the token. Hide the completed widget so the
+          // UI never implies that account creation can bypass verification.
+          if (turnstileEl) turnstileEl.hidden = true;
           if (waitingForTurnstile) {
             setWaitingForTurnstile(false);
             void submitAuth();
+          } else {
+            syncSubmitButton();
           }
         },
-        'expired-callback': () => { turnstileToken = ''; },
+        'expired-callback': () => {
+          turnstileToken = '';
+          if (turnstileEl) turnstileEl.hidden = false;
+          syncSubmitButton();
+        },
         'error-callback': () => {
           turnstileToken = '';
+          if (turnstileEl) turnstileEl.hidden = false;
           setWaitingForTurnstile(false);
+          syncSubmitButton();
         },
       });
     } catch {
@@ -462,10 +474,12 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   }
 
   function resetTurnstileWidget() {
+    turnstileToken = '';
+    if (turnstileEl) turnstileEl.hidden = false;
     if (turnstileWidgetId != null && window.turnstile) {
       try { window.turnstile.reset(turnstileWidgetId); } catch (_) {}
     }
-    turnstileToken = '';
+    syncSubmitButton();
   }
 
   function defaultSubmitLabel() {
@@ -474,11 +488,34 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
     return 'Sign in';
   }
 
+  function turnstileRequiredForCurrentMode() {
+    return mode === 'signup' || mode === 'anon-signup';
+  }
+
+  function syncSubmitButton() {
+    if (!submitBtn) return;
+    if (busy) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Please wait…';
+      return;
+    }
+    if (waitingForTurnstile) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Securing your request…';
+      return;
+    }
+    if (turnstileRequiredForCurrentMode() && !turnstileToken) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Preparing security check…';
+      return;
+    }
+    submitBtn.disabled = false;
+    submitBtn.textContent = defaultSubmitLabel();
+  }
+
   function setWaitingForTurnstile(waiting) {
     waitingForTurnstile = waiting;
-    if (!submitBtn || busy) return;
-    submitBtn.disabled = waiting;
-    submitBtn.textContent = waiting ? 'Securing your request…' : defaultSubmitLabel();
+    syncSubmitButton();
   }
 
   function syncTurnstileForMode() {
@@ -672,6 +709,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
     }
     setError('');
     syncTurnstileForMode();
+    syncSubmitButton();
   }
 
   function showVerifyPending(email) {
@@ -698,10 +736,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
 
   function setBusy(next) {
     busy = next;
-    if (submitBtn) {
-      submitBtn.disabled = busy || waitingForTurnstile;
-      submitBtn.textContent = busy ? 'Please wait…' : (waitingForTurnstile ? 'Securing your request…' : defaultSubmitLabel());
-    }
+    syncSubmitButton();
     if (resetBtn) resetBtn.disabled = busy;
     syncResetCooldown();
   }
