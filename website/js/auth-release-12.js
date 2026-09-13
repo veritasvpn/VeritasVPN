@@ -411,6 +411,16 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
     return turnstileScriptPromise;
   }
 
+  function preconnectTurnstile() {
+    if (document.querySelector('link[data-veritas-turnstile-preconnect]')) return;
+    const link = document.createElement('link');
+    link.rel = 'preconnect';
+    link.href = 'https://challenges.cloudflare.com';
+    link.crossOrigin = 'anonymous';
+    link.dataset.veritasTurnstilePreconnect = '';
+    document.head.appendChild(link);
+  }
+
   function clearTurnstileWidget() {
     if (turnstileWidgetId != null && window.turnstile) {
       try { window.turnstile.remove(turnstileWidgetId); } catch (_) {}
@@ -432,6 +442,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
       turnstileWidgetId = window.turnstile.render(turnstileEl, {
         sitekey: TURNSTILE_SITE_KEY,
         theme: 'dark',
+        appearance: 'interaction-only',
         callback: (token) => {
           turnstileToken = token;
           if (waitingForTurnstile) {
@@ -471,7 +482,7 @@ export function initAuthUI({ redirectAfterAuth = true } = {}) {
   }
 
   function syncTurnstileForMode() {
-    if (mode === 'signin' || mode === 'signup' || mode === 'anon-signin' || mode === 'anon-signup') {
+    if (mode === 'signup' || mode === 'anon-signup') {
       showTurnstileWidget();
     } else {
       clearTurnstileWidget();
@@ -882,11 +893,6 @@ function renderUser(user) {
         setError('Enter your account ID.');
         return;
       }
-      if (!turnstileToken) {
-        setError('Security check is finishing. Your sign-in will continue automatically.');
-        setWaitingForTurnstile(true);
-        return;
-      }
       setBusy(true);
       try {
         pendingDashboardRedirect = redirectAfterAuth && shouldRedirectToDashboardAfterAuth();
@@ -897,6 +903,10 @@ function renderUser(user) {
         renderUser(user);
       } catch (err) {
         pendingDashboardRedirect = false;
+        if (isTurnstileRequiredError(err)) {
+          await requestTurnstileRetry('Security check is required after repeated sign-in attempts. Your sign-in will continue automatically.');
+          return;
+        }
         setError(mapAuthError(err.message));
         resetTurnstileWidget();
       } finally {
@@ -911,7 +921,7 @@ function renderUser(user) {
       setError('Email and password are required.');
       return;
     }
-    if (!turnstileToken) {
+    if (mode === 'signup' && !turnstileToken) {
       setError('Security check is finishing. Your request will continue automatically.');
       setWaitingForTurnstile(true);
       return;
@@ -937,6 +947,10 @@ function renderUser(user) {
       }
     } catch (err) {
       pendingDashboardRedirect = false;
+      if (mode === 'signin' && isTurnstileRequiredError(err)) {
+        await requestTurnstileRetry('Security check is required after repeated sign-in attempts. Your sign-in will continue automatically.');
+        return;
+      }
       const mapped = mapAuthError(err.message);
       if (mode === 'signin' && mapped.toLowerCase().includes('verify your email')) {
         setError(mapped, { action: 'Resend verification email' });
@@ -947,6 +961,17 @@ function renderUser(user) {
     } finally {
       setBusy(false);
     }
+  }
+
+  function isTurnstileRequiredError(err) {
+    return String(err?.message || err || '').toLowerCase().includes('security check required');
+  }
+
+  async function requestTurnstileRetry(message) {
+    resetTurnstileWidget();
+    setError(message);
+    await showTurnstileWidget();
+    setWaitingForTurnstile(true);
   }
 
   form?.addEventListener('submit', (e) => {
@@ -966,6 +991,7 @@ function renderUser(user) {
     } catch { setError('Could not resend the email. Please try again shortly.'); }
   });
 
+  preconnectTurnstile();
   void loadTurnstileScript().catch(() => undefined);
   syncResetCooldown();
 

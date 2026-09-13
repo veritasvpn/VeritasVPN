@@ -79,6 +79,23 @@ func (s *AuthService) RateLimited(ctx context.Context, key string, limit int, wi
 	return limited
 }
 
+// RateLimitCount records an attempt and returns its count. Redis failures are
+// fail-closed so a security dependency outage never makes authentication easier.
+func (s *AuthService) RateLimitCount(ctx context.Context, key string, window time.Duration, failClosedAt int) int64 {
+	count, err := s.redis.IncrementRateLimit(ctx, "auth:"+key, window)
+	if err != nil {
+		s.log.Warn("rate limit attempt recording unavailable", zap.Error(err))
+		return int64(failClosedAt)
+	}
+	return count
+}
+
+func (s *AuthService) ClearRateLimit(ctx context.Context, key string) {
+	if err := s.redis.ClearRateLimit(ctx, "auth:"+key); err != nil {
+		s.log.Warn("rate limit reset unavailable", zap.Error(err))
+	}
+}
+
 func hashInput(input string) string {
 	h := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(h[:])

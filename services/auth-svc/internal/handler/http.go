@@ -61,6 +61,43 @@ func (h *HTTPHandler) verifyTurnstileIfRequired(w http.ResponseWriter, r *http.R
 	return true
 }
 
+const (
+	signInTurnstileThreshold = 3
+	signInRateLimit          = 10
+)
+
+// requireTurnstileForSignIn applies a risk step-up rather than challenging
+// every normal sign-in. Registration, anonymous account creation, recovery,
+// and sensitive account actions continue to call verifyTurnstileIfRequired
+// unconditionally. Repeated attempts are still capped at the old hard limit.
+func (h *HTTPHandler) requireTurnstileForSignIn(w http.ResponseWriter, r *http.Request, token string, keys ...string) bool {
+	maxAttempts := int64(0)
+	for _, key := range keys {
+		attempts := h.service.RateLimitCount(r.Context(), key, time.Minute, signInRateLimit+1)
+		if attempts > maxAttempts {
+			maxAttempts = attempts
+		}
+	}
+	if maxAttempts > signInRateLimit {
+		writeHTTPError(w, http.StatusTooManyRequests, "too many sign-in attempts; try again later")
+		return false
+	}
+	// A deployment may intentionally have Turnstile disabled (for example in a
+	// local environment), but its hard anti-brute-force rate limit must remain
+	// active.
+	if !h.service.TurnstileEnabled() {
+		return true
+	}
+	if maxAttempts <= signInTurnstileThreshold {
+		return true
+	}
+	if strings.TrimSpace(token) == "" {
+		writeHTTPError(w, http.StatusForbidden, "security check required; try signing in again")
+		return false
+	}
+	return h.verifyTurnstileIfRequired(w, r, token)
+}
+
 func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", h.handleHealth)
 	mux.HandleFunc("/api/v1/auth/register", h.withCORS(h.handleRegister))
@@ -197,14 +234,9 @@ func (h *HTTPHandler) handleSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
-		return
-	}
-
 	normalizedEmail := strings.ToLower(strings.TrimSpace(req.Email))
-	if h.service.RateLimited(r.Context(), "email-signin-ip:"+clientIP(r), 10, time.Minute) ||
-		h.service.RateLimited(r.Context(), "email-signin-address:"+normalizedEmail, 10, time.Minute) {
-		writeHTTPError(w, http.StatusTooManyRequests, "too many sign-in attempts; try again later")
+	if !h.requireTurnstileForSignIn(w, r, req.TurnstileToken,
+		"email-signin-ip:"+clientIP(r), "email-signin-address:"+normalizedEmail) {
 		return
 	}
 
@@ -218,6 +250,9 @@ func (h *HTTPHandler) handleSignIn(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusUnauthorized, "incorrect email or password")
 		return
 	}
+	// A verified credential resets its address-specific risk counter. The IP
+	// counter remains to prevent high-volume spraying across many accounts.
+	h.service.ClearRateLimit(r.Context(), "email-signin-address:"+normalizedEmail)
 
 	h.writeAuthTokens(w, r, http.StatusOK, accessToken, refreshToken, accountID, expiresAt, map[string]interface{}{
 		"email": req.Email,
@@ -582,11 +617,6 @@ func (h *HTTPHandler) handleSignInAccount(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if h.service.RateLimited(r.Context(), "signin-account-ip:"+clientIP(r), 10, time.Minute) {
-		writeHTTPError(w, http.StatusTooManyRequests, "too many sign-in attempts; try again later")
-		return
-	}
-
 	var req struct {
 		AccountID      string `json:"account_id"`
 		TurnstileToken string `json:"turnstile_token"`
@@ -596,7 +626,8 @@ func (h *HTTPHandler) handleSignInAccount(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if !h.verifyTurnstileIfRequired(w, r, req.TurnstileToken) {
+	if !h.requireTurnstileForSignIn(w, r, req.TurnstileToken,
+		"signin-account-ip:"+clientIP(r), "signin-account-id:"+strings.ToLower(strings.TrimSpace(req.AccountID))) {
 		return
 	}
 
@@ -606,6 +637,7 @@ func (h *HTTPHandler) handleSignInAccount(w http.ResponseWriter, r *http.Request
 		writeHTTPError(w, http.StatusUnauthorized, "invalid account ID")
 		return
 	}
+	h.service.ClearRateLimit(r.Context(), "signin-account-id:"+strings.ToLower(strings.TrimSpace(req.AccountID)))
 
 	h.writeAuthTokens(w, r, http.StatusOK, accessToken, refreshToken, accountID, expiresAt, nil)
 }

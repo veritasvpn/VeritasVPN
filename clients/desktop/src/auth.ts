@@ -93,6 +93,9 @@ function extractAuthError(
 
 function humanizeError(msg: string): string {
   const m = msg.toLowerCase();
+  if (m.includes("security check required")) {
+    return "Security check required.";
+  }
   if (m.includes("incorrect email or password") || m.includes("invalid email or password")) {
     return "Incorrect email or password.";
   }
@@ -123,6 +126,10 @@ function humanizeError(msg: string): string {
     return "Could not reach the sign-in service. Check your connection and try again.";
   }
   return msg;
+}
+
+export function isTurnstileRequiredError(error: unknown): boolean {
+  return error instanceof Error && error.message.toLowerCase().includes("security check required");
 }
 
 async function authAPI(

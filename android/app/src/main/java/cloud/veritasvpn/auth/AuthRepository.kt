@@ -78,13 +78,13 @@ class AuthRepository(context: Context) {
             .apply()
     }
 
-    fun signIn(email: String, password: String, turnstileToken: String): User {
+    fun signIn(email: String, password: String, turnstileToken: String = ""): User {
         val normalized = email.trim().lowercase()
         val payload = mutableMapOf<String, String>(
             "email" to normalized,
             "password" to password
         )
-        payload["turnstile_token"] = turnstileToken
+        if (turnstileToken.isNotBlank()) payload["turnstile_token"] = turnstileToken
         val data = ApiClient.post(
             "/api/v1/auth/signin",
             payload
@@ -93,6 +93,9 @@ class AuthRepository(context: Context) {
                 val message = extractError(res)
                 if (message.contains("Verify your email", ignoreCase = true)) {
                     throw VerificationRequired(normalized)
+                }
+                if (message.contains("security check required", ignoreCase = true)) {
+                    throw TurnstileRequired()
                 }
                 throw Error(message)
             }
@@ -141,14 +144,20 @@ class AuthRepository(context: Context) {
         }
     }
 
-    fun signInWithAccountId(accountId: String, turnstileToken: String): User {
+    fun signInWithAccountId(accountId: String, turnstileToken: String = ""): User {
         val payload = mutableMapOf("account_id" to accountId.trim())
-        payload["turnstile_token"] = turnstileToken
+        if (turnstileToken.isNotBlank()) payload["turnstile_token"] = turnstileToken
         val data = ApiClient.post(
             "/api/v1/auth/signin-account",
             payload
         ).use { res ->
-            if (!res.isSuccessful) throw Error(extractError(res))
+            if (!res.isSuccessful) {
+                val message = extractError(res)
+                if (message.contains("security check required", ignoreCase = true)) {
+                    throw TurnstileRequired()
+                }
+                throw Error(message)
+            }
             ApiClient.parse<AuthResponse>(res)
                 ?: throw Error("The server returned an invalid sign-in response.")
         }
@@ -238,6 +247,8 @@ class AuthRepository(context: Context) {
     class AccountAlreadyExists(val email: String) : Exception(
         "An account with this email already exists."
     )
+
+    class TurnstileRequired : Exception("Security check required.")
 
     class Error(msg: String) : Exception(msg)
 }

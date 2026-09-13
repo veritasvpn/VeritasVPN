@@ -46,15 +46,29 @@ func (r *Redis) DeleteSession(ctx context.Context, tokenHash string) error {
 }
 
 func (r *Redis) CheckRateLimit(ctx context.Context, key string, limit int, window time.Duration) (bool, error) {
+	count, err := r.IncrementRateLimit(ctx, key, window)
+	if err != nil {
+		return false, err
+	}
+	return count > int64(limit), nil
+}
+
+// IncrementRateLimit records an attempt and returns the current count. Handlers
+// use the count when a low-friction action becomes higher risk before its hard
+// rate limit is reached.
+func (r *Redis) IncrementRateLimit(ctx context.Context, key string, window time.Duration) (int64, error) {
 	pipe := r.client.Pipeline()
 	incr := pipe.Incr(ctx, key)
 	pipe.Expire(ctx, key, window)
 
 	if _, err := pipe.Exec(ctx); err != nil {
-		return false, fmt.Errorf("rate limit check: %w", err)
+		return 0, fmt.Errorf("rate limit check: %w", err)
 	}
+	return incr.Val(), nil
+}
 
-	return incr.Val() > int64(limit), nil
+func (r *Redis) ClearRateLimit(ctx context.Context, key string) error {
+	return r.client.Del(ctx, key).Err()
 }
 
 func (r *Redis) BlacklistToken(ctx context.Context, tokenHash string, ttl time.Duration) error {
