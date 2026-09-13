@@ -1,6 +1,11 @@
 const SITE_KEY = '0x4AAAAAAEcMj2cCveWsarot';
 let widgetId = null;
 
+function setStatus(message) {
+  const status = document.getElementById('status');
+  if (status) status.textContent = message;
+}
+
 function requestedReturnOrigin() {
   const value = new URLSearchParams(location.search).get('return_origin') || location.origin;
   if (value === 'tauri://localhost') return value;
@@ -41,14 +46,21 @@ function renderWhenReady() {
     sitekey: SITE_KEY,
     theme: 'dark',
     appearance: 'interaction-only',
-    callback: token => post({ type: 'token', token }),
+    callback: token => {
+      setStatus('Security check complete.');
+      post({ type: 'token', token });
+    },
     'expired-callback': () => {
+      setStatus('Refreshing security check…');
       post({ type: 'expired' });
       // Start the replacement token immediately. Tokens are intentionally
       // single-use, so this avoids making the next submit wait for a reload.
       try { window.turnstile.reset(widgetId); } catch (_) {}
     },
-    'error-callback': () => post({ type: 'error', message: 'security check failed' }),
+    'error-callback': () => {
+      setStatus('Security check unavailable. Please retry.');
+      post({ type: 'error', message: 'security check failed' });
+    },
   });
 }
 
@@ -60,5 +72,6 @@ renderWhenReady();
 window.addEventListener('message', (event) => {
   if (event.origin !== requestedReturnOrigin()) return;
   if (event.data?.source !== 'veritas-turnstile-host' || event.data?.type !== 'reset') return;
+  setStatus('Checking your connection…');
   try { window.turnstile?.reset(widgetId); } catch (_) {}
 });
