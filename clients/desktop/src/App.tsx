@@ -16,6 +16,7 @@ import {
   passwordStrengthScore,
   VerificationRequiredError,
   AccountAlreadyExistsError,
+  isTurnstileRequiredError,
   User,
   validateSessionOnResume,
 } from "./auth";
@@ -880,8 +881,14 @@ function App() {
     try {
         if (method === "accountId") {
           if (mode === "signin") {
-          const turnstileToken = await obtainTurnstileToken();
-          const u = await doSignInAccountId(accountId, turnstileToken);
+          let u: User;
+          try {
+            u = await doSignInAccountId(accountId);
+          } catch (err) {
+            if (!isTurnstileRequiredError(err)) throw err;
+            const turnstileToken = await obtainTurnstileToken();
+            u = await doSignInAccountId(accountId, turnstileToken);
+          }
           setUser(u);
           setAccountId("");
         } else {
@@ -891,8 +898,14 @@ function App() {
           setUser(u);
         }
       } else if (mode === "signin") {
-        const turnstileToken = await obtainTurnstileToken();
-        const u = await doSignIn(email, password, turnstileToken);
+        let u: User;
+        try {
+          u = await doSignIn(email, password);
+        } catch (err) {
+          if (!isTurnstileRequiredError(err)) throw err;
+          const turnstileToken = await obtainTurnstileToken();
+          u = await doSignIn(email, password, turnstileToken);
+        }
         setUser(u);
         setEmail("");
         setPassword("");

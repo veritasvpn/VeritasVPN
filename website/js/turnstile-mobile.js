@@ -40,6 +40,7 @@ function renderWhenReady() {
   widgetId = window.turnstile.render('#widget', {
     sitekey: SITE_KEY,
     theme: 'dark',
+    appearance: 'interaction-only',
     callback: token => post({ type: 'token', token }),
     'expired-callback': () => {
       post({ type: 'expired' });

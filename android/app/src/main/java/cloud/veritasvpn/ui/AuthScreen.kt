@@ -72,11 +72,11 @@ fun AuthScreen(
     var turnstileToken by remember { mutableStateOf("") }
     var turnstileResetKey by remember { mutableIntStateOf(0) }
     var pendingTurnstileSubmit by remember { mutableStateOf(false) }
+    var signInTurnstileRequired by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    // The same short Turnstile check protects every authentication route. In
-    // managed mode it normally completes without an extra user interaction,
-    // while keeping the app and the API contract consistent.
-    val needsTurnstile = true
+    // Creation remains protected up front. Ordinary sign-ins stay fast until
+    // the server detects repeated attempts and asks this client to step up.
+    val needsTurnstile = mode == AuthMode.SIGN_UP || signInTurnstileRequired
 
     LaunchedEffect(resetCooldown) {
         if (resetCooldown > 0) {
@@ -121,6 +121,10 @@ fun AuthScreen(
             } catch (e: cloud.veritasvpn.auth.AuthRepository.AccountAlreadyExists) {
                 error = e.message
                 verificationResendEmail = e.email
+            } catch (e: cloud.veritasvpn.auth.AuthRepository.TurnstileRequired) {
+                signInTurnstileRequired = true
+                pendingTurnstileSubmit = true
+                error = null
             } catch (e: Exception) {
                 error = e.message?.takeIf { it.isNotBlank() }
                     ?: "Sign in failed. Check your connection and try again."
@@ -402,8 +406,8 @@ fun AuthScreen(
                 .padding(4.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Box(Modifier.weight(1f)) { TabButton(selected = mode == AuthMode.SIGN_IN, onClick = { mode = AuthMode.SIGN_IN; notice = null; error = null; verificationResendEmail = null }, text = "Sign in") }
-            Box(Modifier.weight(1f)) { TabButton(selected = mode == AuthMode.SIGN_UP, onClick = { mode = AuthMode.SIGN_UP; notice = null; error = null; verificationResendEmail = null }, text = "Sign up") }
+            Box(Modifier.weight(1f)) { TabButton(selected = mode == AuthMode.SIGN_IN, onClick = { mode = AuthMode.SIGN_IN; signInTurnstileRequired = false; pendingTurnstileSubmit = false; notice = null; error = null; verificationResendEmail = null }, text = "Sign in") }
+            Box(Modifier.weight(1f)) { TabButton(selected = mode == AuthMode.SIGN_UP, onClick = { mode = AuthMode.SIGN_UP; signInTurnstileRequired = false; pendingTurnstileSubmit = false; notice = null; error = null; verificationResendEmail = null }, text = "Sign up") }
         }
 
         Spacer(Modifier.height(20.dp))
@@ -630,6 +634,8 @@ fun AuthScreen(
             notice = null
             error = null
             verificationResendEmail = null
+            signInTurnstileRequired = false
+            pendingTurnstileSubmit = false
             method = if (method == AuthMethod.EMAIL) AuthMethod.ACCOUNT_ID else AuthMethod.EMAIL
         }) {
             Text(
