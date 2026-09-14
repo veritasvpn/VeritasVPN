@@ -38,7 +38,7 @@ form?.addEventListener("submit", async (event) => {
   showResultSkeletons(results, 3);
   setCheckBusy(button, true, "Analyzing…");
   try {
-    const data = await fetchJson("/api/v1/phishing/check", {
+    const data = await fetchJson("https://api.veritasvpn.cloud/api/v1/phishing/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
