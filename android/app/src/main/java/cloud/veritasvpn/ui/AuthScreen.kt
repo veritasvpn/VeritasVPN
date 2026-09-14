@@ -81,6 +81,22 @@ fun AuthScreen(
     // the server detects repeated attempts and asks this client to step up.
     val needsTurnstile = mode == AuthMode.SIGN_UP || signInTurnstileRequired
 
+    // A silent challenge normally completes in a moment. Never leave a valid
+    // account-creation request disabled indefinitely if its embedded WebView
+    // fails to initialize or Cloudflare does not answer. Interactive checks
+    // remain visible and are not timed out while the person is solving them.
+    LaunchedEffect(pendingTurnstileSubmit, turnstileToken, turnstileInteractive) {
+        if (pendingTurnstileSubmit && turnstileToken.isBlank() && !turnstileInteractive) {
+            delay(12_000)
+            if (pendingTurnstileSubmit && turnstileToken.isBlank() && !turnstileInteractive) {
+                pendingTurnstileSubmit = false
+                turnstileReady = false
+                turnstileResetKey += 1
+                error = "Security check took too long. Please try again."
+            }
+        }
+    }
+
     LaunchedEffect(resetCooldown) {
         if (resetCooldown > 0) {
             delay(1000)
@@ -562,7 +578,10 @@ fun AuthScreen(
             TurnstileWebView(
                 resetKey = turnstileResetKey,
                 executeVersion = turnstileExecuteVersion,
-                showInteractive = turnstileInteractive,
+                // The prewarmed frame takes no meaningful space. It expands
+                // only while the person explicitly starts verification or
+                // Cloudflare requests an interactive challenge.
+                showInteractive = turnstileInteractive || pendingTurnstileSubmit,
                 onToken = { token ->
                     turnstileToken = token
                     turnstileInteractive = false
@@ -579,6 +598,8 @@ fun AuthScreen(
                 onError = {
                     pendingTurnstileSubmit = false
                     turnstileInteractive = false
+                    turnstileReady = false
+                    turnstileResetKey += 1
                     error = it
                 }
             )
