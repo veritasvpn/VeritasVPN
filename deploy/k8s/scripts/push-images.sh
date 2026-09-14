@@ -7,6 +7,14 @@ REGISTRY="${REGISTRY:-localhost:31500}"
 IMAGE_PREFIX="${IMAGE_PREFIX:-}"
 TAG="${TAG:?TAG must be set to an immutable version or digest}"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+BUILD_CONTEXT="$(mktemp -d)"
+trap 'rm -rf "$BUILD_CONTEXT"' EXIT
+
+# Docker cannot safely use an arbitrary live checkout as its context: local
+# backups and credentials may be unreadable or accidentally included. Build
+# exactly the tracked revision instead, which also makes release artifacts
+# reproducible.
+git -C "$ROOT" archive --format=tar HEAD | tar -x -C "$BUILD_CONTEXT"
 
 if [[ "${REGISTRY}" == "localhost:31500" || "${REGISTRY}" == "127.0.0.1:31500" ]]; then
   if ! curl -fsS --connect-timeout 1 "http://${REGISTRY}/v2/" >/dev/null 2>&1; then
@@ -17,11 +25,12 @@ if [[ "${REGISTRY}" == "localhost:31500" || "${REGISTRY}" == "127.0.0.1:31500" ]
   fi
 fi
 
-services=("auth-svc" "wg-manager" "billing-svc" "veritas-agent" "veritas-proxy" "wstunnel")
+services=("auth-svc" "wg-manager" "billing-svc" "phishing-checker" "veritas-agent" "veritas-proxy" "wstunnel")
 dockerfiles=(
   "services/auth-svc/Dockerfile"
   "services/wg-manager/Dockerfile"
   "services/billing-svc/Dockerfile"
+  "services/phishing-checker/Dockerfile"
   "services/veritas-agent/Dockerfile"
   "services/browser-proxy/Dockerfile"
   "services/wstunnel/Dockerfile"
@@ -37,11 +46,10 @@ for i in "${!services[@]}"; do
   else
     img="${REGISTRY}/${svc}:${TAG}"
   fi
-  ctx="${ROOT}"
   echo "--- Building ${img} ---"
   # The production host provides its working resolver through the host network.
   # Using it here avoids Docker daemon DNS overrides and affects build steps only.
-  docker build --network=host -t "${img}" -f "${ROOT}/${df}" "${ctx}"
+  docker build --network=host -t "${img}" -f "${BUILD_CONTEXT}/${df}" "${BUILD_CONTEXT}"
   docker push "${img}"
 done
 

@@ -11,6 +11,7 @@ use (
 	./services/billing-svc
 	./services/bitcoin-readiness
 	./services/browser-proxy
+	./services/phishing-checker
 	./services/telegram-notifier
 	./services/veritas-agent
 	./services/wg-manager
