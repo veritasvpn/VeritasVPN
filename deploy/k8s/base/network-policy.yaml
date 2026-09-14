@@ -227,6 +227,26 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: allow-phishing-checker-from-nginx
+  namespace: veritas
+spec:
+  podSelector:
+    matchLabels:
+      app: phishing-checker
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: nginx
+      ports:
+        - port: 8080
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: allow-agent-metrics
   namespace: veritas
 spec:
@@ -512,6 +532,12 @@ spec:
     - to:
         - podSelector:
             matchLabels:
+              app: phishing-checker
+      ports:
+        - port: 8080
+    - to:
+        - podSelector:
+            matchLabels:
               app: veritas-proxy
       ports:
         - port: 1080
@@ -560,6 +586,31 @@ spec:
               - 10.0.0.0/8
               - 172.16.0.0/12
               - 192.168.0.0/16
+---
+# The scanner only needs encrypted TLS handshakes to public web hosts. It
+# cannot reach cluster/private networks, databases, or arbitrary ports.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-phishing-checker
+  namespace: veritas
+spec:
+  podSelector:
+    matchLabels:
+      app: phishing-checker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
