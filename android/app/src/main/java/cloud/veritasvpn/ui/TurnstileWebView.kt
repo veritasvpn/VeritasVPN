@@ -62,8 +62,8 @@ fun TurnstileWebView(
             modifier = modifier
                 .fillMaxWidth()
                 // Keep a prewarmed, non-interactive Turnstile page effectively
-                // out of layout. Expand only after Cloudflare explicitly asks
-                // the person to solve an interactive challenge.
+                // out of layout. The caller expands it only while verification
+                // is actually running or Cloudflare asks for interaction.
                 .height(if (showInteractive) 96.dp else 1.dp)
                 .clip(RoundedCornerShape(12.dp)),
             factory = { context ->
@@ -113,15 +113,14 @@ fun TurnstileWebView(
                 }
             },
             update = { view ->
-                // The hosted page ignores execute requests until it reports
-                // ready, so each version is emitted only after that callback.
+                // Use a direct JavaScript entry point rather than a cross-frame
+                // message. Some Android WebView versions can defer a posted
+                // message while the warm iframe is only one pixel tall.
                 if (executeVersion > lastExecuteVersion) {
                     lastExecuteVersion = executeVersion
-                    view.postWebMessage(
-                        android.webkit.WebMessage(
-                            "{\"source\":\"veritas-turnstile-host\",\"type\":\"execute\"}"
-                        ),
-                        android.net.Uri.parse("https://veritasvpn.cloud")
+                    view.evaluateJavascript(
+                        "window.veritasTurnstileExecute && window.veritasTurnstileExecute()",
+                        null
                     )
                 }
             }
