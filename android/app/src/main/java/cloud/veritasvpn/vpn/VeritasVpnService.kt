@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
@@ -104,6 +105,25 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         super.onStartCommand(intent, flags, startId)
 
         when (intent?.action) {
+            ACTION_QUERY_STATE -> {
+                if (!sessionIntended()) {
+                    broadcastState(false, null)
+                    return START_NOT_STICKY
+                }
+
+                // An activity can be recreated while this service stays alive,
+                // so state broadcasts emitted before the receiver is registered
+                // are intentionally queried again. A fresh service instance also
+                // resumes the saved tunnel instead of reporting a stale state.
+                if (tunKeeper == null &&
+                    transitionJob?.isActive != true &&
+                    restoreJob?.isActive != true
+                ) {
+                    restoreSavedSessionIfNeeded()
+                }
+                broadcastState(true, null)
+                return START_STICKY
+            }
             ACTION_CONNECT -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG) ?: return START_STICKY
                 val endpointLan = intent.getStringExtra(EXTRA_ENDPOINT_LAN).orEmpty()
@@ -1077,6 +1097,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val NOTIFICATION_ID = 1
         const val ACTION_CONNECT = "cloud.veritasvpn.CONNECT"
         const val ACTION_DISCONNECT = "cloud.veritasvpn.DISCONNECT"
+        const val ACTION_QUERY_STATE = "cloud.veritasvpn.QUERY_STATE"
         const val ACTION_STATE = "cloud.veritasvpn.STATE"
         const val ACTION_STATS = "cloud.veritasvpn.STATS"
         const val ACTION_RECONNECT_NEEDED = "cloud.veritasvpn.RECONNECT_NEEDED"
@@ -1093,6 +1114,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val KEY_CONFIG = "last_approved_config"
         const val KEY_ENDPOINT_LAN = "endpoint_lan"
         const val KEY_ENDPOINT_WAN = "endpoint_wan"
+
+        /**
+         * The durable intent is the app's source of truth across Activity
+         * recreation. Android does not replay non-sticky broadcasts to a new
+         * Activity, so the UI must not default to an unrelated "disconnected"
+         * state while the foreground VPN service is still running.
+         */
+        fun hasSavedSession(context: Context): Boolean =
+            SecurePrefs.open(context.applicationContext, PREFS_NAME)
+                .getString(KEY_CONFIG, null) != null
         private const val UNDERLAY_ADAPT_DEBOUNCE_MS = 400L
         private const val SOFT_ATTACH_MS = 6_000L
         private const val HANDSHAKE_CONFIRM_MS = 3_500L

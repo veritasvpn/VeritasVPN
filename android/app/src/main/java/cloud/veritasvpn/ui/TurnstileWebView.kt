@@ -33,6 +33,7 @@ private const val TURNSTILE_PAGE = "https://veritasvpn.cloud/turnstile-mobile-v2
 fun TurnstileWebView(
     resetKey: Int,
     executeVersion: Int,
+    isReady: Boolean,
     showInteractive: Boolean,
     onToken: (String) -> Unit,
     onReady: () -> Unit,
@@ -116,7 +117,12 @@ fun TurnstileWebView(
                 // Use a direct JavaScript entry point rather than a cross-frame
                 // message. Some Android WebView versions can defer a posted
                 // message while the warm iframe is only one pixel tall.
-                if (executeVersion > lastExecuteVersion) {
+                // A submitted challenge must only execute after the hosted
+                // page has rendered its widget and explicitly reported ready.
+                // Previously a WebView redraw could consume this version while
+                // the page's JavaScript was still loading, leaving the button
+                // stuck on "Securing your request…" with no later retry.
+                if (isReady && executeVersion > lastExecuteVersion) {
                     lastExecuteVersion = executeVersion
                     view.evaluateJavascript(
                         "window.veritasTurnstileExecute && window.veritasTurnstileExecute()",
