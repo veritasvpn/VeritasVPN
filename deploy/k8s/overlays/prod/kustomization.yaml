@@ -19,7 +19,8 @@ images:
     digest: sha256:dea2ba22ccceba427248bc9912ec44bdf2b1b7e4906ed8beab825290495f9e3e
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    digest: sha256:e9473f0bcd9ad39d11811b50fcab20cbd7f6fd84cce49784923fc1a05a7f1bfb
+    # Payment-status reconciliation build, verified in the Dell registry.
+    digest: sha256:dcf18faeb2d3242f2ea42f9de7dba59099ad6193fc7407278c593bf8e07d7a3a
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     digest: sha256:a87ab9340ef4dc18f0f38b93d45b12737220487aba62f26a1eda37d6bcd9fde1
