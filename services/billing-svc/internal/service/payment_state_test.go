@@ -14,8 +14,8 @@ func TestPaymentStatePresentationIsSafeAndActionable(t *testing.T) {
 	}{
 		{model.PaymentStateNone, 0, ""},
 		{model.PaymentStateAwaitingPayment, 15, "Waiting for your Bitcoin payment."},
-		{model.PaymentStateAwaitingConfirmation, 10, "Payment received. Premium activates after the required Bitcoin confirmation."},
-		{model.PaymentStateChecking, 10, "Checking your Bitcoin payment status."},
+		{model.PaymentStateAwaitingConfirmation, 3, "Payment received. Premium activates after the required Bitcoin confirmation."},
+		{model.PaymentStateChecking, 3, "Checking your Bitcoin payment status."},
 		{model.PaymentStateSettled, 0, "Payment confirmed. Premium is active."},
 		{model.PaymentStateFailed, 0, "This checkout was not confirmed. Start a new checkout to try again."},
 	}
