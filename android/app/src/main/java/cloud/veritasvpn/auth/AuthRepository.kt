@@ -109,7 +109,7 @@ class AuthRepository(context: Context) {
 
     fun signUp(email: String, password: String, turnstileToken: String): User {
         val normalized = email.trim().lowercase()
-        val data = ApiClient.post(
+        val data = ApiClient.postFast(
             "/api/v1/auth/register",
             mapOf(
                 "email" to normalized,
@@ -167,7 +167,7 @@ class AuthRepository(context: Context) {
     }
 
     fun registerAnonymous(turnstileToken: String): User {
-        val data = ApiClient.post(
+        val data = ApiClient.postFast(
             "/api/v1/auth/register-anonymous",
             mapOf("turnstile_token" to turnstileToken)
         ).use { res ->

@@ -125,14 +125,21 @@ class MainActivity : ComponentActivity() {
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
                 val billingRepo = remember { BillingRepository(authRepo) }
+                val restoringSavedVpnSession = remember(context) {
+                    VeritasVpnService.hasSavedSession(context)
+                }
                 var connected by remember { mutableStateOf(false) }
-                var connecting by remember { mutableStateOf(false) }
+                var connecting by remember { mutableStateOf(restoringSavedVpnSession) }
                 var reconnecting by remember { mutableStateOf(false) }
-                var userWantsConnected by remember { mutableStateOf(false) }
-                var hadEstablishedSession by remember { mutableStateOf(false) }
+                var userWantsConnected by remember { mutableStateOf(restoringSavedVpnSession) }
+                var hadEstablishedSession by remember { mutableStateOf(restoringSavedVpnSession) }
                 var reconnectAttempt by remember { mutableStateOf(0) }
                 var hardReconnectRequested by remember { mutableStateOf(false) }
-                var statusMsg by remember { mutableStateOf<String?>(null) }
+                var statusMsg by remember {
+                    mutableStateOf(
+                        if (restoringSavedVpnSession) "Restoring secure connection…" else null
+                    )
+                }
                 var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
                 var showTunnelSettings by remember { mutableStateOf(false) }
@@ -595,6 +602,20 @@ class MainActivity : ComponentActivity() {
                         ContextCompat.RECEIVER_NOT_EXPORTED
                     )
                     onDispose { context.unregisterReceiver(receiver) }
+                }
+
+                // The service's previous state broadcast may have occurred
+                // while this Activity was closed. Ask it for the durable state
+                // after registering the receiver so the dashboard cannot show
+                // "Connect now" while Android still shows an active VPN.
+                LaunchedEffect(restoringSavedVpnSession) {
+                    if (restoringSavedVpnSession) {
+                        context.startService(
+                            Intent(context, VeritasVpnService::class.java).apply {
+                                action = VeritasVpnService.ACTION_QUERY_STATE
+                            }
+                        )
+                    }
                 }
 
                 LaunchedEffect(connected, user?.accountId) {

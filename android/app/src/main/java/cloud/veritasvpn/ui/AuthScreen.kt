@@ -38,10 +38,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.ui.theme.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 enum class AuthMode { SIGN_IN, SIGN_UP }
 enum class AuthMethod { EMAIL, ACCOUNT_ID }
@@ -81,19 +84,33 @@ fun AuthScreen(
     // the server detects repeated attempts and asks this client to step up.
     val needsTurnstile = mode == AuthMode.SIGN_UP || signInTurnstileRequired
 
-    // A silent challenge normally completes in a moment. Never leave a valid
-    // account-creation request disabled indefinitely if its embedded WebView
-    // fails to initialize or Cloudflare does not answer. Interactive checks
-    // remain visible and are not timed out while the person is solving them.
-    LaunchedEffect(pendingTurnstileSubmit, turnstileToken, turnstileInteractive) {
-        if (pendingTurnstileSubmit && turnstileToken.isBlank() && !turnstileInteractive) {
-            delay(12_000)
-            if (pendingTurnstileSubmit && turnstileToken.isBlank() && !turnstileInteractive) {
-                pendingTurnstileSubmit = false
-                turnstileReady = false
-                turnstileResetKey += 1
-                error = "Security check took too long. Please try again."
-            }
+    fun resetTurnstile(message: String) {
+        pendingTurnstileSubmit = false
+        turnstileToken = ""
+        turnstileInteractive = false
+        turnstileReady = false
+        turnstileResetKey += 1
+        error = message
+    }
+
+    // A quiet challenge normally completes within a few seconds. Both paths
+    // have an explicit deadline: a transport/WebView failure must return the
+    // button to a retryable state, and an abandoned visible challenge must not
+    // leave an account creation attempt locked forever.
+    LaunchedEffect(pendingTurnstileSubmit, turnstileInteractive) {
+        if (!pendingTurnstileSubmit || turnstileToken.isNotBlank()) return@LaunchedEffect
+        val timeoutMs = if (turnstileInteractive) 90_000L else 15_000L
+        delay(timeoutMs)
+        if (pendingTurnstileSubmit && turnstileToken.isBlank() &&
+            turnstileInteractive == (timeoutMs == 90_000L)
+        ) {
+            resetTurnstile(
+                if (turnstileInteractive) {
+                    "Security check expired. Please try again."
+                } else {
+                    "Security check took too long. Please try again."
+                }
+            )
         }
     }
 
@@ -112,15 +129,17 @@ fun AuthScreen(
         loading = true
         scope.launch {
             try {
-                val user = withContext(Dispatchers.IO) {
-                    when {
-                        method == AuthMethod.EMAIL && mode == AuthMode.SIGN_IN ->
-                            authRepo.signIn(email, password, turnstileToken)
-                        method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP ->
-                            authRepo.signUp(email, password, turnstileToken)
-                        method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN ->
-                            authRepo.signInWithAccountId(accountId, turnstileToken)
-                        else -> authRepo.registerAnonymous(turnstileToken)
+                val user = withTimeout(15_000L) {
+                    withContext(Dispatchers.IO) {
+                        when {
+                            method == AuthMethod.EMAIL && mode == AuthMode.SIGN_IN ->
+                                authRepo.signIn(email, password, turnstileToken)
+                            method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP ->
+                                authRepo.signUp(email, password, turnstileToken)
+                            method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN ->
+                                authRepo.signInWithAccountId(accountId, turnstileToken)
+                            else -> authRepo.registerAnonymous(turnstileToken)
+                        }
                     }
                 }
                 if (method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_UP) {
@@ -128,6 +147,10 @@ fun AuthScreen(
                 } else {
                     onAuthenticated()
                 }
+            } catch (e: TimeoutCancellationException) {
+                resetTurnstile("The account request timed out. Please try again.")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: cloud.veritasvpn.auth.AuthRepository.VerificationRequired) {
                 if (method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP) {
                     pendingVerificationEmail = e.email
@@ -578,6 +601,7 @@ fun AuthScreen(
             TurnstileWebView(
                 resetKey = turnstileResetKey,
                 executeVersion = turnstileExecuteVersion,
+                isReady = turnstileReady,
                 // The prewarmed frame takes no meaningful space. It expands
                 // only while the person explicitly starts verification or
                 // Cloudflare requests an interactive challenge.
@@ -596,11 +620,7 @@ fun AuthScreen(
                 },
                 onInteractiveRequired = { turnstileInteractive = true },
                 onError = {
-                    pendingTurnstileSubmit = false
-                    turnstileInteractive = false
-                    turnstileReady = false
-                    turnstileResetKey += 1
-                    error = it
+                    resetTurnstile(it)
                 }
             )
         }

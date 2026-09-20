@@ -43,6 +43,29 @@ object ApiClient {
         return executeWithRetry(requestFactory = { builder.build() })
     }
 
+    /**
+     * Authentication is interactive. A long retry chain makes a failed sign-up
+     * look like a frozen button, so use one bounded attempt and let the person
+     * decide when to retry.
+     */
+    fun postFast(
+        path: String,
+        body: Map<String, Any>,
+        token: String? = null,
+        timeoutSeconds: Long = 10,
+    ): Response {
+        val requestBody = gson.toJson(body).toRequestBody(JSON)
+        val builder = Request.Builder().url("$BASE_URL$path").post(requestBody)
+        token?.let { builder.header("Authorization", "Bearer $it") }
+        val fastClient = client.newBuilder()
+            .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .build()
+        return fastClient.newCall(builder.build()).execute()
+    }
+
     fun patch(path: String, body: Map<String, Any>, token: String): Response {
         val b = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").patch(b)
