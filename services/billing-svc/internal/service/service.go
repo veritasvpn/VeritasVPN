@@ -249,7 +249,11 @@ func paymentStateMessage(state string) string {
 func paymentStatePollAfter(state string) int {
 	switch state {
 	case model.PaymentStateAwaitingConfirmation, model.PaymentStateChecking:
-		return 10
+		// The mobile app begins this account-scoped poll immediately after
+		// BTCPay returns. Keep the next checks close together so a confirmed
+		// invoice becomes Premium promptly, while the provider remains the
+		// only authority that can grant the entitlement.
+		return 3
 	case model.PaymentStateAwaitingPayment:
 		return 15
 	default:

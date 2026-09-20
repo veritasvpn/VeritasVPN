@@ -319,9 +319,26 @@ class MainActivity : ComponentActivity() {
                 val billingPollDelayMs = (
                     billingStatus?.pollAfterSeconds?.coerceIn(3, 30) ?: 3
                 ) * 1000L
+                val pendingPaymentNeedsPolling = billingStatus?.paymentState in setOf(
+                    "awaiting_payment",
+                    "awaiting_confirmation",
+                    "checking"
+                )
 
-                LaunchedEffect(checkoutUrl, waitingForCheckoutSettlement, billingPollDelayMs) {
-                    while ((checkoutUrl != null || waitingForCheckoutSettlement) && user != null) {
+                LaunchedEffect(
+                    checkoutUrl,
+                    waitingForCheckoutSettlement,
+                    pendingPaymentNeedsPolling,
+                    billingPollDelayMs
+                ) {
+                    // A process/activity recreation can happen while Android is
+                    // returning from BTCPay.  Continue the account-scoped
+                    // reconciliation whenever the API says a payment is pending,
+                    // rather than relying only on in-memory checkout state.
+                    while (
+                        (checkoutUrl != null || waitingForCheckoutSettlement || pendingPaymentNeedsPolling) &&
+                            user != null
+                    ) {
                         kotlinx.coroutines.delay(billingPollDelayMs)
                         try {
                             val status = withTimeout(7_000) {
