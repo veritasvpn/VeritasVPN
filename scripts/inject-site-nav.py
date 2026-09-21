@@ -23,8 +23,8 @@ SKIP_FILES = {
 }
 
 NAV_RE = re.compile(
-    r"<nav\b[^>]*\bclass=\"[^\"]*\bnavbar\b[^\"]*\"[^>]*>.*?</nav>",
-    re.IGNORECASE | re.DOTALL,
+    r"^[ \t]*<nav\b[^>]*\bclass=\"[^\"]*\bnavbar\b[^\"]*\"[^>]*>.*?</nav>",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
 )
 
 SITE_NAV_SCRIPT = '<script type="module" src="/js/site-nav.js"></script>'

@@ -10,9 +10,6 @@ from __future__ import annotations
 NAV_LINKS: list[tuple[str, str, str]] = [
     ("/learn/", "Learn", "learn"),
     ("/check/", "Check", "check"),
-    ("/#network", "Network", "network"),
-    ("/#product", "Product", "product"),
-    ("/#dns", "Shield", "dns"),
     ("/#pricing", "Pricing", "pricing"),
     ("/downloads.html", "Download", "download"),
     ("/#faq", "FAQ", "faq"),
