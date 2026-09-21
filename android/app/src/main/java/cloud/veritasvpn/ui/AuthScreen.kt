@@ -165,6 +165,13 @@ fun AuthScreen(
                 verificationResendEmail = e.email
             } catch (e: cloud.veritasvpn.auth.AuthRepository.TurnstileRequired) {
                 signInTurnstileRequired = true
+                // A token can be expired or rejected by Turnstile. It is
+                // single-use, so discard it and recreate the WebView before
+                // asking the person to complete the fresh challenge.
+                turnstileToken = ""
+                turnstileReady = false
+                turnstileInteractive = false
+                turnstileResetKey += 1
                 pendingTurnstileSubmit = true
                 error = null
             } catch (e: Exception) {

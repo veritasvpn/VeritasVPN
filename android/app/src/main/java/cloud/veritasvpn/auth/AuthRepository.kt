@@ -219,9 +219,10 @@ class AuthRepository(context: Context) {
         return when {
             msg.contains("email_not_verified", true) || msg.contains("verify your email", true) ->
                 "Verify your email before signing in."
-            msg.contains("security check failed", true) ||
-                (msg.contains("verification failed", true) && !msg.contains("email", true)) ->
-                "Security check failed. Complete the check and try again."
+            msg.contains("security check required", true) ||
+                msg.contains("security check failed", true) ||
+                (msg.contains("verification required", true) && !msg.contains("email", true)) ->
+                "Security check required. Complete the check and try again."
             msg.contains("incorrect email or password", true) || msg.contains("invalid email or password", true) ->
                 "Incorrect email or password."
             msg.contains("password must be at least", true) -> "Password must be at least 10 characters."

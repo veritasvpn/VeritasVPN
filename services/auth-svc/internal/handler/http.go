@@ -66,19 +66,27 @@ const (
 	signInRateLimit          = 10
 )
 
+// classifySignInAttempts keeps a shared network protected from high-volume
+// guessing without making unrelated people on that network complete a
+// challenge. Turnstile is a step-up for repeated attempts on one identity;
+// the IP counter remains a separate hard abuse limit.
+func classifySignInAttempts(ipAttempts, identityAttempts int64) (rateLimited, turnstileRequired bool) {
+	if ipAttempts > signInRateLimit || identityAttempts > signInRateLimit {
+		return true, false
+	}
+	return false, identityAttempts > signInTurnstileThreshold
+}
+
 // requireTurnstileForSignIn applies a risk step-up rather than challenging
 // every normal sign-in. Registration, anonymous account creation, recovery,
 // and sensitive account actions continue to call verifyTurnstileIfRequired
-// unconditionally. Repeated attempts are still capped at the old hard limit.
-func (h *HTTPHandler) requireTurnstileForSignIn(w http.ResponseWriter, r *http.Request, token string, keys ...string) bool {
-	maxAttempts := int64(0)
-	for _, key := range keys {
-		attempts := h.service.RateLimitCount(r.Context(), key, time.Minute, signInRateLimit+1)
-		if attempts > maxAttempts {
-			maxAttempts = attempts
-		}
-	}
-	if maxAttempts > signInRateLimit {
+// unconditionally. Repeated attempts are still capped by the shared IP and
+// identity hard limits.
+func (h *HTTPHandler) requireTurnstileForSignIn(w http.ResponseWriter, r *http.Request, token, ipKey, identityKey string) bool {
+	ipAttempts := h.service.RateLimitCount(r.Context(), ipKey, time.Minute, signInRateLimit+1)
+	identityAttempts := h.service.RateLimitCount(r.Context(), identityKey, time.Minute, signInRateLimit+1)
+	rateLimited, turnstileRequired := classifySignInAttempts(ipAttempts, identityAttempts)
+	if rateLimited {
 		writeHTTPError(w, http.StatusTooManyRequests, "too many sign-in attempts; try again later")
 		return false
 	}
@@ -88,7 +96,7 @@ func (h *HTTPHandler) requireTurnstileForSignIn(w http.ResponseWriter, r *http.R
 	if !h.service.TurnstileEnabled() {
 		return true
 	}
-	if maxAttempts <= signInTurnstileThreshold {
+	if !turnstileRequired {
 		return true
 	}
 	if strings.TrimSpace(token) == "" {
