@@ -1877,6 +1877,8 @@ body.auth-modal-open { overflow: hidden; }
 }
 .navbar .nav-links a:hover::after,
 .navbar .nav-links a:focus-visible::after { transform: scaleX(1); transform-origin: left; }
+.navbar .nav-links a[aria-current="page"] { color: var(--paper); }
+.navbar .nav-links a[aria-current="page"]::after { transform: scaleX(1); transform-origin: left; }
 
 .homepage-premium {
   background:

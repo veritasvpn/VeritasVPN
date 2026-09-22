@@ -57,3 +57,20 @@
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 8px;
 }
+
+/* Premium visual system — policy and contact pages */
+.legal-page {
+  padding-top: calc(var(--nav-h) + 64px); padding-bottom: 104px;
+  background:
+    radial-gradient(ellipse 48% 20% at 86% 0%, rgba(0, 71, 255, .14), transparent 75%),
+    radial-gradient(ellipse 35% 18% at 3% 22%, rgba(0, 210, 255, .06), transparent 74%);
+}
+.legal-page .container { max-width: 840px; padding: clamp(30px, 6vw, 66px); border: 1px solid rgba(255, 255, 255, .1); border-radius: 24px; background: linear-gradient(145deg, rgba(14, 23, 36, .82), rgba(7, 12, 20, .9)); box-shadow: 0 28px 78px rgba(0, 0, 0, .22), inset 0 1px rgba(255, 255, 255, .045); }
+.legal-page h1 { font-size: clamp(2.75rem, 5vw, 4.5rem); line-height: 1; letter-spacing: -.065em; }
+.legal-page h2 { margin-top: 2.7rem; padding-top: 1.15rem; border-top: 1px solid rgba(255, 255, 255, .09); font-size: 1.48rem; letter-spacing: -.035em; }
+.legal-page h1 + .legal-meta + .legal-notice { margin-top: 2.25rem; }
+.legal-page a { color: var(--cyan); text-decoration-color: rgba(0, 210, 255, .45); text-underline-offset: 3px; }
+.legal-notice { border-color: rgba(0, 210, 255, .25); border-radius: 14px; background: linear-gradient(135deg, rgba(0, 210, 255, .08), rgba(0, 71, 255, .06)); }
+.contact-block { position: relative; padding: 22px; border-color: rgba(255, 255, 255, .11); border-radius: 14px; background: rgba(5, 10, 17, .36); }
+.contact-block::before { position: absolute; top: 21px; left: 0; width: 2px; height: 34px; content: ""; background: var(--cyan); box-shadow: 0 0 14px rgba(0, 210, 255, .48); }
+@media (max-width: 640px) { .legal-page { padding-top: calc(var(--nav-h) + 28px); } .legal-page .container { padding: 28px 18px; border-radius: 18px; } .legal-page h1 { font-size: clamp(2.6rem, 13vw, 3.7rem); } }
