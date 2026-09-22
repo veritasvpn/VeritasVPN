@@ -41,6 +41,24 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    const premiumHero = document.querySelector('[data-premium-hero]');
+    const supportsFinePointer = window.matchMedia('(pointer: fine)').matches;
+    if (premiumHero && !reduceMotion && supportsFinePointer) {
+        const resetHeroPosition = () => {
+            premiumHero.style.setProperty('--hero-shift-x', '0px');
+            premiumHero.style.setProperty('--hero-shift-y', '0px');
+        };
+        premiumHero.addEventListener('pointermove', (event) => {
+            const bounds = premiumHero.getBoundingClientRect();
+            const offsetX = ((event.clientX - bounds.left) / bounds.width - 0.5) * -14;
+            const offsetY = ((event.clientY - bounds.top) / bounds.height - 0.5) * -10;
+            premiumHero.style.setProperty('--hero-shift-x', `${offsetX.toFixed(1)}px`);
+            premiumHero.style.setProperty('--hero-shift-y', `${offsetY.toFixed(1)}px`);
+        });
+        premiumHero.addEventListener('pointerleave', resetHeroPosition);
+    }
+
     const reveals = document.querySelectorAll('.reveal');
     if (reduceMotion) {
         reveals.forEach((el) => el.classList.add('is-in'));
