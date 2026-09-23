@@ -2080,3 +2080,61 @@ body.auth-modal-open { overflow: hidden; }
 .homepage-premium .pricing-shell { border-radius:0; }.homepage-premium .transparency-shell .transparency-row { border-radius:0; }.homepage-premium .downloads-shell .download-featured-card { border-radius:0; }.homepage-premium .faq-shell { border-top-color:rgba(0,210,255,.3); }
 @media (max-width:960px) { .hero--premium .hero-composition { grid-template-columns:1fr; gap:48px; }.hero-copy{max-width:760px}.hero--premium .hero-title{max-width:10ch}.hero-station{max-width:680px;min-height:520px}.homepage-premium .network-panel{grid-template-columns:1fr}.homepage-premium .network-legend{display:grid;grid-template-columns:repeat(3,1fr);padding:20px 0 0;border-left:0;border-top:1px solid rgba(0,210,255,.35)}.product-shell .reality-grid{grid-template-columns:repeat(2,minmax(0,1fr));} }
 @media (max-width:640px) { .homepage-premium .hero--premium{padding-top:112px}.hero--premium .hero-composition{width:calc(100% - 32px);gap:36px}.hero--premium .hero-title{font-size:clamp(3.9rem,17vw,5.9rem)}.hero-station{min-height:445px;padding:14px}.hero--premium .hero-station .hero-map-plane{inset:48px -66px 110px}.hero-station-caption{bottom:174px}.hero--premium .hero-station .hero-connection-card{right:14px;bottom:14px;left:14px;padding:15px}.homepage-premium .network-panel{padding:28px 0}.homepage-premium .network-legend{grid-template-columns:1fr;gap:13px}.product-shell .reality-grid,.homepage-premium .steps{grid-template-columns:1fr}.product-shell .reality-item,.homepage-premium .step{min-height:0}.homepage-premium .hero-proof-rail{margin-top:32px} }
+
+/* —— Full-bleed hero scene —— */
+.homepage-premium .hero--premium {
+  isolation: isolate;
+  min-height: min(960px, 100svh);
+  padding: clamp(124px, 12vw, 168px) 0 clamp(72px, 8vw, 116px);
+  background-image:
+    linear-gradient(90deg, rgba(4, 8, 15, .98) 0%, rgba(5, 10, 18, .94) 34%, rgba(5, 10, 18, .48) 67%, rgba(5, 9, 16, .76) 100%),
+    linear-gradient(180deg, rgba(3, 7, 13, .08), rgba(3, 7, 13, .88) 94%),
+    url("../assets/hero-network-paraguay-v1.webp");
+  background-position: center, center, center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+.homepage-premium .hero--premium::before {
+  z-index: -1;
+  opacity: .44;
+  background:
+    linear-gradient(90deg, rgba(0, 210, 255, .12) 1px, transparent 1px) 0 0 / 25% 100%,
+    linear-gradient(180deg, transparent 0%, rgba(2, 7, 13, .8) 100%);
+  mask-image: none;
+}
+.hero--premium .hero-composition { min-height: min(704px, calc(100svh - 176px)); }
+.hero--premium .hero-copy { position: relative; z-index: 2; }
+.hero--premium .hero-subtitle { color: #c6d7e5; text-shadow: 0 2px 28px rgba(0, 0, 0, .55); }
+.hero--premium .hero-proof-rail { background: rgba(161, 222, 244, .16); box-shadow: 0 20px 46px rgba(0, 0, 0, .26); }
+.hero--premium .hero-proof-rail li { background: rgba(5, 11, 19, .78); backdrop-filter: blur(10px); }
+.hero--premium .hero-station {
+  align-self: end;
+  min-height: 320px;
+  border-color: rgba(152, 228, 255, .32);
+  background: linear-gradient(145deg, rgba(14, 34, 54, .72), rgba(3, 8, 15, .78));
+  box-shadow: 0 34px 90px rgba(0, 0, 0, .44), inset 0 1px rgba(255, 255, 255, .12);
+  backdrop-filter: blur(18px) saturate(125%);
+}
+.hero--premium .hero-station::after { background: linear-gradient(180deg, transparent, rgba(2, 7, 13, .94) 78%); }
+.hero--premium .hero-station .hero-map-plane { display: none; }
+.hero--premium .hero-station-caption { bottom: 143px; }
+.hero--premium .hero-station .hero-connection-card {
+  border-color: rgba(134, 225, 255, .22);
+  background: rgba(2, 8, 15, .66);
+}
+@media (max-width: 960px) {
+  .homepage-premium .hero--premium { min-height: auto; background-position: center, center, 62% center; }
+  .hero--premium .hero-composition { min-height: 0; }
+  .hero--premium .hero-station { min-height: 310px; }
+}
+@media (max-width: 640px) {
+  .homepage-premium .hero--premium {
+    padding-top: 112px;
+    background-image:
+      linear-gradient(180deg, rgba(3, 8, 15, .9) 0%, rgba(4, 9, 17, .83) 58%, rgba(3, 7, 13, .96) 100%),
+      url("../assets/hero-network-paraguay-v1.webp");
+    background-position: center, 62% center;
+  }
+  .hero--premium .hero-station { min-height: 296px; }
+  .hero--premium .hero-station-caption { bottom: 138px; }
+}
