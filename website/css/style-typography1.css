@@ -2039,7 +2039,17 @@ body.auth-modal-open { overflow: hidden; }
   background: repeating-linear-gradient(90deg, transparent 0, transparent calc(25% - 1px), rgba(255,255,255,.025) 25%);
   mask-image: linear-gradient(180deg, #000, transparent 86%);
 }
-.hero-composition { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(0, .94fr) minmax(370px, .82fr); gap: clamp(44px, 8vw, 128px); align-items: center; }
+.hero--premium .hero-composition {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: min(1220px, calc(100% - 48px));
+  max-width: 1220px;
+  margin: 0 auto;
+  grid-template-columns: minmax(0, .94fr) minmax(370px, .82fr);
+  gap: clamp(44px, 8vw, 128px);
+  align-items: center;
+}
 .hero-copy { max-width: 655px; }
 .hero--premium .hero-title { max-width: 9.5ch; font-size: clamp(4.2rem, 7.4vw, 8.2rem); line-height: .87; }
 .hero--premium .hero-subtitle { max-width: 48ch; }
@@ -2068,5 +2078,5 @@ body.auth-modal-open { overflow: hidden; }
 .product-shell .reality-grid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; overflow:hidden; background:rgba(255,255,255,.1); }.product-shell .reality-item { min-height:260px; border:0; border-radius:0; background:rgba(8,13,21,.87); }.product-shell .reality-item:nth-child(2n) { background:rgba(13,21,33,.9); }
 .homepage-premium .how-it-works-shell { border-radius:0; background:transparent; box-shadow:none; }.homepage-premium .steps { grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; background:rgba(255,255,255,.1); }.homepage-premium .step { min-height:320px; border:0; border-radius:0; background:#0b1018; }.homepage-premium .step:nth-child(2) { background:#101a28; }
 .homepage-premium .pricing-shell { border-radius:0; }.homepage-premium .transparency-shell .transparency-row { border-radius:0; }.homepage-premium .downloads-shell .download-featured-card { border-radius:0; }.homepage-premium .faq-shell { border-top-color:rgba(0,210,255,.3); }
-@media (max-width:960px) { .hero-composition { grid-template-columns:1fr; gap:48px; }.hero-copy{max-width:760px}.hero--premium .hero-title{max-width:10ch}.hero-station{max-width:680px;min-height:520px}.homepage-premium .network-panel{grid-template-columns:1fr}.homepage-premium .network-legend{display:grid;grid-template-columns:repeat(3,1fr);padding:20px 0 0;border-left:0;border-top:1px solid rgba(0,210,255,.35)}.product-shell .reality-grid{grid-template-columns:repeat(2,minmax(0,1fr));} }
-@media (max-width:640px) { .homepage-premium .hero--premium{padding-top:112px}.hero-composition{gap:36px}.hero--premium .hero-title{font-size:clamp(3.9rem,17vw,5.9rem)}.hero-station{min-height:445px;padding:14px}.hero--premium .hero-station .hero-map-plane{inset:48px -66px 110px}.hero-station-caption{bottom:174px}.hero--premium .hero-station .hero-connection-card{right:14px;bottom:14px;left:14px;padding:15px}.homepage-premium .network-panel{padding:28px 0}.homepage-premium .network-legend{grid-template-columns:1fr;gap:13px}.product-shell .reality-grid,.homepage-premium .steps{grid-template-columns:1fr}.product-shell .reality-item,.homepage-premium .step{min-height:0}.homepage-premium .hero-proof-rail{margin-top:32px} }
+@media (max-width:960px) { .hero--premium .hero-composition { grid-template-columns:1fr; gap:48px; }.hero-copy{max-width:760px}.hero--premium .hero-title{max-width:10ch}.hero-station{max-width:680px;min-height:520px}.homepage-premium .network-panel{grid-template-columns:1fr}.homepage-premium .network-legend{display:grid;grid-template-columns:repeat(3,1fr);padding:20px 0 0;border-left:0;border-top:1px solid rgba(0,210,255,.35)}.product-shell .reality-grid{grid-template-columns:repeat(2,minmax(0,1fr));} }
+@media (max-width:640px) { .homepage-premium .hero--premium{padding-top:112px}.hero--premium .hero-composition{width:calc(100% - 32px);gap:36px}.hero--premium .hero-title{font-size:clamp(3.9rem,17vw,5.9rem)}.hero-station{min-height:445px;padding:14px}.hero--premium .hero-station .hero-map-plane{inset:48px -66px 110px}.hero-station-caption{bottom:174px}.hero--premium .hero-station .hero-connection-card{right:14px;bottom:14px;left:14px;padding:15px}.homepage-premium .network-panel{padding:28px 0}.homepage-premium .network-legend{grid-template-columns:1fr;gap:13px}.product-shell .reality-grid,.homepage-premium .steps{grid-template-columns:1fr}.product-shell .reality-item,.homepage-premium .step{min-height:0}.homepage-premium .hero-proof-rail{margin-top:32px} }
