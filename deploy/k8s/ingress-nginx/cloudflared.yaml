@@ -17,7 +17,9 @@ spec:
     spec:
       containers:
         - name: cloudflared
-          image: cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
+          # The Dell runs this digest from the local registry tag 2026.8.2.
+          # Applying the old Docker Hub pin would replace the live tunnel.
+          image: localhost:31500/cloudflared@sha256:de55830499e9adb1c580f7b5cbbdef86a3ff1715fb3ae6b3ff242f19de0afde8
           imagePullPolicy: IfNotPresent
           args:
             - tunnel
