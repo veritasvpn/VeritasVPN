@@ -2,7 +2,7 @@
 
 ## Useful information (humans)
 
-**Production traffic** is served by Cloudflare Functions that stream from GitHub Releases (Linux and Android `v0.2.77`). The local fallback files in this directory are not deployed to Pages and retain their own checksum manifest until they are refreshed separately.
+**Production traffic** is served by Cloudflare Functions that stream from GitHub Releases (Linux and Android `v0.2.77`) only when the bytes match the SHA-256 pinned in `functions/_lib/releases.js`. The local fallback files in this directory are not deployed to Pages and retain their own checksum manifest until they are refreshed separately.
 
 | File | Purpose |
 |------|---------|

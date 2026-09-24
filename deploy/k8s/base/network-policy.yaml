@@ -579,6 +579,8 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
+    # HTTP and HTTPS only. The proxy process also rejects other ports; this
+    # keeps a compromised proxy from opening arbitrary public services.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -586,6 +588,11 @@ spec:
               - 10.0.0.0/8
               - 172.16.0.0/12
               - 192.168.0.0/16
+      ports:
+        - port: 80
+          protocol: TCP
+        - port: 443
+          protocol: TCP
 ---
 # The scanner only needs encrypted TLS handshakes to public web hosts. It
 # cannot reach cluster/private networks, databases, or arbitrary ports.
@@ -677,10 +684,20 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # DoH upstreams + general internet for DNS
+    # DoH and HTTPS blocklist feeds. Client VPN traffic is forwarded by the
+    # host, not by this pod policy: the agent runs with hostNetwork, so
+    # NetworkPolicy does not confine the host. Keep management ports dropped
+    # on the uplink in deploy/node/veritas-firewall.sh.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

@@ -15,7 +15,9 @@ images:
     digest: sha256:be4655a4df93a2fa329d5ba95994314ddcbfa6f9cf421a3f66cb316916bac157
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    digest: sha256:f0f79c16b3c2f28e8339409397f510907787e0e811358490558d2d3667f21efe
+    # Payment-status reconciliation build that is running on the Dell.
+    # The older f0f79c16 pin would roll that back.
+    digest: sha256:dcf18faeb2d3242f2ea42f9de7dba59099ad6193fc7407278c593bf8e07d7a3a
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     digest: sha256:2c4ea2eb7e744f59da0dbc83afd4c8395febe946c1ee90ebe6e2dba0c732a30f
@@ -63,12 +65,14 @@ patches:
       - op: replace
         path: /data/PUBLIC_IP
         value: "REPLACE_ME_PUBLIC_IP"
+      # Leave the browser proxy off until auth-svc reports the database tier.
+      # A public host here would turn the proxy on for every client.
       - op: replace
         path: /data/BROWSER_PROXY_HOST
-        value: "REPLACE_ME_PUBLIC_IP"
+        value: ""
       - op: replace
         path: /data/BROWSER_EXPECTED_EGRESS_IP
-        value: "REPLACE_ME_PUBLIC_IP"
+        value: ""
       - op: replace
         path: /data/STEALTH_ENABLED
         value: "true"

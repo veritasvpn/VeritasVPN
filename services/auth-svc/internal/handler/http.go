@@ -318,11 +318,19 @@ func (h *HTTPHandler) handleValidate(w http.ResponseWriter, r *http.Request) {
 		writeHTTPJSON(w, http.StatusOK, map[string]interface{}{"valid": false})
 		return
 	}
+	// The token's tier claim is stale until refresh. Paid features must see
+	// the accounts row, and a lookup failure fails closed rather than
+	// falling back to that claim.
+	acc, err := h.service.GetAccount(r.Context(), claims.AccountID)
+	if err != nil {
+		writeHTTPJSON(w, http.StatusOK, map[string]interface{}{"valid": false})
+		return
+	}
 
 	writeHTTPJSON(w, http.StatusOK, map[string]interface{}{
 		"valid":      true,
 		"account_id": claims.AccountID,
-		"tier":       claims.Tier,
+		"tier":       service.EffectiveSubscriptionTier(acc, time.Now()),
 	})
 }
 
