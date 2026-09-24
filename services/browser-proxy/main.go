@@ -132,6 +132,7 @@ func (p *proxy) activeToken(ctx context.Context, token string) bool {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result); err != nil {
 		return false
 	}
+	// auth-svc returns the accounts-row tier, not the tier claim in this token.
 	return result.Valid && result.Tier == "premium"
 }
 

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -30,6 +32,27 @@ func TestPublicAddressClassification(t *testing.T) {
 func TestRejectsPrivateTarget(t *testing.T) {
 	if _, err := analyze(context.Background(), "https://192.168.0.6"); err == nil {
 		t.Fatal("expected private target to be rejected")
+	}
+}
+
+func TestSameOriginRequiresSite(t *testing.T) {
+	allowed := []string{"https://veritasvpn.cloud", "https://www.veritasvpn.cloud"}
+	for _, origin := range allowed {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/phishing/check", nil)
+		req.Header.Set("Origin", origin)
+		if !sameOrigin(req) {
+			t.Fatalf("origin %s should be allowed", origin)
+		}
+	}
+	rejected := []string{"", "https://evil.example", "http://veritasvpn.cloud", "https://veritasvpn.cloud.evil.example"}
+	for _, origin := range rejected {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/phishing/check", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if sameOrigin(req) {
+			t.Fatalf("origin %q should be rejected", origin)
+		}
 	}
 }
 

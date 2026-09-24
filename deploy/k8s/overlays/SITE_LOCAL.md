@@ -34,12 +34,15 @@ patches:
       - op: replace
         path: /data/PUBLIC_IP
         value: "YOUR.EGRESS.IP.HERE"
+      # Keep these empty. A non-empty host enables the browser proxy, and that
+      # proxy must not be turned on until the deployed auth-svc returns the
+      # database tier from /api/v1/auth/validate.
       - op: replace
         path: /data/BROWSER_PROXY_HOST
-        value: "YOUR.EGRESS.IP.HERE"
+        value: ""
       - op: replace
         path: /data/BROWSER_EXPECTED_EGRESS_IP
-        value: "YOUR.EGRESS.IP.HERE"
+        value: ""
       - op: replace
         path: /data/STEALTH_ENDPOINT_HOST
         value: "YOUR.EGRESS.IP.HERE"

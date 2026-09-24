@@ -352,8 +352,10 @@ func clientIP(r *http.Request) string {
 }
 
 func sameOrigin(r *http.Request) bool {
+	// A missing Origin is not the website. Browsers send Origin on this POST;
+	// accepting the empty value let any client on the internet use the checker.
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	return origin == "" || origin == "https://veritasvpn.cloud" || origin == "https://www.veritasvpn.cloud"
+	return origin == "https://veritasvpn.cloud" || origin == "https://www.veritasvpn.cloud"
 }
 
 func securityHeaders(next http.Handler) http.Handler {
