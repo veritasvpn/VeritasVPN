@@ -1,4 +1,5 @@
 import { addResult, clearResults, fetchJson, setCheckBusy, setOutcome, setStatus, showResultSkeletons } from "/js/check-common.js";
+import { TURNSTILE_SITE_KEY } from "/js/config.js";
 
 const form = document.getElementById("phishingForm");
 const input = document.getElementById("url");
@@ -6,6 +7,59 @@ const button = document.getElementById("runCheck");
 const status = document.getElementById("status");
 const outcome = document.getElementById("outcome");
 const results = document.getElementById("results");
+const turnstileEl = document.getElementById("phishingTurnstile");
+
+let turnstileWidgetId = null;
+let turnstileToken = "";
+let turnstileScriptPromise = null;
+
+function loadTurnstile() {
+  if (window.turnstile) return Promise.resolve();
+  if (turnstileScriptPromise) return turnstileScriptPromise;
+  turnstileScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Could not load verification"));
+    document.head.appendChild(script);
+  });
+  return turnstileScriptPromise;
+}
+
+async function ensureTurnstile() {
+  if (!turnstileEl || !TURNSTILE_SITE_KEY) return;
+  await loadTurnstile();
+  turnstileEl.hidden = false;
+  if (turnstileWidgetId != null) return;
+  turnstileWidgetId = window.turnstile.render(turnstileEl, {
+    sitekey: TURNSTILE_SITE_KEY,
+    callback: (token) => {
+      turnstileToken = token;
+    },
+    "expired-callback": () => {
+      turnstileToken = "";
+    },
+    "error-callback": () => {
+      turnstileToken = "";
+    },
+  });
+}
+
+function resetTurnstile() {
+  turnstileToken = "";
+  if (turnstileWidgetId != null && window.turnstile) {
+    try {
+      window.turnstile.reset(turnstileWidgetId);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+void ensureTurnstile().catch(() => {
+  /* widget stays hidden until the next attempt reports the error */
+});
 
 const verdicts = {
   high_risk: {
@@ -38,10 +92,14 @@ form?.addEventListener("submit", async (event) => {
   showResultSkeletons(results, 3);
   setCheckBusy(button, true, "Analyzing…");
   try {
+    await ensureTurnstile();
+    if (TURNSTILE_SITE_KEY && !turnstileToken) {
+      throw new Error("Complete the verification challenge, then try again.");
+    }
     const data = await fetchJson("https://api.veritasvpn.cloud/api/v1/phishing/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, turnstile_token: turnstileToken || undefined }),
     });
     const verdict = verdicts[data.verdict] || verdicts.suspicious;
     clearResults(results);
@@ -61,6 +119,7 @@ form?.addEventListener("submit", async (event) => {
     setStatus(status, "bad", error.message || "The link check failed.");
     setOutcome(outcome, { state: "bad", title: "No result", body: "The link could not be checked. Do not treat that as a safe result—try again later or verify the destination through an official channel." });
   } finally {
+    resetTurnstile();
     setCheckBusy(button, false);
   }
 });
