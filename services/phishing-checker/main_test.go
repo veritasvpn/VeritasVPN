@@ -5,7 +5,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestPublicAddressClassification(t *testing.T) {
@@ -32,6 +34,38 @@ func TestPublicAddressClassification(t *testing.T) {
 func TestRejectsPrivateTarget(t *testing.T) {
 	if _, err := analyze(context.Background(), "https://192.168.0.6"); err == nil {
 		t.Fatal("expected private target to be rejected")
+	}
+}
+
+func TestCheckRequiresTurnstileBeforeLookup(t *testing.T) {
+	handler := check(&limiter{entries: map[string][]time.Time{}, limit: 10, window: time.Minute}, "secret", verifyTurnstile)
+	body := strings.NewReader(`{"url":"https://127.0.0.1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/phishing/check", body)
+	req.Header.Set("Origin", "https://veritasvpn.cloud")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("missing token status = %d, want 403", rec.Code)
+	}
+
+	unavailable := check(&limiter{entries: map[string][]time.Time{}, limit: 10, window: time.Minute}, "", verifyTurnstile)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/phishing/check", strings.NewReader(`{"url":"https://127.0.0.1","turnstile_token":"present"}`))
+	req.Header.Set("Origin", "https://veritasvpn.cloud")
+	rec = httptest.NewRecorder()
+	unavailable(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing secret status = %d, want 503", rec.Code)
+	}
+
+	verified := check(&limiter{entries: map[string][]time.Time{}, limit: 10, window: time.Minute}, "secret", func(context.Context, string, string, string) error {
+		return nil
+	})
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/phishing/check", strings.NewReader(`{"url":"https://127.0.0.1","turnstile_token":"ok"}`))
+	req.Header.Set("Origin", "https://veritasvpn.cloud")
+	rec = httptest.NewRecorder()
+	verified(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("verified private target status = %d, want 400", rec.Code)
 	}
 }
 

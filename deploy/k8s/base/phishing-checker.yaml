@@ -38,11 +38,16 @@ spec:
           type: RuntimeDefault
       containers:
         - name: phishing-checker
-          image: localhost:31500/phishing-checker@sha256:cc44aade31f2545a4bd4c951e63e557488c5e5e3a3f7c94db397437afbdec76e
+          image: localhost:31500/phishing-checker@sha256:31f3c895e33fe29de6b2b803a9029fee0f06d52f3a5471a63403b5e267509e61
           imagePullPolicy: IfNotPresent
           env:
             - name: RATE_LIMIT_PER_MINUTE
               value: "10"
+            - name: TURNSTILE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: TURNSTILE_SECRET_KEY
           ports:
             - name: http
               containerPort: 8080

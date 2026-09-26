@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -51,7 +52,8 @@ type tlsInfo struct {
 }
 
 type request struct {
-	URL string `json:"url"`
+	URL            string `json:"url"`
+	TurnstileToken string `json:"turnstile_token"`
 }
 
 type limiter struct {
@@ -91,7 +93,7 @@ func main() {
 	l := &limiter{entries: make(map[string][]time.Time), limit: limit, window: time.Minute}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)
-	mux.HandleFunc("POST /api/v1/phishing/check", check(l))
+	mux.HandleFunc("POST /api/v1/phishing/check", check(l, env("TURNSTILE_SECRET_KEY", ""), verifyTurnstile))
 	server := &http.Server{
 		Addr:              env("LISTEN_ADDR", ":8080"),
 		Handler:           securityHeaders(mux),
@@ -116,7 +118,7 @@ func health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func check(l *limiter) http.HandlerFunc {
+func check(l *limiter, secret string, verify func(context.Context, string, string, string) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !sameOrigin(r) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "Cross-origin requests are not allowed."})
@@ -133,6 +135,20 @@ func check(l *limiter) http.HandlerFunc {
 		var input request
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Enter one valid URL."})
+			return
+		}
+		// Prove the caller passed Turnstile before any DNS lookup or TLS handshake.
+		if err := verify(r.Context(), secret, input.TurnstileToken, client); err != nil {
+			status := http.StatusForbidden
+			message := "Verification failed."
+			if err.Error() == "verification required" {
+				message = "Complete the verification challenge, then try again."
+			}
+			if err.Error() == "verification unavailable" {
+				status = http.StatusServiceUnavailable
+				message = "Verification is unavailable. Try again later."
+			}
+			writeJSON(w, status, map[string]string{"error": message})
 			return
 		}
 		result, err := analyze(r.Context(), input.URL)
@@ -342,6 +358,41 @@ func ipsToStrings(ips []net.IP) []string {
 	}
 	sort.Strings(values)
 	return values
+}
+
+func verifyTurnstile(ctx context.Context, secret, token, remoteIP string) error {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return errors.New("verification unavailable")
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return errors.New("verification required")
+	}
+	form := url.Values{}
+	form.Set("secret", secret)
+	form.Set("response", token)
+	if net.ParseIP(remoteIP) != nil {
+		form.Set("remoteip", remoteIP)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://challenges.cloudflare.com/turnstile/v0/siteverify", strings.NewReader(form.Encode()))
+	if err != nil {
+		return errors.New("verification unavailable")
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return errors.New("verification unavailable")
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Success bool `json:"success"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result); err != nil || !result.Success {
+		return errors.New("verification failed")
+	}
+	return nil
 }
 
 func clientIP(r *http.Request) string {
