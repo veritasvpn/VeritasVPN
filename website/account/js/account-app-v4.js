@@ -84,6 +84,14 @@ async function revokePeer(peerId) {
   });
 }
 
+async function updatePeerMetadata(peerId, metadata) {
+  return authApiFetch("https://api.veritasvpn.cloud/api/v1/wg/peers/" + encodeURIComponent(peerId), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(metadata),
+  });
+}
+
 async function confirmSensitiveAction(label) {
   const user = auth.currentUser;
   if (user?.email) {
@@ -395,18 +403,33 @@ function renderDevices() {
     const id = p.id || p.peer_id || '';
     const short = id ? id.slice(0, 8) + '…' : '—';
     const ip = p.assigned_ip || '—';
-    const status = p.status || '—';
+    const friendlyName = String(p.device_name || '').trim();
+    const platform = String(p.device_platform || '').trim();
+    const model = String(p.device_model || '').trim();
+    const osVersion = String(p.device_os_version || '').trim();
+    const clientVersion = String(p.client_version || '').trim();
+    const fallbackName = [platform, model].filter(Boolean).join(' · ') || `Unnamed device ${short}`;
+    const name = friendlyName || fallbackName;
+    const handshake = Number(p.last_handshake_at || 0);
+    const online = handshake > 0 && (Date.now() / 1000 - handshake) < 180;
+    const connection = online ? 'Connected now' : (handshake ? `Last connected ${formatDate(new Date(handshake * 1000).toISOString())}` : 'Not connected yet');
     const blocked = Number(p.dns_blocked_count || 0);
     const created = p.created_at ? formatDate(typeof p.created_at === 'string' ? p.created_at : new Date(p.created_at * 1000).toISOString()) : '';
+    const technical = [osVersion, clientVersion ? `App ${clientVersion}` : ''].filter(Boolean).join(' · ');
     return `
       <div class="account-card" style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;">
           <div>
-            <strong>Device ${escapeHtml(short)}</strong>
-            <p class="plan-card-meta" style="margin:6px 0 0;">IP ${escapeHtml(ip)} · ${escapeHtml(status)}${created ? ' · ' + escapeHtml(created) : ''}</p>
+            <strong>${escapeHtml(name)}</strong>
+            <p class="plan-card-meta" style="margin:6px 0 0;">${online ? '● ' : ''}${escapeHtml(connection)}${created ? ' · Added ' + escapeHtml(created) : ''}</p>
+            ${technical ? `<p class="plan-card-meta" style="margin:4px 0 0;">${escapeHtml(technical)}</p>` : ''}
+            <p class="plan-card-meta" style="margin:4px 0 0;">Tunnel IP ${escapeHtml(ip)} · Device ID ${escapeHtml(short)}</p>
             <p class="plan-card-meta" style="margin:4px 0 0;">Veritas Shield blocked: ${escapeHtml(blocked)}</p>
           </div>
-          <button type="button" class="btn btn-outline btn-sm" data-action="revoke-peer" data-peer-id="${escapeHtml(id)}">Revoke</button>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button type="button" class="btn btn-outline btn-sm" data-action="rename-peer" data-peer-id="${escapeHtml(id)}" data-peer-name="${escapeHtml(friendlyName)}" data-peer-fallback="${escapeHtml(fallbackName)}">Rename</button>
+            <button type="button" class="btn btn-outline btn-sm" data-action="revoke-peer" data-peer-id="${escapeHtml(id)}" data-peer-name="${escapeHtml(name)}">Revoke</button>
+          </div>
         </div>
       </div>`;
   }).join('');
@@ -567,11 +590,27 @@ async function onAction(action, btn) {
     }
     if (action === 'revoke-peer') {
       const peerId = btn.dataset.peerId;
-      if (!peerId || !confirm('Revoke this device? It will disconnect if currently using the VPN.')) return;
+      const name = btn.dataset.peerName || 'this device';
+      if (!peerId || !confirm(`Revoke ${name}?\n\nIts WireGuard access will be removed immediately, disconnecting it from VeritasVPN. This does not delete the app, your account, or your Premium plan.`)) return;
       btn.disabled = true;
       await revokePeer(peerId);
       peersCache = peersCache.filter((p) => (p.id || p.peer_id) !== peerId);
-      showFlash('Device revoked.', 'ok');
+      showFlash(`${name} was revoked. It no longer has VPN access and its device slot is free.`, 'ok');
+      render();
+      return;
+    }
+    if (action === 'rename-peer') {
+      const peerId = btn.dataset.peerId;
+      if (!peerId) return;
+      const current = btn.dataset.peerName || '';
+      const suggestion = btn.dataset.peerFallback || 'My device';
+      const name = window.prompt('Name this device. This is only shown in your account dashboard.', current || suggestion);
+      if (name === null) return;
+      const cleaned = name.trim().slice(0, 80);
+      btn.disabled = true;
+      const updated = await updatePeerMetadata(peerId, { device_name: cleaned });
+      peersCache = peersCache.map((p) => (p.id || p.peer_id) === peerId ? { ...p, ...updated } : p);
+      showFlash(cleaned ? 'Device name updated.' : 'Custom device name removed.', 'ok');
       render();
       return;
     }

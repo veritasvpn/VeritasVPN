@@ -231,6 +231,27 @@ func (m *Manager) GetStats() (rxBytes, txBytes int64, peerCount, activePeerCount
 	return rxBytes, txBytes, int32(len(wgPeers)), activePeerCount
 }
 
+// HandshakeTimes returns the most recent real WireGuard handshakes keyed by
+// the manager peer ID. It intentionally exposes no public keys or traffic
+// totals to the control plane.
+func (m *Manager) HandshakeTimes() map[string]int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	wgPeers, err := m.wg.ListPeers()
+	if err != nil {
+		return nil
+	}
+	result := make(map[string]int64)
+	for _, kernel := range wgPeers {
+		cfg := m.peers[kernel.PublicKey]
+		if cfg == nil || cfg.PeerID == "" || kernel.LastHandshakeAt.IsZero() {
+			continue
+		}
+		result[cfg.PeerID] = kernel.LastHandshakeAt.UTC().Unix()
+	}
+	return result
+}
+
 func cidrsToIPNets(cidrs []string) []net.IPNet {
 	nets := make([]net.IPNet, 0, len(cidrs))
 	for _, raw := range cidrs {

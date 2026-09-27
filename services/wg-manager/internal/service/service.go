@@ -41,6 +41,11 @@ type PeerConfig struct {
 	ClientAllowedIPs       []string // client tunnel AllowedIPs (full tunnel)
 	PersistentKeepaliveSec int
 	DeviceID               string
+	DeviceName             string
+	DevicePlatform         string
+	DeviceModel            string
+	DeviceOSVersion        string
+	ClientVersion          string
 	ShieldPreset           string
 }
 
@@ -389,7 +394,7 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 	return srv, plaintext, nil
 }
 
-func (s *Service) HandleHeartbeat(ctx context.Context, serverID string, peerCount int32, loadFactor float64, rxBytes, txBytes int64, dnsBlockedByIP map[string]uint64) error {
+func (s *Service) HandleHeartbeat(ctx context.Context, serverID string, peerCount int32, loadFactor float64, rxBytes, txBytes int64, dnsBlockedByIP map[string]uint64, peerHandshakes map[string]time.Time) error {
 	if err := s.postgres.UpdateServerLoad(ctx, serverID, peerCount, loadFactor); err != nil {
 		return fmt.Errorf("update server load: %w", err)
 	}
@@ -402,6 +407,9 @@ func (s *Service) HandleHeartbeat(ctx context.Context, serverID string, peerCoun
 		if err := s.redis.SetDNSBlockedCounts(ctx, dnsBlockedByIP); err != nil {
 			s.log.Warn("failed to store dns blocked counts", "server_id", serverID, "error", err)
 		}
+	}
+	if err := s.postgres.UpdatePeerHandshakes(ctx, serverID, peerHandshakes); err != nil {
+		s.log.Warn("failed to store peer handshake times", "server_id", serverID, "error", err)
 	}
 
 	s.log.Debug("heartbeat processed",
@@ -431,7 +439,7 @@ func (s *Service) DNSBlockedCount(ctx context.Context, assignedIP string) uint64
 	return n
 }
 
-func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, deviceID, preferredRegion, clientIP, shieldPreset string) (*PeerConfig, error) {
+func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, deviceID, deviceName, devicePlatform, deviceModel, deviceOSVersion, clientVersion, preferredRegion, clientIP, shieldPreset string) (*PeerConfig, error) {
 	tier = s.resolveTier(ctx, accountID, tier)
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" {
@@ -518,16 +526,21 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 	}
 
 	peer := &model.Peer{
-		AccountID:    accountID,
-		ServerID:     srv.ID,
-		DeviceID:     deviceID,
-		Pubkey:       publicKey,
-		PresharedKey: &psk,
-		AllowedIPs:   []string{assignedIP},
-		AssignedIP:   assignedIP,
-		Status:       "pending",
-		ShieldPreset: entitlement.NormalizeShieldPreset(shieldPreset),
-		CreatedAt:    time.Now(),
+		AccountID:       accountID,
+		ServerID:        srv.ID,
+		DeviceID:        deviceID,
+		DeviceName:      deviceName,
+		DevicePlatform:  devicePlatform,
+		DeviceModel:     deviceModel,
+		DeviceOSVersion: deviceOSVersion,
+		ClientVersion:   clientVersion,
+		Pubkey:          publicKey,
+		PresharedKey:    &psk,
+		AllowedIPs:      []string{assignedIP},
+		AssignedIP:      assignedIP,
+		Status:          "pending",
+		ShieldPreset:    entitlement.NormalizeShieldPreset(shieldPreset),
+		CreatedAt:       time.Now(),
 	}
 
 	if replacedPeer != nil {
@@ -625,6 +638,11 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		ClientAllowedIPs:       []string{"0.0.0.0/0", "::/0"},
 		PersistentKeepaliveSec: 25,
 		DeviceID:               deviceID,
+		DeviceName:             peer.DeviceName,
+		DevicePlatform:         peer.DevicePlatform,
+		DeviceModel:            peer.DeviceModel,
+		DeviceOSVersion:        peer.DeviceOSVersion,
+		ClientVersion:          peer.ClientVersion,
 		ShieldPreset:           peer.ShieldPreset,
 	}, nil
 }
@@ -768,6 +786,31 @@ func (s *Service) UpdateShieldPreset(ctx context.Context, peerID, accountID, pre
 	}
 	_ = s.communicator.PushShieldPreset(peer.ServerID, peer)
 	return peer, nil
+}
+
+// UpdatePeerMetadata changes only human-readable dashboard details. Values are
+// supplied by the client and must never be treated as a device attestation.
+func (s *Service) UpdatePeerMetadata(ctx context.Context, peerID, accountID string, name, platform, deviceModel, osVersion, clientVersion *string) (*model.Peer, error) {
+	peer, err := s.postgres.GetPeer(ctx, peerID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if name != nil {
+		peer.DeviceName = *name
+	}
+	if platform != nil {
+		peer.DevicePlatform = *platform
+	}
+	if deviceModel != nil {
+		peer.DeviceModel = *deviceModel
+	}
+	if osVersion != nil {
+		peer.DeviceOSVersion = *osVersion
+	}
+	if clientVersion != nil {
+		peer.ClientVersion = *clientVersion
+	}
+	return s.postgres.UpdatePeerMetadata(ctx, peerID, accountID, peer.DeviceName, peer.DevicePlatform, peer.DeviceModel, peer.DeviceOSVersion, peer.ClientVersion)
 }
 
 func (s *Service) MarkPeerActive(ctx context.Context, peerID, serverID string) error {
