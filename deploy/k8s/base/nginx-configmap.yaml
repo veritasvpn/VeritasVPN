@@ -131,6 +131,10 @@ data:
             limit_req zone=auth_limit burst=10 nodelay;
             proxy_pass http://auth-svc:8080/api/v1/auth/;
             proxy_hide_header Access-Control-Allow-Origin;
+            # Nginx owns the single credentialed CORS policy. Do not forward
+            # the backend copy: duplicate Allow-Credentials headers make
+            # browsers reject the response as a network error.
+            proxy_hide_header Access-Control-Allow-Credentials;
             proxy_hide_header Access-Control-Allow-Methods;
             proxy_hide_header Access-Control-Allow-Headers;
             proxy_hide_header Access-Control-Expose-Headers;
@@ -156,6 +160,7 @@ data:
             limit_req zone=billing_limit burst=5 nodelay;
             proxy_pass http://billing-svc:8080/api/v1/billing/;
             proxy_hide_header Access-Control-Allow-Origin;
+            proxy_hide_header Access-Control-Allow-Credentials;
             proxy_hide_header Access-Control-Allow-Methods;
             proxy_hide_header Access-Control-Allow-Headers;
             proxy_hide_header Access-Control-Expose-Headers;
@@ -171,6 +176,7 @@ data:
             limit_req zone=provisioning_limit burst=5 nodelay;
             proxy_pass http://wg-manager:8080/api/v1/wg/;
             proxy_hide_header Access-Control-Allow-Origin;
+            proxy_hide_header Access-Control-Allow-Credentials;
             proxy_hide_header Access-Control-Allow-Methods;
             proxy_hide_header Access-Control-Allow-Headers;
             proxy_hide_header Access-Control-Expose-Headers;
