@@ -4,7 +4,7 @@ import {
   signOutHandler,
   sendPasswordResetEmail,
   apiFetch,
-} from '/js/auth.js?v=sessionhandoff1';
+} from '/js/auth.js?v=accountHandoff2';
 import {
   fetchBillingStatus,
   hasPendingBitcoinConfirmation,
