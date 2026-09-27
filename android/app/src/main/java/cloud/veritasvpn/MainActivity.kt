@@ -829,6 +829,30 @@ class MainActivity : ComponentActivity() {
 
     private var currentPeerId: String? = null
 
+    // Display-only metadata for the account dashboard. Do not add hardware
+    // identifiers (IMEI, Android ID, serial, MAC), account data or location.
+    // A user-selected dashboard name stays server-side and is never overwritten.
+    private fun deviceMetadata(): Map<String, String> {
+        val manufacturer = Build.MANUFACTURER.orEmpty().trim()
+        val model = Build.MODEL.orEmpty().trim()
+        val deviceModel = listOf(manufacturer, model)
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+            .joinToString(" ")
+            .take(100)
+        val appVersion = try {
+            packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+        return mapOf(
+            "device_platform" to "Android",
+            "device_model" to deviceModel,
+            "device_os_version" to "Android ${Build.VERSION.RELEASE.orEmpty()}".trim(),
+            "client_version" to appVersion,
+        )
+    }
+
     private fun peerIdForDisconnect(): String? {
         val id = currentPeerId ?: VpnSettings.currentPeerId(this)
         currentPeerId = null
@@ -862,7 +886,7 @@ class MainActivity : ComponentActivity() {
                             mapOf(
                                 "public_key" to generated.publicKey.toBase64(),
                                 "device_id" to deviceId,
-                            ),
+                            ) + deviceMetadata(),
                             token
                         )
                     }) { res ->

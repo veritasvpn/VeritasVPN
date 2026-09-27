@@ -1,0 +1,13 @@
+-- 007_peer_device_metadata.sql
+-- Kept with the docker-init migration copies. Runtime migrations are in
+-- internal/migrate and are authoritative for an existing installation.
+ALTER TABLE peers ADD COLUMN IF NOT EXISTS device_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE peers ADD COLUMN IF NOT EXISTS device_platform TEXT NOT NULL DEFAULT '';
+ALTER TABLE peers ADD COLUMN IF NOT EXISTS device_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE peers ADD COLUMN IF NOT EXISTS device_os_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE peers ADD COLUMN IF NOT EXISTS client_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE peers ADD COLUMN IF NOT EXISTS last_handshake_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_peers_server_last_handshake
+    ON peers (server_id, last_handshake_at DESC)
+    WHERE status IN ('pending', 'active');

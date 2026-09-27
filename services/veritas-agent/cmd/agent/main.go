@@ -58,6 +58,7 @@ type HeartbeatRequest struct {
 	RXBytes        int64             `json:"rx_bytes"`
 	TXBytes        int64             `json:"tx_bytes"`
 	DNSBlockedByIP map[string]uint64 `json:"dns_blocked_by_ip,omitempty"`
+	PeerHandshakes map[string]int64  `json:"peer_handshakes,omitempty"`
 }
 
 type PeerUpdate struct {
@@ -692,6 +693,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 				}
 				return a.dnsForwarder.BlockedCounts()
 			}(),
+			PeerHandshakes: a.peerManager.HandshakeTimes(),
 		}
 
 		if err := a.managerClient.SendHeartbeat(ctx, req); err != nil {

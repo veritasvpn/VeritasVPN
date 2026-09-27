@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"errors"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/veritasvpn/services/wg-manager/internal/entitlement"
 	"github.com/veritasvpn/services/wg-manager/internal/hub"
 	"github.com/veritasvpn/services/wg-manager/internal/metrics"
+	"github.com/veritasvpn/services/wg-manager/internal/model"
 	"github.com/veritasvpn/services/wg-manager/internal/repository"
 	"github.com/veritasvpn/services/wg-manager/internal/service"
 )
@@ -202,6 +204,7 @@ type heartbeatRequest struct {
 	RXBytes        int64             `json:"rx_bytes"`
 	TXBytes        int64             `json:"tx_bytes"`
 	DNSBlockedByIP map[string]uint64 `json:"dns_blocked_by_ip"`
+	PeerHandshakes map[string]int64  `json:"peer_handshakes"`
 }
 
 func (h *HTTPHandler) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -224,7 +227,16 @@ func (h *HTTPHandler) handleAgentHeartbeat(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := h.svc.HandleHeartbeat(r.Context(), req.ServerID, req.PeerCount, req.LoadFactor, req.RXBytes, req.TXBytes, req.DNSBlockedByIP); err != nil {
+	handshakes := make(map[string]time.Time, len(req.PeerHandshakes))
+	now := time.Now().UTC()
+	for peerID, unix := range req.PeerHandshakes {
+		at := time.Unix(unix, 0).UTC()
+		if peerID == "" || unix <= 0 || at.After(now.Add(time.Minute)) || at.Before(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)) {
+			continue
+		}
+		handshakes[peerID] = at
+	}
+	if err := h.svc.HandleHeartbeat(r.Context(), req.ServerID, req.PeerCount, req.LoadFactor, req.RXBytes, req.TXBytes, req.DNSBlockedByIP, handshakes); err != nil {
 		h.writeError(w, http.StatusInternalServerError, "heartbeat failed", err, "server_id", req.ServerID)
 		return
 	}
@@ -375,10 +387,58 @@ func (h *HTTPHandler) handlePeerApplied(w http.ResponseWriter, r *http.Request) 
 }
 
 type createPeerRequest struct {
-	PublicKey    string `json:"public_key"`
-	DeviceID     string `json:"device_id"`
-	Region       string `json:"region"`
-	ShieldPreset string `json:"shield_preset"`
+	PublicKey       string `json:"public_key"`
+	DeviceID        string `json:"device_id"`
+	DeviceName      string `json:"device_name"`
+	DevicePlatform  string `json:"device_platform"`
+	DeviceModel     string `json:"device_model"`
+	DeviceOSVersion string `json:"device_os_version"`
+	ClientVersion   string `json:"client_version"`
+	Region          string `json:"region"`
+	ShieldPreset    string `json:"shield_preset"`
+}
+
+// deviceMetadata is intentionally limited to a few display fields. It is
+// client-provided, not an identity proof, and excludes hardware IDs, serials,
+// network identifiers and location data.
+type deviceMetadata struct {
+	DeviceName      *string `json:"device_name"`
+	DevicePlatform  *string `json:"device_platform"`
+	DeviceModel     *string `json:"device_model"`
+	DeviceOSVersion *string `json:"device_os_version"`
+	ClientVersion   *string `json:"client_version"`
+}
+
+func cleanDeviceText(raw string, limit int) string {
+	value := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(raw))
+	runes := []rune(value)
+	if len(runes) > limit {
+		return string(runes[:limit])
+	}
+	return value
+}
+
+func cleanedCreateDeviceMetadata(req createPeerRequest) (name, platform, model, osVersion, clientVersion string) {
+	return cleanDeviceText(req.DeviceName, 80), cleanDeviceText(req.DevicePlatform, 32),
+		cleanDeviceText(req.DeviceModel, 100), cleanDeviceText(req.DeviceOSVersion, 48), cleanDeviceText(req.ClientVersion, 48)
+}
+
+func peerResponse(peer *model.Peer) map[string]interface{} {
+	var lastHandshake interface{}
+	if peer.LastHandshakeAt != nil {
+		lastHandshake = peer.LastHandshakeAt.Unix()
+	}
+	return map[string]interface{}{
+		"id": peer.ID, "assigned_ip": peer.AssignedIP, "shield_preset": peer.ShieldPreset,
+		"device_name": peer.DeviceName, "device_platform": peer.DevicePlatform,
+		"device_model": peer.DeviceModel, "device_os_version": peer.DeviceOSVersion,
+		"client_version": peer.ClientVersion, "last_handshake_at": lastHandshake,
+	}
 }
 
 func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
@@ -399,7 +459,8 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "public_key is required"})
 			return
 		}
-		cfg, err := h.svc.CreatePeer(r.Context(), accountID, tier, req.PublicKey, req.DeviceID, req.Region, clientIPFromRequest(r), req.ShieldPreset)
+		name, platform, deviceModel, osVersion, clientVersion := cleanedCreateDeviceMetadata(req)
+		cfg, err := h.svc.CreatePeer(r.Context(), accountID, tier, req.PublicKey, req.DeviceID, name, platform, deviceModel, osVersion, clientVersion, req.Region, clientIPFromRequest(r), req.ShieldPreset)
 		if err != nil {
 			var planErr *entitlement.PlanError
 			if errors.As(err, &planErr) {
@@ -429,6 +490,11 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			"client_allowed_ips":   cfg.ClientAllowedIPs,
 			"persistent_keepalive": cfg.PersistentKeepaliveSec,
 			"device_id":            cfg.DeviceID,
+			"device_name":          cfg.DeviceName,
+			"device_platform":      cfg.DevicePlatform,
+			"device_model":         cfg.DeviceModel,
+			"device_os_version":    cfg.DeviceOSVersion,
+			"client_version":       cfg.ClientVersion,
 			"shield_preset":        cfg.ShieldPreset,
 		})
 	case http.MethodGet:
@@ -453,7 +519,18 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 				"assigned_ip":       p.AssignedIP,
 				"status":            p.Status,
 				"shield_preset":     entitlement.NormalizeShieldPreset(p.ShieldPreset),
+				"device_name":       p.DeviceName,
+				"device_platform":   p.DevicePlatform,
+				"device_model":      p.DeviceModel,
+				"device_os_version": p.DeviceOSVersion,
+				"client_version":    p.ClientVersion,
 				"created_at":        p.CreatedAt.Unix(),
+				"last_handshake_at": func() interface{} {
+					if p.LastHandshakeAt == nil {
+						return nil
+					}
+					return p.LastHandshakeAt.Unix()
+				}(),
 				"expires_at":        expiresAt,
 				"dns_blocked_count": h.svc.DNSBlockedCount(r.Context(), p.AssignedIP),
 			})
@@ -487,26 +564,56 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodPatch:
 		var req struct {
-			ShieldPreset string `json:"shield_preset"`
+			ShieldPreset *string `json:"shield_preset"`
+			deviceMetadata
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 			return
 		}
-		if strings.TrimSpace(req.ShieldPreset) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "shield_preset is required"})
+		if req.ShieldPreset != nil {
+			if strings.TrimSpace(*req.ShieldPreset) == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "shield_preset is required"})
+				return
+			}
+			peer, err := h.svc.UpdateShieldPreset(r.Context(), peerID, accountID, *req.ShieldPreset)
+			if err != nil {
+				h.writeError(w, http.StatusBadRequest, "update shield preset failed", err, "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
+				return
+			}
+			writeJSON(w, http.StatusOK, peerResponse(peer))
 			return
 		}
-		peer, err := h.svc.UpdateShieldPreset(r.Context(), peerID, accountID, req.ShieldPreset)
+		if req.DeviceName == nil && req.DevicePlatform == nil && req.DeviceModel == nil && req.DeviceOSVersion == nil && req.ClientVersion == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device metadata or shield_preset is required"})
+			return
+		}
+		if req.DeviceName != nil {
+			value := cleanDeviceText(*req.DeviceName, 80)
+			req.DeviceName = &value
+		}
+		if req.DevicePlatform != nil {
+			value := cleanDeviceText(*req.DevicePlatform, 32)
+			req.DevicePlatform = &value
+		}
+		if req.DeviceModel != nil {
+			value := cleanDeviceText(*req.DeviceModel, 100)
+			req.DeviceModel = &value
+		}
+		if req.DeviceOSVersion != nil {
+			value := cleanDeviceText(*req.DeviceOSVersion, 48)
+			req.DeviceOSVersion = &value
+		}
+		if req.ClientVersion != nil {
+			value := cleanDeviceText(*req.ClientVersion, 48)
+			req.ClientVersion = &value
+		}
+		peer, err := h.svc.UpdatePeerMetadata(r.Context(), peerID, accountID, req.DeviceName, req.DevicePlatform, req.DeviceModel, req.DeviceOSVersion, req.ClientVersion)
 		if err != nil {
-			h.writeError(w, http.StatusBadRequest, "update shield preset failed", err, "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
+			h.writeError(w, http.StatusBadRequest, "update device metadata failed", err, "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"id":            peer.ID,
-			"shield_preset": peer.ShieldPreset,
-			"assigned_ip":   peer.AssignedIP,
-		})
+		writeJSON(w, http.StatusOK, peerResponse(peer))
 	case http.MethodGet:
 		peer, srv, err := h.svc.GetPeer(r.Context(), peerID, accountID)
 		if err != nil {
@@ -519,17 +626,28 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 			expiresAt = peer.ExpiresAt.Unix()
 		}
 		peerOut := map[string]interface{}{
-			"id":            peer.ID,
-			"account_id":    peer.AccountID,
-			"server_id":     peer.ServerID,
-			"device_id":     peer.DeviceID,
-			"pubkey":        peer.Pubkey,
-			"allowed_ips":   peer.AllowedIPs,
-			"assigned_ip":   peer.AssignedIP,
-			"status":        peer.Status,
-			"shield_preset": entitlement.NormalizeShieldPreset(peer.ShieldPreset),
-			"created_at":    peer.CreatedAt.Unix(),
-			"expires_at":    expiresAt,
+			"id":                peer.ID,
+			"account_id":        peer.AccountID,
+			"server_id":         peer.ServerID,
+			"device_id":         peer.DeviceID,
+			"pubkey":            peer.Pubkey,
+			"allowed_ips":       peer.AllowedIPs,
+			"assigned_ip":       peer.AssignedIP,
+			"status":            peer.Status,
+			"shield_preset":     entitlement.NormalizeShieldPreset(peer.ShieldPreset),
+			"device_name":       peer.DeviceName,
+			"device_platform":   peer.DevicePlatform,
+			"device_model":      peer.DeviceModel,
+			"device_os_version": peer.DeviceOSVersion,
+			"client_version":    peer.ClientVersion,
+			"created_at":        peer.CreatedAt.Unix(),
+			"last_handshake_at": func() interface{} {
+				if peer.LastHandshakeAt == nil {
+					return nil
+				}
+				return peer.LastHandshakeAt.Unix()
+			}(),
+			"expires_at": expiresAt,
 		}
 		if peer.PresharedKey != nil {
 			peerOut["preshared_key"] = *peer.PresharedKey
