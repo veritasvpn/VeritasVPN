@@ -67,11 +67,24 @@ function restoreSession() {
     const legacyRefresh =
       localStorage.getItem(STORAGE_KEYS.refreshToken) ||
       sessionStorage.getItem(STORAGE_KEYS.refreshToken);
-    if (legacyAccess || localStorage.getItem(STORAGE_KEYS.refreshToken)) {
+    if (legacyAccess || legacyRefresh) {
       const user = JSON.parse(raw);
-      // Discard rather than adopt the legacy access token: setSession wipes it
-      // from storage, and getIdToken mints a fresh one from the refresh cookie.
-      setSession(user, null, legacyRefresh);
+      // Older cached website bundles stored both tokens in web storage.  Keep
+      // only the refresh token in session storage long enough to exchange it
+      // for the HttpOnly-cookie session; clearing it here first causes a
+      // successful sign-in to loop back to /?signin=1 after navigation.
+      localStorage.removeItem(STORAGE_KEYS.user);
+      localStorage.removeItem(STORAGE_KEYS.accessToken);
+      localStorage.removeItem(STORAGE_KEYS.refreshToken);
+      sessionStorage.removeItem(STORAGE_KEYS.accessToken);
+      sessionStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
+      if (legacyRefresh) {
+        sessionStorage.setItem(STORAGE_KEYS.refreshToken, legacyRefresh);
+      } else {
+        sessionStorage.removeItem(STORAGE_KEYS.refreshToken);
+      }
+      memoryAccessToken = null;
+      currentUser = user;
       return user;
     }
     return JSON.parse(raw);
