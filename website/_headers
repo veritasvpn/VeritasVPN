@@ -30,6 +30,12 @@
 /*.html
   Cache-Control: no-cache
 
+/
+  Cache-Control: no-cache
+
+/account/
+  Cache-Control: no-cache
+
 /*.css
   Cache-Control: public, max-age=300
 

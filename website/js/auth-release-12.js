@@ -4,6 +4,10 @@ const STORAGE_KEYS = {
   user: 'veritas_user',
   accessToken: 'veritas_access_token',
   refreshToken: 'veritas_refresh_token',
+  // A single-navigation bridge. It is written only immediately before the
+  // browser leaves a signed-in page, consumed by the account page at startup,
+  // and is never persisted after that bootstrap.
+  navigationAccessToken: 'veritas_navigation_access_token',
 };
 
 export const ACCOUNT_PATH = '/account/';
@@ -40,6 +44,7 @@ function setSession(user, accessToken, _refreshToken) {
   localStorage.removeItem(STORAGE_KEYS.user);
   sessionStorage.removeItem(STORAGE_KEYS.accessToken);
   sessionStorage.removeItem(STORAGE_KEYS.refreshToken);
+  sessionStorage.removeItem(STORAGE_KEYS.navigationAccessToken);
   memoryAccessToken = accessToken || null;
   if (user) sessionStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
   else sessionStorage.removeItem(STORAGE_KEYS.user);
@@ -54,6 +59,7 @@ function clearSession() {
   sessionStorage.removeItem(STORAGE_KEYS.user);
   sessionStorage.removeItem(STORAGE_KEYS.accessToken);
   sessionStorage.removeItem(STORAGE_KEYS.refreshToken);
+  sessionStorage.removeItem(STORAGE_KEYS.navigationAccessToken);
   currentUser = null;
 }
 
@@ -63,6 +69,12 @@ function restoreSession() {
     localStorage.getItem(STORAGE_KEYS.user);
   if (!raw) return null;
   try {
+    // A complete page navigation creates a new JS module and therefore loses
+    // the in-memory access token. The refresh cookie remains the durable
+    // session, but this one-time bridge prevents a valid just-issued session
+    // from being mistaken for a sign-out while that cookie is being restored.
+    const navigationAccessToken = sessionStorage.getItem(STORAGE_KEYS.navigationAccessToken);
+    sessionStorage.removeItem(STORAGE_KEYS.navigationAccessToken);
     const legacyAccess = localStorage.getItem(STORAGE_KEYS.accessToken);
     const legacyRefresh =
       localStorage.getItem(STORAGE_KEYS.refreshToken) ||
@@ -87,9 +99,31 @@ function restoreSession() {
       currentUser = user;
       return user;
     }
-    return JSON.parse(raw);
+    const user = JSON.parse(raw);
+    if (isUsableAccessToken(navigationAccessToken)) {
+      memoryAccessToken = navigationAccessToken;
+    }
+    currentUser = user;
+    return user;
   } catch {
+    sessionStorage.removeItem(STORAGE_KEYS.navigationAccessToken);
     return null;
+  }
+}
+
+function isUsableAccessToken(token) {
+  if (!token) return false;
+  const payload = parseJwt(token);
+  const now = Math.floor(Date.now() / 1000);
+  return Boolean(payload?.exp && payload.exp > now + 10);
+}
+
+function stageNavigationAccessToken() {
+  const token = getAccessToken();
+  if (isUsableAccessToken(token)) {
+    sessionStorage.setItem(STORAGE_KEYS.navigationAccessToken, token);
+  } else {
+    sessionStorage.removeItem(STORAGE_KEYS.navigationAccessToken);
   }
 }
 
@@ -293,6 +327,7 @@ function parseJwt(token) {
 
 export function goToDashboard(hash = '') {
   const path = hash ? `${ACCOUNT_PATH}${hash}` : ACCOUNT_PATH;
+  stageNavigationAccessToken();
   window.location.href = path;
 }
 
@@ -832,6 +867,26 @@ function renderUser(user) {
         pendingDashboardRedirect = true;
         openModal('signin');
       }
+    });
+  });
+
+  // The signed-in navigation menu is rendered on every marketing page. Route
+  // it through the same single-use handoff as the in-page dashboard buttons
+  // instead of allowing a bare anchor navigation to discard the current
+  // in-memory token.
+  document.querySelectorAll('a.nav-user-menu-item[href^="/account"]').forEach((link) => {
+    link.addEventListener('click', async (e) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      const token = await getIdToken();
+      if (token) {
+        stageNavigationAccessToken();
+        window.location.href = link.href;
+        return;
+      }
+      renderUser(null);
+      pendingDashboardRedirect = true;
+      openModal('signin');
     });
   });
 
