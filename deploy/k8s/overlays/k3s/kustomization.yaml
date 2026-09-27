@@ -12,7 +12,8 @@ images:
     digest: sha256:e8a414033657b99883f5c8e963b46851dfe7c2fd632ba0c29c2bbdda15297d7c
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    digest: sha256:be4655a4df93a2fa329d5ba95994314ddcbfa6f9cf421a3f66cb316916bac157
+    # Device metadata, friendly names, and WireGuard handshake reporting.
+    digest: sha256:c24f4c8f0fef7048bd2b4d45d9652e72c88a5dc4de5a6c2ef428d15054ea8187
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
     # Payment-status reconciliation build that is running on the Dell.
@@ -20,9 +21,8 @@ images:
     digest: sha256:dcf18faeb2d3242f2ea42f9de7dba59099ad6193fc7407278c593bf8e07d7a3a
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    # 4 Sep build that is running on the Dell (medium-202609041816).
-    # The older 2c4ea2eb pin would roll that back.
-    digest: sha256:a87ab9340ef4dc18f0f38b93d45b12737220487aba62f26a1eda37d6bcd9fde1
+    # Reports only WireGuard handshake timestamps, mapped to peer IDs.
+    digest: sha256:c871c20eb3efef6b1bc11434e74f12efd91a7013463985f5616dbe762b2f7e75
   - name: localhost:31500/wstunnel
     newName: localhost:31500/wstunnel
     # 27 Aug audit build that is running on the Dell.
