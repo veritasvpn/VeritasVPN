@@ -54,7 +54,7 @@ jobs:
           if-no-files-found: error
 
   build-android:
-    name: Signed Android APK
+    name: Signed Android release artifacts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -78,13 +78,13 @@ jobs:
           test -n "$ANDROID_KEYSTORE_BASE64"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/veritasvpn-release.p12"
           chmod 600 "$RUNNER_TEMP/veritasvpn-release.p12"
-      - name: Test and assemble signed release
+      - name: Test and assemble signed release artifacts
         env:
           ORG_GRADLE_PROJECT_VERITAS_RELEASE_STORE_FILE: ${{ runner.temp }}/veritasvpn-release.p12
           ORG_GRADLE_PROJECT_VERITAS_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ORG_GRADLE_PROJECT_VERITAS_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ORG_GRADLE_PROJECT_VERITAS_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew test assembleRelease --no-daemon
+        run: ./gradlew test assembleRelease bundleRelease --no-daemon
         working-directory: android
       - name: Verify APK signature
         run: |
@@ -92,10 +92,18 @@ jobs:
           test -n "$APKSIGNER"
           "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
         working-directory: android
+      - name: Verify Android App Bundle signature
+        run: jarsigner -verify -strict -certs app/build/outputs/bundle/release/app-release.aab
+        working-directory: android
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: veritasvpn-android
           path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: veritasvpn-android-aab
+          path: android/app/build/outputs/bundle/release/app-release.aab
           if-no-files-found: error
 
   build-chrome:
@@ -142,11 +150,13 @@ jobs:
           DEB="$(find artifacts/veritasvpn-linux-deb -type f -name '*.deb' -print -quit)"
           APPIMAGE="$(find artifacts/veritasvpn-linux-appimage -type f -name '*.AppImage' -print -quit)"
           APK="$(find artifacts/veritasvpn-android -type f -name '*.apk' -print -quit)"
-          test -n "$DEB" && test -n "$APPIMAGE" && test -n "$APK"
+          AAB="$(find artifacts/veritasvpn-android-aab -type f -name '*.aab' -print -quit)"
+          test -n "$DEB" && test -n "$APPIMAGE" && test -n "$APK" && test -n "$AAB"
           cp "$DEB" veritasvpn-linux.deb
           cp "$APPIMAGE" veritasvpn-linux.AppImage
           cp "$APK" veritasvpn-android.apk
-          sha256sum veritasvpn-linux.deb veritasvpn-linux.AppImage veritasvpn-android.apk > SHA256SUMS
+          cp "$AAB" veritasvpn-android.aab
+          sha256sum veritasvpn-linux.deb veritasvpn-linux.AppImage veritasvpn-android.apk veritasvpn-android.aab > SHA256SUMS
           sha256sum --check SHA256SUMS
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
@@ -154,6 +164,7 @@ jobs:
             veritasvpn-linux.deb
             veritasvpn-linux.AppImage
             veritasvpn-android.apk
+            veritasvpn-android.aab
             SHA256SUMS
       - name: Create GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -163,4 +174,5 @@ jobs:
             veritasvpn-linux.deb
             veritasvpn-linux.AppImage
             veritasvpn-android.apk
+            veritasvpn-android.aab
             SHA256SUMS

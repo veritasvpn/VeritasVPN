@@ -32,8 +32,10 @@ android {
         applicationId = "cloud.veritasvpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 64
-        versionName = "0.2.78"
+        // Google Play requires a new monotonically increasing version code for
+        // every uploaded release artifact.
+        versionCode = 65
+        versionName = "0.2.79"
     }
 
     signingConfigs {
