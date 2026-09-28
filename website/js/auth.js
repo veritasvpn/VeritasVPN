@@ -129,15 +129,22 @@ function stageNavigationAccessToken() {
 
 async function api(path, options = {}) {
   const url = `${AUTH_API}${path}`;
-  const res = await fetch(url, {
-    ...options,
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Veritas-Client': 'web',
-      ...(options.headers || {}),
-    },
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      ...options,
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Veritas-Client': 'web',
+        ...(options.headers || {}),
+      },
+    });
+  } catch {
+    // Browsers expose connection failures as an unhelpful "Failed to fetch".
+    // Keep that implementation detail out of every authentication screen.
+    throw new Error('auth_service_unavailable');
+  }
   const rawText = await res.text();
   let data = {};
   try {
@@ -146,6 +153,9 @@ async function api(path, options = {}) {
     data = {};
   }
   if (!res.ok) {
+    // A 5xx response means the API or its route is unavailable.  In
+    // particular, Cloudflare returns 530 when its Tunnel has no live origin.
+    if (res.status >= 500) throw new Error('auth_service_unavailable');
     throw new Error(extractAuthError(data, res.status, rawText));
   }
   return data;
@@ -343,6 +353,9 @@ export function requireAuthOrOpenModal(preferredMode = 'signin') {
 
 function mapAuthError(message) {
   const msg = (message || '').toLowerCase();
+  if (msg.includes('auth_service_unavailable') || msg.includes('failed to fetch') || msg.includes('networkerror') || msg.includes('load failed')) {
+    return 'The sign-in service is temporarily unavailable. Your account was not changed. Please try again in a few minutes.';
+  }
   if (msg.includes('verification failed') || msg.includes('security check failed')) {
     return 'Security check failed. Complete the check and try again.';
   }
