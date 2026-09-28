@@ -1,4 +1,4 @@
-import { forceRefreshAccessToken } from './auth.js?v=accountHandoff2';
+import { forceRefreshAccessToken } from './auth.js?v=cookieBootstrap1';
 
 const returnTarget = new URLSearchParams(window.location.search).get('return_target') || 'web';
 const trustedParentOrigins = new Set(['tauri://localhost', 'https://tauri.localhost', 'http://tauri.localhost']);
