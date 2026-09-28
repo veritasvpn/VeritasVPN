@@ -1,4 +1,4 @@
-import { getIdToken, requireAuthOrOpenModal, auth, forceSignOutOnExpiry } from './auth.js?v=accountHandoff2';
+import { getIdToken, requireAuthOrOpenModal, auth, forceSignOutOnExpiry } from './auth.js?v=cookieBootstrap1';
 import { BILLING_API } from './config.js';
 
 async function api(path, options = {}) {

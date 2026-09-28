@@ -16,6 +16,7 @@ export const SESSION_EXPIRED_EVENT = 'veritas-session-expired';
 let currentUser = null;
 let listeners = [];
 let authReady = false;
+let authBootstrapPromise = null;
 /** Access JWT kept in memory only (not localStorage). */
 let memoryAccessToken = null;
 
@@ -267,13 +268,54 @@ async function refreshTokenSilently() {
     sessionStorage.removeItem(STORAGE_KEYS.refreshToken);
     localStorage.removeItem(STORAGE_KEYS.refreshToken);
     if (!data?.access_token) return false;
-    const user = restoreSession() || currentUser;
+    let user = restoreSession() || currentUser;
+    // A cookie session must be sufficient to enter the dashboard.  Do not
+    // require the marketing page's sessionStorage hint to survive a full page
+    // load: it is only a convenience cache, not authentication.  This also
+    // recovers sessions opened in a new tab or after browser storage cleanup.
+    if (!user) {
+      user = await loadSessionUser(data.access_token);
+    }
     if (user) setSession(user, data.access_token, null);
     else memoryAccessToken = data.access_token;
     return true;
   } catch {
     return false;
   }
+}
+
+async function loadSessionUser(accessToken) {
+  try {
+    const response = await fetch(`${AUTH_API}/api/v1/auth/me`, {
+      credentials: 'include',
+      headers: {
+        'X-Veritas-Client': 'web',
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    if (!response.ok) return null;
+    const profile = await response.json();
+    if (!profile?.account_id) return null;
+    return {
+      account_id: profile.account_id,
+      ...(profile.email ? { email: profile.email } : { is_anonymous: true }),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function bootstrapAuthenticatedSession() {
+  restoreSession();
+  const token = await getIdToken();
+  if (!token) return null;
+
+  if (!currentUser) {
+    const user = await loadSessionUser(token);
+    if (!user) return null;
+    setSession(user, token, null);
+  }
+  return currentUser;
 }
 
 /** Force a refresh so JWT tier matches billing after Premium purchase. */
@@ -290,20 +332,19 @@ export function onAuthStateChanged(fn) {
   listeners.push(fn);
   if (authReady) {
     fn(currentUser);
-  } else {
-    const sessionUser = restoreSession();
-    currentUser = sessionUser;
-    authReady = true;
-    if (sessionUser) {
-      void getIdToken().then((token) => {
-        if (!token) fn(null);
-        else fn(sessionUser);
+  } else if (!authBootstrapPromise) {
+    // Delay the first state notification until the HttpOnly refresh cookie has
+    // been checked.  Previously this emitted `null` whenever sessionStorage
+    // was absent, so /account immediately redirected a user who had just
+    // signed in successfully.
+    authBootstrapPromise = bootstrapAuthenticatedSession()
+      .catch(() => null)
+      .then((user) => {
+        currentUser = user;
+        authReady = true;
+        notifyListeners(user);
+        return user;
       });
-      return () => {
-        listeners = listeners.filter((l) => l !== fn);
-      };
-    }
-    fn(sessionUser);
   }
   return () => {
     listeners = listeners.filter((l) => l !== fn);
