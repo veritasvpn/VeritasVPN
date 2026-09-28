@@ -604,6 +604,9 @@ button { font-family: inherit; }
   transform-origin: center;
   animation: ring-expand 2.4s ease-out infinite;
 }
+.network-map .marker-ring--delayed {
+  animation-delay: 0.9s;
+}
 .network-map .marker-core {
   fill: #00d2ff;
   stroke: #05070a;

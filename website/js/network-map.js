@@ -55,7 +55,7 @@ export function mountNetworkMap(mount, opts = {}) {
       const labelY = Math.max(y - 16, 24);
       return `<g class="marker live" data-location="${loc.id}">
         <circle class="marker-ring" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7"/>
-        <circle class="marker-ring" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7" style="animation-delay:0.9s"/>
+        <circle class="marker-ring marker-ring--delayed" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7"/>
         <circle class="marker-core" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5.5"/>
         <rect class="marker-label-bg" x="${(labelX - 6).toFixed(1)}" y="${(labelY - 14).toFixed(1)}" width="118" height="32" rx="4"/>
         <text class="marker-label" x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}">${loc.name}</text>
