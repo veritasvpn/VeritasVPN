@@ -93,7 +93,9 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
         working-directory: android
       - name: Verify Android App Bundle signature
-        run: jarsigner -verify -strict -certs app/build/outputs/bundle/release/app-release.aab
+        # App bundles are JAR-signed. Verify their integrity and signer without
+        # requiring the release certificate to chain to a public CA.
+        run: jarsigner -verify -certs app/build/outputs/bundle/release/app-release.aab
         working-directory: android
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
