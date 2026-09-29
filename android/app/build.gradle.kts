@@ -26,16 +26,17 @@ if (releaseTaskRequested && !releaseSigningConfigured) {
 
 android {
     namespace = "cloud.veritasvpn"
-    compileSdk = 35
+    // Android 16 / API 36 — required for the current Google Play target level.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "cloud.veritasvpn"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         // Google Play requires a new monotonically increasing version code for
         // every uploaded release artifact.
-        versionCode = 66
-        versionName = "0.2.80"
+        versionCode = 67
+        versionName = "0.2.81"
     }
 
     signingConfigs {
