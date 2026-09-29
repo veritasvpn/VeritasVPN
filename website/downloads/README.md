@@ -27,8 +27,15 @@ sha256sum -c SHA256SUMS --ignore-missing
 
 Rebuild Chrome zip from source:
 
+Run from the repository root. `store-assets/` is Chrome Web Store listing art only and must stay out of the zip.
+
 ```bash
-cd clients/browser-extension && zip -r ../../website/downloads/veritasvpn-chrome.zip . -x '*.DS_Store'
+ROOT="$(pwd)"
+rm -rf /tmp/veritasvpn-chrome-pack
+mkdir -p /tmp/veritasvpn-chrome-pack
+cp -a clients/browser-extension/. /tmp/veritasvpn-chrome-pack/
+rm -rf /tmp/veritasvpn-chrome-pack/store-assets
+( cd /tmp/veritasvpn-chrome-pack && zip -r "$ROOT/website/downloads/veritasvpn-chrome.zip" . -x '*.DS_Store' )
 ```
 
 Then rewrite `SHA256SUMS` with `sha256sum` of the four artifacts.

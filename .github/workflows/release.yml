@@ -124,6 +124,7 @@ jobs:
           node --input-type=module --check < clients/browser-extension/js/auth.js
           mkdir -p "$RUNNER_TEMP/chrome"
           cp -R clients/browser-extension/. "$RUNNER_TEMP/chrome/"
+          rm -rf "$RUNNER_TEMP/chrome/store-assets"
           cd "$RUNNER_TEMP/chrome"
           zip -qr "$GITHUB_WORKSPACE/veritasvpn-chrome.zip" . -x '*.DS_Store'
           unzip -t "$GITHUB_WORKSPACE/veritasvpn-chrome.zip" >/dev/null

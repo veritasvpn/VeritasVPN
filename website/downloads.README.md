@@ -12,5 +12,5 @@ Other platforms listed as coming soon.
 ## Useful information (AI)
 
 - Featured CTAs must stay macOS + Chrome until product priority changes.
-- Chrome zip: `downloads/veritasvpn-chrome.zip` from `clients/browser-extension`.
+- Chrome zip: `downloads/veritasvpn-chrome.zip` from `clients/browser-extension`, excluding `store-assets/`.
 - Keep secondary platforms visually quieter than the two featured cards.

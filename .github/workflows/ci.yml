@@ -266,8 +266,32 @@ jobs:
           node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('/tmp/published-manifest.json')); if(m.host_permissions.includes('<all_urls>')) throw new Error('Published chrome zip must not request <all_urls>');"
           mkdir -p "$RUNNER_TEMP/veritasvpn-extension"
           cp -R clients/browser-extension/. "$RUNNER_TEMP/veritasvpn-extension/"
+          rm -rf "$RUNNER_TEMP/veritasvpn-extension/store-assets"
           (cd "$RUNNER_TEMP/veritasvpn-extension" && zip -qr "$RUNNER_TEMP/veritasvpn-extension.zip" .)
           unzip -t "$RUNNER_TEMP/veritasvpn-extension.zip" >/dev/null
+          python3 - <<'PY'
+          import struct, zipfile
+          def png_size(data):
+              assert data[:8] == b"\x89PNG\r\n\x1a\n", "not a png"
+              assert data[12:16] == b"IHDR"
+              return struct.unpack(">II", data[16:24])
+          expected = {
+              "icons/icon16.png": (16, 16),
+              "icons/icon48.png": (48, 48),
+              "icons/icon128.png": (128, 128),
+          }
+          with zipfile.ZipFile("website/downloads/veritasvpn-chrome.zip") as zf:
+              names = zf.namelist()
+              if not any(name.startswith("fonts/") and name.endswith(".ttf") for name in names):
+                  raise SystemExit("chrome zip is missing fonts/")
+              if any(name.startswith("store-assets/") for name in names):
+                  raise SystemExit("chrome zip must not include store-assets/")
+              for name, size in expected.items():
+                  actual = png_size(zf.read(name))
+                  if actual != size:
+                      raise SystemExit(f"{name} is {actual[0]}x{actual[1]}, expected {size[0]}x{size[1]}")
+          print("chrome zip icons, fonts, and store-assets exclusion ok")
+          PY
       - name: Validate website entry points
         run: |
           test -f website/index.html

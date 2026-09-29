@@ -48,7 +48,7 @@
   <main class="legal-page">
     <div class="container">
       <h1>Privacy Policy</h1>
-      <p class="legal-meta">Effective: 2026-07-28 · Last updated: 2026-09-02</p>
+      <p class="legal-meta">Effective: 2026-07-28 · Last updated: 2026-09-29</p>
 
       <div class="legal-notice">
         This policy describes our current early-stage practices for veritasvpn.cloud.
@@ -60,7 +60,7 @@
       <p>
         VeritasVPN (“we”, “us”) operates the VeritasVPN website, desktop clients,
         browser extension, and VPN infrastructure at veritasvpn.cloud.
-        Contact: <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a>.
+        Contact: <a href="mailto:veritasvpn19@gmail.com">veritasvpn19@gmail.com</a>.
       </p>
 
       <h2>2. What we do not collect</h2>
@@ -97,6 +97,23 @@
       </ul>
       <p>Cloudflare may retain standard edge access logs for the website for a limited time, as with other pages.</p>
 
+      <h2>3b. Chrome browser extension</h2>
+      <p>
+        The Chrome extension routes <strong>Chrome browser traffic</strong> through an authenticated
+        <strong>HTTP CONNECT proxy</strong> to VeritasVPN’s Paraguay gateway. It is not a system-wide
+        WireGuard VPN. It does not route or encrypt traffic from other apps, the operating system, or
+        other browsers. The extension does not show ads, replace the new-tab page, or sell browsing data.
+      </p>
+      <ul>
+        <li><strong>Account and tokens:</strong> you sign in with the same account as the apps (email, if you use email, or an anonymous Account ID). The access token is stored in <code>chrome.storage.session</code> and is cleared when the browser session ends. The refresh token, account record, connection flags, and cached gateway settings are stored in <code>chrome.storage.local</code> so you can stay signed in. Web pages cannot read this extension storage. The access token is sent to <code>api.veritasvpn.cloud</code> for sign-in, session refresh, billing status, and gateway discovery, and is used only as the proxy-authentication password when the Paraguay gateway challenges the connection.</li>
+        <li><strong>Egress check:</strong> after the proxy is turned on, the extension asks <a href="https://api.ipify.org/">api.ipify.org</a> for the public IP Chrome is using and compares it with the expected Paraguay gateway address before showing Connected. A mismatch disconnects the proxy.</li>
+        <li><strong>Optional map location:</strong> while you are disconnected, the extension may request a coarse location from <a href="https://ipwho.is/">ipwho.is</a> (approximate latitude, longitude, city, and country) to draw the in-popup network map. That result is cached in <code>chrome.storage.local</code>. It is not used for advertising. If the lookup fails, the map still works without it.</li>
+        <li><strong>Proxy operation:</strong> while connected, Chrome sends its HTTP and HTTPS requests through the Paraguay HTTP CONNECT gateway. Operating that proxy requires connection metadata such as destination host and timing. The extension does not keep a browsing-history log and does not inject scripts into pages.</li>
+      </ul>
+      <p>
+        If the proxy fails while you are connected, the extension fail-closes: it sends Chrome traffic to a local discard address so browsing is blocked instead of silently falling back to a direct connection. Disconnecting on purpose clears Chrome’s proxy settings. Connecting requires an active Premium subscription. The extension does not collect payment; Bitcoin checkout stays on veritasvpn.cloud.
+      </p>
+
       <h2>4. Cookies and similar tech</h2>
       <p>
         See our <a href="/cookies.html">Cookie Policy</a>. We use essential cookies/storage
@@ -130,9 +147,10 @@
 
       <h2>8. Security</h2>
       <p>
-        We use WireGuard for tunnel traffic and industry-standard practices for
-        secrets and auth tokens. No system is perfectly secure; early-stage
-        deployments may have higher operational risk than mature providers.
+        Desktop and mobile clients use WireGuard for tunnel traffic. The Chrome extension
+        does not: it uses the HTTP CONNECT browser proxy described above. We use
+        industry-standard practices for secrets and auth tokens. No system is perfectly
+        secure; early-stage deployments may have higher operational risk than mature providers.
       </p>
 
       <h2>9. International users</h2>
@@ -161,7 +179,7 @@
 
       <h2>13. Contact</h2>
       <p>
-        Privacy questions: <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a>
+        Privacy questions: <a href="mailto:veritasvpn19@gmail.com">veritasvpn19@gmail.com</a>
         or <a href="/contact.html">Contact</a>.
       </p>
     </div>
