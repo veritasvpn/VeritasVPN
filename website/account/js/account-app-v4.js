@@ -104,12 +104,12 @@ async function confirmSensitiveAction(label) {
   }
   return new Promise((resolve, reject) => {
     const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.72);display:grid;place-items:center;z-index:9999;padding:24px;';
-    overlay.innerHTML = `<div style="background:#12141c;border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:24px;max-width:360px;width:100%;color:#e8e8ef;font-family:inherit;">
-      <p style="margin:0 0 16px;">${escapeHtml(label)}</p>
-      <p style="margin:0 0 12px;color:#9aa0b4;font-size:14px;">Complete the check to continue.</p>
+    overlay.className = 'turnstile-confirm-overlay';
+    overlay.innerHTML = `<div class="turnstile-confirm-dialog">
+      <p class="turnstile-confirm-title">${escapeHtml(label)}</p>
+      <p class="turnstile-confirm-help">Complete the check to continue.</p>
       <div id="accountConfirmTurnstile"></div>
-      <button type="button" data-cancel style="margin-top:16px;" class="btn btn-outline">Cancel</button>
+      <button type="button" data-cancel class="btn btn-outline turnstile-confirm-cancel">Cancel</button>
     </div>`;
     document.body.appendChild(overlay);
     const cleanup = () => overlay.remove();
@@ -265,7 +265,7 @@ function renderHome() {
       <div class="account-card upgrade-card">
         <div>
           <div class="upgrade-price">$3 <span>/ month</span></div>
-          <p class="plan-card-meta" style="margin-top:8px;">Bitcoin · prepaid, no auto-renewal</p>
+          <p class="plan-card-meta upgrade-price-meta">Bitcoin · prepaid, no auto-renewal</p>
           <div class="account-plan-options"><button type="button" class="btn btn-outline" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_monthly">$3 monthly</button><button type="button" class="btn btn-primary" data-action="checkout" data-payment-method="btcpay" data-plan-id="premium_annual">$30 annual <small>save $6</small></button></div>
         </div>
         <ul class="upgrade-features">
@@ -366,10 +366,10 @@ function renderAccount(user) {
       <div class="account-card">
         ${!isAnonymous ? `
         <p class="plan-card-meta">Email</p>
-        <div class="plan-card-title" style="font-size:18px;">${escapeHtml(user.email)}</div>
+        <div class="plan-card-title account-email-value">${escapeHtml(user.email)}</div>
         ` : ''}
-        <p class="plan-card-meta" style="${isAnonymous ? '' : 'margin-top:12px;'}">Account ID</p>
-        <code style="font-size:12px;color:var(--text-muted);word-break:break-all;">${
+        <p class="plan-card-meta${isAnonymous ? '' : ' account-id-label-spaced'}">Account ID</p>
+        <code class="account-id-value">${
           escapeHtml(user.account_id || '—')
         }</code>
         <div class="account-actions">
@@ -417,16 +417,16 @@ function renderDevices() {
     const created = p.created_at ? formatDate(typeof p.created_at === 'string' ? p.created_at : new Date(p.created_at * 1000).toISOString()) : '';
     const technical = [osVersion, clientVersion ? `App ${clientVersion}` : ''].filter(Boolean).join(' · ');
     return `
-      <div class="account-card" style="margin-bottom:12px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;">
+      <div class="account-card device-card">
+        <div class="device-card-layout">
           <div>
             <strong>${escapeHtml(name)}</strong>
-            <p class="plan-card-meta" style="margin:6px 0 0;">${online ? '● ' : ''}${escapeHtml(connection)}${created ? ' · Added ' + escapeHtml(created) : ''}</p>
-            ${technical ? `<p class="plan-card-meta" style="margin:4px 0 0;">${escapeHtml(technical)}</p>` : ''}
-            <p class="plan-card-meta" style="margin:4px 0 0;">Tunnel IP ${escapeHtml(ip)} · Device ID ${escapeHtml(short)}</p>
-            <p class="plan-card-meta" style="margin:4px 0 0;">Veritas Shield blocked: ${escapeHtml(blocked)}</p>
+            <p class="plan-card-meta device-meta device-meta-first">${online ? '● ' : ''}${escapeHtml(connection)}${created ? ' · Added ' + escapeHtml(created) : ''}</p>
+            ${technical ? `<p class="plan-card-meta device-meta">${escapeHtml(technical)}</p>` : ''}
+            <p class="plan-card-meta device-meta">Tunnel IP ${escapeHtml(ip)} · Device ID ${escapeHtml(short)}</p>
+            <p class="plan-card-meta device-meta">Veritas Shield blocked: ${escapeHtml(blocked)}</p>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;">
+          <div class="device-actions">
             <button type="button" class="btn btn-outline btn-sm" data-action="rename-peer" data-peer-id="${escapeHtml(id)}" data-peer-name="${escapeHtml(friendlyName)}" data-peer-fallback="${escapeHtml(fallbackName)}">Rename</button>
             <button type="button" class="btn btn-outline btn-sm" data-action="revoke-peer" data-peer-id="${escapeHtml(id)}" data-peer-name="${escapeHtml(name)}">Revoke</button>
           </div>
