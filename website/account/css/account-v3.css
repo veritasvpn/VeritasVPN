@@ -272,6 +272,85 @@
   font-size: 15px;
 }
 
+.upgrade-price-meta {
+  margin-top: 8px;
+}
+
+.account-email-value {
+  font-size: 18px;
+}
+
+.account-id-label-spaced {
+  margin-top: 12px;
+}
+
+.account-id-value {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.device-card {
+  margin-bottom: 12px;
+}
+
+.device-card-layout {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.device-meta {
+  margin: 4px 0 0;
+}
+
+.device-meta-first {
+  margin-top: 6px;
+}
+
+.device-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.turnstile-confirm-overlay {
+  background: rgba(0, 0, 0, .72);
+  display: grid;
+  inset: 0;
+  padding: 24px;
+  place-items: center;
+  position: fixed;
+  z-index: 9999;
+}
+
+.turnstile-confirm-dialog {
+  background: #12141c;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 12px;
+  color: #e8e8ef;
+  font-family: inherit;
+  max-width: 360px;
+  padding: 24px;
+  width: 100%;
+}
+
+.turnstile-confirm-title {
+  margin: 0 0 16px;
+}
+
+.turnstile-confirm-help {
+  color: #9aa0b4;
+  font-size: 14px;
+  margin: 0 0 12px;
+}
+
+.turnstile-confirm-cancel {
+  margin-top: 16px;
+}
+
 .plan-expiration {
   display: grid;
   gap: 3px;
