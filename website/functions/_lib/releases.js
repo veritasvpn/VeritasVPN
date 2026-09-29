@@ -17,8 +17,10 @@ const MAX_ASSET_BYTES = 100 * 1024 * 1024;
 
 export const DOWNLOADS = {
   "veritasvpn-android.apk": {
-    tag: "v0.2.77",
-    sha256: "21022ce7ca78488e42393855b8c2b894c9990735e3d35437b58d83247ea716e9",
+    // v0.2.81 includes Android device metadata for the account dashboard and
+    // targets Android API 36. Keep this pin paired with the signed release.
+    tag: "v0.2.81",
+    sha256: "2f63446c0061de604f44308c262e175d172520a865c9d27d81d36d11c4ecccfd",
     contentType: "application/vnd.android.package-archive",
     unavailable: "Android APK is temporarily unavailable.",
   },
