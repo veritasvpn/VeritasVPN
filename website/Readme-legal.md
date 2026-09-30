@@ -10,11 +10,14 @@ Static legal pages for veritasvpn.cloud:
 | `terms.html` | `/terms.html` |
 | `cookies.html` | `/cookies.html` |
 | `contact.html` | `/contact.html` |
+| `support.html` | `/support.html` |
 | `../canary.txt` | `/canary.txt` |
 
 These are honest early-stage templates, not a substitute for lawyer review.
-Update dates and contact email when practices change. Keep the warrant canary
-in sync (monthly if you claim a monthly cadence).
+Update dates and contact email when practices change. The public contact address
+is contact@veritasvpn.cloud. Keep the warrant canary in sync (monthly if you
+claim a monthly cadence). Support replies live in `support.html` and must match
+`docs/SUPPORT_SNIPPETS.md`.
 
 ## For AI
 

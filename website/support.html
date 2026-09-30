@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Support — VeritasVPN</title>
+  <meta name="description" content="Paste-ready VeritasVPN answers for Account ID backup, Android Always-on, Bitcoin invoices, and Chrome versus a full tunnel." />
+  <link rel="stylesheet" href="/css/style-typography1.css" />
+  <link rel="stylesheet" href="/css/legal.css" />
+</head>
+<body>
+  <nav class="navbar" id="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+                <li><a href="/learn/">Learn</a></li>
+                <li><a href="/check/">Check</a></li>
+                <li><a href="/#pricing">Pricing</a></li>
+                <li><a href="/downloads.html">Download</a></li>
+                <li><a href="/#faq">FAQ</a></li>
+      </ul>
+      <div class="nav-auth">
+        <div id="navAuthLoggedOut" class="nav-auth-logged-out">
+          <a href="/?signin=1" class="btn btn-primary nav-login">Log in</a>
+        </div>
+        <div id="navAuthLoggedIn" class="nav-auth-logged-in is-hidden">
+          <span id="navPlanBadge" class="nav-plan-badge" hidden>Inactive</span>
+          <button type="button" class="nav-user-btn" id="navUserMenuBtn" aria-haspopup="true" aria-expanded="false">
+            <span class="nav-user-avatar" aria-hidden="true"></span>
+            <span id="navUserEmail" class="nav-user-email"></span>
+          </button>
+          <div class="nav-user-menu" id="navUserMenu" role="menu">
+            <a href="/account/" class="nav-user-menu-item" role="menuitem">Open dashboard</a>
+            <button type="button" class="nav-user-menu-item nav-user-menu-item--signout" id="authSignOutAll" role="menuitem">Sign out from all devices</button>
+            <button type="button" class="nav-user-menu-item nav-user-menu-item--signout" id="authSignOut" role="menuitem">Sign out from this device</button>
+          </div>
+        </div>
+      </div>
+      <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <main class="legal-page support-page">
+    <div class="container">
+      <h1>Support</h1>
+      <p class="legal-meta">Short answers that match how the product works today. Select a block and paste it.</p>
+
+      <h2 id="account-id">Account ID backup</h2>
+      <p>Anonymous accounts download <code>veritasvpn-account.txt</code> once at creation. Email accounts use password reset.</p>
+      <pre class="support-snippet">Anonymous Account ID: when you create one, VeritasVPN shows the Account ID once and downloads veritasvpn-account.txt. Save that .txt file and copy the Account ID before you leave the page. If both are lost, the account cannot be recovered.
+
+Email accounts do not use that file. Use Forgot password on the sign-in form. The reset link goes to the email address on the account.</pre>
+
+      <h2 id="android-always-on">Android Always-on</h2>
+      <p>Connect stays blocked until both system switches are on. The app opens VPN settings; it cannot flip them, and there is no in-app off switch.</p>
+      <pre class="support-snippet">Open Settings → VPN → VeritasVPN and turn on both Always-on VPN and Block connections without VPN. On some phones the VPN list is under Settings → Network &amp; internet.
+
+Connect stays blocked until both are on for VeritasVPN. The app cannot turn those system switches on for you. It explains them and opens Android VPN settings. There is no in-app kill-switch off. After both are on, return to the app and Connect continues. Cancel leaves you disconnected.</pre>
+
+      <h2 id="btcpay">Bitcoin invoice (BTCPay)</h2>
+      <p>Pay the invoice on-chain, wait for confirmations, then refresh the account. The status page billing row is checkout health, not your invoice.</p>
+      <pre class="support-snippet">Open the invoice from checkout and pay it on-chain for the amount BTCPay shows. Premium is not granted at zero confirmations. Wait until the payment is confirmed, then reopen the app or refresh the account page so the entitlement updates.
+
+If it stays stuck after you paid, email contact@veritasvpn.cloud with the invoice id and the time you sent the payment. On https://veritasvpn.cloud/status.html, the Bitcoin checkout readiness row is whether checkout itself is up. It is not the state of your invoice.</pre>
+
+      <h2 id="chrome-vs-full-tunnel">Chrome versus a full tunnel</h2>
+      <p>Chrome covers the browser only. Android and Linux are the full WireGuard tunnel.</p>
+      <pre class="support-snippet">The Chrome extension is a browser-only HTTP CONNECT proxy. It can cover traffic inside Chrome. Other apps on the device stay unprotected, and it is not a device kill switch.
+
+A full tunnel is the Android or Linux WireGuard client. Android requires Always-on VPN and Block connections without VPN before Connect. Linux keeps a firewall and routing kill switch on while connected, with no in-app off. Current downloads on the site are those two clients.</pre>
+
+      <h2>Still stuck</h2>
+      <p>Email <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a>. Bugs can also go to <a href="https://github.com/veritasvpn/VeritasVPN/issues" rel="noopener noreferrer">GitHub issues</a>.</p>
+
+      <h2>Related</h2>
+      <ul>
+        <li><a href="/contact.html">Contact</a></li>
+        <li><a href="/#faq">FAQ</a></li>
+        <li><a href="/install/android.html">Android install</a></li>
+        <li><a href="/install/linux.html">Linux install</a></li>
+        <li><a href="/status.html">Service status</a></li>
+      </ul>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a> · <a href="/contact.html">Contact</a></p>
+      </div>
+    </div>
+  </footer>
+  <script type="module" src="/js/site-nav.js?v=mobilefix1"></script>
+</body>
+</html>
