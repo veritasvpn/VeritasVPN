@@ -25,12 +25,20 @@ fi
 
 echo "[bootstrap] iface=$WG_IFACE addr=$WG_ADDR port=$WG_PORT egress=$EGRESS_IFACE"
 
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
 # Persist IP forwarding across reboots
 SYSCTL_CONF="/etc/sysctl.d/99-veritas-vpn.conf"
 if [[ ! -f "$SYSCTL_CONF" ]]; then
   echo "net.ipv4.ip_forward = 1" > "$SYSCTL_CONF"
 fi
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
+
+# Canonical host sysctl. Includes net.ipv4.ip_unprivileged_port_start=443 so
+# non-root veritas-wstunnel (uid 65532, CAP_NET_BIND_SERVICE) can bind TCP 443.
+install -m 0644 "$ROOT/deploy/sysctl/99-veritasvpn.conf" /etc/sysctl.d/99-veritasvpn.conf
+sysctl -p /etc/sysctl.d/99-veritasvpn.conf >/dev/null
+echo "[bootstrap] installed /etc/sysctl.d/99-veritasvpn.conf"
 mkdir -p "$KEY_DIR"
 chmod 700 "$KEY_DIR"
 
@@ -77,7 +85,6 @@ echo "    sudo ufw allow $WG_PORT/udp comment 'WireGuard VPN'"
 echo "    sudo ufw route allow in on wg0 out on $EGRESS_IFACE"
 
 # Host tc shaping (peer caps + uplink AQM) from repo — keeps live host in sync with git.
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 if [[ -x "$ROOT/deploy/node/install-host-shaping.sh" ]]; then
   bash "$ROOT/deploy/node/install-host-shaping.sh"
 fi

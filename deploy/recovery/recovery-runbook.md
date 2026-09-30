@@ -62,6 +62,11 @@ sudo install -m 600 /var/lib/veritasvpn/recovery/wireguard-private.key \
   /opt/veritasvpn/data/wireguard/private.key
 sudo ./deploy/node/bootstrap-wg.sh
 sudo ./deploy/node/persist-rules.sh
+```
+
+`bootstrap-wg.sh` and `persist-rules.sh` install `deploy/sysctl/99-veritasvpn.conf` to `/etc/sysctl.d/99-veritasvpn.conf`. That drop-in sets `net.ipv4.ip_unprivileged_port_start=443` so the non-root `veritas-wstunnel` DaemonSet (uid 65532, `CAP_NET_BIND_SERVICE`) can bind host TCP 443. Do not switch the DaemonSet to root.
+
+```sh
 sudo ./deploy/security/install-host-auditing.sh
 sudo bash ./deploy/security/install-ssh-hardening.sh
 ```
