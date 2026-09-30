@@ -1,7 +1,7 @@
 # Pre-production plan: JWT cutover, Android Always-on tip, release smoke
 
 **Date:** 2026-08-31  
-**Status:** JWT cutover + smoke automation done. **Android Always-on tip removed** (0.2.20): post-connect dialog was bad UX; only the system VPN permission prompt remains. Always-on remains optional via FAQ/settings copy, not an in-app dialog.  
+**Status:** JWT cutover + smoke automation done. **Android Always-on tip removed** (0.2.20) and later treated as optional. **Superseded 2026-09-30:** the mandatory Connect gate is restored. Do not implement the dismissible tip in section 2. Connect stays blocked until Always-on VPN and Block connections without VPN are on for VeritasVPN. See `docs/CLIENT_KILL_SWITCH.md`.  
 **Goal:** Close three remaining soft-launch → public-production gaps without blocking invite-only Linux/Android use.
 
 **Current live state (Dell, 2026-08-31):**
@@ -188,7 +188,7 @@ Add short section to `docs/DEPLOYMENT_SOURCE_OF_TRUTH.md` or a `docs/RELEASE_SMO
 
 - Chrome / Windows / macOS product launch  
 - Multi-node HA  
-- Changing Android Always-on to mandatory again  
+- The 2026-08 tip-only Always-on approach (mandatory Connect gate was restored 2026-09-30)  
 - Real mainnet payment as sole automated gate  
 
 ---
@@ -196,5 +196,5 @@ Add short section to `docs/DEPLOYMENT_SOURCE_OF_TRUTH.md` or a `docs/RELEASE_SMO
 ## Done when
 
 1. Cluster verifies **EdDSA-only**; `JWT_SECRET` gone from workloads and secret store.  
-2. Android shows a one-time Always-on tip after connect without blocking.  
+2. Historical for this plan: a one-time Always-on tip. Current product behavior blocks Connect until lockdown is on (`docs/CLIENT_KILL_SWITCH.md`).
 3. Every release runs automated sign-in + premium + SHA checks; Dell daily proves 5+ min tunnel stability; webhook settle is scripted or explicitly manual on the release checklist.

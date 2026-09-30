@@ -26,7 +26,9 @@ Only remove this route when the VPN is intentionally disconnected; removing it w
 
 ## Android
 
-The Android client uses a full-tunnel VpnService so connected app traffic is forced through WireGuard while the session is up. Connect also requires system **Always-on VPN** and **Block connections without VPN** for VeritasVPN (Android’s kill switch). Apps cannot flip those OS settings themselves; the client blocks Connect until both are on and deep-links to system VPN settings. There is no in-app off toggle. Auto-reconnect is always on for an established session (sticky restore + Always-on).
+The Android client uses a full-tunnel VpnService so connected app traffic is forced through WireGuard while the session is up. That tunnel does not fail closed by itself: if it drops, Android can send traffic to the clearnet unless system **Always-on VPN** and **Block connections without VPN** are enabled for VeritasVPN.
+
+Connect is blocked until `VpnKillSwitch.isLockdownEnabled` is true (this package is the Always-on VPN app and lockdown is on). The app cannot flip those OS settings. When Connect is blocked, the client explains both switches and opens system VPN settings (`Settings.ACTION_VPN_SETTINGS`). Returning to the app re-checks them; Connect continues only after both are detected. Cancel leaves the user disconnected. There is no in-app off toggle and no way to connect without both settings. Auto-reconnect stays always on for an established session (sticky restore + Always-on). Linux desktop behavior above and Chrome extension behavior below are unchanged.
 
 ## Chrome extension
 
