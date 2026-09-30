@@ -59,7 +59,8 @@ fun DashboardScreen(
     handshakeMs: Long = 0,
     dnsBlockedCount: Long? = null,
     dnsBlockedBaseline: Long? = null,
-    dnsGateway: String? = null
+    dnsGateway: String? = null,
+    transport: String = "",
 ) {
     var showSignOutConfirmation by remember { mutableStateOf(false) }
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
@@ -172,6 +173,7 @@ fun DashboardScreen(
                     isPremium = isPremium,
                     billingReady = billingReady,
                     connecting = connecting,
+                    transport = transport,
                     onPlans = onPlans,
                     onConnect = onConnect
                 )
@@ -189,6 +191,15 @@ fun DashboardScreen(
                     fontWeight = FontWeight.Bold,
                     fontSize = 22.sp
                 )
+                transportLabel(transport)?.let { label ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = label,
+                        color = if (transport == "switching") WarningOrange else PaperMuted,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                }
             }
 
             Spacer(Modifier.height(24.dp))
@@ -404,10 +415,19 @@ private fun NetworkMapView(
 }
 
 @Composable
+private fun transportLabel(transport: String): String? = when (transport) {
+    "udp" -> "Direct UDP"
+    "stealth" -> "Stealth"
+    "switching" -> "Switching to Stealth…"
+    else -> null
+}
+
+@Composable
 private fun DisconnectedActionContent(
     isPremium: Boolean,
     billingReady: Boolean,
     connecting: Boolean,
+    transport: String,
     onPlans: () -> Unit,
     onConnect: () -> Unit
 ) {
@@ -442,7 +462,12 @@ private fun DisconnectedActionContent(
         )
         Spacer(Modifier.width(8.dp))
         Text(
-            if (connecting) "ESTABLISHING SECURE CONNECTION" else "VPN DISCONNECTED",
+            when {
+                connecting && transport == "switching" -> "SWITCHING TO STEALTH"
+                connecting && transport == "stealth" -> "CONNECTING OVER STEALTH"
+                connecting -> "ESTABLISHING SECURE CONNECTION"
+                else -> "VPN DISCONNECTED"
+            },
             color = if (connecting) CyanHover else WarningOrange,
             fontSize = 11.sp,
             fontWeight = FontWeight.ExtraBold,
@@ -461,7 +486,14 @@ private fun DisconnectedActionContent(
     )
     Spacer(Modifier.height(8.dp))
     Text(
-        if (connecting) "Creating secure keys and validating encrypted internet access." else "Hide your IP address and encrypt your connection.",
+        when {
+            connecting && transport == "switching" ->
+                "UDP did not complete a handshake. Switching to Stealth. The VPN stays on."
+            connecting && transport == "stealth" ->
+                "Connecting over Stealth. WireGuard stays inside the VPN."
+            connecting -> "Creating secure keys and validating encrypted internet access."
+            else -> "Hide your IP address and encrypt your connection."
+        },
         color = PaperMuted,
         fontSize = 14.sp,
         textAlign = TextAlign.Center

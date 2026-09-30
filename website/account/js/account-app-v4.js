@@ -272,7 +272,7 @@ function renderHome() {
           <li>Access to the current network</li>
           <li>Up to 5 WireGuard devices</li>
           <li>Veritas Shield DNS security (Android &amp; Linux)</li>
-          <li>Stealth (Linux)</li>
+          <li>Stealth (Android &amp; Linux)</li>
           <li>Kill switch always on (Linux firewall; Android Always-on + lockdown required to connect)</li>
           <li>Split tunnel</li>
           <li>Pay with Bitcoin (no card)</li>
@@ -459,7 +459,7 @@ function renderSecurity() {
         <ul class="upgrade-features">
           <li>WireGuard-only protocol</li>
           <li>Veritas Shield DNS security for Android &amp; Linux</li>
-          <li>Stealth (Linux)</li>
+          <li>Stealth (Android &amp; Linux)</li>
           <li>Kill switch always on (Linux firewall; Android Always-on + lockdown required to connect)</li>
           <li>Split tunnel</li>
           <li>No traffic logs — see Privacy Policy for operational data</li>

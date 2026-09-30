@@ -16,6 +16,7 @@ object VpnSettings {
     private const val KEY_BYPASS_APPS = "bypass_apps"
     private const val KEY_CURRENT_PEER_ID = "current_peer_id"
     private const val KEY_DEVICE_ID = "device_id"
+    private const val KEY_STEALTH_MODE = "stealth_mode"
 
     /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
     val EXCLUDE_LAN_ALLOWED_IPS: List<String> = listOf(
@@ -58,6 +59,14 @@ object VpnSettings {
 
     fun setExcludeLan(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_EXCLUDE_LAN, enabled).apply()
+    }
+
+    /** Auto is the default: UDP first, then Stealth if the handshake does not complete. */
+    fun stealthMode(context: Context): StealthMode =
+        StealthMode.fromStored(prefs(context).getString(KEY_STEALTH_MODE, null))
+
+    fun setStealthMode(context: Context, mode: StealthMode) {
+        prefs(context).edit().putString(KEY_STEALTH_MODE, mode.stored()).apply()
     }
 
     fun bypassApps(context: Context): Set<String> {
