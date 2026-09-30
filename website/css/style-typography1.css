@@ -1733,7 +1733,7 @@ body.auth-modal-open { overflow: hidden; }
 
 .downloads-shell { background:radial-gradient(circle at 50% 120%,rgba(0,71,255,.18),transparent 46%),linear-gradient(145deg,rgba(15,22,33,.97),rgba(7,11,18,.98)); }
 .downloads-header .text-link { display:inline-block; margin-top:12px; font-weight:700; }
-.downloads-shell .download-featured { grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.downloads-shell .download-featured { grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
 .downloads-shell .download-featured-card { display:flex; flex-direction:column; min-height:300px; padding:22px; border-radius:18px; background:linear-gradient(155deg,rgba(18,27,41,.94),rgba(8,13,21,.94)); }
 .downloads-shell .download-featured-card:hover { transform:translateY(-4px); box-shadow:0 18px 42px rgba(0,0,0,.25); }
 .downloads-shell .download-featured-badge { order:0; display:flex; align-items:center; margin-bottom:20px; }

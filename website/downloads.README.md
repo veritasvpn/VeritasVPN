@@ -4,13 +4,13 @@
 
 Primary download offers:
 
-1. **macOS** → `install/macos.html` (desktop WireGuard / Tauri — DMG pending)
-2. **Chrome** → `install/chrome.html` (download paused pending gateway validation)
+1. **Android** → `install/android.html`
+2. **Linux** → `install/linux.html`
 
-Other platforms listed as coming soon.
+Windows, macOS, and iOS stay listed as coming soon. Do not add a Chrome extension card.
 
 ## Useful information (AI)
 
-- Featured CTAs must stay macOS + Chrome until product priority changes.
-- Chrome zip: `downloads/veritasvpn-chrome.zip` from `clients/browser-extension`, excluding `store-assets/`.
-- Keep secondary platforms visually quieter than the two featured cards.
+- Featured clients are Android and Linux.
+- `install/chrome.html` is a leftover URL that points visitors at those clients. It is not in the sitemap.
+- The sideload zip may still exist in the repo. Do not link it from the marketing site.

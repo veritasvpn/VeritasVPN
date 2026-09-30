@@ -6,7 +6,7 @@ Logged-in VeritasVPN dashboard (Proton-style shell):
 
 - **Home** — current subscription status
 - **Subscription** — Bitcoin upgrade / renew / cancel
-- **Downloads** — Android, Linux, Chrome
+- **Downloads** — Android and Linux
 - **Account** — profile, password reset, sign out
 - **Security** — privacy notes
 

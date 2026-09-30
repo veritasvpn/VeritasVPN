@@ -273,7 +273,7 @@ function renderHome() {
           <li>Up to 5 WireGuard devices</li>
           <li>Veritas Shield DNS security (Android &amp; Linux)</li>
           <li>Stealth (Linux)</li>
-          <li>Kill switch + auto-reconnect always on (Android and Linux; Chrome browser-only when it ships)</li>
+          <li>Kill switch + auto-reconnect always on (Android and Linux)</li>
           <li>Split tunnel</li>
           <li>Pay with Bitcoin (no card)</li>
           <li>Priority support while we expand</li>
@@ -331,11 +331,6 @@ function renderDownloads() {
         </div>
       </div>
       <div class="download-grid">
-        <a class="download-tile" href="/install/chrome.html">
-          <h3>Chrome</h3>
-          <p>Authenticated browser gateway hardening and external egress testing are in progress.</p>
-          <span class="btn btn-primary btn-sm">View status</span>
-        </a>
         <a class="download-tile" href="/install/linux.html">
           <h3>Linux</h3>
           <p>Full-device protection with the .deb or AppImage release.</p>
@@ -465,7 +460,7 @@ function renderSecurity() {
           <li>WireGuard-only protocol</li>
           <li>Veritas Shield DNS security for Android &amp; Linux</li>
           <li>Stealth (Linux)</li>
-          <li>Kill switch + auto-reconnect always on (Android and Linux; Chrome browser-only when it ships)</li>
+          <li>Kill switch + auto-reconnect always on (Android and Linux)</li>
           <li>Split tunnel</li>
           <li>No traffic logs — see Privacy Policy for operational data</li>
           <li>Paid with Bitcoin (no card required)</li>
