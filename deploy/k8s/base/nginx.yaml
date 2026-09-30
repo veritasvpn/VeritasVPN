@@ -83,6 +83,11 @@ spec:
               mountPath: /etc/nginx/conf.d
             - name: website
               mountPath: /usr/share/nginx/html
+            # Egress probe JSON written on the host by verify-vpn-egress.sh.
+            # Read-only: a failed probe must not be able to change /healthz.
+            - name: egress-status
+              mountPath: /var/lib/veritasvpn/status
+              readOnly: true
             # The only paths nginx writes to: proxy/client body temp files and
             # the pid file. Keeping them on emptyDir is what lets / stay read-only.
             - name: nginx-cache
@@ -122,6 +127,10 @@ spec:
           hostPath:
             path: /opt/veritasvpn/website
             type: Directory
+        - name: egress-status
+          hostPath:
+            path: /var/lib/veritasvpn/status
+            type: DirectoryOrCreate
         - name: nginx-cache
           emptyDir: {}
         - name: nginx-run

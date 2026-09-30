@@ -8,3 +8,8 @@ shell PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # Weekly backup verification (Sunday at 03:00)
 0 3 * * 0 root /opt/veritasvpn/deploy/verify/boot-verify.sh >> /var/log/veritas-verify.log 2>&1
+
+# VPN egress probe every 5 minutes. Inert until Dell installs this file
+# (or the single line) into /etc/cron.d. Requires /etc/veritasvpn/egress.env
+# with VERITAS_PUBLIC_IP. See deploy/ops/VPN_EGRESS.md.
+*/5 * * * * root /opt/veritasvpn/deploy/ops/verify-vpn-egress.sh >> /var/log/veritas-egress.log 2>&1
