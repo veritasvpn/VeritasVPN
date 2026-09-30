@@ -18,6 +18,14 @@ else
   echo "[persist] $SYSCTL_FILE already exists — skipping"
 fi
 
+# Canonical host sysctl, including the unprivileged-port floor so non-root
+# veritas-wstunnel can bind host TCP 443. Always refresh from the repo.
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+CANONICAL_SYSCTL="/etc/sysctl.d/99-veritasvpn.conf"
+install -m 0644 "$ROOT/deploy/sysctl/99-veritasvpn.conf" "$CANONICAL_SYSCTL"
+sysctl -p "$CANONICAL_SYSCTL"
+echo "[persist] installed $CANONICAL_SYSCTL"
+
 echo ""
 echo "[persist] Saving current iptables rules..."
 if command -v iptables-save >/dev/null; then
@@ -43,5 +51,6 @@ echo "  sudo ufw route allow in on wg0 out on \$(ip route show default | awk '{p
 echo ""
 echo "[persist] Done. Rules will persist across reboots."
 echo "  - sysctl: $SYSCTL_FILE"
+echo "  - sysctl: $CANONICAL_SYSCTL (ip_unprivileged_port_start=443 for non-root wstunnel)"
 echo "  - iptables: /etc/iptables/rules.v4 (if present)"
 echo "  - veritas-agent re-applies rules on Docker container startup"

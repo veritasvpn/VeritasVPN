@@ -37,7 +37,7 @@ clients use WireGuard directly.
 
 ## Useful information (AI)
 
-- Bootstrap creates/adopts `wg0`, persists `/etc/wireguard/private.key`, enables IP forward + MASQUERADE.
+- Bootstrap creates/adopts `wg0`, persists `/etc/wireguard/private.key`, installs `deploy/sysctl/99-veritasvpn.conf` (IPv4 forwarding, and `net.ipv4.ip_unprivileged_port_start=443` so non-root wstunnel can bind host TCP 443), and enables MASQUERADE.
 - Agent runs `network_mode: host` with `NET_ADMIN`, talks to `MANAGER_ENDPOINT=http://127.0.0.1:8082`.
 - Peer provisioning: `POST /api/v1/wg/peers` (JWT) → SSE to agent → `wgctrl` AddPeer →
   `POST /api/v1/agents/peers/applied` marks peer `active`. Create responses include `preshared_key`.

@@ -21,6 +21,11 @@ fi
 if ip link show wg0 >/dev/null 2>&1 && wg show wg0 >/dev/null 2>&1; then ok 'WireGuard interface wg0 available'; else bad 'WireGuard interface wg0 missing'; fi
 if [[ "$(wg show wg0 listen-port 2>/dev/null)" == '51820' ]]; then ok 'WireGuard UDP 51820 listening'; else bad 'WireGuard UDP 51820 not listening'; fi
 if [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" == '1' ]]; then ok 'IPv4 forwarding enabled'; else bad 'IPv4 forwarding disabled'; fi
+if [[ "$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null)" == '443' ]]; then
+  ok 'unprivileged port start is 443 (non-root wstunnel can bind TCP 443)'
+else
+  bad 'net.ipv4.ip_unprivileged_port_start is not 443 (non-root wstunnel cannot bind host TCP 443)'
+fi
 if nft list table inet veritas_filter >/dev/null 2>&1 && nft list table inet veritas >/dev/null 2>&1; then ok 'host and VPN firewall tables loaded'; else bad 'required nftables tables missing'; fi
 
 if dig +short +time=3 +tries=1 @10.0.0.1 api.veritasvpn.cloud A | grep -Eq '^[0-9]+(\.[0-9]+){3}$'; then ok 'VPN DNS forwarder resolves'; else bad 'VPN DNS forwarder failed'; fi
