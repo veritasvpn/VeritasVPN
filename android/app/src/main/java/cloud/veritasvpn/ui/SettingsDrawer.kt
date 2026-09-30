@@ -198,7 +198,7 @@ fun SettingsDrawer(
                     SettingsDrawerSection(title = "Connection") {
                         SettingsDrawerNavItem(
                             label = "Split tunnel",
-                            note = "Exclude LAN · per-app bypass",
+                            note = "Stealth · exclude LAN · per-app bypass",
                             onClick = { navigate(onTunnelSettings) },
                         )
                     }

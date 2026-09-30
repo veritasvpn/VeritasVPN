@@ -26,6 +26,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.ui.theme.*
+import cloud.veritasvpn.vpn.StealthMode
 
 private data class LaunchableApp(val label: String, val packageName: String)
 
@@ -33,9 +34,11 @@ private data class LaunchableApp(val label: String, val packageName: String)
 fun TunnelSettingsScreen(
     excludeLan: Boolean,
     bypassApps: Set<String>,
+    stealthMode: StealthMode,
     showReconnectBanner: Boolean,
     onExcludeLanChange: (Boolean) -> Unit,
     onBypassAppsChange: (Set<String>) -> Unit,
+    onStealthModeChange: (StealthMode) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -82,6 +85,35 @@ fun TunnelSettingsScreen(
         }
 
         Spacer(Modifier.height(20.dp))
+        Text("TRANSPORT", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Auto tries WireGuard UDP first. If that handshake does not complete, VeritasVPN switches to Stealth without dropping Always-on VPN. Reconnect to apply a change.",
+            color = PaperMuted, fontSize = 13.sp, lineHeight = 18.sp
+        )
+        Spacer(Modifier.height(10.dp))
+        TransportChoice(
+            title = "Auto",
+            subtitle = "UDP first, then Stealth. Recommended.",
+            selected = stealthMode == StealthMode.AUTO,
+            onClick = { onStealthModeChange(StealthMode.AUTO) }
+        )
+        Spacer(Modifier.height(8.dp))
+        TransportChoice(
+            title = "UDP only",
+            subtitle = "Plain WireGuard. No Stealth fallback.",
+            selected = stealthMode == StealthMode.UDP,
+            onClick = { onStealthModeChange(StealthMode.UDP) }
+        )
+        Spacer(Modifier.height(8.dp))
+        TransportChoice(
+            title = "Stealth always",
+            subtitle = "WireGuard inside TLS from the start. Use this on networks that block UDP.",
+            selected = stealthMode == StealthMode.STEALTH,
+            onClick = { onStealthModeChange(StealthMode.STEALTH) }
+        )
+
+        Spacer(Modifier.height(24.dp))
         Text("ROUTING", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
         Spacer(Modifier.height(8.dp))
         Column(
@@ -227,6 +259,29 @@ private fun launchableApps(context: Context): List<LaunchableApp> {
         }
         .distinctBy { it.packageName }
         .sortedBy { it.label.lowercase() }
+}
+
+@Composable
+private fun TransportChoice(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .border(1.dp, if (selected) CyanHover.copy(alpha = 0.4f) else LineStrong, RoundedCornerShape(14.dp))
+            .background(CardElevated, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = onClick,
+            colors = RadioButtonDefaults.colors(selectedColor = Cyan, unselectedColor = PaperDim)
+        )
+        Column(Modifier.weight(1f).padding(end = 10.dp)) {
+            Text(title, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            Spacer(Modifier.height(2.dp))
+            Text(subtitle, color = PaperMuted, fontSize = 12.sp, lineHeight = 16.sp)
+        }
+    }
 }
 
 @Composable

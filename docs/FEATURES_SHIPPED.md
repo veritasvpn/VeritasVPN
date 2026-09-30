@@ -5,7 +5,7 @@ Last updated: 2026-09-30
 ## Core VPN
 - WireGuard on Linux desktop, Android, CLI; Chrome HTTP proxy extension
 - Advertised UDP endpoint often public **443** (router → host **51820**)
-- Optional **Stealth** (Linux desktop): WireGuard over TLS/WebSocket (`wstunnel`) on TCP **443**
+- Optional **Stealth** (Android and Linux desktop): WireGuard over TLS/WebSocket (`wstunnel`) on TCP **443**. Android defaults to Auto (plain UDP, then Stealth if that handshake does not complete; UDP only and Stealth always are in connection settings). Linux is a Settings toggle. Not a claim of undetectability.
 - Always-on private DNS gateway (while connected) with DoH upstreams + **Veritas Shield** categorized blocklists and per-peer presets (Security / Standard / Aggressive; ads off unless Aggressive); well-known public DoH resolver IPs/hostnames blocked for peers; Prometheus has no query names (category labels only); UI blocked counts are per tunnel IP / session delta; ops allowlist via `DNS_SHIELD_ALLOWLIST`
 - Per-device bandwidth cap (~150 Mbps)
 - 5 devices; Premium gate via BTCPay (Bitcoin)
@@ -25,5 +25,4 @@ Last updated: 2026-09-30
 ## Not shipped
 - Multi-hop / multi-region (needs more nodes)
 - Dedicated IP add-on (needs extra public IPs)
-- Android Stealth transport (API fields only; use Linux desktop)
 - AmneziaWG / claim of undetectability

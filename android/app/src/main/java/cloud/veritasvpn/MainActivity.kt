@@ -154,8 +154,11 @@ class MainActivity : ComponentActivity() {
                 var dnsGateway by remember { mutableStateOf<String?>(null) }
                 var excludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
                 var bypassApps by remember { mutableStateOf(VpnSettings.bypassApps(context)) }
+                var stealthMode by remember { mutableStateOf(VpnSettings.stealthMode(context)) }
                 var appliedExcludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
                 var appliedBypassApps by remember { mutableStateOf(VpnSettings.bypassApps(context)) }
+                var appliedStealthMode by remember { mutableStateOf(VpnSettings.stealthMode(context)) }
+                var transport by remember { mutableStateOf("") }
                 var billingStatus by remember { mutableStateOf<BillingStatus?>(null) }
                 var billingRefreshing by remember { mutableStateOf(false) }
                 var cancellationInProgress by remember { mutableStateOf(false) }
@@ -179,6 +182,7 @@ class MainActivity : ComponentActivity() {
                     dnsBlockedCount = null
                     dnsBlockedBaseline = null
                     dnsGateway = null
+                    transport = ""
                 }
 
                 fun cancelReconnect() {
@@ -579,8 +583,12 @@ class MainActivity : ComponentActivity() {
                                         hadEstablishedSession = true
                                         appliedExcludeLan = VpnSettings.excludeLan(this@MainActivity)
                                         appliedBypassApps = VpnSettings.bypassApps(this@MainActivity)
+                                        appliedStealthMode = VpnSettings.stealthMode(this@MainActivity)
                                         excludeLan = appliedExcludeLan
                                         bypassApps = appliedBypassApps
+                                        stealthMode = appliedStealthMode
+                                        intent.getStringExtra(VeritasVpnService.EXTRA_TRANSPORT)
+                                            ?.let { transport = it }
                                         statusMsg = null
                                     } else if (error != null && error.contains("revoked", ignoreCase = true)) {
                                         connected = false
@@ -588,6 +596,7 @@ class MainActivity : ComponentActivity() {
                                         reconnecting = false
                                         userWantsConnected = false
                                         hadEstablishedSession = false
+                                        transport = ""
                                         statusMsg = error
                                         peerIdForDisconnect()
                                     } else if (userWantsConnected && hadEstablishedSession) {
@@ -607,6 +616,7 @@ class MainActivity : ComponentActivity() {
                                         dnsBlockedCount = null
                                         dnsBlockedBaseline = null
                                         dnsGateway = null
+                                        transport = ""
                                         statusMsg = error
                                     }
                                 }
@@ -614,6 +624,9 @@ class MainActivity : ComponentActivity() {
                                     rxBytes = intent.getLongExtra(VeritasVpnService.EXTRA_RX_BYTES, 0L)
                                     txBytes = intent.getLongExtra(VeritasVpnService.EXTRA_TX_BYTES, 0L)
                                     handshakeMs = intent.getLongExtra(VeritasVpnService.EXTRA_HANDSHAKE_MS, 0L)
+                                    if (intent.hasExtra(VeritasVpnService.EXTRA_TRANSPORT)) {
+                                        transport = intent.getStringExtra(VeritasVpnService.EXTRA_TRANSPORT).orEmpty()
+                                    }
                                 }
                                 VeritasVpnService.ACTION_RECONNECT_NEEDED -> {
                                     if (userWantsConnected && hadEstablishedSession) {
@@ -724,7 +737,9 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val tunnelSettingsDirty =
-                    excludeLan != appliedExcludeLan || bypassApps != appliedBypassApps
+                    excludeLan != appliedExcludeLan ||
+                        bypassApps != appliedBypassApps ||
+                        stealthMode != appliedStealthMode
 
                 if (user == null) {
                     AuthScreen(onAuthenticated = {
@@ -743,6 +758,7 @@ class MainActivity : ComponentActivity() {
                         TunnelSettingsScreen(
                             excludeLan = excludeLan,
                             bypassApps = bypassApps,
+                            stealthMode = stealthMode,
                             showReconnectBanner = connected && tunnelSettingsDirty,
                             onExcludeLanChange = {
                                 excludeLan = it
@@ -751,6 +767,10 @@ class MainActivity : ComponentActivity() {
                             onBypassAppsChange = {
                                 bypassApps = it
                                 VpnSettings.setBypassApps(context, it)
+                            },
+                            onStealthModeChange = {
+                                stealthMode = it
+                                VpnSettings.setStealthMode(context, it)
                             },
                         onBack = { showTunnelSettings = false }
                     )
@@ -833,7 +853,8 @@ class MainActivity : ComponentActivity() {
                         handshakeMs = handshakeMs,
                         dnsBlockedCount = dnsBlockedCount,
                         dnsBlockedBaseline = dnsBlockedBaseline,
-                        dnsGateway = dnsGateway
+                        dnsGateway = dnsGateway,
+                        transport = transport,
                     )
                 }
             }
@@ -954,6 +975,22 @@ class MainActivity : ComponentActivity() {
                     putExtra(
                         VeritasVpnService.EXTRA_ENDPOINT_WAN,
                         peer.serverEndpointWan?.trim().orEmpty()
+                    )
+                    putExtra(
+                        VeritasVpnService.EXTRA_STEALTH_ENDPOINT,
+                        peer.stealthEndpoint?.trim().orEmpty()
+                    )
+                    putExtra(
+                        VeritasVpnService.EXTRA_STEALTH_PREFIX,
+                        peer.stealthPathPrefix?.trim().orEmpty()
+                    )
+                    putExtra(
+                        VeritasVpnService.EXTRA_STEALTH_MODE,
+                        VpnSettings.stealthMode(context).stored()
+                    )
+                    putExtra(
+                        VeritasVpnService.EXTRA_STEALTH_AVAILABLE,
+                        peer.stealthAvailable
                     )
                 }
                 currentPeerId = peer.peerId
