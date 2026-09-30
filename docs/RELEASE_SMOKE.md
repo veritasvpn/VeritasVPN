@@ -15,6 +15,7 @@ ship/ops + host/edge leftovers).
 | Short WireGuard connect | `.github/workflows/vpn-e2e.yml` → `deploy/verify/external-wireguard-e2e.sh` (hourly) |
 | 5+ min tunnel, no 2m flap | `.github/workflows/tunnel-hold.yml` (daily) → `deploy/verify/tunnel-hold-e2e.sh` (+ optional production host systemd) |
 | Agent heartbeat + public `:443` | production host → `deploy/ops/verify-agent-health.sh` (after any agent/wg-manager roll) |
+| VPN egress on `/status` | production host cron → `deploy/ops/verify-vpn-egress.sh` (Dell enables cron + `VERITAS_PUBLIC_IP`; see `deploy/ops/VPN_EGRESS.md`) |
 | BTCPay webhook → Premium | production host → `BTCPAY_WEBHOOK_SECRET=… deploy/verify/billing-webhook-smoke.sh` (**never** mock in prod) |
 | JWT_SECRET gone from Secret (post-drain) | `veritas-jwt-secret-cleanup.timer` → `delete-jwt-secret-after.sh` |
 | SSH WAN closed | `.github/workflows/verify-wan-ssh.yml` / `deploy/ops/verify-ssh-wan.sh` from off-LAN |
