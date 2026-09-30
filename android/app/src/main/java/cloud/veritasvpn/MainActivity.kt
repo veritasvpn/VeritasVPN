@@ -38,6 +38,7 @@ import cloud.veritasvpn.ui.PaymentCheckoutScreen
 import cloud.veritasvpn.ui.TunnelSettingsScreen
 import cloud.veritasvpn.ui.theme.VeritasVPNTheme
 import cloud.veritasvpn.vpn.VeritasVpnService
+import cloud.veritasvpn.vpn.VpnKillSwitch
 import cloud.veritasvpn.vpn.VpnSettings
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -143,6 +144,8 @@ class MainActivity : ComponentActivity() {
                 var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
                 var showTunnelSettings by remember { mutableStateOf(false) }
+                var showKillSwitchRequired by remember { mutableStateOf(false) }
+                var pendingConnectAfterKillSwitch by remember { mutableStateOf(false) }
                 var rxBytes by remember { mutableStateOf(0L) }
                 var txBytes by remember { mutableStateOf(0L) }
                 var handshakeMs by remember { mutableStateOf(0L) }
@@ -390,6 +393,20 @@ class MainActivity : ComponentActivity() {
                 var pendingNotificationStart by remember { mutableStateOf(false) }
                 var pendingNotificationReconnect by remember { mutableStateOf(false) }
 
+                fun blockConnectForKillSwitch(): Boolean {
+                    if (VpnKillSwitch.isLockdownEnabled(context)) {
+                        showKillSwitchRequired = false
+                        return false
+                    }
+                    pendingConnectAfterKillSwitch = true
+                    showKillSwitchRequired = true
+                    connecting = false
+                    reconnecting = false
+                    userWantsConnected = false
+                    statusMsg = null
+                    return true
+                }
+
                 fun markReconnectNeeded() {
                     // Product rule: after Connect, never auto-tear the session.
                     if (!userWantsConnected || !hadEstablishedSession) {
@@ -413,7 +430,7 @@ class MainActivity : ComponentActivity() {
                     val isReconnect = pendingNotificationReconnect
                     pendingNotificationStart = false
                     pendingNotificationReconnect = false
-                    if (shouldStart) {
+                    if (shouldStart && !blockConnectForKillSwitch()) {
                         startConnection(
                             context, scope,
                             setStatus = { msg -> statusMsg = msg },
@@ -430,6 +447,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun startVpnAfterPermissions(isReconnect: Boolean = false) {
+                    if (blockConnectForKillSwitch()) return
                     val notificationManager =
                         context.getSystemService(NotificationManager::class.java)
                     val permissionPrefs = SecurePrefs.open(
@@ -675,6 +693,7 @@ class MainActivity : ComponentActivity() {
                         statusMsg = "An active subscription is required. Open Plans to subscribe."
                         return
                     }
+                    if (blockConnectForKillSwitch()) return
                     userWantsConnected = true
                     cancelReconnect()
                     connecting = true
@@ -689,6 +708,14 @@ class MainActivity : ComponentActivity() {
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
+                            if (VpnKillSwitch.isLockdownEnabled(context)) {
+                                val continueConnect = pendingConnectAfterKillSwitch
+                                pendingConnectAfterKillSwitch = false
+                                showKillSwitchRequired = false
+                                if (continueConnect) requestConnect()
+                            } else if (pendingConnectAfterKillSwitch) {
+                                showKillSwitchRequired = true
+                            }
                             if (user != null) ensureSessionFresh()
                         }
                     }
@@ -780,6 +807,22 @@ class MainActivity : ComponentActivity() {
                             if (billingStatus == null) refreshBilling()
                         },
                         onTunnelSettings = { showTunnelSettings = true },
+                        onOpenKillSwitchSettings = {
+                            val opened = runCatching {
+                                context.startActivity(VpnKillSwitch.systemVpnSettingsIntent())
+                            }.isSuccess
+                            if (!opened) {
+                                statusMsg = "Could not open Android VPN settings. Enable Always-on VPN and Block connections without VPN for VeritasVPN in system settings."
+                            }
+                        },
+                        showKillSwitchRequired = showKillSwitchRequired,
+                        onDismissKillSwitchRequired = {
+                            showKillSwitchRequired = false
+                            pendingConnectAfterKillSwitch = false
+                            userWantsConnected = false
+                            connecting = false
+                            reconnecting = false
+                        },
                         isPremium = billingStatus?.isPremium == true,
                         billingReady = billingStatus != null,
                         statusMsg = statusMsg,

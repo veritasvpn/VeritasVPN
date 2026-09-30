@@ -4,7 +4,7 @@ description: Fail-closed networking that blocks cleartext paths when the tunnel 
 category: protect
 slug: what-is-a-kill-switch
 related: [how-does-a-vpn-work, what-is-split-tunneling, what-is-webrtc-leak]
-updated: 2026-09-04
+updated: 2026-09-30
 lede: A kill switch stops traffic from leaving your device outside the VPN when the tunnel fails—so a disconnect does not silently expose you.
 ---
 
@@ -30,4 +30,4 @@ The trustworthy ones are **fail-closed**: prefer no internet over accidental exp
 
 ## On VeritasVPN clients
 
-Linux desktop uses firewall-oriented fail-closed behavior while connected (always on; no off option). Android uses a full-device WireGuard tunnel while connected (kill switch always on; no in-app off option). Auto-reconnect is always on for both clients.
+Linux desktop uses firewall-oriented fail-closed behavior while connected (always on; no off option). Android requires system Always-on VPN plus “Block connections without VPN” before Connect (apps cannot flip those OS toggles; the client blocks Connect and opens system VPN settings until both are on; no in-app off option). Auto-reconnect is always on for both clients.

@@ -46,6 +46,9 @@ fun DashboardScreen(
     onSignOutEverywhere: () -> Unit,
     onPlans: () -> Unit,
     onTunnelSettings: () -> Unit,
+    onOpenKillSwitchSettings: () -> Unit,
+    showKillSwitchRequired: Boolean,
+    onDismissKillSwitchRequired: () -> Unit,
     isPremium: Boolean,
     billingReady: Boolean,
     statusMsg: String?,
@@ -62,6 +65,13 @@ fun DashboardScreen(
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var showNetworkMap by remember { mutableStateOf(false) }
+
+    if (showKillSwitchRequired) {
+        KillSwitchRequiredDialog(
+            onOpenSystemVpnSettings = onOpenKillSwitchSettings,
+            onCancel = onDismissKillSwitchRequired
+        )
+    }
 
     if (showSignOutConfirmation) {
         AlertDialog(
@@ -697,4 +707,55 @@ private fun ExposureNode(
         Text(label, color = Paper, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         Text(detail, color = PaperDim, fontSize = 9.sp)
     }
+}
+
+@Composable
+fun KillSwitchRequiredDialog(
+    onOpenSystemVpnSettings: () -> Unit,
+    onCancel: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Kill switch required", color = Paper, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Connect stays blocked until Android’s fail-closed VPN settings are on for VeritasVPN. The app cannot turn these on for you:",
+                    color = PaperMuted,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+                Text(
+                    "1. Always-on VPN",
+                    color = Paper,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "2. Block connections without VPN",
+                    color = Paper,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "Open system VPN settings, enable both, then return here. Connect continues only after both are detected. There is no in-app off switch and no way to connect without them.",
+                    color = PaperDim,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onOpenSystemVpnSettings,
+                colors = ButtonDefaults.buttonColors(containerColor = CyanHover)
+            ) {
+                Text("Open VPN settings", color = Ink, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text("Cancel", color = CyanHover) }
+        },
+        containerColor = CardElevated
+    )
 }

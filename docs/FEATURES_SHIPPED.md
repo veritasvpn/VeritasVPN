@@ -1,6 +1,6 @@
 # Features shipped (source of truth)
 
-Last updated: 2026-09-02
+Last updated: 2026-09-30
 
 ## Core VPN
 - WireGuard on Linux desktop, Android, CLI; Chrome HTTP proxy extension
@@ -12,7 +12,7 @@ Last updated: 2026-09-02
 
 ## Client safety
 - Linux: firewall + route kill switch mandatory while connected (no in-app off toggle)
-- Android: Connect requires Always-on VPN + Block connections without VPN (no in-app off toggle; apps cannot force the OS switches)
+- Android: Connect is blocked until system Always-on VPN and Block connections without VPN are enabled for VeritasVPN. The app explains why, deep-links to system VPN settings, and re-checks on resume. There is no in-app off toggle and no skip; apps cannot force the OS switches.
 - Auto-reconnect always on (Linux desktop + Android); no user toggle
 - Split tunnel: exclude LAN (desktop/Android); Android per-app bypass
 
