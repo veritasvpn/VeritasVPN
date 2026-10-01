@@ -69,6 +69,7 @@ fun SettingsDrawer(
     isPremium: Boolean,
     onPlans: () -> Unit,
     onNetworkMap: () -> Unit,
+    onStealthSettings: () -> Unit,
     onTunnelSettings: () -> Unit,
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
@@ -197,8 +198,13 @@ fun SettingsDrawer(
 
                     SettingsDrawerSection(title = "Connection") {
                         SettingsDrawerNavItem(
+                            label = "Stealth",
+                            note = "Auto · UDP only · Stealth always",
+                            onClick = { navigate(onStealthSettings) },
+                        )
+                        SettingsDrawerNavItem(
                             label = "Split tunnel",
-                            note = "Stealth · exclude LAN · per-app bypass",
+                            note = "Exclude LAN · per-app bypass",
                             onClick = { navigate(onTunnelSettings) },
                         )
                     }
