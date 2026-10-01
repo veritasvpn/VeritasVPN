@@ -146,6 +146,7 @@ class MainActivity : ComponentActivity() {
                 var showTunnelSettings by remember { mutableStateOf(false) }
                 var showKillSwitchRequired by remember { mutableStateOf(false) }
                 var pendingConnectAfterKillSwitch by remember { mutableStateOf(false) }
+                val killSwitchRecheckGeneration = remember { intArrayOf(0) }
                 var awaitingVpnConsent by remember { mutableStateOf(false) }
                 var rxBytes by remember { mutableStateOf(0L) }
                 var txBytes by remember { mutableStateOf(0L) }
@@ -726,7 +727,10 @@ class MainActivity : ComponentActivity() {
                     }
                     val gate = VpnKillSwitch.nextConnectGate(
                         vpnPrepared = consentIntent == null,
-                        lockdownEnabled = VpnKillSwitch.isLockdownEnabled(context),
+                        lockdownEnabled = VpnKillSwitch.isLockdownEnabled(
+                            context,
+                            vpnPrepared = consentIntent == null,
+                        ),
                     )
                     if (gate == VpnKillSwitch.ConnectGate.VpnConsent) {
                         userWantsConnected = true
@@ -747,13 +751,31 @@ class MainActivity : ComponentActivity() {
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
-                            if (VpnKillSwitch.isLockdownEnabled(context)) {
-                                val continueConnect = pendingConnectAfterKillSwitch
-                                pendingConnectAfterKillSwitch = false
-                                showKillSwitchRequired = false
-                                if (continueConnect) requestConnect()
-                            } else if (pendingConnectAfterKillSwitch) {
-                                showKillSwitchRequired = true
+                            // Some builds publish Always-on and lockdown slightly after
+                            // the VPN screen closes. Re-read before leaving the modal up.
+                            val generation = ++killSwitchRecheckGeneration[0]
+                            val waitingForSettings = pendingConnectAfterKillSwitch
+                            scope.launch {
+                                var enabled = VpnKillSwitch.isLockdownEnabled(context)
+                                if (!enabled && waitingForSettings) {
+                                    var reads = 0
+                                    while (!enabled && reads < 4) {
+                                        reads += 1
+                                        delay(300)
+                                        if (generation != killSwitchRecheckGeneration[0]) return@launch
+                                        if (!pendingConnectAfterKillSwitch) return@launch
+                                        enabled = VpnKillSwitch.isLockdownEnabled(context)
+                                    }
+                                }
+                                if (generation != killSwitchRecheckGeneration[0]) return@launch
+                                if (enabled) {
+                                    val continueConnect = pendingConnectAfterKillSwitch
+                                    pendingConnectAfterKillSwitch = false
+                                    showKillSwitchRequired = false
+                                    if (continueConnect) requestConnect()
+                                } else if (pendingConnectAfterKillSwitch) {
+                                    showKillSwitchRequired = true
+                                }
                             }
                             if (user != null) ensureSessionFresh()
                         }

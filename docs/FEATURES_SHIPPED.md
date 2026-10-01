@@ -12,7 +12,7 @@ Last updated: 2026-10-01
 
 ## Client safety
 - Linux: firewall + route kill switch mandatory while connected (no in-app off toggle)
-- Android: The first Connect calls `VpnService.prepare` so VeritasVPN is registered in the system VPN list (and the allow dialog is shown when needed) before the Always-on gate. The tunnel stays blocked until system Always-on VPN and Block connections without VPN are enabled for VeritasVPN. The app explains why, deep-links to system VPN settings, and re-checks on resume. There is no in-app off toggle and no skip; apps cannot force the OS switches.
+- Android: The first Connect calls `VpnService.prepare` so VeritasVPN is registered in the system VPN list (and the allow dialog is shown when needed) before the Always-on gate. The tunnel stays blocked until system Always-on VPN and Block connections without VPN are enabled for VeritasVPN. Release builds on Android 12+ / HyperOS cannot read the hidden always-on package setting; detection then treats readable lockdown plus this app being the prepared VPN as both switches on, and still rejects another VPN such as Tailscale. The VPN list master switch is not required. The app explains why, deep-links to system VPN settings, and re-checks on resume. There is no in-app off toggle and no skip; apps cannot force the OS switches.
 - Auto-reconnect always on (Linux desktop + Android); no user toggle
 - Split tunnel: exclude LAN (desktop/Android); Android per-app bypass
 
