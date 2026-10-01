@@ -91,7 +91,7 @@ dependencies {
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-    implementation("com.google.code.gson:gson:2.11.0")
+    implementation("com.google.code.gson:gson:2.14.0")
     implementation("com.caverock:androidsvg-aar:1.4")
 
     implementation("com.wireguard.android:tunnel:1.0.20260102")
