@@ -19,9 +19,9 @@ Email accounts do not use that file. Use Forgot password on the sign-in form. Th
 Matches the Connect gate from the Always-on lockdown change: both system switches are required, the app only deep-links to VPN settings, and there is no in-app off switch.
 
 ```
-Open Settings → VPN → VeritasVPN and turn on both Always-on VPN and Block connections without VPN. On some phones the VPN list is under Settings → Network & internet.
+Tap Connect. If Android asks, allow the VPN connection so VeritasVPN appears under Settings → VPN. That step is required when another VPN app, such as Tailscale, is already listed. On some phones the list is under Settings → Network & internet.
 
-Connect stays blocked until both are on for VeritasVPN. The app cannot turn those system switches on for you. It explains them and opens Android VPN settings. There is no in-app kill-switch off. After both are on, return to the app and Connect continues. Cancel leaves you disconnected.
+Select VeritasVPN and turn on both Always-on VPN and Block connections without VPN. The tunnel stays blocked until both are on for VeritasVPN. The app cannot turn those system switches on for you. It explains them and opens Android VPN settings. There is no in-app kill-switch off. After both are on, return to the app and Connect continues. Cancel leaves you disconnected.
 ```
 
 ## BTCPay
@@ -39,5 +39,5 @@ If it stays stuck after you paid, email contact@veritasvpn.cloud with the invoic
 ```
 The Chrome extension is a browser-only HTTP CONNECT proxy. It can cover traffic inside Chrome. Other apps on the device stay unprotected, and it is not a device kill switch.
 
-A full tunnel is the Android or Linux WireGuard client. Android requires Always-on VPN and Block connections without VPN before Connect. Linux keeps a firewall and routing kill switch on while connected, with no in-app off. Current downloads on the site are those two clients.
+A full tunnel is the Android or Linux WireGuard client. Android asks for VPN permission first so VeritasVPN is listed, then requires Always-on VPN and Block connections without VPN before the tunnel starts. Linux keeps a firewall and routing kill switch on while connected, with no in-app off. Current downloads on the site are those two clients.
 ```

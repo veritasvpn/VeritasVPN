@@ -28,7 +28,11 @@ Only remove this route when the VPN is intentionally disconnected; removing it w
 
 The Android client uses a full-tunnel VpnService so connected app traffic is forced through WireGuard while the session is up. That tunnel does not fail closed by itself: if it drops, Android can send traffic to the clearnet unless system **Always-on VPN** and **Block connections without VPN** are enabled for VeritasVPN.
 
-Connect is blocked until `VpnKillSwitch.isLockdownEnabled` is true (this package is the Always-on VPN app and lockdown is on). The app cannot flip those OS settings. When Connect is blocked, the client explains both switches and opens system VPN settings (`Settings.ACTION_VPN_SETTINGS`). Returning to the app re-checks them; Connect continues only after both are detected. Cancel leaves the user disconnected. There is no in-app off toggle and no way to connect without both settings. Auto-reconnect stays always on for an established session (sticky restore + Always-on). Linux desktop behavior above and Chrome extension behavior below are unchanged.
+The first Connect calls `VpnService.prepare` before the Always-on check. That consent registers VeritasVPN in the system VPN list and shows Android’s allow dialog when it has not been granted. The tunnel still does not start until `VpnKillSwitch.isLockdownEnabled` is true (this package is the Always-on VPN app and lockdown is on). The app cannot flip those OS settings. When the tunnel is blocked, the client explains both switches and opens system VPN settings (`Settings.ACTION_VPN_SETTINGS`). Returning to the app re-checks them; Connect continues only after both are detected. Cancel leaves the user disconnected. There is no in-app off toggle and no way to connect without both settings.
+
+That order matters when another VPN app is already installed (for example Tailscale on Xiaomi HyperOS). Those settings screens only list VPN apps that have already been granted `VpnService` consent. Checking lockdown before `prepare` shows the kill-switch dialog while VeritasVPN is still absent, so Always-on and Block cannot be turned on for it.
+
+Auto-reconnect stays always on for an established session (sticky restore + Always-on). Linux desktop behavior above and Chrome extension behavior below are unchanged.
 
 ## Chrome extension
 
