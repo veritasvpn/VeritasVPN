@@ -61,9 +61,9 @@ import androidx.compose.ui.unit.dp
 import cloud.veritasvpn.ui.theme.CardElevated
 import cloud.veritasvpn.ui.theme.Cyan
 import cloud.veritasvpn.ui.theme.CyanHover
+import cloud.veritasvpn.ui.theme.ErrorRed
 import cloud.veritasvpn.ui.theme.Ink
 import cloud.veritasvpn.ui.theme.Ink2
-import cloud.veritasvpn.ui.theme.Paper
 import cloud.veritasvpn.ui.theme.PaperDim
 import cloud.veritasvpn.ui.theme.Royal
 import cloud.veritasvpn.ui.theme.RoyalHover
@@ -137,20 +137,41 @@ fun HeroConnectControl(
     } else {
         0f
     }
-    // Premium idle: the rings drift a few dp around the still lock so the
-    // control reads as tappable. The transition stays in composition; animator
-    // scale 0 simply does not apply the offset, so the rings stay centered.
+    // Premium idle: rings travel farther, breathe, and a soft arc turns so the
+    // circle reads as tappable. The transitions stay in composition; animator
+    // scale 0 does not apply them, so the rings stay centered and still.
     val idleTransition = rememberInfiniteTransition(label = "hero-idle-orbit")
     val idleOrbit by idleTransition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(durationMillis = 12000, easing = LinearEasing)),
+        animationSpec = infiniteRepeatable(tween(durationMillis = 7600, easing = LinearEasing)),
         label = "hero-idle-angle",
+    )
+    val idleOrbitInner by idleTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(durationMillis = 5200, easing = LinearEasing)),
+        label = "hero-idle-inner-angle",
+    )
+    val idleGlowSpin by idleTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(durationMillis = 4800, easing = LinearEasing)),
+        label = "hero-idle-glow-spin",
+    )
+    val idleBreathe by idleTransition.animateFloat(
+        initialValue = 0.94f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "hero-idle-breathe",
     )
     val idleOrbitActive = motion && phase == HeroPhase.Ready
     val density = LocalDensity.current
-    val outerOrbitPx = with(density) { 4.dp.toPx() }
-    val innerOrbitPx = with(density) { 2.5.dp.toPx() }
+    val outerOrbitPx = with(density) { 9.dp.toPx() }
+    val innerOrbitPx = with(density) { 6.dp.toPx() }
     val ring = when (phase) {
         HeroPhase.Protected -> Cyan
         HeroPhase.Connecting, HeroPhase.Checking -> CyanHover
@@ -173,7 +194,7 @@ fun HeroConnectControl(
     val labelColor = when (phase) {
         HeroPhase.Protected -> Cyan
         HeroPhase.Connecting, HeroPhase.Checking -> CyanHover
-        else -> Paper
+        HeroPhase.Ready, HeroPhase.Upsell -> ErrorRed
     }
 
     Column(
@@ -206,15 +227,28 @@ fun HeroConnectControl(
             Canvas(Modifier.fillMaxSize()) {
                 val center = this.center
                 val radius = size.minDimension / 2f
+                val halo = if (idleOrbitActive) (glow * 1.7f).coerceAtMost(0.72f) else glow
                 drawCircle(
                     brush = Brush.radialGradient(
-                        colors = listOf(ringColor.copy(alpha = glow), Color.Transparent),
+                        colors = listOf(ringColor.copy(alpha = halo), Color.Transparent),
                         center = center,
                         radius = radius,
                     ),
                     radius = radius,
                     center = center,
                 )
+                if (idleOrbitActive) {
+                    val arcRadius = radius * 0.8f
+                    drawArc(
+                        color = Cyan.copy(alpha = 0.72f),
+                        startAngle = idleGlowSpin,
+                        sweepAngle = 128f,
+                        useCenter = false,
+                        topLeft = Offset(center.x - arcRadius, center.y - arcRadius),
+                        size = Size(arcRadius * 2f, arcRadius * 2f),
+                        style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round),
+                    )
+                }
                 val burstValue = burst.value
                 if (burstValue in 0.01f..0.99f) {
                     drawCircle(
@@ -247,25 +281,39 @@ fun HeroConnectControl(
                             IntOffset.Zero
                         }
                     }
-                    .border(1.dp, ringColor.copy(alpha = 0.16f), CircleShape)
+                    .graphicsLayer {
+                        if (idleOrbitActive) {
+                            scaleX = idleBreathe
+                            scaleY = idleBreathe
+                        }
+                    }
+                    .border(1.dp, ringColor.copy(alpha = if (idleOrbitActive) 0.55f else 0.16f), CircleShape)
             )
             Box(
                 Modifier
                     .size(144.dp)
                     .offset {
                         if (idleOrbitActive) {
-                            orbitOffset(idleOrbit, innerOrbitPx, 180f)
+                            orbitOffset(idleOrbitInner, innerOrbitPx, 0f)
                         } else {
                             IntOffset.Zero
                         }
                     }
-                    .border(1.dp, ringColor.copy(alpha = 0.28f), CircleShape)
+                    .graphicsLayer {
+                        if (idleOrbitActive) {
+                            val innerScale = 1.08f - (idleBreathe - 0.94f)
+                            scaleX = innerScale
+                            scaleY = innerScale
+                        }
+                    }
+                    .border(1.dp, ringColor.copy(alpha = if (idleOrbitActive) 0.82f else 0.28f), CircleShape)
             )
             Box(
                 modifier = Modifier
                     .size(118.dp)
                     .graphicsLayer {
-                        val scale = pressScale * settle
+                        val breathe = if (idleOrbitActive) 0.985f + (idleBreathe - 0.94f) * 0.28f else 1f
+                        val scale = pressScale * settle * breathe
                         scaleX = scale
                         scaleY = scale
                     }
