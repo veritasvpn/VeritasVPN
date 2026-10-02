@@ -26,12 +26,12 @@ Connect stays blocked until both are on for VeritasVPN. The app cannot turn thos
 
 ## Stealth / connection modes
 
-Android Auto tries UDP first, then Stealth on port 443. UDP only and Stealth always live under Settings → Connection → Split tunnel. Linux is Settings → Stealth mode. Reconnect to apply. Not a claim of undetectability.
+Android Auto tries UDP first, then Stealth on port 443. UDP only and Stealth always live under Settings → Connection. Linux is Settings → Stealth mode. Reconnect to apply. Not a claim of undetectability.
 
 ```
 Stealth wraps WireGuard in a TLS WebSocket on port 443 so it looks more like ordinary HTTPS. Use it on networks that block or throttle plain WireGuard UDP. This helps on restrictive networks; it is not a claim of undetectability.
 
-On Android, open Settings → Connection → Split tunnel. Auto (the default) tries UDP WireGuard first and switches to Stealth if that handshake does not complete. The VPN stays on during that switch. UDP only stays on plain WireGuard, with no Stealth fallback. Stealth always starts on Stealth. Reconnect to apply a change.
+On Android, open Settings → Connection. Auto (the default) tries UDP WireGuard first and switches to Stealth if that handshake does not complete. The VPN stays on during that switch. UDP only stays on plain WireGuard, with no Stealth fallback. Stealth always starts on Stealth. Reconnect to apply a change.
 
 On Linux, enable Settings → Stealth mode, then reconnect. Direct UDP remains the default when Stealth is off.
 ```
