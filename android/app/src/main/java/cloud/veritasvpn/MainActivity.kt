@@ -35,6 +35,7 @@ import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.DashboardScreen
 import cloud.veritasvpn.ui.PlansScreen
 import cloud.veritasvpn.ui.PaymentCheckoutScreen
+import cloud.veritasvpn.ui.StealthSettingsScreen
 import cloud.veritasvpn.ui.TunnelSettingsScreen
 import cloud.veritasvpn.ui.theme.VeritasVPNTheme
 import cloud.veritasvpn.vpn.VeritasVpnService
@@ -143,6 +144,7 @@ class MainActivity : ComponentActivity() {
                 }
                 var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
+                var showStealthSettings by remember { mutableStateOf(false) }
                 var showTunnelSettings by remember { mutableStateOf(false) }
                 var showKillSwitchRequired by remember { mutableStateOf(false) }
                 var pendingConnectAfterKillSwitch by remember { mutableStateOf(false) }
@@ -216,6 +218,7 @@ class MainActivity : ComponentActivity() {
                     billingError = null
                     checkoutMethod = null
                     showPlans = false
+                    showStealthSettings = false
                     showTunnelSettings = false
                     user = null
                 }
@@ -784,10 +787,9 @@ class MainActivity : ComponentActivity() {
                     onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
                 }
 
-                val tunnelSettingsDirty =
-                    excludeLan != appliedExcludeLan ||
-                        bypassApps != appliedBypassApps ||
-                        stealthMode != appliedStealthMode
+                val splitTunnelDirty =
+                    excludeLan != appliedExcludeLan || bypassApps != appliedBypassApps
+                val stealthDirty = stealthMode != appliedStealthMode
 
                 if (user == null) {
                     AuthScreen(onAuthenticated = {
@@ -802,24 +804,29 @@ class MainActivity : ComponentActivity() {
                         onClose = { checkoutUrl = null; refreshBilling() },
                         onRefreshPlan = { refreshBilling() }
                     )
+                } else if (showStealthSettings) {
+                    StealthSettingsScreen(
+                        stealthMode = stealthMode,
+                        showReconnectBanner = connected && stealthDirty,
+                        onStealthModeChange = {
+                            stealthMode = it
+                            VpnSettings.setStealthMode(context, it)
+                        },
+                        onBack = { showStealthSettings = false }
+                    )
                 } else if (showTunnelSettings) {
-                        TunnelSettingsScreen(
-                            excludeLan = excludeLan,
-                            bypassApps = bypassApps,
-                            stealthMode = stealthMode,
-                            showReconnectBanner = connected && tunnelSettingsDirty,
-                            onExcludeLanChange = {
-                                excludeLan = it
-                                VpnSettings.setExcludeLan(context, it)
-                            },
-                            onBypassAppsChange = {
-                                bypassApps = it
-                                VpnSettings.setBypassApps(context, it)
-                            },
-                            onStealthModeChange = {
-                                stealthMode = it
-                                VpnSettings.setStealthMode(context, it)
-                            },
+                    TunnelSettingsScreen(
+                        excludeLan = excludeLan,
+                        bypassApps = bypassApps,
+                        showReconnectBanner = connected && splitTunnelDirty,
+                        onExcludeLanChange = {
+                            excludeLan = it
+                            VpnSettings.setExcludeLan(context, it)
+                        },
+                        onBypassAppsChange = {
+                            bypassApps = it
+                            VpnSettings.setBypassApps(context, it)
+                        },
                         onBack = { showTunnelSettings = false }
                     )
                 } else if (showPlans) {
@@ -874,6 +881,7 @@ class MainActivity : ComponentActivity() {
                             showPlans = true
                             if (billingStatus == null) refreshBilling()
                         },
+                        onStealthSettings = { showStealthSettings = true },
                         onTunnelSettings = { showTunnelSettings = true },
                         onOpenKillSwitchSettings = {
                             val opened = runCatching {

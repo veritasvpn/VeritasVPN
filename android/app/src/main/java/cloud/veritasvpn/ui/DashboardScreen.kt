@@ -45,6 +45,7 @@ fun DashboardScreen(
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
     onPlans: () -> Unit,
+    onStealthSettings: () -> Unit,
     onTunnelSettings: () -> Unit,
     onOpenKillSwitchSettings: () -> Unit,
     showKillSwitchRequired: Boolean,
@@ -262,6 +263,7 @@ fun DashboardScreen(
         isPremium = isPremium,
         onPlans = onPlans,
         onNetworkMap = { showNetworkMap = true },
+        onStealthSettings = onStealthSettings,
         onTunnelSettings = onTunnelSettings,
         onSignOut = {
             if (connected || connecting) showSignOutConfirmation = true else onSignOut()
