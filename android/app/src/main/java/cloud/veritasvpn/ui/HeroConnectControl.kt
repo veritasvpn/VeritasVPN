@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -138,11 +139,17 @@ fun HeroConnectControl(
     }
     val ringColor by animateColorAsState(ring, label = "hero-ring")
     val label = when (phase) {
-        HeroPhase.Ready -> "Connect now"
-        HeroPhase.Upsell -> "Get Premium"
+        HeroPhase.Ready -> "Not protected"
+        HeroPhase.Upsell -> "Premium required"
         HeroPhase.Checking -> "Checking plan…"
         HeroPhase.Connecting -> "Connecting…"
         HeroPhase.Protected -> "Protected"
+    }
+    val actionName = when (phase) {
+        HeroPhase.Ready -> "Connect"
+        HeroPhase.Upsell -> "Get Premium"
+        HeroPhase.Protected -> "Disconnect"
+        else -> null
     }
     val labelColor = when (phase) {
         HeroPhase.Protected -> Cyan
@@ -151,25 +158,31 @@ fun HeroConnectControl(
     }
 
     Column(
-        modifier = modifier
-            .semantics(mergeDescendants = true) {
-                if (onClick != null) role = Role.Button
-                if (phase == HeroPhase.Protected) stateDescription = "VPN connected"
-            }
-            .then(
-                if (onClick != null) {
-                    Modifier.clickable(
-                        interactionSource = interaction,
-                        indication = null,
-                        onClick = onClick,
-                    )
-                } else {
-                    Modifier
-                }
-            ),
+        modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(196.dp)) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(196.dp)
+                .then(
+                    if (onClick != null && actionName != null) {
+                        Modifier
+                            .semantics {
+                                role = Role.Button
+                                contentDescription = actionName
+                                if (phase == HeroPhase.Protected) stateDescription = "VPN connected"
+                            }
+                            .clickable(
+                                interactionSource = interaction,
+                                indication = null,
+                                onClick = onClick,
+                            )
+                    } else {
+                        Modifier
+                    }
+                ),
+        ) {
             Canvas(Modifier.fillMaxSize()) {
                 val center = this.center
                 val radius = size.minDimension / 2f

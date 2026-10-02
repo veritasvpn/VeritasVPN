@@ -2,8 +2,6 @@ package cloud.veritasvpn.ui
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
@@ -14,20 +12,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -35,7 +26,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.ui.theme.*
-import kotlinx.coroutines.delay
 
 @Composable
 fun DashboardScreen(
@@ -157,17 +147,13 @@ fun DashboardScreen(
                 onBack = { showNetworkMap = false }
             )
         } else {
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(28.dp))
 
         val motion = rememberMotionEnabled()
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            PrivacyExposureScene(encrypted = connected)
-
-            Spacer(Modifier.height(22.dp))
-
             AnimatedContent(
                 targetState = connected,
                 transitionSpec = {
@@ -201,7 +187,8 @@ fun DashboardScreen(
                     else -> HeroPhase.Upsell
                 },
                 onClick = when {
-                    connected || connecting || !billingReady -> null
+                    connecting || !billingReady -> null
+                    connected -> onDisconnect
                     isPremium -> onConnect
                     else -> onPlans
                 },
@@ -216,7 +203,7 @@ fun DashboardScreen(
                     Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(20.dp))
                     LiveTransferStats(
                         rxBytes = rxBytes,
                         txBytes = txBytes,
@@ -226,8 +213,6 @@ fun DashboardScreen(
                         } else null,
                         dnsGateway = dnsGateway
                     )
-                    Spacer(Modifier.height(14.dp))
-                    DisconnectButton(onClick = onDisconnect)
                 }
             }
 
@@ -450,37 +435,6 @@ private fun ProtectedStatusCopy(transport: String) {
 }
 
 @Composable
-private fun DisconnectButton(onClick: () -> Unit) {
-    val motion = rememberMotionEnabled()
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.98f else 1f,
-        animationSpec = if (motion) spring(dampingRatio = 0.75f, stiffness = 600f) else snap(),
-        label = "disconnect-press",
-    )
-    OutlinedButton(
-        onClick = onClick,
-        interactionSource = interaction,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(50.dp)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            },
-        shape = RoundedCornerShape(25.dp),
-        border = BorderStroke(1.dp, ErrorRed.copy(alpha = 0.55f)),
-        colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = ErrorRed,
-            containerColor = ErrorRed.copy(alpha = 0.08f),
-        ),
-    ) {
-        Text("Disconnect", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-    }
-}
-
-@Composable
 private fun DisconnectedActionContent(
     connecting: Boolean,
     transport: String,
@@ -552,251 +506,6 @@ private fun DisconnectedActionContent(
         style = MaterialTheme.typography.bodyMedium,
         textAlign = TextAlign.Center
     )
-    }
-}
-
-@Composable
-private fun PrivacyExposureScene(encrypted: Boolean) {
-    val accent = if (encrypted) SuccessGreen else WarningOrange
-    val motion = rememberMotionEnabled()
-    val trafficPhase: Float
-    val observerPulse: Float
-    val warningAlpha: Float
-    if (motion) {
-        val transition = rememberInfiniteTransition(label = "visible traffic")
-        trafficPhase = transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(3200, easing = LinearEasing)),
-            label = "traffic movement"
-        ).value
-        observerPulse = transition.animateFloat(
-            initialValue = .98f,
-            targetValue = 1.03f,
-            animationSpec = infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-            label = "observer pulse"
-        ).value
-        warningAlpha = transition.animateFloat(
-            initialValue = .72f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(1100), RepeatMode.Reverse),
-            label = "warning blink"
-        ).value
-    } else {
-        trafficPhase = 0.35f
-        observerPulse = 1f
-        warningAlpha = 1f
-    }
-    var activityIndex by remember { mutableIntStateOf(0) }
-    val visibleActivities = remember(encrypted) {
-        if (encrypted) listOf("Your activity is private", "Your IP address is hidden", "Trackers cannot inspect traffic")
-        else listOf("Sites you visit", "Your IP address", "Searches and activity")
-    }
-    LaunchedEffect(encrypted, motion) {
-        if (!motion) {
-            activityIndex = 0
-            return@LaunchedEffect
-        }
-        while (true) {
-            delay(2400)
-            activityIndex = (activityIndex + 1) % visibleActivities.size
-        }
-    }
-    val deviceScale by animateFloatAsState(
-        targetValue = if (encrypted) 1f else 0.96f,
-        animationSpec = if (motion) tween(420, easing = FastOutSlowInEasing) else snap(),
-        label = "device-scale",
-    )
-
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .height(286.dp)
-            .clip(RoundedCornerShape(28.dp))
-            .background(
-                Brush.radialGradient(
-                    colors = listOf(accent.copy(alpha = .14f), CardElevated, Ink),
-                    radius = 780f
-                )
-            )
-            .border(1.dp, accent.copy(alpha = .28f), RoundedCornerShape(28.dp))
-    ) {
-        Canvas(Modifier.fillMaxSize()) {
-            val device = Offset(size.width * .5f, size.height * .82f)
-            val isp = Offset(size.width * .5f, size.height * .18f)
-            val leftWebsite = Offset(size.width * .17f, size.height * .49f)
-            val rightWebsite = Offset(size.width * .83f, size.height * .49f)
-            val scanY = size.height * trafficPhase
-
-            drawLine(
-                color = accent.copy(alpha = .08f),
-                start = Offset(0f, scanY),
-                end = Offset(size.width, scanY),
-                strokeWidth = 2f
-            )
-
-            val destinations = listOf(isp, leftWebsite, rightWebsite)
-            destinations.forEachIndexed { index, destination ->
-                drawLine(
-                    color = accent.copy(alpha = .24f),
-                    start = device,
-                    end = destination,
-                    strokeWidth = 3f,
-                    cap = StrokeCap.Round
-                )
-                repeat(3) { particleIndex ->
-                    val progress = (trafficPhase + particleIndex / 3f + index * .13f) % 1f
-                    val point = Offset(
-                        device.x + (destination.x - device.x) * progress,
-                        device.y + (destination.y - device.y) * progress
-                    )
-                    drawCircle(
-                        color = if (encrypted) SuccessGreen else if (index == 0) WarningOrange else CyanHover,
-                        radius = if (particleIndex == 0) 5f else 3.5f,
-                        center = point
-                    )
-                    drawCircle(
-                        color = accent.copy(alpha = .16f),
-                        radius = 10f,
-                        center = point
-                    )
-                }
-            }
-        }
-
-        Text(
-            if (encrypted) "ENCRYPTED TRAFFIC" else "UNENCRYPTED TRAFFIC",
-            color = accent.copy(alpha = warningAlpha),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.5.sp,
-            modifier = Modifier.align(Alignment.TopStart).padding(16.dp)
-        )
-        Text(
-            if (encrypted) "IP HIDDEN" else "IP VISIBLE",
-            color = Ink,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.ExtraBold,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(14.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(accent.copy(alpha = warningAlpha))
-                .padding(horizontal = 10.dp, vertical = 5.dp)
-        )
-
-        ExposureNode(
-            label = "YOUR ISP",
-            detail = if (encrypted) "Sees encrypted data" else "Can observe traffic",
-            warning = !encrypted,
-            scale = observerPulse,
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 42.dp)
-        )
-        ExposureNode(
-            label = "WEBSITE",
-            detail = if (encrypted) "Sees the VPN IP" else "Sees your IP",
-            warning = false,
-            scale = observerPulse,
-            modifier = Modifier.align(Alignment.CenterStart).padding(start = 10.dp)
-        )
-        ExposureNode(
-            label = "TRACKERS",
-            detail = if (encrypted) "Traffic is obscured" else "Build a profile",
-            warning = false,
-            scale = observerPulse,
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp)
-        )
-
-        AnimatedContent(
-            targetState = visibleActivities[activityIndex],
-            transitionSpec = {
-                if (motion) {
-                    fadeIn(tween(350)) + slideInVertically { it / 2 } togetherWith fadeOut(tween(250))
-                } else {
-                    EnterTransition.None togetherWith ExitTransition.None
-                }
-            },
-            label = "visible activity",
-            modifier = Modifier.align(Alignment.Center).offset(y = 43.dp)
-        ) { activity ->
-            Text(
-                activity,
-                color = Paper,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Ink.copy(alpha = .9f))
-                    .border(1.dp, accent.copy(alpha = .24f), RoundedCornerShape(20.dp))
-                    .padding(horizontal = 12.dp, vertical = 7.dp)
-            )
-        }
-
-        Box(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 14.dp)
-                .size(78.dp)
-                .graphicsLayer {
-                    scaleX = deviceScale
-                    scaleY = deviceScale
-                }
-                .border(1.dp, accent.copy(alpha = .22f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Box(
-                Modifier
-                    .size(68.dp)
-                    .clip(CircleShape)
-                    .background(Brush.radialGradient(listOf(CardElevated, Ink2)))
-                    .border(1.dp, accent.copy(alpha = .5f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Crossfade(
-                        targetState = encrypted,
-                        animationSpec = if (motion) tween(280) else snap(),
-                        label = "device-lock",
-                    ) { locked ->
-                        Icon(
-                            if (locked) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
-                            if (locked) "Your protected device" else "Your unprotected device",
-                            tint = accent,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                    Text("YOU", color = Paper, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ExposureNode(
-    label: String,
-    detail: String,
-    warning: Boolean,
-    scale: Float,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier.graphicsLayer { scaleX = scale; scaleY = scale },
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(
-            Modifier
-                .size(54.dp)
-                .clip(CircleShape)
-                .background(if (warning) WarningOrange.copy(alpha = .16f) else Royal.copy(alpha = .2f))
-                .border(1.dp, if (warning) WarningOrange.copy(alpha = .5f) else CyanHover.copy(alpha = .35f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(if (label.contains("ISP")) "ISP" else "WEB", color = if (warning) WarningOrange else CyanHover, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
-        }
-        Spacer(Modifier.height(4.dp))
-        Text(label, color = Paper, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-        Text(detail, color = PaperDim, fontSize = 9.sp)
     }
 }
 
