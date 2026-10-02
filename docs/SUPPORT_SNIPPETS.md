@@ -4,7 +4,7 @@ Paste-ready replies for the questions we get most often. The same wording is pub
 
 Cases these do not cover: email contact@veritasvpn.cloud.
 
-Do not promise Account ID recovery, an in-app Android kill-switch off switch, Premium at zero Bitcoin confirmations, or system-wide protection from the Chrome extension.
+Do not promise Account ID recovery, an in-app Android kill-switch off switch, Premium at zero Bitcoin confirmations, system-wide protection from the Chrome extension, or that Stealth is undetectable.
 
 ## Account ID backup
 
@@ -22,6 +22,18 @@ Matches the Connect gate from the Always-on lockdown change: both system switche
 Open Settings → VPN → VeritasVPN and turn on both Always-on VPN and Block connections without VPN. On some phones the VPN list is under Settings → Network & internet.
 
 Connect stays blocked until both are on for VeritasVPN. The app cannot turn those system switches on for you. It explains them and opens Android VPN settings. There is no in-app kill-switch off. After both are on, return to the app and Connect continues. Cancel leaves you disconnected.
+```
+
+## Stealth / connection modes
+
+Android Auto tries UDP first, then Stealth on port 443. UDP only and Stealth always live under Settings → Connection → Split tunnel. Linux is Settings → Stealth mode. Reconnect to apply. Not a claim of undetectability.
+
+```
+Stealth wraps WireGuard in a TLS WebSocket on port 443 so it looks more like ordinary HTTPS. Use it on networks that block or throttle plain WireGuard UDP. This helps on restrictive networks; it is not a claim of undetectability.
+
+On Android, open Settings → Connection → Split tunnel. Auto (the default) tries UDP WireGuard first and switches to Stealth if that handshake does not complete. The VPN stays on during that switch. UDP only stays on plain WireGuard, with no Stealth fallback. Stealth always starts on Stealth. Reconnect to apply a change.
+
+On Linux, enable Settings → Stealth mode, then reconnect. Direct UDP remains the default when Stealth is off.
 ```
 
 ## BTCPay
