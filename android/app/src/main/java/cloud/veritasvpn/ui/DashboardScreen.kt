@@ -772,7 +772,7 @@ fun KillSwitchRequiredDialog(
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    "Open system VPN settings, enable both, then return here. Connect continues only after both are detected. There is no in-app off switch and no way to connect without them.",
+                    "Open system VPN settings and select VeritasVPN. If another VPN app is already listed, Always-on must be VeritasVPN, not that app. Enable both switches, then return here. Connect continues only after both are detected. There is no in-app off switch and no way to connect without them.",
                     color = PaperDim,
                     fontSize = 13.sp,
                     lineHeight = 18.sp
