@@ -57,10 +57,10 @@
 Email accounts do not use that file. Use Forgot password on the sign-in form. The reset link goes to the email address on the account.</pre>
 
       <h2 id="android-always-on">Android Always-on</h2>
-      <p>Connect stays blocked until both system switches are on. The app opens VPN settings; it cannot flip them, and there is no in-app off switch.</p>
-      <pre class="support-snippet">Open Settings → VPN → VeritasVPN and turn on both Always-on VPN and Block connections without VPN. On some phones the VPN list is under Settings → Network &amp; internet.
+      <p>The first Connect asks Android for VPN permission so VeritasVPN is listed. The tunnel stays blocked until both system switches are on for VeritasVPN. The app opens VPN settings; it cannot flip them, and there is no in-app off switch.</p>
+      <pre class="support-snippet">Tap Connect. If Android asks, allow the VPN connection so VeritasVPN appears under Settings → VPN. That step is required when another VPN app, such as Tailscale, is already listed. On some phones the list is under Settings → Network &amp; internet.
 
-Connect stays blocked until both are on for VeritasVPN. The app cannot turn those system switches on for you. It explains them and opens Android VPN settings. There is no in-app kill-switch off. After both are on, return to the app and Connect continues. Cancel leaves you disconnected.</pre>
+Select VeritasVPN and turn on both Always-on VPN and Block connections without VPN. The tunnel stays blocked until both are on for VeritasVPN. The app cannot turn those system switches on for you. It explains them and opens Android VPN settings. There is no in-app kill-switch off. After both are on, return to the app and Connect continues. Cancel leaves you disconnected.</pre>
 
       <h2 id="stealth">Stealth / connection modes</h2>
       <p>Android Auto tries UDP first, then Stealth. UDP only and Stealth always are in connection settings. Linux is a Settings toggle. Reconnect to apply. This is not a claim of undetectability.</p>
@@ -80,7 +80,7 @@ If it stays stuck after you paid, email contact@veritasvpn.cloud with the invoic
       <p>Chrome covers the browser only. Android and Linux are the full WireGuard tunnel.</p>
       <pre class="support-snippet">The Chrome extension is a browser-only HTTP CONNECT proxy. It can cover traffic inside Chrome. Other apps on the device stay unprotected, and it is not a device kill switch.
 
-A full tunnel is the Android or Linux WireGuard client. Android requires Always-on VPN and Block connections without VPN before Connect. Linux keeps a firewall and routing kill switch on while connected, with no in-app off. Current downloads on the site are those two clients.</pre>
+A full tunnel is the Android or Linux WireGuard client. Android asks for VPN permission first so VeritasVPN is listed, then requires Always-on VPN and Block connections without VPN before the tunnel starts. Linux keeps a firewall and routing kill switch on while connected, with no in-app off. Current downloads on the site are those two clients.</pre>
 
       <h2>Still stuck</h2>
       <p>Email <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a>. Bugs can also go to <a href="https://github.com/veritasvpn/VeritasVPN/issues" rel="noopener noreferrer">GitHub issues</a>.</p>
