@@ -7,7 +7,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -17,7 +16,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -154,29 +152,27 @@ fun DashboardScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            AnimatedContent(
-                targetState = connected,
-                transitionSpec = {
-                    if (motion) {
-                        (fadeIn(tween(320)) + slideInVertically { it / 8 }) togetherWith
-                            (fadeOut(tween(180)) + slideOutVertically { -it / 10 })
+            if (connected || connecting) {
+                AnimatedContent(
+                    targetState = connected,
+                    transitionSpec = {
+                        if (motion) {
+                            (fadeIn(tween(320)) + slideInVertically { it / 8 }) togetherWith
+                                (fadeOut(tween(180)) + slideOutVertically { -it / 10 })
+                        } else {
+                            EnterTransition.None togetherWith ExitTransition.None
+                        }
+                    },
+                    label = "home-status",
+                ) { isConnected ->
+                    if (isConnected) {
+                        ProtectedStatusCopy(transport = transport)
                     } else {
-                        EnterTransition.None togetherWith ExitTransition.None
+                        ConnectingStatusCopy(transport = transport)
                     }
-                },
-                label = "home-status",
-            ) { isConnected ->
-                if (!isConnected) {
-                    DisconnectedActionContent(
-                        connecting = connecting,
-                        transport = transport,
-                    )
-                } else {
-                    ProtectedStatusCopy(transport = transport)
                 }
+                Spacer(Modifier.height(8.dp))
             }
-
-            Spacer(Modifier.height(8.dp))
 
             HeroConnectControl(
                 phase = when {
@@ -408,12 +404,6 @@ private fun ProtectedStatusCopy(transport: String) {
             style = MaterialTheme.typography.labelSmall,
             color = Cyan,
         )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "You're protected",
-            style = MaterialTheme.typography.headlineLarge,
-            color = Paper,
-        )
         transportLabel(transport)?.let { label ->
             Spacer(Modifier.height(8.dp))
             Text(
@@ -435,77 +425,31 @@ private fun ProtectedStatusCopy(transport: String) {
 }
 
 @Composable
-private fun DisconnectedActionContent(
-    connecting: Boolean,
-    transport: String,
-) {
-    val motion = rememberMotionEnabled()
-    val dotScale = if (motion) {
-        val pulse = rememberInfiniteTransition(label = "disconnected badge")
-        val animated by pulse.animateFloat(
-            initialValue = .88f,
-            targetValue = 1.12f,
-            animationSpec = infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-            label = "status dot pulse"
-        )
-        animated
-    } else {
-        1f
-    }
-
+private fun ConnectingStatusCopy(transport: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(50.dp))
-            .background((if (connecting) CyanHover else WarningOrange).copy(alpha = .09f))
-            .border(1.dp, (if (connecting) CyanHover else WarningOrange).copy(alpha = .28f), RoundedCornerShape(50.dp))
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            Modifier
-                .size(8.dp)
-                .graphicsLayer { scaleX = dotScale; scaleY = dotScale }
-                .clip(CircleShape)
-                .background(if (connecting) CyanHover else WarningOrange)
-        )
-        Spacer(Modifier.width(8.dp))
         Text(
             when {
-                connecting && transport == "switching" -> "SWITCHING TO STEALTH"
-                connecting && transport == "stealth" -> "CONNECTING OVER STEALTH"
-                connecting -> "ESTABLISHING SECURE CONNECTION"
-                else -> "VPN DISCONNECTED"
+                transport == "switching" -> "SWITCHING TO STEALTH"
+                transport == "stealth" -> "CONNECTING OVER STEALTH"
+                else -> "ESTABLISHING SECURE CONNECTION"
             },
-            color = if (connecting) CyanHover else WarningOrange,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.8.sp,
-            maxLines = 1,
+            color = CyanHover,
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.Center,
         )
-    }
-
-    Spacer(Modifier.height(14.dp))
-    Text(
-        if (connecting) "Securing this device" else "Your online activity\nis visible",
-        color = Paper,
-        style = MaterialTheme.typography.displayMedium,
-        textAlign = TextAlign.Center
-    )
-    Spacer(Modifier.height(8.dp))
-    Text(
-        when {
-            connecting && transport == "switching" ->
-                "UDP did not complete a handshake. Switching to Stealth. The VPN stays on."
-            connecting && transport == "stealth" ->
-                "Connecting over Stealth. WireGuard stays inside the VPN."
-            connecting -> "Creating secure keys and validating encrypted internet access."
-            else -> "Hide your IP address and encrypt your connection."
-        },
-        color = PaperMuted,
-        style = MaterialTheme.typography.bodyMedium,
-        textAlign = TextAlign.Center
-    )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            when {
+                transport == "switching" ->
+                    "UDP did not complete a handshake. Switching to Stealth. The VPN stays on."
+                transport == "stealth" ->
+                    "Connecting over Stealth. WireGuard stays inside the VPN."
+                else -> "Creating secure keys and validating encrypted internet access."
+            },
+            color = PaperMuted,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -555,6 +499,68 @@ fun KillSwitchRequiredDialog(
         },
         dismissButton = {
             TextButton(onClick = onCancel) { Text("Cancel", color = CyanHover) }
+        },
+        containerColor = CardElevated,
+        shape = RoundedCornerShape(28.dp),
+    )
+}
+
+@Composable
+fun ReleaseLockdownDialog(
+    onOpenSystemVpnSettings: () -> Unit,
+    onDismiss: () -> Unit,
+    settingsError: String? = null,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Internet is still blocked", color = Paper, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "VeritasVPN is disconnected. Android is still blocking traffic because Always-on VPN and Block connections without VPN stay on. This app cannot turn those switches off.",
+                    color = PaperMuted,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                )
+                Text(
+                    "1. Open VPN settings and select VeritasVPN",
+                    color = Paper,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "2. Turn off Always-on VPN",
+                    color = Paper,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "3. Turn off Block connections without VPN",
+                    color = Paper,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "While the tunnel is connected, those switches stay required and traffic stays fail-closed. After you disconnect, turn them off to use your normal connection.",
+                    color = PaperDim,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                )
+                settingsError?.let {
+                    Text(it, color = WarningOrange, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onOpenSystemVpnSettings,
+                colors = ButtonDefaults.buttonColors(containerColor = CyanHover),
+            ) {
+                Text("Open VPN settings", color = Ink, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Not now", color = CyanHover) }
         },
         containerColor = CardElevated,
         shape = RoundedCornerShape(28.dp),

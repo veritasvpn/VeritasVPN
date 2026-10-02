@@ -33,6 +33,7 @@ import cloud.veritasvpn.billing.BillingRepository
 import java.io.IOException
 import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.DashboardScreen
+import cloud.veritasvpn.ui.ReleaseLockdownDialog
 import cloud.veritasvpn.ui.PlansScreen
 import cloud.veritasvpn.ui.PaymentCheckoutScreen
 import cloud.veritasvpn.ui.StealthSettingsScreen
@@ -148,6 +149,9 @@ class MainActivity : ComponentActivity() {
                 var showTunnelSettings by remember { mutableStateOf(false) }
                 var showKillSwitchRequired by remember { mutableStateOf(false) }
                 var pendingConnectAfterKillSwitch by remember { mutableStateOf(false) }
+                var showReleaseLockdown by remember { mutableStateOf(false) }
+                var awaitingLockdownRelease by remember { mutableStateOf(false) }
+                var releaseLockdownError by remember { mutableStateOf<String?>(null) }
                 val killSwitchRecheckGeneration = remember { intArrayOf(0) }
                 var awaitingVpnConsent by remember { mutableStateOf(false) }
                 var rxBytes by remember { mutableStateOf(0L) }
@@ -223,6 +227,17 @@ class MainActivity : ComponentActivity() {
                     user = null
                 }
 
+                fun noteIntentionalDisconnect() {
+                    // Always-on and lockdown are system settings. Stopping the
+                    // tunnel cannot clear them, and while they stay on Android
+                    // blocks every connection. Prompt only after the user asked
+                    // to disconnect, never while the tunnel is meant to stay up.
+                    if (!VpnKillSwitch.isLockdownEnabled(context)) return
+                    releaseLockdownError = null
+                    awaitingLockdownRelease = true
+                    showReleaseLockdown = true
+                }
+
                 fun performLocalSignOut() {
                     userWantsConnected = false
                     hadEstablishedSession = false
@@ -232,6 +247,7 @@ class MainActivity : ComponentActivity() {
                     // Local sign-out must be immediate. Network cleanup continues in the
                     // background so a delayed request cannot leave the app authenticated.
                     clearLocalSessionUi()
+                    noteIntentionalDisconnect()
                 }
 
                 fun handleSessionExpired() {
@@ -779,6 +795,22 @@ class MainActivity : ComponentActivity() {
                                 } else if (pendingConnectAfterKillSwitch) {
                                     showKillSwitchRequired = true
                                 }
+                                if (awaitingLockdownRelease) {
+                                    var stillBlocking = VpnKillSwitch.isLockdownEnabled(context)
+                                    var reads = 0
+                                    while (stillBlocking && reads < 4) {
+                                        reads += 1
+                                        delay(300)
+                                        if (generation != killSwitchRecheckGeneration[0]) return@launch
+                                        stillBlocking = VpnKillSwitch.isLockdownEnabled(context)
+                                    }
+                                    if (generation != killSwitchRecheckGeneration[0]) return@launch
+                                    if (!stillBlocking) {
+                                        awaitingLockdownRelease = false
+                                        showReleaseLockdown = false
+                                        releaseLockdownError = null
+                                    }
+                                }
                             }
                             if (user != null) ensureSessionFresh()
                         }
@@ -856,6 +888,7 @@ class MainActivity : ComponentActivity() {
                             val disconnectedPeerId = peerIdForDisconnect()
                             disconnectVpnService()
                             deletePeerBestEffort(disconnectedPeerId)
+                            noteIntentionalDisconnect()
                         },
                         onSignOut = { performLocalSignOut() },
                         onSignOutEverywhere = {
@@ -876,6 +909,7 @@ class MainActivity : ComponentActivity() {
                             // The local app exits immediately even if the remote session
                             // revocation is delayed by the network transition.
                             clearLocalSessionUi()
+                            noteIntentionalDisconnect()
                         },
                         onPlans = {
                             showPlans = true
@@ -911,6 +945,26 @@ class MainActivity : ComponentActivity() {
                         dnsBlockedBaseline = dnsBlockedBaseline,
                         dnsGateway = dnsGateway,
                         transport = transport,
+                    )
+                }
+                if (showReleaseLockdown) {
+                    ReleaseLockdownDialog(
+                        onOpenSystemVpnSettings = {
+                            val opened = runCatching {
+                                context.startActivity(VpnKillSwitch.systemVpnSettingsIntent())
+                            }.isSuccess
+                            releaseLockdownError = if (opened) {
+                                null
+                            } else {
+                                "Could not open Android VPN settings. Turn off Always-on VPN and Block connections without VPN for VeritasVPN in system settings."
+                            }
+                        },
+                        onDismiss = {
+                            showReleaseLockdown = false
+                            awaitingLockdownRelease = false
+                            releaseLockdownError = null
+                        },
+                        settingsError = releaseLockdownError,
                     )
                 }
             }

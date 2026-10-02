@@ -139,7 +139,7 @@ fun HeroConnectControl(
     }
     val ringColor by animateColorAsState(ring, label = "hero-ring")
     val label = when (phase) {
-        HeroPhase.Ready -> "Not protected"
+        HeroPhase.Ready -> null
         HeroPhase.Upsell -> "Premium required"
         HeroPhase.Checking -> "Checking plan…"
         HeroPhase.Connecting -> "Connecting…"
@@ -295,13 +295,15 @@ fun HeroConnectControl(
                 }
             }
         }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.titleLarge,
-            color = labelColor,
-            textAlign = TextAlign.Center,
-        )
+        if (label != null) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleLarge,
+                color = labelColor,
+                textAlign = TextAlign.Center,
+            )
+        }
         if (phase == HeroPhase.Protected) {
             Spacer(Modifier.height(2.dp))
             Text(
