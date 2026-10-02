@@ -5,7 +5,6 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -51,7 +50,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
@@ -71,8 +69,8 @@ import cloud.veritasvpn.ui.theme.Line
 import cloud.veritasvpn.ui.theme.Paper
 import cloud.veritasvpn.ui.theme.PaperDim
 import cloud.veritasvpn.ui.theme.PaperMuted
+import cloud.veritasvpn.ui.theme.CyanSoft
 import cloud.veritasvpn.ui.theme.ErrorRed
-import cloud.veritasvpn.ui.theme.glassSurface
 import kotlin.math.roundToInt
 
 private val DrawerOpenEasing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
@@ -198,7 +196,7 @@ fun SettingsDrawer(
                     modifier = Modifier
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                        .padding(horizontal = 4.dp, vertical = 6.dp),
                 ) {
                     SettingsDrawerSection(title = "Account & tools") {
                         SettingsDrawerNavItem(
@@ -255,18 +253,27 @@ private fun SettingsDrawerSection(
     title: String,
     content: @Composable () -> Unit,
 ) {
-    Column(modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)) {
+    Column(modifier = Modifier.padding(top = 20.dp, bottom = 2.dp)) {
         Text(
             text = title.uppercase(),
             color = PaperDim,
             style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            letterSpacing = 1.6.sp,
+            modifier = Modifier.padding(start = 22.dp, end = 16.dp, bottom = 10.dp),
         )
         Column(
             modifier = Modifier
                 .padding(horizontal = 12.dp)
-                .glassSurface(RoundedCornerShape(18.dp), borderColor = Line.copy(alpha = 0.9f))
-                .padding(vertical = 4.dp),
+                .clip(RoundedCornerShape(22.dp))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Paper.copy(alpha = 0.055f),
+                            Paper.copy(alpha = 0.028f),
+                        )
+                    )
+                )
+                .padding(vertical = 6.dp),
         ) {
             content()
         }
@@ -285,24 +292,17 @@ private fun SettingsDrawerNavItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 6.dp, vertical = 3.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (danger) ErrorRed.copy(alpha = 0.12f) else Color.Transparent)
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
             Box(
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
-                    .background(if (danger) ErrorRed.copy(alpha = 0.14f) else Cyan.copy(alpha = 0.12f))
-                    .border(
-                        1.dp,
-                        if (danger) ErrorRed.copy(alpha = 0.28f) else Cyan.copy(alpha = 0.22f),
-                        CircleShape,
-                    ),
+                    .background(if (danger) ErrorRed.copy(alpha = 0.14f) else CyanSoft),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -312,7 +312,7 @@ private fun SettingsDrawerNavItem(
                     modifier = Modifier.size(18.dp),
                 )
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(14.dp))
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -322,20 +322,20 @@ private fun SettingsDrawerNavItem(
                     muted -> PaperMuted
                     else -> Paper
                 },
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = if (muted) FontWeight.Medium else FontWeight.SemiBold,
-                fontSize = 15.sp,
             )
             if (note != null) {
                 Text(
                     text = note,
                     color = PaperDim,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
+                    style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
         }
         if (!danger) {
+            Spacer(Modifier.width(8.dp))
             Icon(
                 Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                 contentDescription = null,
