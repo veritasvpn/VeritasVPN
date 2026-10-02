@@ -171,7 +171,7 @@ fun DashboardScreen(
                         ConnectingStatusCopy(transport = transport)
                     }
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(24.dp))
             }
 
             HeroConnectControl(

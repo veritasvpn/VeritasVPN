@@ -184,7 +184,7 @@ fun HeroConnectControl(
                     style = MaterialTheme.typography.headlineMedium,
                     textAlign = TextAlign.Center,
                 )
-                Spacer(Modifier.height(22.dp))
+                Spacer(Modifier.height(36.dp))
             }
         }
         Box(
