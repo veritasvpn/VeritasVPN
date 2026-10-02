@@ -3,6 +3,6 @@
     <style name="Theme.VeritasVPN" parent="android:Theme.Material.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowBackground">#FF05070A</item>
+        <item name="android:windowBackground">#FF010814</item>
     </style>
 </resources>
