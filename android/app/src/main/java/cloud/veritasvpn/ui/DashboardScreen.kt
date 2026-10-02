@@ -172,6 +172,15 @@ fun DashboardScreen(
                     }
                 }
                 Spacer(Modifier.height(8.dp))
+            } else {
+                Text(
+                    text = "Your online activity is visible",
+                    color = WarningOrange,
+                    style = MaterialTheme.typography.headlineMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(28.dp))
             }
 
             HeroConnectControl(

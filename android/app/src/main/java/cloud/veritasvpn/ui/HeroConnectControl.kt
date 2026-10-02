@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -48,12 +49,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import cloud.veritasvpn.ui.theme.CardElevated
 import cloud.veritasvpn.ui.theme.Cyan
@@ -65,6 +68,9 @@ import cloud.veritasvpn.ui.theme.PaperDim
 import cloud.veritasvpn.ui.theme.Royal
 import cloud.veritasvpn.ui.theme.RoyalHover
 import cloud.veritasvpn.ui.theme.rememberMotionEnabled
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 enum class HeroPhase {
     Ready,
@@ -131,6 +137,20 @@ fun HeroConnectControl(
     } else {
         0f
     }
+    // Premium idle: the rings drift a few dp around the still lock so the
+    // control reads as tappable. The transition stays in composition; animator
+    // scale 0 simply does not apply the offset, so the rings stay centered.
+    val idleTransition = rememberInfiniteTransition(label = "hero-idle-orbit")
+    val idleOrbit by idleTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(durationMillis = 12000, easing = LinearEasing)),
+        label = "hero-idle-angle",
+    )
+    val idleOrbitActive = motion && phase == HeroPhase.Ready
+    val density = LocalDensity.current
+    val outerOrbitPx = with(density) { 4.dp.toPx() }
+    val innerOrbitPx = with(density) { 2.5.dp.toPx() }
     val ring = when (phase) {
         HeroPhase.Protected -> Cyan
         HeroPhase.Connecting, HeroPhase.Checking -> CyanHover
@@ -139,8 +159,7 @@ fun HeroConnectControl(
     }
     val ringColor by animateColorAsState(ring, label = "hero-ring")
     val label = when (phase) {
-        HeroPhase.Ready -> null
-        HeroPhase.Upsell -> "Premium required"
+        HeroPhase.Ready, HeroPhase.Upsell -> "Not protected"
         HeroPhase.Checking -> "Checking plan…"
         HeroPhase.Connecting -> "Connecting…"
         HeroPhase.Protected -> "Protected"
@@ -172,6 +191,7 @@ fun HeroConnectControl(
                                 role = Role.Button
                                 contentDescription = actionName
                                 if (phase == HeroPhase.Protected) stateDescription = "VPN connected"
+                                if (phase == HeroPhase.Ready) stateDescription = "Not protected"
                             }
                             .clickable(
                                 interactionSource = interaction,
@@ -220,11 +240,25 @@ fun HeroConnectControl(
             Box(
                 Modifier
                     .size(168.dp)
+                    .offset {
+                        if (idleOrbitActive) {
+                            orbitOffset(idleOrbit, outerOrbitPx, 0f)
+                        } else {
+                            IntOffset.Zero
+                        }
+                    }
                     .border(1.dp, ringColor.copy(alpha = 0.16f), CircleShape)
             )
             Box(
                 Modifier
                     .size(144.dp)
+                    .offset {
+                        if (idleOrbitActive) {
+                            orbitOffset(idleOrbit, innerOrbitPx, 180f)
+                        } else {
+                            IntOffset.Zero
+                        }
+                    }
                     .border(1.dp, ringColor.copy(alpha = 0.28f), CircleShape)
             )
             Box(
@@ -295,15 +329,13 @@ fun HeroConnectControl(
                 }
             }
         }
-        if (label != null) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleLarge,
-                color = labelColor,
-                textAlign = TextAlign.Center,
-            )
-        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleLarge,
+            color = labelColor,
+            textAlign = TextAlign.Center,
+        )
         if (phase == HeroPhase.Protected) {
             Spacer(Modifier.height(2.dp))
             Text(
@@ -313,5 +345,22 @@ fun HeroConnectControl(
                 textAlign = TextAlign.Center,
             )
         }
+        if (phase == HeroPhase.Upsell) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "Premium required",
+                style = MaterialTheme.typography.bodySmall,
+                color = PaperDim,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
+}
+
+private fun orbitOffset(angleDegrees: Float, radiusPx: Float, phaseShift: Float): IntOffset {
+    val radians = Math.toRadians((angleDegrees + phaseShift).toDouble())
+    return IntOffset(
+        (cos(radians) * radiusPx).roundToInt(),
+        (sin(radians) * radiusPx).roundToInt(),
+    )
 }
