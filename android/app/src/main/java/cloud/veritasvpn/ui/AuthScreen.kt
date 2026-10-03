@@ -217,7 +217,7 @@ fun AuthScreen(
                 painter = painterResource(cloud.veritasvpn.R.drawable.veritas_mark),
                 contentDescription = "VeritasVPN shield",
                 modifier = Modifier.size(106.dp),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Fit
             )
         }
         Spacer(Modifier.height(0.dp))

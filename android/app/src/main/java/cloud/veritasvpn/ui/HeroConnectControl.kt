@@ -285,7 +285,7 @@ fun HeroConnectControl(
             }
             if (caption != null || current == HeroPhase.Upsell) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(if (current == HeroPhase.Upsell) 20.dp else 8.dp))
                     if (caption != null) {
                         Text(
                             text = caption,

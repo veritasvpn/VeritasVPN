@@ -123,11 +123,8 @@ fun DashboardScreen(
             Image(
                 painter = painterResource(cloud.veritasvpn.R.drawable.veritas_logo),
                 contentDescription = "VeritasVPN shield",
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(13.dp))
-                    .border(1.dp, LineStrong.copy(alpha = 0.7f), RoundedCornerShape(13.dp)),
-                contentScale = ContentScale.Crop
+                modifier = Modifier.size(44.dp),
+                contentScale = ContentScale.Fit,
             )
             GlassIconButton(onClick = { showSettingsMenu = true }, contentDescription = "Open settings") {
                 Icon(Icons.Rounded.Settings, contentDescription = null, tint = CyanHover, modifier = Modifier.size(21.dp))
