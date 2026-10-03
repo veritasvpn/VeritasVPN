@@ -97,6 +97,18 @@ fun AccountScreen(
         Spacer(Modifier.height(4.dp))
         Text("Your account, plan, and Bitcoin payments.", color = PaperDim, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(18.dp))
+        Text(
+            "VeritasVPN stores an anonymous account ID and Bitcoin purchase history.",
+            modifier = Modifier
+                .fillMaxWidth()
+                .glassSurface(RoundedCornerShape(20.dp))
+                .padding(16.dp),
+            color = Paper,
+            fontSize = 16.sp,
+            lineHeight = 23.sp,
+            fontWeight = FontWeight.Medium
+        )
+        Spacer(Modifier.height(14.dp))
         AccountIdentity(email = email, accountId = accountId)
         Spacer(Modifier.height(18.dp))
 
