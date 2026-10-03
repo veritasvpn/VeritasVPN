@@ -35,7 +35,7 @@ import java.io.IOException
 import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.DashboardScreen
 import cloud.veritasvpn.ui.ReleaseLockdownDialog
-import cloud.veritasvpn.ui.PlansScreen
+import cloud.veritasvpn.ui.AccountScreen
 import cloud.veritasvpn.ui.PaymentCheckoutScreen
 import cloud.veritasvpn.ui.StealthSettingsScreen
 import cloud.veritasvpn.ui.TunnelSettingsScreen
@@ -927,7 +927,9 @@ class MainActivity : ComponentActivity() {
                         onBack = { showTunnelSettings = false }
                     )
                 } else if (showPlans) {
-                    PlansScreen(
+                    AccountScreen(
+                        email = user?.email,
+                        accountId = user?.accountId.orEmpty(),
                         billingStatus = billingStatus,
                         refreshing = billingRefreshing,
                         cancelling = cancellationInProgress,

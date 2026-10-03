@@ -29,7 +29,9 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 @Composable
-fun PlansScreen(
+fun AccountScreen(
+    email: String?,
+    accountId: String,
     billingStatus: BillingStatus?,
     refreshing: Boolean,
     cancelling: Boolean,
@@ -91,10 +93,14 @@ fun PlansScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
-        PremiumTopBar(eyebrow = "ACCOUNT", title = "Plans & billing", onBack = onBack)
+        PremiumTopBar(eyebrow = "SIGNED IN", title = "Account", onBack = onBack)
         Spacer(Modifier.height(4.dp))
-        Text("Choose the privacy plan that fits you", color = PaperDim, style = MaterialTheme.typography.bodyMedium)
-        Spacer(Modifier.height(22.dp))
+        Text("Your account, plan, and Bitcoin payments.", color = PaperDim, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(18.dp))
+        DataStoredNotice()
+        Spacer(Modifier.height(14.dp))
+        AccountIdentity(email = email, accountId = accountId)
+        Spacer(Modifier.height(18.dp))
 
         val premium = billingStatus?.isPremium == true
         Row(
@@ -228,6 +234,51 @@ fun PlansScreen(
         Spacer(Modifier.height(24.dp))
     }
     }
+    }
+}
+
+@Composable
+private fun DataStoredNotice() {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .glassSurface(RoundedCornerShape(20.dp))
+            .padding(16.dp)
+    ) {
+        Text("DATA THIS VPN STORES", color = PaperDim, fontSize = 11.sp, letterSpacing = 1.4.sp)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "VeritasVPN stores an anonymous account ID and Bitcoin purchase history.",
+            color = Paper,
+            fontSize = 16.sp,
+            lineHeight = 23.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun AccountIdentity(email: String?, accountId: String) {
+    val shownEmail = email?.trim()?.takeIf { it.isNotEmpty() }
+    val shownAccountId = accountId.trim().takeIf { it.isNotEmpty() }
+    if (shownEmail == null && shownAccountId == null) return
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .glassSurface(RoundedCornerShape(20.dp))
+            .padding(16.dp)
+    ) {
+        if (shownEmail != null) {
+            Text("EMAIL", color = PaperDim, fontSize = 11.sp, letterSpacing = 1.4.sp)
+            Spacer(Modifier.height(4.dp))
+            Text(shownEmail, color = Paper, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+        if (shownAccountId != null) {
+            if (shownEmail != null) Spacer(Modifier.height(14.dp))
+            Text("ACCOUNT ID", color = PaperDim, fontSize = 11.sp, letterSpacing = 1.4.sp)
+            Spacer(Modifier.height(4.dp))
+            Text(shownAccountId, color = Paper, fontSize = 14.sp, lineHeight = 20.sp)
+        }
     }
 }
 

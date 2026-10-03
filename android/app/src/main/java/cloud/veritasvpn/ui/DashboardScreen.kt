@@ -232,7 +232,6 @@ fun DashboardScreen(
     SettingsDrawer(
         open = showSettingsMenu,
         onDismiss = { showSettingsMenu = false },
-        isPremium = isPremium,
         onPlans = onPlans,
         onNetworkMap = { showNetworkMap = true },
         onStealthSettings = onStealthSettings,

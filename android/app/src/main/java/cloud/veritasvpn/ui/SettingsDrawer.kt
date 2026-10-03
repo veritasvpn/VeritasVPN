@@ -31,7 +31,7 @@ import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.VisibilityOff
-import androidx.compose.material.icons.rounded.WorkspacePremium
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -80,7 +80,6 @@ private val DrawerCloseEasing = CubicBezierEasing(0.4f, 0f, 1f, 1f)
 fun SettingsDrawer(
     open: Boolean,
     onDismiss: () -> Unit,
-    isPremium: Boolean,
     onPlans: () -> Unit,
     onNetworkMap: () -> Unit,
     onStealthSettings: () -> Unit,
@@ -200,8 +199,8 @@ fun SettingsDrawer(
                 ) {
                     SettingsDrawerSection(title = "Account & tools") {
                         SettingsDrawerNavItem(
-                            label = if (isPremium) "Premium" else "Plans",
-                            icon = Icons.Rounded.WorkspacePremium,
+                            label = "Account",
+                            icon = Icons.Rounded.Person,
                             onClick = { navigate(onPlans) },
                         )
                         SettingsDrawerNavItem(
