@@ -318,8 +318,9 @@ fun HeroConnectControl(
 }
 
 /**
- * Elapsed realtime sampled once per frame. The value is absolute, so restarting
- * the frame loop does not snap the pulse back to the start.
+ * Elapsed realtime sampled once per frame. The loop is not keyed on connection
+ * phase or status text, so those updates do not restart it. The value is
+ * absolute, so a restarted frame callback does not snap the pulse to zero.
  */
 @Composable
 private fun rememberElapsedRealtime(enabled: Boolean): Long {
