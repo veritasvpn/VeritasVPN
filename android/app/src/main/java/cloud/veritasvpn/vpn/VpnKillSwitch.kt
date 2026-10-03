@@ -14,6 +14,9 @@ import android.util.Log
  * Third-party apps cannot flip these switches. VeritasVPN asks for VPN consent
  * first so this package is registered in the system VPN list, then treats both
  * switches as mandatory before the tunnel starts. There is no in-app off toggle.
+ * Stopping the VPN service does not clear them. After an intentional disconnect,
+ * if they are still on, Android keeps blocking traffic with no tunnel. The app
+ * can only open system VPN settings so the user can turn both switches off.
  *
  * The HyperOS VPN list header (the master VPN switch) is not part of this check.
  * Per-app Always-on and Block connections without VPN are.

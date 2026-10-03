@@ -9,7 +9,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -191,23 +193,33 @@ fun AuthScreen(
         }
     }
 
+    PremiumBackdrop {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(GradientSurface))
             .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(horizontal = 24.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(60.dp))
+        Spacer(Modifier.height(36.dp))
 
-        Image(
-            painter = painterResource(cloud.veritasvpn.R.drawable.veritas_mark),
-            contentDescription = "VeritasVPN shield",
-            modifier = Modifier.size(106.dp),
-            contentScale = ContentScale.Crop
-        )
+        Box(contentAlignment = Alignment.Center) {
+            Box(
+                Modifier
+                    .size(150.dp)
+                    .background(
+                        Brush.radialGradient(listOf(Cyan.copy(alpha = 0.18f), Color.Transparent)),
+                        CircleShape
+                    )
+            )
+            Image(
+                painter = painterResource(cloud.veritasvpn.R.drawable.veritas_mark),
+                contentDescription = "VeritasVPN shield",
+                modifier = Modifier.size(106.dp),
+                contentScale = ContentScale.Fit
+            )
+        }
         Spacer(Modifier.height(0.dp))
 
         // Brand
@@ -239,6 +251,7 @@ fun AuthScreen(
                 label = { Text("Email") },
                 modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                shape = RoundedCornerShape(16.dp),
                 colors = inputColors(),
                 singleLine = true
             )
@@ -525,6 +538,7 @@ fun AuthScreen(
                 label = { Text("Email") },
                 modifier = Modifier.fillMaxWidth(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                shape = RoundedCornerShape(16.dp),
                 colors = inputColors(),
                 singleLine = true
             )
@@ -539,6 +553,7 @@ fun AuthScreen(
                     PasswordVisualTransformation()
                 },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                shape = RoundedCornerShape(16.dp),
                 colors = inputColors(),
                 singleLine = true,
                 trailingIcon = {
@@ -564,7 +579,8 @@ fun AuthScreen(
                         PasswordVisualTransformation()
                     },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    colors = inputColors(),
+                    shape = RoundedCornerShape(16.dp),
+                colors = inputColors(),
                     singleLine = true,
                     isError = confirmPassword.isNotEmpty() && confirmPassword != password,
                     trailingIcon = {
@@ -595,6 +611,7 @@ fun AuthScreen(
                 value = accountId, onValueChange = { accountId = it },
                 label = { Text("Account ID") },
                 modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
                 colors = inputColors(),
                 singleLine = true
             )
@@ -669,8 +686,16 @@ fun AuthScreen(
                 } else {
                     submitWithTurnstileToken()
                 }
-            },            modifier = Modifier.fillMaxWidth().height(50.dp),
-            shape = RoundedCornerShape(25.dp),
+            },            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .shadow(
+                    18.dp,
+                    RoundedCornerShape(26.dp),
+                    ambientColor = Royal.copy(alpha = 0.38f),
+                    spotColor = Cyan.copy(alpha = 0.18f),
+                ),
+            shape = RoundedCornerShape(26.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Royal),
             enabled = !loading && !pendingTurnstileSubmit
         ) {
@@ -713,6 +738,7 @@ fun AuthScreen(
                 modifier = Modifier.padding(top = 4.dp)
             )
         }
+    }
     }
 }
 

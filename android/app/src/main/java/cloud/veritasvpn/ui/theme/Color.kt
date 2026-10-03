@@ -2,8 +2,29 @@ package cloud.veritasvpn.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Veritas brand palette (matches website/css/style.css)
+// Frozen Veritas brand palette (matches website/css/style.css).
+// Premium surfaces may only change opacity, elevation, and gradients of these hues.
 // Gradient: cyan -> royal on charcoal ink
+//
+// Cyan            #09C7F5
+// CyanHover       #4AD9FA
+// CyanSoft        #09C7F5 @ 14% (0x24)
+// Royal           #0756D9
+// RoyalHover      #2877EE
+// BlueDeep        #06265C
+// Ink             #010814
+// Ink2            #06101F
+// Ink3            #0A1729
+// CardBg          #081527
+// CardElevated    #0B1C32
+// Paper           #FFFFFF
+// PaperMuted      #ADC3DB
+// PaperDim        #7189A5
+// Line            #2167A8 @ 20% (0x33)
+// LineStrong      #408FD4 @ 40% (0x66)
+// SuccessGreen    Cyan (#09C7F5)
+// ErrorRed        #FF6B7A
+// WarningOrange   #FFB74D
 
 val Cyan = Color(0xFF09C7F5)
 val CyanHover = Color(0xFF4AD9FA)
