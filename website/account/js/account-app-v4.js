@@ -24,6 +24,7 @@ const mobileNavBtn = document.getElementById('accountMobileNav');
 const sidebar = document.querySelector('.account-sidebar');
 
 let billingStatus = null;
+let purchaseHistoryError = null;
 let flash = null;
 
 async function authApiFetch(url, options = {}) {
@@ -209,6 +210,7 @@ function renderPlanExpiry(status) {
 
 async function refreshBilling() {
   billingStatus = await fetchBillingStatus();
+  purchaseHistoryError = null;
   if (upgradeBtn) {
     upgradeBtn.hidden = Boolean(billingStatus?.is_premium) || hasPendingBitcoinConfirmation(billingStatus);
   }
@@ -326,7 +328,10 @@ function purchaseStatusClass(status) {
 function renderPurchaseHistory(status) {
   const payments = status?.payments;
   if (!Array.isArray(payments)) {
-    return '<p class="purchase-empty">Purchase history is unavailable right now.</p>';
+    if (purchaseHistoryError || !status) {
+      return '<p class="purchase-empty">Purchase history could not be loaded.</p>';
+    }
+    return '<p class="purchase-empty">This billing service has not sent purchase history yet.</p>';
   }
   if (payments.length === 0) {
     return '<p class="purchase-empty">No past payments yet.</p>';
@@ -742,7 +747,8 @@ onAuthStateChanged(async (user) => {
   try {
     await refreshBilling();
   } catch (err) {
-    showFlash(err.message || 'Could not load subscription status', 'error');
+    purchaseHistoryError = err.message || 'Could not load subscription status';
+    showFlash(purchaseHistoryError, 'error');
     billingStatus = { is_premium: false, tier: 'inactive', status: 'unknown' };
   }
   render();

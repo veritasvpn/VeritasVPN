@@ -304,16 +304,12 @@ function purchaseStatusClass(status?: string) {
   }
 }
 
-function PurchaseHistory({ status, loading }: { status: BillingStatus | null; loading: boolean }) {
+function PurchaseHistory({ status, loading, error }: { status: BillingStatus | null; loading: boolean; error: string }) {
   const payments = status?.payments;
   let body;
-  if (!status && loading) {
-    body = <p className="purchase-empty">Loading purchase history…</p>;
-  } else if (!status || !Array.isArray(payments)) {
-    body = <p className="purchase-empty">Purchase history is unavailable right now.</p>;
-  } else if (payments.length === 0) {
+  if (Array.isArray(payments) && payments.length === 0) {
     body = <p className="purchase-empty">No past payments yet.</p>;
-  } else {
+  } else if (Array.isArray(payments)) {
     body = (
       <ul className="purchase-history">
         {payments.map((payment: PurchaseHistoryItem, index) => (
@@ -326,6 +322,12 @@ function PurchaseHistory({ status, loading }: { status: BillingStatus | null; lo
         ))}
       </ul>
     );
+  } else if (loading && !error) {
+    body = <p className="purchase-empty">Loading purchase history…</p>;
+  } else if (error || !status) {
+    body = <p className="purchase-empty">Purchase history could not be loaded.</p>;
+  } else {
+    body = <p className="purchase-empty">This billing service has not sent purchase history yet.</p>;
   }
   return (
     <div className="purchase-history-block">
@@ -548,7 +550,7 @@ function PlansScreen({
           )}
         </>
       ) : null}
-      <PurchaseHistory status={billingStatus} loading={billingLoading} />
+      <PurchaseHistory status={billingStatus} loading={billingLoading} error={billingError} />
     </section>
   );
 }

@@ -186,6 +186,7 @@ class MainActivity : ComponentActivity() {
                 var billingRefreshing by remember { mutableStateOf(false) }
                 var cancellationInProgress by remember { mutableStateOf(false) }
                 var billingError by remember { mutableStateOf<String?>(null) }
+                var purchaseHistoryFailed by remember { mutableStateOf(false) }
                 var checkoutMethod by remember { mutableStateOf<String?>(null) }
                 var checkoutUrl by remember { mutableStateOf<String?>(null) }
                 var waitingForCheckoutSettlement by remember { mutableStateOf(false) }
@@ -235,6 +236,7 @@ class MainActivity : ComponentActivity() {
                     billingStatus = null
                     checkoutUrl = null
                     billingError = null
+                    purchaseHistoryFailed = false
                     checkoutMethod = null
                     showPlans = false
                     showStealthSettings = false
@@ -291,6 +293,7 @@ class MainActivity : ComponentActivity() {
                             billingStatus = status
                             writeCachedBillingStatus(context, user!!.accountId, status)
                             billingError = null
+                            purchaseHistoryFailed = false
                         } catch (e: Exception) {
                             if (e is SessionExpiredException) {
                                 handleSessionExpired()
@@ -306,6 +309,7 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 null
                             }
+                            if (billingStatus?.payments == null) purchaseHistoryFailed = true
                         } finally {
                             billingRefreshing = false
                         }
@@ -391,6 +395,7 @@ class MainActivity : ComponentActivity() {
                             }
                             billingStatus = status
                             writeCachedBillingStatus(context, user!!.accountId, status)
+                            purchaseHistoryFailed = false
                             if (status.isPremium) {
                                 checkoutUrl = null
                                 waitingForCheckoutSettlement = false
@@ -930,6 +935,7 @@ class MainActivity : ComponentActivity() {
                         paymentState = billingStatus?.paymentState.orEmpty(),
                         paymentMessage = billingStatus?.paymentMessage,
                         error = billingError,
+                        purchaseHistoryFailed = purchaseHistoryFailed,
                         onBack = { showPlans = false },
                         onRefresh = { refreshBilling() },
                         onCheckout = { method, plan -> startCheckout(method, plan) },

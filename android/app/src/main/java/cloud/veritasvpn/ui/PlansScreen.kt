@@ -37,6 +37,7 @@ fun PlansScreen(
     paymentState: String,
     paymentMessage: String?,
     error: String?,
+    purchaseHistoryFailed: Boolean = false,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onCheckout: (String, String) -> Unit,
@@ -219,7 +220,11 @@ fun PlansScreen(
             }
         }
         Spacer(Modifier.height(22.dp))
-        PurchaseHistorySection(billingStatus?.payments, refreshing)
+        PurchaseHistorySection(
+            payments = billingStatus?.payments,
+            refreshing = refreshing,
+            loadFailed = purchaseHistoryFailed || (error != null && billingStatus?.payments == null)
+        )
         Spacer(Modifier.height(24.dp))
     }
     }
@@ -227,17 +232,24 @@ fun PlansScreen(
 }
 
 @Composable
-private fun PurchaseHistorySection(payments: List<PurchaseHistoryItem>?, refreshing: Boolean) {
+private fun PurchaseHistorySection(
+    payments: List<PurchaseHistoryItem>?,
+    refreshing: Boolean,
+    loadFailed: Boolean,
+) {
     Text("Purchase history", color = Paper, fontSize = 17.sp, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(4.dp))
     Text("Bitcoin payments recorded for this account.", color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
     Spacer(Modifier.height(12.dp))
     when {
-        payments == null && refreshing -> {
+        payments == null && refreshing && !loadFailed -> {
             Text("Loading purchase history…", color = PaperMuted, fontSize = 14.sp)
         }
+        payments == null && loadFailed -> {
+            Text("Purchase history could not be loaded.", color = PaperMuted, fontSize = 14.sp)
+        }
         payments == null -> {
-            Text("Purchase history is unavailable right now.", color = PaperMuted, fontSize = 14.sp)
+            Text("This billing service has not sent purchase history yet.", color = PaperMuted, fontSize = 14.sp)
         }
         payments.isEmpty() -> {
             Text("No past payments yet.", color = PaperMuted, fontSize = 14.sp)
