@@ -164,6 +164,14 @@ data class AuthResponse(
 
 data class AuthError(val error: String)
 
+data class PurchaseHistoryItem(
+    @SerializedName("created_at") val createdAt: String? = null,
+    @SerializedName("amount_cents") val amountCents: Long = 0,
+    val currency: String? = null,
+    val plan: String? = null,
+    val status: String? = null
+)
+
 data class BillingStatus(
     val tier: String = "free",
     val status: String = "active",
@@ -174,6 +182,7 @@ data class BillingStatus(
     @SerializedName("payment_state") val paymentState: String = "none",
     @SerializedName("payment_message") val paymentMessage: String? = null,
     @SerializedName("poll_after_seconds") val pollAfterSeconds: Int = 0,
+    val payments: List<PurchaseHistoryItem>? = null,
     val error: String? = null
 )
 

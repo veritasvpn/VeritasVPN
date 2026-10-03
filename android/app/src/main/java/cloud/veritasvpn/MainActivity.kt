@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.BillingStatus
+import cloud.veritasvpn.api.PurchaseHistoryItem
 import cloud.veritasvpn.api.PeerListResponse
 import cloud.veritasvpn.api.PeerResponse
 import cloud.veritasvpn.auth.AuthRepository
@@ -72,8 +73,18 @@ private fun readCachedBillingStatus(context: Context, accountId: String): Billin
         isPremium = prefs.getBoolean(billingCacheKey(accountId, "premium"), false),
         paymentState = prefs.getString(billingCacheKey(accountId, "payment_state"), "none") ?: "none",
         paymentMessage = prefs.getString(billingCacheKey(accountId, "payment_message"), null),
-        pollAfterSeconds = prefs.getInt(billingCacheKey(accountId, "poll_after_seconds"), 0)
+        pollAfterSeconds = prefs.getInt(billingCacheKey(accountId, "poll_after_seconds"), 0),
+        payments = readCachedPurchaseHistory(prefs, accountId)
     )
+}
+
+private fun readCachedPurchaseHistory(prefs: android.content.SharedPreferences, accountId: String): List<PurchaseHistoryItem>? {
+    val key = billingCacheKey(accountId, "payments")
+    if (!prefs.contains(key)) return null
+    val raw = prefs.getString(key, null) ?: return null
+    return runCatching {
+        ApiClient.gson.fromJson(raw, Array<PurchaseHistoryItem>::class.java)?.toList() ?: emptyList()
+    }.getOrNull()
 }
 
 private fun writeCachedBillingStatus(
@@ -81,7 +92,7 @@ private fun writeCachedBillingStatus(
     accountId: String,
     status: BillingStatus
 ) {
-    SecurePrefs.open(context, BILLING_CACHE_PREFS)
+    val editor = SecurePrefs.open(context, BILLING_CACHE_PREFS)
         .edit()
         .putString(billingCacheKey(accountId, "tier"), status.tier)
         .putString(billingCacheKey(accountId, "status"), status.status)
@@ -92,7 +103,11 @@ private fun writeCachedBillingStatus(
         .putString(billingCacheKey(accountId, "payment_state"), status.paymentState)
         .putString(billingCacheKey(accountId, "payment_message"), status.paymentMessage)
         .putInt(billingCacheKey(accountId, "poll_after_seconds"), status.pollAfterSeconds)
-        .apply()
+    val payments = status.payments
+    if (payments != null) {
+        editor.putString(billingCacheKey(accountId, "payments"), ApiClient.gson.toJson(payments))
+    }
+    editor.apply()
 }
 
 class MainActivity : ComponentActivity() {

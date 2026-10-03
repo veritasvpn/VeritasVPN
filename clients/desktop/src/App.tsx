@@ -27,6 +27,7 @@ import {
   clearCachedBillingStatus,
   hasPendingBitcoinConfirmation,
   BillingStatus,
+  type PurchaseHistoryItem,
 } from "./billing";
 import { AUTH_API } from "./config";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
@@ -259,6 +260,82 @@ function formatBillingDate(value?: string) {
     : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
 }
 
+function formatPurchaseDate(value?: string) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value.slice(0, 10)
+    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(date);
+}
+
+function formatPurchaseAmount(cents?: number, currency?: string) {
+  if (typeof cents !== "number" || !Number.isFinite(cents)) return "—";
+  const sign = cents < 0 ? "-" : "";
+  const abs = Math.abs(Math.trunc(cents));
+  const dollars = Math.floor(abs / 100);
+  const remainder = abs % 100;
+  const value = remainder === 0 ? String(dollars) : `${dollars}.${String(remainder).padStart(2, "0")}`;
+  if ((currency || "usd").toLowerCase() === "usd") return `${sign}$${value}`;
+  return `${sign}${value} ${String(currency).toUpperCase()}`;
+}
+
+function purchasePlanLabel(plan?: string) {
+  if (plan === "annual") return "Annual";
+  if (plan === "monthly") return "Monthly";
+  return "—";
+}
+
+function purchaseStatusLabel(status?: string) {
+  switch (status) {
+    case "completed": return "Confirmed";
+    case "pending": return "Pending";
+    case "failed": return "Failed";
+    case "refunded": return "Refunded";
+    default: return "Pending";
+  }
+}
+
+function purchaseStatusClass(status?: string) {
+  switch (status) {
+    case "completed": return "is-confirmed";
+    case "failed": return "is-failed";
+    case "refunded": return "is-refunded";
+    default: return "is-pending";
+  }
+}
+
+function PurchaseHistory({ status, loading }: { status: BillingStatus | null; loading: boolean }) {
+  const payments = status?.payments;
+  let body;
+  if (!status && loading) {
+    body = <p className="purchase-empty">Loading purchase history…</p>;
+  } else if (!status || !Array.isArray(payments)) {
+    body = <p className="purchase-empty">Purchase history is unavailable right now.</p>;
+  } else if (payments.length === 0) {
+    body = <p className="purchase-empty">No past payments yet.</p>;
+  } else {
+    body = (
+      <ul className="purchase-history">
+        {payments.map((payment: PurchaseHistoryItem, index) => (
+          <li key={`${payment.created_at}-${payment.amount_cents}-${index}`}>
+            <span>{formatPurchaseDate(payment.created_at)}</span>
+            <span>{formatPurchaseAmount(payment.amount_cents, payment.currency)}</span>
+            <span>{purchasePlanLabel(payment.plan)}</span>
+            <strong className={`purchase-status ${purchaseStatusClass(payment.status)}`}>{purchaseStatusLabel(payment.status)}</strong>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  return (
+    <div className="purchase-history-block">
+      <h4>Purchase history</h4>
+      <p>Bitcoin payments recorded for this account.</p>
+      {body}
+    </div>
+  );
+}
+
 function ConnectionMap({
   connected,
   connecting,
@@ -471,6 +548,7 @@ function PlansScreen({
           )}
         </>
       ) : null}
+      <PurchaseHistory status={billingStatus} loading={billingLoading} />
     </section>
   );
 }

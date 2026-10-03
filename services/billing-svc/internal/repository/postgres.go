@@ -164,6 +164,40 @@ func (p *Postgres) GetLatestPendingPayment(ctx context.Context, accountID string
 	return pr, nil
 }
 
+const purchaseHistoryLimit = 100
+
+// ListAccountPayments returns Bitcoin payments already stored for an account,
+// newest first. It does not select invoice or transaction identifiers.
+func (p *Postgres) ListAccountPayments(ctx context.Context, accountID string) ([]model.PaymentRecord, error) {
+	query := `SELECT pr.amount, pr.currency, pr.status, COALESCE(pr.plan_id, ''), pr.period_days, pr.created_at
+	          FROM payment_records pr
+	          WHERE pr.account_id = $1
+	             OR (
+	               COALESCE(pr.account_id, '') = ''
+	               AND pr.subscription_id IN (SELECT id FROM subscriptions WHERE account_id = $1)
+	             )
+	          ORDER BY pr.created_at DESC
+	          LIMIT $2`
+	rows, err := p.pool.Query(ctx, query, accountID, purchaseHistoryLimit)
+	if err != nil {
+		return nil, fmt.Errorf("list account payments: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]model.PaymentRecord, 0)
+	for rows.Next() {
+		var pr model.PaymentRecord
+		if err := rows.Scan(&pr.Amount, &pr.Currency, &pr.Status, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan account payment: %w", err)
+		}
+		out = append(out, pr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list account payments: %w", err)
+	}
+	return out, nil
+}
+
 func (p *Postgres) CompletePayment(ctx context.Context, providerTxnID string) error {
 	query := `UPDATE payment_records SET status = $2
 	           WHERE provider_transaction_id = $1 AND status = $3`
