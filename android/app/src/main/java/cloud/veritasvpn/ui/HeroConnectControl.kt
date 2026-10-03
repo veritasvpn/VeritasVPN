@@ -7,11 +7,7 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -22,6 +18,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,19 +33,24 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -65,6 +67,8 @@ import cloud.veritasvpn.ui.theme.Ink2
 import cloud.veritasvpn.ui.theme.PaperDim
 import cloud.veritasvpn.ui.theme.RoyalHover
 import cloud.veritasvpn.ui.theme.rememberMotionEnabled
+import android.os.SystemClock
+import kotlinx.coroutines.isActive
 
 enum class HeroPhase {
     Ready,
@@ -81,6 +85,9 @@ fun HeroConnectControl(
     modifier: Modifier = Modifier,
 ) {
     val motion = rememberMotionEnabled()
+    // Wall clock, not connection progress. Recomposition while the tunnel waits
+    // cannot restart this, and a dropped frame catches up instead of freezing.
+    val nowMs = rememberElapsedRealtime(enabled = motion)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
@@ -89,18 +96,9 @@ fun HeroConnectControl(
         label = "hero-press",
     )
     // Circle-only pulse. Disconnected travels farther so the control reads as
-    // tappable; protected keeps the same loop at a lower amplitude. Animator
-    // scale 0 holds the circle at rest. No rings outside the button.
-    val pulseTransition = rememberInfiniteTransition(label = "hero-pulse")
-    val pulseUnit by pulseTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1280, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "hero-pulse-unit",
-    )
+    // tappable; protected keeps the same loop at a lower amplitude. Connecting
+    // and checking use that same uninterrupted loop. Animator scale 0 holds
+    // the circle at rest. No rings outside the button.
     val pulseAmplitude = if (!motion) {
         0f
     } else if (phase == HeroPhase.Protected) {
@@ -108,7 +106,7 @@ fun HeroConnectControl(
     } else {
         0.16f
     }
-    val pulseScale = 1f + pulseUnit * pulseAmplitude
+    val pulseScale = 1f + pulseUnitFromElapsed(nowMs) * pulseAmplitude
     val secured = phase == HeroPhase.Protected
     val arrival = remember { Animatable(1f) }
     val arrivalSeen = remember { booleanArrayOf(false) }
@@ -231,11 +229,7 @@ fun HeroConnectControl(
             ) { current ->
                 when (current) {
                     HeroPhase.Checking, HeroPhase.Connecting -> {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(36.dp),
-                            color = CyanHover,
-                            strokeWidth = 2.5.dp,
-                        )
+                        ContinuousBusyGlyph(nowMs = nowMs, spinning = motion)
                     }
                     HeroPhase.Protected -> {
                         Icon(
@@ -320,5 +314,51 @@ fun HeroConnectControl(
                 }
             }
         }
+    }
+}
+
+/**
+ * Elapsed realtime sampled once per frame. The value is absolute, so restarting
+ * the frame loop does not snap the pulse back to the start.
+ */
+@Composable
+private fun rememberElapsedRealtime(enabled: Boolean): Long {
+    val now = remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(enabled) {
+        if (!enabled) return@LaunchedEffect
+        while (isActive) {
+            withFrameNanos {
+                now.longValue = SystemClock.elapsedRealtime()
+            }
+        }
+    }
+    return now.longValue
+}
+
+private fun pulseUnitFromElapsed(nowMs: Long): Float {
+    val half = 1280L
+    val t = nowMs % (half * 2)
+    return if (t < half) {
+        FastOutSlowInEasing.transform(t / half.toFloat())
+    } else {
+        FastOutSlowInEasing.transform(1f - (t - half) / half.toFloat())
+    }
+}
+
+@Composable
+private fun ContinuousBusyGlyph(nowMs: Long, spinning: Boolean) {
+    val rotation = if (spinning) ((nowMs % 1100L).toFloat() / 1100f) * 360f else 0f
+    Canvas(Modifier.size(36.dp)) {
+        val strokePx = 2.5.dp.toPx()
+        val inset = strokePx / 2f
+        drawArc(
+            color = CyanHover,
+            startAngle = rotation - 90f,
+            sweepAngle = 100f,
+            useCenter = false,
+            topLeft = Offset(inset, inset),
+            size = Size(size.width - strokePx, size.height - strokePx),
+            style = Stroke(width = strokePx, cap = StrokeCap.Round),
+        )
     }
 }
