@@ -13,7 +13,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -56,31 +55,26 @@ fun TunnelSettingsScreen(
         )
     }
 
+    PremiumBackdrop {
+    PremiumEnter {
     Column(
-        Modifier.fillMaxSize().background(Brush.verticalGradient(GradientSurface)).safeDrawingPadding()
-            .verticalScroll(rememberScrollState()).padding(16.dp)
+        Modifier.fillMaxSize().safeDrawingPadding()
+            .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = CyanHover)
-            }
-            Column {
-                Text("CONNECTION", color = CyanHover, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                Text("Split tunnel", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
-            }
-        }
+        PremiumTopBar(eyebrow = "CONNECTION", title = "Split tunnel", onBack = onBack)
 
         if (showReconnectBanner) {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(16.dp))
             SettingsReconnectBanner()
         }
 
-        Spacer(Modifier.height(20.dp))
-        Text("ROUTING", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Spacer(Modifier.height(22.dp))
+        Text("ROUTING", style = MaterialTheme.typography.labelSmall, color = PaperDim)
         Spacer(Modifier.height(8.dp))
         Column(
-            Modifier.fillMaxWidth().border(1.dp, CyanHover.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
-                .background(CardElevated, RoundedCornerShape(16.dp)).padding(16.dp)
+            Modifier.fillMaxWidth()
+                .glassSurface(RoundedCornerShape(20.dp), borderColor = CyanHover.copy(alpha = 0.45f))
+                .padding(16.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(10.dp).background(Cyan, CircleShape))
@@ -105,7 +99,7 @@ fun TunnelSettingsScreen(
         )
 
         Spacer(Modifier.height(24.dp))
-        Text("PER-APP BYPASS", color = PaperDim, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Text("PER-APP BYPASS", style = MaterialTheme.typography.labelSmall, color = PaperDim)
         Spacer(Modifier.height(7.dp))
         Text(
             "Choose apps that should use your regular internet connection instead of the VPN. Those apps expose your normal network IP address.",
@@ -123,8 +117,7 @@ fun TunnelSettingsScreen(
         if (bypassApps.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
             Column(
-                Modifier.fillMaxWidth().border(1.dp, LineStrong, RoundedCornerShape(14.dp))
-                    .background(CardElevated, RoundedCornerShape(14.dp))
+                Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(18.dp))
             ) {
                 selectedApps.forEachIndexed { index, app ->
                     BypassAppRow(app.label, "Uses your regular connection") { onBypassAppsChange(bypassApps - app.packageName) }
@@ -137,6 +130,8 @@ fun TunnelSettingsScreen(
             }
         }
         Spacer(Modifier.height(28.dp))
+    }
+    }
     }
 }
 
@@ -167,7 +162,11 @@ private fun AppBypassPicker(
     }
 
     AlertDialog(
-        onDismissRequest = onDismiss, containerColor = CardElevated, titleContentColor = Paper, textContentColor = PaperMuted,
+        onDismissRequest = onDismiss,
+        containerColor = CardElevated,
+        shape = RoundedCornerShape(28.dp),
+        titleContentColor = Paper,
+        textContentColor = PaperMuted,
         title = { Text("Choose apps to bypass") },
         text = {
             Column {
@@ -225,9 +224,12 @@ private fun launchableApps(context: Context): List<LaunchableApp> {
 
 @Composable
 private fun SettingToggleRow(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    val border = if (checked) CyanHover.copy(alpha = 0.55f) else LineStrong.copy(alpha = 0.85f)
     Row(
-        Modifier.fillMaxWidth().border(1.dp, if (checked) CyanHover.copy(alpha = 0.4f) else LineStrong, RoundedCornerShape(14.dp))
-            .background(CardElevated, RoundedCornerShape(14.dp)).padding(14.dp), verticalAlignment = Alignment.CenterVertically
+        Modifier.fillMaxWidth()
+            .glassSurface(RoundedCornerShape(18.dp), borderColor = border)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f).padding(end = 10.dp)) {
             Text(title, color = Paper, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)

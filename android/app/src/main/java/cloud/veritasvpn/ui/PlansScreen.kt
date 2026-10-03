@@ -77,32 +77,27 @@ fun PlansScreen(
                     Text("Keep Premium", color = CyanHover)
                 }
             },
-            containerColor = CardElevated
+            containerColor = CardElevated,
+            shape = RoundedCornerShape(28.dp),
         )
     }
 
+    PremiumBackdrop {
+    PremiumEnter {
     Column(
         Modifier.fillMaxSize()
-            .background(Brush.verticalGradient(GradientSurface))
             .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
-            .padding(18.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = Paper)
-            }
-            Spacer(Modifier.width(6.dp))
-            Column {
-                Text("Plans & billing", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text("Choose the privacy plan that fits you", color = PaperDim, fontSize = 13.sp)
-            }
-        }
+        PremiumTopBar(eyebrow = "ACCOUNT", title = "Plans & billing", onBack = onBack)
+        Spacer(Modifier.height(4.dp))
+        Text("Choose the privacy plan that fits you", color = PaperDim, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(22.dp))
 
         val premium = billingStatus?.isPremium == true
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CardElevated).padding(14.dp),
+            Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(20.dp)).padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
@@ -227,6 +222,8 @@ fun PlansScreen(
         PurchaseHistorySection(billingStatus?.payments, refreshing)
         Spacer(Modifier.height(24.dp))
     }
+    }
+    }
 }
 
 @Composable
@@ -343,9 +340,12 @@ private fun PlanChoice(name: String, detail: String, selected: Boolean, onClick:
 private fun PlanCard(name: String, price: String, suffix: String, current: Boolean, features: List<String>, emphasized: Boolean = false) {
     Card(
         Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = if (emphasized) CardElevated else CardBg),
-        border = BorderStroke(1.dp, if (emphasized) RoyalHover else Line)
+        border = BorderStroke(
+            1.dp,
+            if (emphasized) Brush.linearGradient(listOf(Cyan.copy(alpha = 0.75f), Royal)) else Brush.linearGradient(listOf(Line, Line))
+        )
     ) {
         Column(Modifier.padding(18.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
