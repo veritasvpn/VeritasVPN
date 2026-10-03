@@ -1,3 +1,11 @@
+export interface PurchaseHistoryItem {
+  created_at: string;
+  amount_cents: number;
+  currency: string;
+  plan: string;
+  status: string;
+}
+
 export interface BillingStatus {
   is_premium: boolean;
   tier?: string;
@@ -8,6 +16,7 @@ export interface BillingStatus {
   payment_state?: 'none' | 'awaiting_payment' | 'awaiting_confirmation' | 'checking' | 'settled' | 'failed';
   payment_message?: string;
   poll_after_seconds?: number;
+  payments?: PurchaseHistoryItem[];
   error?: string;
 }
 

@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.api.BillingStatus
+import cloud.veritasvpn.api.PurchaseHistoryItem
 import cloud.veritasvpn.ui.theme.*
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -36,6 +37,7 @@ fun PlansScreen(
     paymentState: String,
     paymentMessage: String?,
     error: String?,
+    purchaseHistoryFailed: Boolean = false,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onCheckout: (String, String) -> Unit,
@@ -76,32 +78,27 @@ fun PlansScreen(
                     Text("Keep Premium", color = CyanHover)
                 }
             },
-            containerColor = CardElevated
+            containerColor = CardElevated,
+            shape = RoundedCornerShape(28.dp),
         )
     }
 
+    PremiumBackdrop {
+    PremiumEnter {
     Column(
         Modifier.fillMaxSize()
-            .background(Brush.verticalGradient(GradientSurface))
             .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
-            .padding(18.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = Paper)
-            }
-            Spacer(Modifier.width(6.dp))
-            Column {
-                Text("Plans & billing", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text("Choose the privacy plan that fits you", color = PaperDim, fontSize = 13.sp)
-            }
-        }
+        PremiumTopBar(eyebrow = "ACCOUNT", title = "Plans & billing", onBack = onBack)
+        Spacer(Modifier.height(4.dp))
+        Text("Choose the privacy plan that fits you", color = PaperDim, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(22.dp))
 
         val premium = billingStatus?.isPremium == true
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(CardElevated).padding(14.dp),
+            Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(20.dp)).padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
@@ -222,8 +219,114 @@ fun PlansScreen(
                 }
             }
         }
+        Spacer(Modifier.height(22.dp))
+        PurchaseHistorySection(
+            payments = billingStatus?.payments,
+            refreshing = refreshing,
+            loadFailed = purchaseHistoryFailed || (error != null && billingStatus?.payments == null)
+        )
         Spacer(Modifier.height(24.dp))
     }
+    }
+    }
+}
+
+@Composable
+private fun PurchaseHistorySection(
+    payments: List<PurchaseHistoryItem>?,
+    refreshing: Boolean,
+    loadFailed: Boolean,
+) {
+    Text("Purchase history", color = Paper, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+    Spacer(Modifier.height(4.dp))
+    Text("Bitcoin payments recorded for this account.", color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
+    Spacer(Modifier.height(12.dp))
+    when {
+        payments == null && refreshing && !loadFailed -> {
+            Text("Loading purchase history…", color = PaperMuted, fontSize = 14.sp)
+        }
+        payments == null && loadFailed -> {
+            Text("Purchase history could not be loaded.", color = PaperMuted, fontSize = 14.sp)
+        }
+        payments == null -> {
+            Text("This billing service has not sent purchase history yet.", color = PaperMuted, fontSize = 14.sp)
+        }
+        payments.isEmpty() -> {
+            Text("No past payments yet.", color = PaperMuted, fontSize = 14.sp)
+        }
+        else -> {
+            Card(
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = CardElevated),
+                border = BorderStroke(1.dp, Line)
+            ) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) {
+                    payments.forEachIndexed { index, payment ->
+                        if (index > 0) HorizontalDivider(color = Line)
+                        PurchaseHistoryRow(payment)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PurchaseHistoryRow(payment: PurchaseHistoryItem) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(formatBillingDate(payment.createdAt).let { if (payment.createdAt.isNullOrBlank()) "—" else it }, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "${purchasePlanLabel(payment.plan)} · ${formatPurchaseAmount(payment.amountCents, payment.currency)}",
+                color = PaperMuted,
+                fontSize = 13.sp
+            )
+        }
+        Text(
+            purchaseStatusLabel(payment.status),
+            color = purchaseStatusColor(payment.status),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+private fun formatPurchaseAmount(cents: Long, currency: String?): String {
+    val sign = if (cents < 0) "-" else ""
+    val abs = kotlin.math.abs(cents)
+    val dollars = abs / 100
+    val remainder = abs % 100
+    val value = if (remainder == 0L) dollars.toString() else "%d.%02d".format(dollars, remainder)
+    return if (currency.isNullOrBlank() || currency.equals("usd", ignoreCase = true)) {
+        "$sign${'$'}$value"
+    } else {
+        "$sign$value ${currency.uppercase()}"
+    }
+}
+
+private fun purchasePlanLabel(plan: String?): String = when (plan) {
+    "annual" -> "Annual"
+    "monthly" -> "Monthly"
+    else -> "—"
+}
+
+private fun purchaseStatusLabel(status: String?): String = when (status) {
+    "completed" -> "Confirmed"
+    "failed" -> "Failed"
+    "refunded" -> "Refunded"
+    else -> "Pending"
+}
+
+private fun purchaseStatusColor(status: String?): Color = when (status) {
+    "completed" -> SuccessGreen
+    "failed", "refunded" -> WarningOrange
+    else -> CyanHover
 }
 
 private fun formatBillingDate(value: String?): String {
@@ -249,9 +352,12 @@ private fun PlanChoice(name: String, detail: String, selected: Boolean, onClick:
 private fun PlanCard(name: String, price: String, suffix: String, current: Boolean, features: List<String>, emphasized: Boolean = false) {
     Card(
         Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = if (emphasized) CardElevated else CardBg),
-        border = BorderStroke(1.dp, if (emphasized) RoyalHover else Line)
+        border = BorderStroke(
+            1.dp,
+            if (emphasized) Brush.linearGradient(listOf(Cyan.copy(alpha = 0.75f), Royal)) else Brush.linearGradient(listOf(Line, Line))
+        )
     ) {
         Column(Modifier.padding(18.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {

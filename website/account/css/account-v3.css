@@ -581,6 +581,64 @@
 
 .account-plan-options,.account-plan-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.account-plan-options .btn,.account-plan-actions .btn{flex:1;min-width:145px}.account-plan-options small{opacity:.8}.plan-card-meta{line-height:1.5}
 
+.purchase-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.purchase-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr) minmax(0, 0.8fr) auto;
+  gap: 8px 16px;
+  align-items: baseline;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.purchase-history-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.purchase-history-date,
+.purchase-history-plan {
+  color: var(--text-secondary);
+  font-size: 15px;
+}
+
+.purchase-history-amount {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.purchase-status {
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.purchase-status.is-confirmed { color: var(--accent, #00d2ff); }
+.purchase-status.is-pending { color: var(--text-secondary); }
+.purchase-status.is-failed,
+.purchase-status.is-refunded { color: #f0b429; }
+
+.purchase-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 15px;
+}
+
+@media (max-width: 640px) {
+  .purchase-history-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .purchase-history-amount { grid-column: 1; }
+  .purchase-history-plan { grid-column: 1; }
+  .purchase-status { grid-row: 1; grid-column: 2; }
+}
+
 .pf-form {
   display: grid;
   gap: 12px;

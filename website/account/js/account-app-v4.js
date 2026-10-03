@@ -24,6 +24,7 @@ const mobileNavBtn = document.getElementById('accountMobileNav');
 const sidebar = document.querySelector('.account-sidebar');
 
 let billingStatus = null;
+let purchaseHistoryError = null;
 let flash = null;
 
 async function authApiFetch(url, options = {}) {
@@ -209,6 +210,7 @@ function renderPlanExpiry(status) {
 
 async function refreshBilling() {
   billingStatus = await fetchBillingStatus();
+  purchaseHistoryError = null;
   if (upgradeBtn) {
     upgradeBtn.hidden = Boolean(billingStatus?.is_premium) || hasPendingBitcoinConfirmation(billingStatus);
   }
@@ -286,6 +288,66 @@ function renderHome() {
   `;
 }
 
+function formatPurchaseAmount(cents, currency) {
+  const amount = Number(cents);
+  if (!Number.isFinite(amount)) return '—';
+  const sign = amount < 0 ? '-' : '';
+  const abs = Math.abs(Math.trunc(amount));
+  const dollars = Math.floor(abs / 100);
+  const remainder = abs % 100;
+  const value = remainder === 0 ? String(dollars) : `${dollars}.${String(remainder).padStart(2, '0')}`;
+  if (String(currency || 'usd').toLowerCase() === 'usd') return `${sign}$${value}`;
+  return `${sign}${value} ${String(currency).toUpperCase()}`;
+}
+
+function purchasePlanLabel(plan) {
+  if (plan === 'annual') return 'Annual';
+  if (plan === 'monthly') return 'Monthly';
+  return '—';
+}
+
+function purchaseStatusLabel(status) {
+  switch (status) {
+    case 'completed': return 'Confirmed';
+    case 'pending': return 'Pending';
+    case 'failed': return 'Failed';
+    case 'refunded': return 'Refunded';
+    default: return 'Pending';
+  }
+}
+
+function purchaseStatusClass(status) {
+  switch (status) {
+    case 'completed': return 'is-confirmed';
+    case 'failed': return 'is-failed';
+    case 'refunded': return 'is-refunded';
+    default: return 'is-pending';
+  }
+}
+
+function renderPurchaseHistory(status) {
+  const payments = status?.payments;
+  if (!Array.isArray(payments)) {
+    if (purchaseHistoryError || !status) {
+      return '<p class="purchase-empty">Purchase history could not be loaded.</p>';
+    }
+    return '<p class="purchase-empty">This billing service has not sent purchase history yet.</p>';
+  }
+  if (payments.length === 0) {
+    return '<p class="purchase-empty">No past payments yet.</p>';
+  }
+  const rows = payments.map((payment) => {
+    const date = formatDate(payment?.created_at) || '—';
+    return `<li class="purchase-history-row">
+      <span class="purchase-history-date">${escapeHtml(date)}</span>
+      <span class="purchase-history-amount">${escapeHtml(formatPurchaseAmount(payment?.amount_cents, payment?.currency))}</span>
+      <span class="purchase-history-plan">${escapeHtml(purchasePlanLabel(payment?.plan))}</span>
+      <span class="purchase-status ${purchaseStatusClass(payment?.status)}">${escapeHtml(purchaseStatusLabel(payment?.status))}</span>
+    </li>`;
+  }).join('');
+  return `<ul class="purchase-history-list">${rows}</ul>`;
+}
+
 function renderSubscription() {
   const premium = Boolean(billingStatus?.is_premium);
   const paymentPending = hasPendingBitcoinConfirmation(billingStatus);
@@ -315,6 +377,17 @@ function renderSubscription() {
               : ''
           }
         </div>
+      </div>
+    </section>
+    <section class="account-section">
+      <div class="account-section-header">
+        <div>
+          <h2>Purchase history</h2>
+          <p>Bitcoin payments recorded for this account.</p>
+        </div>
+      </div>
+      <div class="account-card">
+        ${renderPurchaseHistory(billingStatus)}
       </div>
     </section>
   `;
@@ -674,7 +747,8 @@ onAuthStateChanged(async (user) => {
   try {
     await refreshBilling();
   } catch (err) {
-    showFlash(err.message || 'Could not load subscription status', 'error');
+    purchaseHistoryError = err.message || 'Could not load subscription status';
+    showFlash(purchaseHistoryError, 'error');
     billingStatus = { is_premium: false, tier: 'inactive', status: 'unknown' };
   }
   render();

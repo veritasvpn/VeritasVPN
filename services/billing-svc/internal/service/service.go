@@ -176,6 +176,11 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		paymentState = model.PaymentStateSettled
 	}
 
+	recorded, err := s.db.ListAccountPayments(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
 	return &model.StatusResponse{
 		AccountID:          sub.AccountID,
 		Tier:               sub.Tier,
@@ -192,6 +197,7 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		PaymentState:       paymentState,
 		PaymentMessage:     paymentStateMessage(paymentState),
 		PollAfterSeconds:   paymentStatePollAfter(paymentState),
+		Payments:           model.PurchaseHistoryFrom(recorded),
 	}, nil
 }
 

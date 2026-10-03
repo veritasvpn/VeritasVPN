@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.*
@@ -43,32 +44,31 @@ fun PaymentCheckoutScreen(checkoutUrl: String, onClose: () -> Unit, onRefreshPla
     }
 
     BackHandler(onBack = onClose)
+    PremiumBackdrop {
+    PremiumEnter {
     Column(
         Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(GradientSurface))
             .safeDrawingPadding()
-            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            IconButton(onClick = onClose) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Close checkout", tint = Paper)
-            }
-            Column(Modifier.weight(1f)) {
-                Text("Bitcoin checkout", color = Paper, style = MaterialTheme.typography.titleMedium)
-                Text("Opened in your browser", color = PaperDim, style = MaterialTheme.typography.bodySmall)
-            }
-        }
+        PremiumTopBar(
+            eyebrow = "BILLING",
+            title = "Bitcoin checkout",
+            onBack = onClose,
+            backContentDescription = "Close checkout",
+        )
+        Text("Opened in your browser", color = PaperDim, style = MaterialTheme.typography.bodySmall)
 
         Spacer(Modifier.height(28.dp))
 
-        Card(
-            Modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = CardBg),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Line)
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .glassSurface(RoundedCornerShape(22.dp))
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(
                     "Complete payment in the browser tab that just opened.",
                     color = Paper,
@@ -91,11 +91,12 @@ fun PaymentCheckoutScreen(checkoutUrl: String, onClose: () -> Unit, onRefreshPla
                 }
                 OutlinedButton(
                     onClick = onRefreshPlan,
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Cyan.copy(alpha = 0.45f)),
                 ) {
                     Text("Check payment", color = CyanHover, fontWeight = FontWeight.Bold)
                 }
-            }
         }
 
         Spacer(Modifier.weight(1f))
@@ -108,5 +109,7 @@ fun PaymentCheckoutScreen(checkoutUrl: String, onClose: () -> Unit, onRefreshPla
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
         )
+    }
+    }
     }
 }
