@@ -97,8 +97,6 @@ fun AccountScreen(
         Spacer(Modifier.height(4.dp))
         Text("Your account, plan, and Bitcoin payments.", color = PaperDim, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(18.dp))
-        DataStoredNotice()
-        Spacer(Modifier.height(14.dp))
         AccountIdentity(email = email, accountId = accountId)
         Spacer(Modifier.height(18.dp))
 
@@ -234,26 +232,6 @@ fun AccountScreen(
         Spacer(Modifier.height(24.dp))
     }
     }
-    }
-}
-
-@Composable
-private fun DataStoredNotice() {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .glassSurface(RoundedCornerShape(20.dp))
-            .padding(16.dp)
-    ) {
-        Text("DATA THIS VPN STORES", color = PaperDim, fontSize = 11.sp, letterSpacing = 1.4.sp)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "VeritasVPN stores an anonymous account ID and Bitcoin purchase history.",
-            color = Paper,
-            fontSize = 16.sp,
-            lineHeight = 23.sp,
-            fontWeight = FontWeight.Medium
-        )
     }
 }
 
