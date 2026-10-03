@@ -198,6 +198,42 @@ func (p *Postgres) ListAccountPayments(ctx context.Context, accountID string) ([
 	return out, nil
 }
 
+// FailStalePendingPayments marks still-pending Bitcoin payments created before
+// cutoff as failed. Completed, refunded, and already-failed rows are left
+// unchanged. It does not read or write subscriptions.
+func (p *Postgres) FailStalePendingPayments(ctx context.Context, cutoff time.Time) (int64, error) {
+	query := `UPDATE payment_records
+	          SET status = $1
+	          WHERE status = $2 AND created_at < $3`
+	ct, err := p.pool.Exec(ctx, query, model.PaymentFailed, model.PaymentPending, cutoff.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("fail stale pending payments: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
+// FailStalePendingPaymentsForAccount is the account-scoped form used when
+// loading billing status, so the payments that account can see are updated
+// immediately. Attribution matches ListAccountPayments.
+func (p *Postgres) FailStalePendingPaymentsForAccount(ctx context.Context, accountID string, cutoff time.Time) (int64, error) {
+	query := `UPDATE payment_records AS pr
+	          SET status = $1
+	          WHERE pr.status = $2
+	            AND pr.created_at < $3
+	            AND (
+	              pr.account_id = $4
+	              OR (
+	                COALESCE(pr.account_id, '') = ''
+	                AND pr.subscription_id IN (SELECT id FROM subscriptions WHERE account_id = $4)
+	              )
+	            )`
+	ct, err := p.pool.Exec(ctx, query, model.PaymentFailed, model.PaymentPending, cutoff.UTC(), accountID)
+	if err != nil {
+		return 0, fmt.Errorf("fail stale pending payments for account: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
 func (p *Postgres) CompletePayment(ctx context.Context, providerTxnID string) error {
 	query := `UPDATE payment_records SET status = $2
 	           WHERE provider_transaction_id = $1 AND status = $3`
