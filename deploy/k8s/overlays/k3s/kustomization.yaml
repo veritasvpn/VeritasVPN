@@ -9,7 +9,7 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    digest: sha256:e8a414033657b99883f5c8e963b46851dfe7c2fd632ba0c29c2bbdda15297d7c
+    digest: sha256:6ce1039fd853ef8c81e3bfcb2c46e9d64e1f85df6c0da8734e3ea9afedaa0dba
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
     # Device metadata, friendly names, and WireGuard handshake reporting.
@@ -22,7 +22,7 @@ images:
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     # Reports only WireGuard handshake timestamps, mapped to peer IDs.
-    digest: sha256:c871c20eb3efef6b1bc11434e74f12efd91a7013463985f5616dbe762b2f7e75
+    digest: sha256:d4e18eb1a2d05b6ee7b799003238b9cf86af92aa21e0a9b4899133c52a6576e7
   - name: localhost:31500/wstunnel
     newName: localhost:31500/wstunnel
     # 27 Aug audit build that is running on the Dell.
@@ -30,7 +30,7 @@ images:
     digest: sha256:4169260f4a2dc84df3c97aeba46882d5f7ee1b6ef94427b6c7f86951fc3b89b1
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
-    digest: sha256:df02b5d35129d6f694d36649110b11346f1d8249dcd831b5106d67fcccbcc4bf
+    digest: sha256:33e7a3e011d899e78b4790da37f5a13144a9087d95fd2b5d4d616f9c9d4b0746
   - name: localhost:31500/telegram-notifier
     newName: localhost:31500/telegram-notifier
     digest: sha256:c65ec535ef7e6e6aaec053520b0807a9aa7a8ab53b4a717d6aa69522d46d69af

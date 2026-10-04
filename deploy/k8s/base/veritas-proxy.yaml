@@ -37,7 +37,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: veritas-proxy
-          image: localhost:31500/veritas-proxy@sha256:ab5ddbef3fd013a62a1cbe067d796819de1cdcdd8128f3ab8be3f57bb41d060d
+          image: localhost:31500/veritas-proxy@sha256:33e7a3e011d899e78b4790da37f5a13144a9087d95fd2b5d4d616f9c9d4b0746
           imagePullPolicy: IfNotPresent
           env:
             - name: AUTH_VALIDATE_URL

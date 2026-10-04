@@ -45,7 +45,7 @@ spec:
         - operator: Exists
       containers:
         - name: veritas-agent
-          image: localhost:31500/veritas-agent@sha256:a3e2c8af93b016ccd6dad3d72a393234a4893913062ccb5a96efe17b1523f475
+          image: localhost:31500/veritas-agent@sha256:d4e18eb1a2d05b6ee7b799003238b9cf86af92aa21e0a9b4899133c52a6576e7
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: false
