@@ -1,22 +1,16 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject, type TransitionEvent } from "react";
+
+export type StealthChoice = "auto" | "udp" | "stealth";
 
 export type SettingsDrawerProps = {
   open: boolean;
   onClose: () => void;
   returnFocusRef: RefObject<HTMLButtonElement | null>;
-  subscriptionActive: boolean;
   linuxDesktop: boolean;
-  stealthMode: boolean;
-  connected: boolean;
-  dnsGateway: string | null;
-  dnsBlockedThisSession: number | null;
-  shieldPreset: string;
-  onShieldPresetChange: (preset: string) => void;
-  onOpenPlans: () => void;
+  onOpenAccount: () => void;
   onOpenNetworkMap: () => void;
-  onOpenDevices: () => void;
+  onOpenStealthSettings: () => void;
   onOpenTunnelSettings: () => void;
-  onToggleStealthMode: () => void;
   onSignOutEverywhere: () => void;
   onRequestSignOut: () => void;
 };
@@ -24,23 +18,103 @@ export type SettingsDrawerProps = {
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+function IconAccount() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="8" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M5.5 19.2c1.2-3 3.4-4.4 6.5-4.4s5.3 1.4 6.5 4.4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconMap() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M4 12h16M12 4c2.4 2.4 3.6 5 3.6 8s-1.2 5.6-3.6 8c-2.4-2.4-3.6-5-3.6-8s1.2-5.6 3.6-8z" fill="none" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+function IconStealth() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 12s3.2-6 8-6 8 6 8 6-3.2 6-8 6-8-6-8-6z" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M5 5l14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconSplit() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 5v5c0 3 2.2 5 6 5h2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M14 11l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M14 5h4v4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconDevices() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="5" width="12" height="9" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <rect x="9" y="10" width="12" height="9" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function IconLogout() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10 6H7.5A1.5 1.5 0 0 0 6 7.5v9A1.5 1.5 0 0 0 7.5 18H10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M11 12h8M16 8.5 19.5 12 16 15.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconChevron() {
+  return (
+    <svg className="settings-chevron" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function NavItem({
+  label,
+  note,
+  danger,
+  icon,
+  onClick,
+}: {
+  label: string;
+  note?: string;
+  danger?: boolean;
+  icon: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className={`settings-nav-row${danger ? " is-danger" : ""}`} onClick={onClick}>
+      <span className={`settings-nav-icon${danger ? " is-danger" : ""}`}>{icon}</span>
+      <span className="settings-nav-copy">
+        <span className="settings-nav-label">{label}</span>
+        {note && <span className="settings-nav-note">{note}</span>}
+      </span>
+      {!danger && <IconChevron />}
+    </button>
+  );
+}
+
 export function SettingsDrawer({
   open,
   onClose,
   returnFocusRef,
-  subscriptionActive,
   linuxDesktop,
-  stealthMode,
-  connected,
-  dnsGateway,
-  dnsBlockedThisSession,
-  shieldPreset,
-  onShieldPresetChange,
-  onOpenPlans,
+  onOpenAccount,
   onOpenNetworkMap,
-  onOpenDevices,
+  onOpenStealthSettings,
   onOpenTunnelSettings,
-  onToggleStealthMode,
   onSignOutEverywhere,
   onRequestSignOut,
 }: SettingsDrawerProps) {
@@ -95,7 +169,7 @@ export function SettingsDrawer({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [present, animOpen, onClose]);
 
-  const handlePanelTransitionEnd = (event: React.TransitionEvent<HTMLElement>) => {
+  const handlePanelTransitionEnd = (event: TransitionEvent<HTMLElement>) => {
     if (event.target !== drawerRef.current || event.propertyName !== "transform") return;
     if (!animOpen && !open) {
       setPresent(false);
@@ -106,10 +180,7 @@ export function SettingsDrawer({
   if (!present) return null;
 
   return (
-    <div
-      className={`settings-drawer-root${animOpen ? " is-open" : ""}`}
-      aria-hidden={!animOpen}
-    >
+    <div className={`settings-drawer-root${animOpen ? " is-open" : ""}`} aria-hidden={!animOpen}>
       <button
         type="button"
         className="settings-drawer-scrim"
@@ -127,10 +198,7 @@ export function SettingsDrawer({
         onTransitionEnd={handlePanelTransitionEnd}
       >
         <header className="settings-drawer-head">
-          <div>
-            <p className="settings-drawer-kicker">CONNECTION CONTROL</p>
-            <h2>Settings</h2>
-          </div>
+          <h2>Settings</h2>
           <button
             ref={closeBtnRef}
             type="button"
@@ -147,96 +215,148 @@ export function SettingsDrawer({
         <div className="settings-drawer-body">
           <section className="settings-drawer-section" aria-label="Account and tools">
             <p className="settings-drawer-label">Account &amp; tools</p>
-            <button type="button" className="settings-nav-item" onClick={onOpenPlans}>
-              {subscriptionActive ? "Premium" : "Plans"}
-            </button>
-            <button type="button" className="settings-nav-item" onClick={onOpenNetworkMap}>Network map</button>
-            <button type="button" className="settings-nav-item" onClick={onOpenDevices}>Devices</button>
+            <div className="settings-group">
+              <NavItem label="Account" icon={<IconAccount />} onClick={onOpenAccount} />
+              <NavItem label="Network map" icon={<IconMap />} onClick={onOpenNetworkMap} />
+            </div>
           </section>
 
           <section className="settings-drawer-section" aria-label="Connection">
             <p className="settings-drawer-label">Connection</p>
-            <div className={`settings-connection-summary${connected ? " is-protected" : ""}`} role="status">
-              <span className="settings-connection-dot" aria-hidden="true" />
-              <div>
-                <strong>{connected ? "Protected" : "Not connected"}</strong>
-                <span>{connected ? "WireGuard tunnel ready" : "Connect from Home to protect your traffic"}</span>
-              </div>
+            <div className="settings-group">
+              {linuxDesktop && (
+                <NavItem
+                  label="Stealth"
+                  note="Auto · UDP only · Stealth always"
+                  icon={<IconStealth />}
+                  onClick={onOpenStealthSettings}
+                />
+              )}
+              <NavItem
+                label="Split tunnel"
+                note="Exclude LAN"
+                icon={<IconSplit />}
+                onClick={onOpenTunnelSettings}
+              />
             </div>
-            {connected ? (
-              <div className="settings-dns-status" role="status">
-                <strong>Veritas Shield on</strong>
-                <span>
-                  {dnsGateway ? `Gateway ${dnsGateway}` : "Tunnel gateway"}
-                  {dnsBlockedThisSession !== null ? ` · ${dnsBlockedThisSession} blocked this session` : ""}
-                </span>
-                <span className="settings-dns-explainer">
-                  Threat and tracker hostnames return NXDOMAIN. Lookups use DNS-over-HTTPS upstreams. Well-known public DoH resolvers are blocked; uncommon DoH endpoints may still bypass.
-                </span>
-                <div className="settings-shield-presets" role="group" aria-label="Veritas Shield preset">
-                  {(
-                    [
-                      ["security", "Security"],
-                      ["standard", "Standard"],
-                      ["aggressive", "Aggressive"],
-                    ] as const
-                  ).map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={`settings-shield-preset${shieldPreset === value ? " is-active" : ""}`}
-                      onClick={() => onShieldPresetChange(value)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <span className="settings-dns-explainer">
-                  Security: threats only · Standard: + trackers · Aggressive: + ads
-                </span>
-              </div>
-            ) : (
-              <div className="settings-dns-status is-idle" role="status">
-                <strong>Veritas Shield</strong>
-                <span>Always on while connected — DNS threat filtering through the tunnel gateway.</span>
-              </div>
-            )}
-            <button type="button" className="settings-nav-item" onClick={onOpenTunnelSettings}>
-              <span className="settings-nav-label">Split tunnel</span>
-              <span className="settings-nav-note">Exclude LAN · reconnect to apply</span>
-            </button>
-            {linuxDesktop && (
-              <button
-                type="button"
-                className="settings-switch"
-                onClick={onToggleStealthMode}
-                aria-pressed={stealthMode}
-              >
-                <span className="settings-switch-copy">
-                  <span className="settings-nav-label">Stealth mode</span>
-                  <span className="settings-nav-note">TLS wrap · reconnect to apply</span>
-                </span>
-                <span className={`settings-switch-track${stealthMode ? " is-on" : ""}`} aria-hidden="true">
-                  <span className="settings-switch-thumb" />
-                </span>
-              </button>
-            )}
           </section>
 
-          <section className="settings-drawer-section settings-drawer-section--session" aria-label="Session">
+          <section className="settings-drawer-section" aria-label="Session">
             <p className="settings-drawer-label">Session</p>
-            <div className="settings-session-actions">
-              <button type="button" className="danger" onClick={() => void onSignOutEverywhere()}>
-                Sign out from all devices
-              </button>
-              <button type="button" className="danger" onClick={onRequestSignOut}>
-                Sign out from this device
-              </button>
+            <div className="settings-group">
+              <NavItem
+                label="Sign out from all devices"
+                danger
+                icon={<IconDevices />}
+                onClick={() => void onSignOutEverywhere()}
+              />
+              <NavItem
+                label="Sign out from this device"
+                danger
+                icon={<IconLogout />}
+                onClick={onRequestSignOut}
+              />
             </div>
           </section>
         </div>
       </aside>
     </div>
+  );
+}
+
+function BackIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
+  );
+}
+
+export function ScreenTopBar({
+  eyebrow,
+  title,
+  onBack,
+  backLabel = "Back",
+}: {
+  eyebrow: string;
+  title: string;
+  onBack: () => void;
+  backLabel?: string;
+}) {
+  return (
+    <header className="screen-topbar">
+      <button type="button" className="glass-icon-button" onClick={onBack} aria-label={backLabel}>
+        <BackIcon />
+      </button>
+      <div>
+        <p className="screen-eyebrow">{eyebrow}</p>
+        <h2>{title}</h2>
+      </div>
+    </header>
+  );
+}
+
+export function ReconnectBanner() {
+  return (
+    <div className="tunnel-reconnect-banner" role="status">
+      <i aria-hidden="true" />
+      <span>Reconnect from Home to apply these changes</span>
+    </div>
+  );
+}
+
+export function StealthSettingsScreen({
+  choice,
+  showReconnectBanner,
+  onChange,
+  onBack,
+}: {
+  choice: StealthChoice;
+  showReconnectBanner: boolean;
+  onChange: (next: StealthChoice) => void;
+  onBack: () => void;
+}) {
+  const options: { id: StealthChoice; title: string; subtitle: string }[] = [
+    {
+      id: "auto",
+      title: "Auto",
+      subtitle: "Try UDP first. If that handshake does not complete, switch to Stealth. Recommended.",
+    },
+    {
+      id: "udp",
+      title: "UDP only",
+      subtitle: "Plain WireGuard over UDP. Never fall back to Stealth.",
+    },
+    {
+      id: "stealth",
+      title: "Stealth always",
+      subtitle: "Start with WireGuard inside TLS. Use this on networks that block UDP.",
+    },
+  ];
+  return (
+    <section className="tunnel-settings" aria-label="Stealth">
+      <ScreenTopBar eyebrow="CONNECTION" title="Stealth" onBack={onBack} />
+      {showReconnectBanner && <ReconnectBanner />}
+      <p className="tunnel-section-label">TRANSPORT</p>
+      <p className="tunnel-lead">
+        Choose how VeritasVPN carries WireGuard. Auto is the default. Reconnect from Home to apply a change.
+      </p>
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          className={`transport-choice${choice === option.id ? " is-selected" : ""}`}
+          aria-pressed={choice === option.id}
+          onClick={() => onChange(option.id)}
+        >
+          <span className={`transport-radio${choice === option.id ? " is-on" : ""}`} aria-hidden="true" />
+          <span>
+            <strong>{option.title}</strong>
+            <span>{option.subtitle}</span>
+          </span>
+        </button>
+      ))}
+    </section>
   );
 }
 
@@ -253,51 +373,21 @@ export function TunnelSettingsScreen({
 }) {
   return (
     <section className="tunnel-settings" aria-label="Split tunnel">
-      <header className="tunnel-settings-head">
-        <button type="button" className="tunnel-back" onClick={onBack} aria-label="Back">
-          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
-        </button>
-        <div>
-          <p className="tunnel-eyebrow">TUNNEL</p>
-          <h2>Split tunnel</h2>
-        </div>
-      </header>
-
-      {showReconnectBanner && (
-        <div className="tunnel-reconnect-banner" role="status">
-          Reconnect to apply
-        </div>
-      )}
-
+      <ScreenTopBar eyebrow="CONNECTION" title="Split tunnel" onBack={onBack} />
+      {showReconnectBanner && <ReconnectBanner />}
       <p className="tunnel-section-label">ROUTING</p>
-
       <div className="tunnel-route-summary">
         <span className="tunnel-route-dot" aria-hidden="true" />
         <div>
-          <strong>Route your internet through VeritasVPN</strong>
-          <span>Your browser, apps, and DNS use the encrypted WireGuard tunnel unless you allow a local-network exception.</span>
+          <strong>Protected connection</strong>
+          <b>Route your internet through VeritasVPN</b>
+          <span>Your browser, apps, and DNS use the encrypted WireGuard tunnel unless you choose a local-network exception below.</span>
         </div>
       </div>
-
-      <button
-        type="button"
-        className={`tunnel-toggle-card${!excludeLan ? " is-on" : ""}`}
-        onClick={() => onExcludeLanChange(false)}
-        aria-pressed={!excludeLan}
-      >
-        <div>
-          <strong>Full tunnel</strong>
-          <span>Route internet and local-network traffic through VeritasVPN.</span>
-        </div>
-        <i className={!excludeLan ? "on" : ""} aria-hidden="true" />
-      </button>
-
       <button
         type="button"
         className={`tunnel-toggle-card${excludeLan ? " is-on" : ""}`}
-        onClick={() => onExcludeLanChange(true)}
+        onClick={() => onExcludeLanChange(!excludeLan)}
         aria-pressed={excludeLan}
       >
         <div>
