@@ -73,7 +73,7 @@ func TestPurchaseHistoryFromRecordedPayments(t *testing.T) {
 }
 
 func TestPurchaseHistoryOmitsPaymentReferences(t *testing.T) {
-	const secret = "btcpay-invoice-9f3c"
+	const secret = "fake-txid"
 	items := PurchaseHistoryFrom([]PaymentRecord{{
 		ID:                    "payment-row",
 		SubscriptionID:        "subscription-row",
