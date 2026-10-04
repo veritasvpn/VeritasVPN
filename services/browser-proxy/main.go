@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/hmac"
@@ -17,8 +16,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/veritasvpn/lib/netpolicy"
 )
 
 type claims struct {
@@ -30,13 +33,18 @@ type claims struct {
 	TokenUse string          `json:"token_use"`
 }
 type proxy struct {
-	secret      []byte
-	publicKeys  map[string]ed25519.PublicKey
-	issuer      string
-	audience    string
-	validateURL string
-	authClient  *http.Client
-	transport   *http.Transport
+	sessions       sessionTracker
+	shutdown       context.Context
+	tunnelLifetime time.Duration
+	tunnelIdle     time.Duration
+	tunnelRecheck  time.Duration
+	secret         []byte
+	publicKeys     map[string]ed25519.PublicKey
+	issuer         string
+	audience       string
+	validateURL    string
+	authClient     *http.Client
+	transport      *http.Transport
 }
 
 func main() {
@@ -77,20 +85,39 @@ func main() {
 			IdleConnTimeout:     60 * time.Second,
 			TLSHandshakeTimeout: 10 * time.Second,
 		}}
+	shutdown, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	p.shutdown = shutdown
 	server := &http.Server{Addr: ":1080", Handler: p, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second}
+	go func() {
+		<-shutdown.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+	}()
 	log.Printf("authenticated browser proxy listening on %s", server.Addr)
-	log.Fatal(server.ListenAndServe())
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !p.authorized(r.Context(), r.Header.Get("Proxy-Authorization")) {
+	header := r.Header.Get("Proxy-Authorization")
+	if !p.authorized(r.Context(), header) {
 		w.Header().Set("Proxy-Authenticate", `Basic realm="VeritasVPN"`)
 		http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
 		return
 	}
+	account := authorizedAccount(header)
+	release, ok := p.sessions.acquire(account)
+	if !ok {
+		http.Error(w, "proxy connection limit reached", http.StatusTooManyRequests)
+		return
+	}
+	defer release()
 	r.Header.Del("Proxy-Authorization")
 	if r.Method == http.MethodConnect {
-		p.connect(w, r)
+		p.connect(w, r, header)
 		return
 	}
 	p.forward(w, r)
@@ -241,19 +268,19 @@ func validateJWT(token string, secret []byte, publicKeys map[string]ed25519.Publ
 
 func publicAddresses(ctx context.Context, host string) ([]net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
+		if !netpolicy.IsPublic(ip) {
 			return nil, errors.New("private target is not allowed")
 		}
 		return []net.IP{ip}, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
 	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 	if err != nil || len(ips) == 0 {
 		return nil, errors.New("target resolution failed")
 	}
-	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
-			return nil, errors.New("private target is not allowed")
-		}
+	if !netpolicy.AllPublic(ips) {
+		return nil, errors.New("private target is not allowed")
 	}
 	return ips, nil
 }
@@ -294,7 +321,7 @@ func dialPublic(ctx context.Context, network, address string) (net.Conn, error) 
 	}
 	return nil, lastErr
 }
-func (p *proxy) connect(w http.ResponseWriter, r *http.Request) {
+func (p *proxy) connect(w http.ResponseWriter, r *http.Request, authHeader string) {
 	target, err := allowedTarget(r.Host)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
@@ -318,18 +345,7 @@ func (p *proxy) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
 	_ = rw.Flush()
-	go relay(upstream, client, rw.Reader)
-	go relay(client, upstream, nil)
-}
-
-func relay(dst net.Conn, src net.Conn, buffered *bufio.Reader) {
-	defer dst.Close()
-	defer src.Close()
-	if buffered != nil {
-		_, _ = io.Copy(dst, buffered)
-	} else {
-		_, _ = io.Copy(dst, src)
-	}
+	p.serveTunnel(upstream, client, rw.Reader, authHeader)
 }
 
 func (p *proxy) forward(w http.ResponseWriter, r *http.Request) {

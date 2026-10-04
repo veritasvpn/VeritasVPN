@@ -57,14 +57,13 @@ func (r *Redis) CheckRateLimit(ctx context.Context, key string, limit int, windo
 // use the count when a low-friction action becomes higher risk before its hard
 // rate limit is reached.
 func (r *Redis) IncrementRateLimit(ctx context.Context, key string, window time.Duration) (int64, error) {
-	pipe := r.client.Pipeline()
-	incr := pipe.Incr(ctx, key)
-	pipe.Expire(ctx, key, window)
-
-	if _, err := pipe.Exec(ctx); err != nil {
+	count, err := r.client.Eval(ctx, `local n = redis.call('INCR', KEYS[1])
+if n == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+return n`, []string{key}, window.Milliseconds()).Int64()
+	if err != nil {
 		return 0, fmt.Errorf("rate limit check: %w", err)
 	}
-	return incr.Val(), nil
+	return count, nil
 }
 
 func (r *Redis) ClearRateLimit(ctx context.Context, key string) error {

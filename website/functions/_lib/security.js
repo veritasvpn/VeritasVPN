@@ -59,49 +59,53 @@ export function rejectForeignOrigin(request) {
   return jsonResponse({ error: "Cross-origin requests are not allowed" }, 403);
 }
 
-/**
- * Sliding-window rate limit using the Cache API (best-effort per isolate).
- * On Cloudflare (`request.cf`), Cache API failures fail closed (503) so an
- * outage cannot open an unthrottled flood path. Local/dev without `cf` still
- * allows the request when the cache is unavailable.
- * @returns {Promise<Response|null>} 429/503 response or null if allowed
- */
-export async function rateLimit(request, { bucket, limit = 30, windowSec = 60 } = {}) {
-  const ip = clientIP(request) || "unknown";
-  const keyUrl = `https://rate-limit.veritasvpn.internal/${bucket}/${ip}`;
-  let count = 1;
+/** Atomic Redis quotas. Only this authenticated hop may forward a visitor IP. */
+export async function rateLimit(request, env, { bucket } = {}) {
+  const ip = clientIP(request);
+  const secret = env?.TOOLS_RATE_LIMIT_SECRET || "";
+  const unavailable = () => jsonResponse({ error: "Rate limit unavailable. Try again shortly." }, 503, { "Retry-After": "60" });
+  if (secret.length < 32 || !ip || !["check-ip", "check-dns-session", "check-breach"].includes(bucket)) return unavailable();
   try {
-    const cache = caches.default;
-    const hit = await cache.match(keyUrl);
-    if (hit) {
-      const prev = Number(await hit.text());
-      count = Number.isFinite(prev) ? prev + 1 : 1;
-    }
-    const res = new Response(String(count), {
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const bytes = await crypto.subtle.sign("HMAC", key, encoder.encode(`${timestamp}\n${bucket}\n${ip}`));
+    const signature = [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, "0")).join("");
+    const response = await fetch("https://api.veritasvpn.cloud/api/v1/auth/tool-limit", {
+      method: "POST",
       headers: {
-        "Cache-Control": `max-age=${windowSec}`,
-        "Content-Type": "text/plain",
+        "Content-Type": "application/json",
+        "X-Tool-Timestamp": timestamp,
+        "X-Tool-Signature": signature,
       },
+      body: JSON.stringify({ bucket, ip }),
+      signal: AbortSignal.timeout(4000),
+      redirect: "error",
     });
-    await cache.put(keyUrl, res);
+    await response.body?.cancel();
+    if (response.status === 204) return null;
+    if (response.status === 429) return jsonResponse({ error: "Too many requests. Try again shortly." }, 429, { "Retry-After": "60" });
+    return unavailable();
   } catch {
-    if (request && request.cf) {
-      return jsonResponse(
-        { error: "Rate limit unavailable. Try again shortly." },
-        503,
-        { "Retry-After": String(windowSec) }
-      );
+    return unavailable();
+  }
+}
+
+export async function boundedJSON(message, maxBytes = 4096) {
+  if (!message.body) throw new Error("Missing body");
+  const reader = message.body.getReader();
+  let total = 0, text = "";
+  const decoder = new TextDecoder();
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) { await reader.cancel(); throw new Error("Body too large"); }
+      text += decoder.decode(value, { stream: true });
     }
-    return null;
-  }
-  if (count > limit) {
-    return jsonResponse(
-      { error: "Too many requests. Try again shortly." },
-      429,
-      { "Retry-After": String(windowSec) }
-    );
-  }
-  return null;
+    return JSON.parse(text + decoder.decode());
+  } finally { reader.releaseLock(); }
 }
 
 export async function verifyTurnstile(env, token, remoteIP) {
@@ -111,12 +115,7 @@ export async function verifyTurnstile(env, token, remoteIP) {
   }
   const secret = (env && env.TURNSTILE_SECRET_KEY) || "";
   if (!secret) {
-    // Fail closed when secret is expected in production Pages.
-    if (env && (env.ENVIRONMENT === "production" || env.CF_PAGES === "1")) {
-      return { ok: false, error: "Verification unavailable" };
-    }
-    // Local/dev without a secret: require a non-empty token only.
-    return { ok: true };
+    return { ok: false, error: "Verification unavailable" };
   }
   const form = new URLSearchParams();
   form.set("secret", secret);
@@ -129,12 +128,14 @@ export async function verifyTurnstile(env, token, remoteIP) {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form,
+      signal: AbortSignal.timeout(4000),
+      redirect: "error",
     }
   );
   if (!resp.ok) {
     return { ok: false, error: "Verification unavailable" };
   }
-  const result = await resp.json();
+  const result = await boundedJSON(resp, 16384);
   if (!result.success) {
     return { ok: false, error: "Verification failed" };
   }

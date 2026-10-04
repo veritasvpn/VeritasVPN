@@ -200,18 +200,20 @@ func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP 
 		// Fail-closed forward.
 		"add chain inet "+table+" forward { type filter hook forward priority filter; policy drop; }",
 
+		// Isolate VPN traffic before broad CNI and established-flow exceptions.
+		// This also rejects an already-established flow into a private network.
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname \"cni0\" counter drop",
+		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname \"flannel.1\" counter drop",
+
 		// Preserve Kubernetes CNI/service forwarding (never from the VPN iface).
 		"add rule inet "+table+" forward iifname != "+q(wgIface)+" ip saddr "+podCIDR+" accept",
 		"add rule inet "+table+" forward iifname != "+q(wgIface)+" ip daddr "+podCIDR+" accept",
 		"add rule inet "+table+" forward iifname != "+q(wgIface)+" ip saddr "+serviceCIDR+" accept",
 		"add rule inet "+table+" forward iifname != "+q(wgIface)+" ip daddr "+serviceCIDR+" accept",
 		"add rule inet "+table+" forward iifname \"cni0\" accept",
-		"add rule inet "+table+" forward oifname \"cni0\" accept",
+		"add rule inet "+table+" forward iifname != "+q(wgIface)+" oifname \"cni0\" accept",
 		"add rule inet "+table+" forward iifname \"flannel.1\" accept",
-		"add rule inet "+table+" forward oifname \"flannel.1\" accept",
-
-		// VPN path: established return traffic first.
-		"add rule inet "+table+" forward ct state established,related accept",
+		"add rule inet "+table+" forward iifname != "+q(wgIface)+" oifname \"flannel.1\" accept",
 
 		// No client-to-client, no hairpin onto the tunnel.
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" oifname "+q(wgIface)+" counter drop",
@@ -230,6 +232,9 @@ func buildRuleset(table, wgIface, egress, podCIDR, serviceCIDR, wgSubnet, dnsIP 
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip6 daddr fe80::/10 counter drop",
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip6 daddr ::1/128 counter drop",
 		"add rule inet "+table+" forward iifname "+q(wgIface)+" ip6 daddr ff00::/8 counter drop",
+
+		// Established public traffic is accepted only after private isolation.
+		"add rule inet "+table+" forward ct state established,related accept",
 
 		// DNS protection: plain DNS and DoT cannot bypass the gateway. Known
 		// public DoH resolver anycast IPs are dropped on TCP/UDP 443 (see

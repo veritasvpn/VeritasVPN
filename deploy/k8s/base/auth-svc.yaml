@@ -41,6 +41,11 @@ spec:
           ports:
             - containerPort: 8080
           env:
+            - name: TOOLS_RATE_LIMIT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: veritas-secrets
+                  key: TOOLS_RATE_LIMIT_SECRET
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
