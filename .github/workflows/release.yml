@@ -64,7 +64,8 @@ jobs:
 
   build-android:
     name: Signed Android release artifacts
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_only != true }}
+    # v0.2.83 is the Linux device-identity release. Do not sign or upload Android.
+    if: ${{ github.ref_name != 'v0.2.83' && (github.event_name != 'workflow_dispatch' || inputs.linux_only != true) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -120,7 +121,7 @@ jobs:
 
   build-chrome:
     name: Chrome extension bundle
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_only != true }}
+    if: ${{ github.ref_name != 'v0.2.83' && (github.event_name != 'workflow_dispatch' || inputs.linux_only != true) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -165,7 +166,7 @@ jobs:
       id-token: write
       attestations: write
     env:
-      LINUX_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_only == true && 'true' || 'false' }}
+      LINUX_ONLY: ${{ (github.ref_name == 'v0.2.83' || (github.event_name == 'workflow_dispatch' && inputs.linux_only == true)) && 'true' || 'false' }}
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Reject replacement of an existing release
