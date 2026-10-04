@@ -12,7 +12,7 @@ declare -A images=(
 kubectl -n veritas get secret veritas-secrets -o json | jq -e '.data.TOOLS_RATE_LIMIT_SECRET | length > 0' >/dev/null
 for image in "${images[@]}"; do
   ref=${image#localhost:31500/}
-  curl -fsS --max-time 10 -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+  curl -fsS --max-time 10 -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
     "http://127.0.0.1:31500/v2/${ref%@*}/manifests/${ref#*@}" >/dev/null
 done
 umask 077
