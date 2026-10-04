@@ -46,6 +46,9 @@ kubectl -n veritas set image daemonset/veritas-agent "veritas-agent=${images[ver
 kubectl -n veritas delete pod -l app=veritas-agent --wait=true
 kubectl -n veritas wait --for=condition=Ready pod -l app=veritas-agent --timeout=120s
 bash deploy/k8s/scripts/verify-core.sh
-nft list chain inet veritas forward | grep -q 'iifname "wg0" oifname "cni0" counter.*drop'
+# Read the full output before matching: with pipefail, grep -q may close the
+# pipe early and turn nft's SIGPIPE into a spurious verification failure.
+nft list chain inet veritas forward > "$snapshot_dir/forward-after.txt"
+grep -q 'iifname "wg0" oifname "cni0" counter.*drop' "$snapshot_dir/forward-after.txt"
 trap - ERR INT TERM
 echo 'Scoped security rollout and core verification passed.'
