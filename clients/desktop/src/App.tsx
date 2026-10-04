@@ -31,8 +31,10 @@ import {
 } from "./billing";
 import { AUTH_API } from "./config";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
-import { SettingsDrawer, TunnelSettingsScreen } from "./SettingsDrawer";
+import { SettingsDrawer, StealthSettingsScreen, TunnelSettingsScreen, type StealthChoice } from "./SettingsDrawer";
+import { HeroConnectControl, type HeroPhase } from "./HeroConnect";
 import veritasMark from "./assets/veritas-mark.png";
+import veritasLogo from "./assets/veritas-logo.png";
 import "./App.css";
 
 type AuthMode = "signin" | "signup";
@@ -180,6 +182,46 @@ function isLinuxDesktop(): boolean {
   return ua.includes("linux") && !ua.includes("android");
 }
 
+function readStealthChoice(): StealthChoice {
+  try {
+    const raw = localStorage.getItem(LS_STEALTH);
+    if (raw === "stealth" || raw === "1") return "stealth";
+    if (raw === "udp" || raw === "0") return "udp";
+    return "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+function writeStealthChoice(choice: StealthChoice) {
+  try {
+    localStorage.setItem(LS_STEALTH, choice);
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+function errorText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
+    return (err as { message: string }).message;
+  }
+  return "";
+}
+
+/** Auto may retry Stealth after a UDP handshake or egress failure. Auth, kill-switch, and user-cancel errors stay put. */
+function isAutoFallbackError(err: unknown): boolean {
+  if (err instanceof SessionExpiredError) return false;
+  const lower = errorText(err).toLowerCase();
+  if (
+    /kill switch|nftables|iptables|authorization|administrator|cancelled|canceled|dismissed|subscription|device limit|unavailable in this build|not bundled/.test(lower)
+  ) {
+    return false;
+  }
+  return /handshake|egress|validation|timed out|timeout|unreachable|connection failed|network/.test(lower);
+}
+
 function formatConnectError(err: unknown, wantedStealth: boolean): string {
   let raw = "Connection failed";
   if (err instanceof Error) raw = err.message;
@@ -193,22 +235,22 @@ function formatConnectError(err: unknown, wantedStealth: boolean): string {
     /stealth|wstunnel/.test(lower)
   ) {
     if (/wstunnel|stealth engine/.test(lower) && /missing|not found|not bundled/.test(lower)) {
-      return "Stealth failed: wstunnel is not bundled in this build. Rebuild with the Linux stealth binary, or turn Stealth off.";
+      return "Stealth failed: wstunnel is not bundled in this build. Rebuild with the Linux stealth binary, or choose UDP only.";
     }
     if (/stealth engine missing/.test(lower)) {
-      return "Stealth failed: wstunnel binary missing. Bundle it for Linux or turn Stealth off.";
+      return "Stealth failed: wstunnel binary missing. Bundle it for Linux or choose UDP only.";
     }
     if (/linux desktop|linux only|available on linux/.test(lower)) {
-      return "Stealth mode is Linux-only in this build. Turn it off to connect with Direct UDP.";
+      return "Stealth mode is Linux-only in this build. Choose UDP only to connect with Direct UDP.";
     }
     if (/failed to start stealth|stealth transport/.test(lower)) {
-      return "Stealth transport failed to start. Check TLS endpoint reachability, or turn Stealth off.";
+      return "Stealth transport failed to start. Check TLS endpoint reachability, or choose UDP only.";
     }
     if (/path prefix/.test(lower)) {
-      return "Stealth failed: server path prefix missing. Try again later or turn Stealth off.";
+      return "Stealth failed: server path prefix missing. Try again later or choose UDP only.";
     }
     if (/not available on the (server|vpn node)/.test(lower)) {
-      return "Stealth is not available on the VPN node yet. Turn Stealth off or try again later.";
+      return "Stealth is not available on the VPN node yet. Choose UDP only or try again later.";
     }
   }
   if (/firewall kill switch|kill switch/.test(lower)) {
@@ -245,11 +287,6 @@ function formatHandshakeAge(lastHandshakeSec: number): string {
   if (ageSec < 60) return `${ageSec}s ago`;
   if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`;
   return `${Math.floor(ageSec / 3600)}h ago`;
-}
-
-function shortPeerId(id: string): string {
-  if (!id) return "—";
-  return id.length <= 12 ? id : `${id.slice(0, 8)}…`;
 }
 
 function formatBillingDate(value?: string) {
@@ -312,12 +349,13 @@ function PurchaseHistory({ status, loading, error }: { status: BillingStatus | n
   } else if (Array.isArray(payments)) {
     body = (
       <ul className="purchase-history">
-        {payments.map((payment: PurchaseHistoryItem, index) => (
+        {payments.slice(0, 100).map((payment: PurchaseHistoryItem, index) => (
           <li key={`${payment.created_at}-${payment.amount_cents}-${index}`}>
-            <span>{formatPurchaseDate(payment.created_at)}</span>
-            <span>{formatPurchaseAmount(payment.amount_cents, payment.currency)}</span>
-            <span>{purchasePlanLabel(payment.plan)}</span>
-            <strong className={`purchase-status ${purchaseStatusClass(payment.status)}`}>{purchaseStatusLabel(payment.status)}</strong>
+            <div>
+              <strong>{formatPurchaseDate(payment.created_at)}</strong>
+              <span>{purchasePlanLabel(payment.plan)} · {formatPurchaseAmount(payment.amount_cents, payment.currency)}</span>
+            </div>
+            <b className={`purchase-status ${purchaseStatusClass(payment.status)}`}>{purchaseStatusLabel(payment.status)}</b>
           </li>
         ))}
       </ul>
@@ -365,29 +403,6 @@ function ConnectionMap({
   );
 }
 
-function PrivacyScene({ encrypted }: { encrypted: boolean }) {
-  const activities = encrypted
-    ? ["Your activity is private", "Your IP address is hidden", "Trackers cannot inspect traffic"]
-    : ["Sites you visit", "Your IP address", "Searches and activity"];
-  return (
-    <section className={`privacy-exposure ${encrypted ? "is-encrypted" : ""}`} aria-label={encrypted ? "Encrypted traffic visualization" : "Visible traffic visualization"}>
-      <div className="exposure-topline"><strong>{encrypted ? "ENCRYPTED TRAFFIC" : "UNENCRYPTED TRAFFIC"}</strong><b>{encrypted ? "IP HIDDEN" : "IP VISIBLE"}</b></div>
-      <svg className="exposure-routes" viewBox="0 0 600 330" aria-hidden="true">
-        <g className="exposure-lines"><path d="M300 285L300 68"/><path d="M300 285L95 170"/><path d="M300 285L505 170"/></g>
-        {["M300 285L300 68", "M300 285L95 170", "M300 285L505 170"].map((path, index) => (
-          <g key={path}><circle className={`data-particle particle-${index + 1}`} r="5"><animateMotion dur={`${2.2 + index * .25}s`} repeatCount="indefinite" path={path}/></circle><circle className="data-particle small" r="3"><animateMotion begin={`${.65 + index * .2}s`} dur={`${2.2 + index * .25}s`} repeatCount="indefinite" path={path}/></circle></g>
-        ))}
-      </svg>
-      <div className="observer observer-isp"><i>ISP</i><strong>YOUR ISP</strong><span>{encrypted ? "Sees encrypted data" : "Can observe traffic"}</span></div>
-      <div className="observer observer-site"><i>WEB</i><strong>WEBSITE</strong><span>{encrypted ? "Sees the VPN IP" : "Sees your IP"}</span></div>
-      <div className="observer observer-trackers"><i>WEB</i><strong>TRACKERS</strong><span>{encrypted ? "Traffic is obscured" : "Build a profile"}</span></div>
-      <div className="activity-carousel">{activities.map((activity, index) => <span key={activity} style={{ animationDelay: `${index * 1.9}s` }}>{activity}</span>)}</div>
-      <div className="device-node"><span className="mini-lock"/><strong>YOU</strong></div>
-      <span className="scene-scan"/>
-    </section>
-  );
-}
-
 function PasswordStrength({ password }: { password: string }) {
   if (!password) return null;
   const score = passwordStrengthScore(password);
@@ -413,7 +428,9 @@ function PasswordStrength({ password }: { password: string }) {
   );
 }
 
-function PlansScreen({
+function AccountScreen({
+  email,
+  accountId,
   billingStatus,
   billingLoading,
   billingBusy,
@@ -429,6 +446,8 @@ function PlansScreen({
   onCancelConfirm,
   onCancelDismiss,
 }: {
+  email?: string;
+  accountId: string;
   billingStatus: BillingStatus | null;
   billingLoading: boolean;
   billingBusy: boolean;
@@ -448,15 +467,39 @@ function PlansScreen({
   const paymentPending = hasPendingBitcoinConfirmation(billingStatus);
   const price = selectedPlan === "premium_annual" ? "$30" : "$3";
   const suffix = selectedPlan === "premium_annual" ? "/year" : "/month";
+  const shownEmail = email?.trim() || "";
+  const shownAccountId = accountId.trim();
   return (
-    <section className="plans-screen">
+    <section className="plans-screen" aria-label="Account">
       <div className="plans-head">
-        <button type="button" className="plans-back" onClick={onBack} aria-label="Back">←</button>
+        <button type="button" className="glass-icon-button" onClick={onBack} aria-label="Back">
+          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
         <div>
-          <h2>Plans & billing</h2>
-          <p>Choose the privacy plan that fits you</p>
+          <p className="screen-eyebrow">SIGNED IN</p>
+          <h2>Account</h2>
         </div>
       </div>
+      <p className="screen-sub">Your account, plan, and Bitcoin payments.</p>
+      <p className="account-disclosure">VeritasVPN stores an anonymous account ID and Bitcoin purchase history.</p>
+      {(shownEmail || shownAccountId) && (
+        <div className="account-identity">
+          {shownEmail && (
+            <div>
+              <span>EMAIL</span>
+              <strong>{shownEmail}</strong>
+            </div>
+          )}
+          {shownAccountId && (
+            <div>
+              <span>ACCOUNT ID</span>
+              <strong className="account-id-value">{shownAccountId}</strong>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="billing-current">
         <div>
@@ -600,68 +643,134 @@ function PaymentCheckoutScreen({
   );
 }
 
-function DevicesScreen({
-  peers,
-  loading,
-  error,
-  currentPeerId,
-  revokingId,
-  onBack,
-  onRefresh,
-  onRevoke,
+function transportLabel(transport: string): string | null {
+  if (transport === "udp") return "Direct UDP";
+  if (transport === "stealth") return "Stealth";
+  if (transport === "switching") return "Switching to Stealth…";
+  return null;
+}
+
+function connectingCopy(transport: string): { title: string; body: string } {
+  if (transport === "switching") {
+    return {
+      title: "SWITCHING TO STEALTH",
+      body: "UDP did not complete a handshake. Switching to Stealth.",
+    };
+  }
+  if (transport === "stealth") {
+    return {
+      title: "CONNECTING OVER STEALTH",
+      body: "Connecting over Stealth. WireGuard stays inside the VPN.",
+    };
+  }
+  return {
+    title: "ESTABLISHING SECURE CONNECTION",
+    body: "Creating secure keys and validating encrypted internet access.",
+  };
+}
+
+function HomeStage({
+  connected,
+  connecting,
+  subscriptionChecked,
+  subscriptionActive,
+  transport,
+  wgStats,
+  dnsBlockedThisSession,
+  dnsGateway,
+  statusMsg,
+  statusSticky,
+  onConnect,
+  onDisconnect,
+  onGetPremium,
+  onDismissStatus,
 }: {
-  peers: PeerInfo[];
-  loading: boolean;
-  error: string;
-  currentPeerId: string;
-  revokingId: string | null;
-  onBack: () => void;
-  onRefresh: () => void;
-  onRevoke: (peer: PeerInfo) => void;
+  connected: boolean;
+  connecting: boolean;
+  subscriptionChecked: boolean;
+  subscriptionActive: boolean;
+  transport: string;
+  wgStats: WgTransferStats | null;
+  dnsBlockedThisSession: number | null;
+  dnsGateway: string | null;
+  statusMsg: string;
+  statusSticky: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onGetPremium: () => void;
+  onDismissStatus: () => void;
 }) {
+  const phase: HeroPhase = connected
+    ? "protected"
+    : connecting
+      ? "connecting"
+      : !subscriptionChecked
+        ? "checking"
+        : subscriptionActive
+          ? "ready"
+          : "upsell";
+  const onClick = connecting || !subscriptionChecked
+    ? null
+    : connected
+      ? onDisconnect
+      : subscriptionActive
+        ? onConnect
+        : onGetPremium;
+  const copy = connectingCopy(transport);
+  const label = transportLabel(transport);
+  const hideStatus = connecting && /^(connecting|reconnecting|creating secure)/i.test(statusMsg);
   return (
-    <section className="devices-screen">
-      <div className="plans-head">
-        <button type="button" className="plans-back" onClick={onBack} aria-label="Back">←</button>
-        <div>
-          <h2>Devices</h2>
-          <p>Active WireGuard peers on your account</p>
+    <section className="home-stage">
+      {(connected || connecting) && (
+        <div className="home-status">
+          {connected ? (
+            <>
+              <p className="home-kicker">CONNECTION SECURED</p>
+              {label && (
+                <span className={`transport-chip${transport === "switching" ? " is-switching" : ""}`}>{label}</span>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="home-kicker is-connecting">{copy.title}</p>
+              <p className="home-status-body">{copy.body}</p>
+            </>
+          )}
         </div>
-        <button type="button" className="devices-refresh" disabled={loading || !!revokingId} onClick={onRefresh}>
-          {loading ? "…" : "Refresh"}
-        </button>
-      </div>
-      {error && <div className="billing-error">{error}</div>}
-      {loading && peers.length === 0 ? (
-        <div className="billing-loading">Loading devices…</div>
-      ) : peers.length === 0 ? (
-        <p className="devices-empty">No devices registered.</p>
-      ) : (
-        <ul className="devices-list">
-          {peers.map((peer) => {
-            const isCurrent = peer.id === currentPeerId;
-            return (
-              <li key={peer.id} className={`device-card ${isCurrent ? "current" : ""}`}>
-                <div>
-                  <strong>{shortPeerId(peer.id)}</strong>
-                  {isCurrent && <span className="device-current-pill">THIS DEVICE</span>}
-                  <span className="device-meta">{peer.assigned_ip || "—"} · {peer.status || "unknown"}</span>
-                  {typeof peer.dns_blocked_count === "number" && (
-                    <span className="device-meta">Shield blocked: {peer.dns_blocked_count}</span>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  className="device-revoke"
-                  disabled={!!revokingId}
-                  onClick={() => onRevoke(peer)}
-                >
-                  {revokingId === peer.id ? "Revoking…" : "Revoke"}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+      )}
+      <HeroConnectControl phase={phase} onClick={onClick} />
+      {connected && wgStats && (
+        <div className="live-stats" aria-label="Live tunnel statistics">
+          <span className="live-stats-label">LIVE STATS</span>
+          <div className="live-stats-row">
+            <div><strong>{formatBytes(wgStats.rx_bytes)}</strong><span>Download</span></div>
+            <div><strong>{formatBytes(wgStats.tx_bytes)}</strong><span>Upload</span></div>
+            <div><strong>{formatHandshakeAge(wgStats.last_handshake_sec)}</strong><span>Handshake</span></div>
+          </div>
+          {dnsBlockedThisSession !== null && (
+            <div className="live-stats-dns">
+              <span>Shield blocked this session</span>
+              <strong>{dnsBlockedThisSession}</strong>
+            </div>
+          )}
+          <div className="live-stats-dns-status" role="status">
+            <strong>Veritas Shield on</strong>
+            <span>
+              {dnsGateway ? `Gateway ${dnsGateway}` : "Tunnel gateway"}
+              {" · malware/phishing blocks via DoH upstreams. Well-known public DoH resolvers are blocked."}
+            </span>
+          </div>
+        </div>
+      )}
+      {statusMsg && !hideStatus && (
+        <div className={`status-msg ${connected ? "ok" : connecting ? "info" : "warn"} ${statusSticky ? "sticky" : ""}`}>
+          <span>{statusMsg}</span>
+          {statusSticky && (
+            <button type="button" className="status-dismiss" onClick={onDismissStatus} aria-label="Dismiss">
+              Dismiss
+            </button>
+          )}
+        </div>
       )}
     </section>
   );
@@ -708,26 +817,19 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showNetworkMap, setShowNetworkMap] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
-  const [showDevices, setShowDevices] = useState(false);
   const [showTunnelSettings, setShowTunnelSettings] = useState(false);
+  const [showStealthSettings, setShowStealthSettings] = useState(false);
   const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
-  const [stealthMode, setStealthMode] = useState(() => {
-    const enabled = readLocalFlag(LS_STEALTH, "0");
-    return enabled && isLinuxDesktop();
-  });
+  const [stealthMode, setStealthMode] = useState<StealthChoice>(() => (isLinuxDesktop() ? readStealthChoice() : "udp"));
+  const [transport, setTransport] = useState<"" | "udp" | "stealth" | "switching">("");
   const [linuxDesktop] = useState(() => isLinuxDesktop());
   const [reconnectToApply, setReconnectToApply] = useState(false);
   const [statusSticky, setStatusSticky] = useState(false);
   const [wgStats, setWgStats] = useState<WgTransferStats | null>(null);
   const [dnsBlockedCount, setDnsBlockedCount] = useState<number | null>(null);
   const [dnsBlockedBaseline, setDnsBlockedBaseline] = useState<number | null>(null);
-  const [shieldPreset, setShieldPreset] = useState("standard");
   const [dnsGateway, setDnsGateway] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
-  const [peers, setPeers] = useState<PeerInfo[]>([]);
-  const [devicesLoading, setDevicesLoading] = useState(false);
-  const [devicesError, setDevicesError] = useState("");
-  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [deviceLabel, setDeviceLabel] = useState("Current location");
   const connectPeerRef = useRef("");
   const authBootstrapGenerationRef = useRef(0);
@@ -782,7 +884,8 @@ function App() {
     setBillingStatus(null);
     setCheckoutUrl(null);
     setShowPlans(false);
-    setShowDevices(false);
+    setShowStealthSettings(false);
+    setShowTunnelSettings(false);
     setShowSettings(false);
     // Tear down tunnel + kill switch like manual sign-out (expiry previously left VPN up).
     userDisconnectedRef.current = true;
@@ -871,9 +974,9 @@ function App() {
   }, [user]);
 
   useEffect(() => {
-    if (!linuxDesktop && stealthMode) {
-      setStealthMode(false);
-      writeLocalFlag(LS_STEALTH, false);
+    if (!linuxDesktop && stealthMode !== "udp") {
+      setStealthMode("udp");
+      writeStealthChoice("udp");
     }
   }, [linuxDesktop, stealthMode]);
 
@@ -910,11 +1013,12 @@ function App() {
       setConnecting(false);
       setConnected(false);
       setTunnelMode("");
+      setTransport("");
       setPeerId("");
       setStatusMsg("Connection timed out. Check your network and try again.");
     }, CONNECT_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
-  }, [connecting]);
+  }, [connecting, transport]);
 
   useEffect(() => {
     if ((!checkoutUrl && !checkoutSettlementPending) || !user) return;
@@ -1066,15 +1170,15 @@ function App() {
     setShowSettings(false);
     setShowNetworkMap(true);
     setShowPlans(false);
-    setShowDevices(false);
     setShowTunnelSettings(false);
+    setShowStealthSettings(false);
   }, []);
 
-  const openPlans = useCallback(() => {
+  const openAccount = useCallback(() => {
     setShowSettings(false);
     setShowPlans(true);
-    setShowDevices(false);
     setShowTunnelSettings(false);
+    setShowStealthSettings(false);
     setShowCancelConfirmation(false);
     setBillingError("");
     refreshBillingStatus().catch((err) => setBillingError(err instanceof Error ? err.message : "Could not load your subscription."));
@@ -1146,25 +1250,6 @@ function App() {
   }, []);
   clearReconnectTimerRef.current = clearReconnectTimer;
 
-  const loadDevices = useCallback(async () => {
-    setDevicesLoading(true);
-    setDevicesError("");
-    try {
-      const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`);
-      const data = (await response.json()) as { peers?: PeerInfo[]; error?: string };
-      if (!response.ok) throw new Error(data.error || "Could not load devices.");
-      setPeers(Array.isArray(data.peers) ? data.peers : []);
-    } catch (err) {
-      if (err instanceof SessionExpiredError) {
-        expireAndReturnToSignIn();
-        return;
-      }
-      setDevicesError(err instanceof Error ? err.message : "Could not load devices.");
-    } finally {
-      setDevicesLoading(false);
-    }
-  }, [expireAndReturnToSignIn]);
-
   const deletePeer = useCallback(async (id: string) => {
     if (!id) return;
     const controller = new AbortController();
@@ -1185,12 +1270,16 @@ function App() {
     if (connectingRef.current) return false;
     if (connectedRef.current && !opts?.isReconnect) return false;
 
-    const wantedStealth = stealthModeRef.current && linuxDesktop;
-    showStatus(opts?.isReconnect ? "Reconnecting…" : "", false);
+    const choice: StealthChoice = linuxDesktop ? stealthModeRef.current : "udp";
+    const wantedStealth = choice === "stealth";
+    showStatus("", false);
+    connectingRef.current = true;
     setConnecting(true);
+    setTransport(choice === "stealth" ? "stealth" : "");
     connectPeerRef.current = "";
 
     let createdPeerId = "";
+    let triedStealth = choice === "stealth";
     try {
       // Drop any previous peer before registering a new one (reconnect + stale sessions).
       const priorPeer = peerIdRef.current;
@@ -1201,18 +1290,16 @@ function App() {
         }
       }
 
-      if (wantedStealth && !linuxDesktop) {
-        throw new Error("Stealth mode is Linux-only in this build. Turn it off to connect with Direct UDP.");
+      if (choice === "stealth" && !linuxDesktop) {
+        throw new Error("Stealth mode is Linux-only in this build. Choose UDP only to connect with Direct UDP.");
       }
-
-      if (!opts?.isReconnect) showStatus("Creating secure keys…", false);
 
       const billingResponse = await fetchWithAuth(`${AUTH_API}/api/v1/billing/status`);
       const billing = (await billingResponse.json()) as BillingStatus;
       if (!billingResponse.ok || !billing.is_premium) {
         setSubscriptionActive(false);
         setSubscriptionChecked(true);
-        throw new Error("An active subscription is required. Open Plans to subscribe.");
+        throw new Error("An active subscription is required. Open Account to subscribe.");
       }
       setSubscriptionActive(true);
       setSubscriptionChecked(true);
@@ -1240,32 +1327,50 @@ function App() {
 
       const allowedRaw = peer.client_allowed_ips || peer.allowed_ips || ["0.0.0.0/0", "::/0"];
       const allowed = applyExcludeLan(allowedRaw, excludeLanRef.current);
-      const useStealth = wantedStealth && !!peer.stealth_available && !!peer.stealth_endpoint;
-      if (wantedStealth && !useStealth) {
-        throw new Error("Stealth is not available on the VPN node yet. Turn Stealth off or try again later.");
+      const stealthUsable = linuxDesktop && !!peer.stealth_available && !!peer.stealth_endpoint && !!peer.stealth_path_prefix;
+      if (choice === "stealth" && !stealthUsable) {
+        throw new Error("Stealth is not available on the VPN node yet. Choose UDP only or try again later.");
       }
       const gatewayDns = (peer.dns_server || "").trim();
       if (!gatewayDns) {
         throw new Error("Server did not provide a DNS gateway; connect aborted to avoid unfiltered public DNS.");
       }
-      const result = await invoke<ConnectResult>("connect_wireguard", {
-        config: {
-          private_key: keys.private_key,
-          address: peer.assigned_ip,
-          dns: gatewayDns,
-          server_public_key: peer.server_public_key,
-          endpoint: peer.server_endpoint,
-          endpoint_lan: peer.server_endpoint_lan || "",
-          endpoint_wan: peer.server_endpoint_wan || "",
-          allowed_ips: allowed,
-          peer_id: peer.peer_id,
-          preshared_key: peer.preshared_key || "",
-          stealth_endpoint: useStealth ? peer.stealth_endpoint || "" : "",
-          stealth_path_prefix: useStealth ? peer.stealth_path_prefix || "" : "",
-        },
-      });
-
-      if (!result.success) throw new Error(result.message || "WireGuard connection failed");
+      const attempts: boolean[] = choice === "stealth" ? [true] : choice === "auto" && stealthUsable ? [false, true] : [false];
+      let usedStealth = false;
+      let lastConnectError: unknown = null;
+      for (let attempt = 0; attempt < attempts.length; attempt += 1) {
+        const useStealth = attempts[attempt];
+        if (useStealth) triedStealth = true;
+        if (useStealth && attempt > 0) setTransport("switching");
+        try {
+          const result = await invoke<ConnectResult>("connect_wireguard", {
+            config: {
+              private_key: keys.private_key,
+              address: peer.assigned_ip,
+              dns: gatewayDns,
+              server_public_key: peer.server_public_key,
+              endpoint: peer.server_endpoint,
+              endpoint_lan: peer.server_endpoint_lan || "",
+              endpoint_wan: peer.server_endpoint_wan || "",
+              allowed_ips: allowed,
+              peer_id: peer.peer_id,
+              preshared_key: peer.preshared_key || "",
+              stealth_endpoint: useStealth ? peer.stealth_endpoint || "" : "",
+              stealth_path_prefix: useStealth ? peer.stealth_path_prefix || "" : "",
+            },
+          });
+          if (!result.success) throw new Error(result.message || "WireGuard connection failed");
+          usedStealth = useStealth;
+          lastConnectError = null;
+          break;
+        } catch (err) {
+          lastConnectError = err;
+          const canFallback = attempt === 0 && attempts.length > 1 && isAutoFallbackError(err);
+          if (!canFallback) break;
+        }
+      }
+      if (lastConnectError) throw lastConnectError;
+      setTransport(usedStealth ? "stealth" : "udp");
 
       connectPeerRef.current = "";
       userDisconnectedRef.current = false;
@@ -1285,6 +1390,7 @@ function App() {
       return true;
     } catch (err) {
       connectPeerRef.current = "";
+      setTransport("");
       if (createdPeerId) {
         await deletePeer(createdPeerId);
       }
@@ -1292,10 +1398,11 @@ function App() {
         expireAndReturnToSignIn();
         return false;
       }
-      const message = formatConnectError(err, wantedStealth);
+      const message = formatConnectError(err, wantedStealth || triedStealth);
       showStatus(message, isStickyStatusMessage(message));
       return false;
     } finally {
+      connectingRef.current = false;
       setConnecting(false);
     }
   }, [user, deletePeer, linuxDesktop, showStatus, expireAndReturnToSignIn]);
@@ -1319,6 +1426,7 @@ function App() {
     const clearUi = () => {
       setConnected(false);
       setTunnelMode("");
+      setTransport("");
       setPeerId("");
       setWgStats(null);
       setDnsBlockedCount(null);
@@ -1381,6 +1489,7 @@ function App() {
       }
       setConnected(false);
       setTunnelMode("");
+      setTransport("");
       setPeerId("");
       setWgStats(null);
       hadGoodHandshakeRef.current = false;
@@ -1476,9 +1585,6 @@ function App() {
           setDnsBlockedCount(match.dns_blocked_count);
           setDnsBlockedBaseline((prev) => (prev === null ? match.dns_blocked_count! : prev));
         }
-        if (match?.shield_preset) {
-          setShieldPreset(match.shield_preset);
-        }
       } catch (err) {
         if (err instanceof SessionExpiredError) expireAndReturnToSignIn();
       }
@@ -1496,20 +1602,19 @@ function App() {
       ? Math.max(0, dnsBlockedCount - dnsBlockedBaseline)
       : null;
 
-  const openDevices = useCallback(() => {
-    setShowSettings(false);
-    setShowDevices(true);
-    setShowPlans(false);
-    setShowNetworkMap(false);
-    setShowTunnelSettings(false);
-    void loadDevices();
-  }, [loadDevices]);
-
   const openTunnelSettings = useCallback(() => {
     setShowSettings(false);
     setShowTunnelSettings(true);
     setShowPlans(false);
-    setShowDevices(false);
+    setShowStealthSettings(false);
+    setShowNetworkMap(false);
+  }, []);
+
+  const openStealthSettings = useCallback(() => {
+    setShowSettings(false);
+    setShowStealthSettings(true);
+    setShowPlans(false);
+    setShowTunnelSettings(false);
     setShowNetworkMap(false);
   }, []);
 
@@ -1520,42 +1625,12 @@ function App() {
     setReconnectToApply(true);
   }, [excludeLan]);
 
-  const revokePeer = useCallback(async (peer: PeerInfo) => {
-    if (!peer.id || revokingId) return;
-    setRevokingId(peer.id);
-    setDevicesError("");
-    try {
-      if (peer.id === peerIdRef.current && (connectedRef.current || connectingRef.current)) {
-        await handleDisconnect();
-      }
-      const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${peer.id}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) {
-        const data = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error || "Could not revoke device.");
-      }
-      setPeers((list) => list.filter((p) => p.id !== peer.id));
-    } catch (err) {
-      if (err instanceof SessionExpiredError) {
-        expireAndReturnToSignIn();
-        return;
-      }
-      setDevicesError(err instanceof Error ? err.message : "Could not revoke device.");
-    } finally {
-      setRevokingId(null);
-    }
-  }, [revokingId, handleDisconnect, expireAndReturnToSignIn]);
-
-  const toggleStealthMode = useCallback(() => {
-    if (!linuxDesktop) return;
-    setStealthMode((prev) => {
-      const next = !prev;
-      writeLocalFlag(LS_STEALTH, next);
-      return next;
-    });
+  const setStealthChoice = useCallback((next: StealthChoice) => {
+    if (!linuxDesktop || stealthMode === next) return;
+    writeStealthChoice(next);
+    setStealthMode(next);
     setReconnectToApply(true);
-  }, [linuxDesktop]);
+  }, [linuxDesktop, stealthMode]);
 
   const handleSignOut = useCallback(() => {
     // Make the app unauthenticated first. Disconnecting the tunnel and deleting
@@ -1566,7 +1641,7 @@ function App() {
     setSubscriptionActive(false);
     setSubscriptionChecked(false);
     setShowPlans(false);
-    setShowDevices(false);
+    setShowStealthSettings(false);
     setShowTunnelSettings(false);
     setCheckoutUrl(null);
     userDisconnectedRef.current = true;
@@ -1618,7 +1693,7 @@ function App() {
       return (
         <div className="app auth-screen">
           <div className="brand">
-            <img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" />
+            <div className="auth-mark"><img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" /></div>
             <h1>VeritasVPN</h1>
           </div>
           <div className="auth-card">
@@ -1640,7 +1715,7 @@ function App() {
       return (
         <div className="app auth-screen">
           <div className="brand">
-            <img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" />
+            <div className="auth-mark"><img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" /></div>
             <h1>VeritasVPN</h1>
           </div>
           <div className="auth-card">
@@ -1666,7 +1741,7 @@ function App() {
     return (
       <div className="app auth-screen">
         <div className="brand">
-          <img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" />
+          <div className="auth-mark"><img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" /></div>
           <h1>VeritasVPN</h1>
           <p>The truth about online privacy</p>
         </div>
@@ -1763,27 +1838,33 @@ function App() {
     );
   }
 
+  const onHome = !showPlans && !showTunnelSettings && !showStealthSettings && !showNetworkMap;
   return (
     <div className="app app-dashboard">
-      <header className="app-header blueprint-header">
-        <img className="brand-logo" src={veritasMark} alt="VeritasVPN" />
-        {!showPlans && !showDevices && !showTunnelSettings && (
+      {onHome && <header className="app-header blueprint-header">
+        <img className="brand-logo" src={veritasLogo} alt="VeritasVPN" />
+        {!showPlans && !showTunnelSettings && !showStealthSettings && (
           <button
             ref={settingsCogRef}
-            className="blueprint-cog"
+            className="glass-icon-button"
             onClick={() => setShowSettings((open) => !open)}
             aria-label="Open settings"
             aria-expanded={showSettings}
             aria-controls="settings-drawer"
           >
-            ⚙
+            <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+            </svg>
           </button>
         )}
-      </header>
+      </header>}
 
       <main className="blueprint-main">
         {showPlans ? (
-          <PlansScreen
+          <AccountScreen
+            email={user.email}
+            accountId={user.account_id}
             billingStatus={billingStatus}
             billingLoading={billingLoading}
             billingBusy={billingBusy}
@@ -1799,23 +1880,19 @@ function App() {
             onCancelConfirm={() => cancelSubscription()}
             onCancelDismiss={() => setShowCancelConfirmation(false)}
           />
+        ) : showStealthSettings ? (
+          <StealthSettingsScreen
+            choice={stealthMode}
+            showReconnectBanner={reconnectToApply && (connected || reconnecting)}
+            onChange={setStealthChoice}
+            onBack={() => setShowStealthSettings(false)}
+          />
         ) : showTunnelSettings ? (
           <TunnelSettingsScreen
             excludeLan={excludeLan}
             showReconnectBanner={reconnectToApply && (connected || reconnecting)}
             onExcludeLanChange={setExcludeLanValue}
             onBack={() => setShowTunnelSettings(false)}
-          />
-        ) : showDevices ? (
-          <DevicesScreen
-            peers={peers}
-            loading={devicesLoading}
-            error={devicesError}
-            currentPeerId={peerId}
-            revokingId={revokingId}
-            onBack={() => setShowDevices(false)}
-            onRefresh={() => void loadDevices()}
-            onRevoke={(peer) => void revokePeer(peer)}
           />
         ) : showNetworkMap ? (
           <section className="network-map-view">
@@ -1827,101 +1904,22 @@ function App() {
             </div>
           </section>
         ) : (
-          <>
-            <PrivacyScene encrypted={connected} />
-            <section className="blueprint-status">
-              {!connected && !reconnecting ? (
-                <>
-                  <div className={`blueprint-badge ${connecting ? "connecting" : ""}`}>
-                    <i />
-                    {connecting ? "ESTABLISHING SECURE CONNECTION" : "VPN DISCONNECTED"}
-                  </div>
-                  <h2>{"Your online activity\nis visible"}</h2>
-                  <p>
-                    {connecting
-                      ? "Creating secure keys and validating encrypted internet access."
-                      : "Hide your IP address and encrypt your connection."}
-                  </p>
-                  <button
-                    className="blueprint-primary"
-                    disabled={connecting || !subscriptionChecked}
-                    onClick={subscriptionActive ? handleConnect : openPlans}
-                  >
-                    {(connecting || !subscriptionChecked) ? (
-                      <i className="button-spinner" />
-                    ) : (
-                      <span className={`cta-lock ${subscriptionActive ? "open" : ""}`} aria-hidden="true" />
-                    )}
-                    {connecting
-                      ? "Connecting…"
-                      : !subscriptionChecked
-                        ? "Checking plan…"
-                        : subscriptionActive
-                          ? "Connect now"
-                          : "Get Premium"}
-                    {!connecting && subscriptionChecked && <b>→</b>}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <div className="blueprint-secured">
-                    {reconnecting && !connected ? "RECONNECTING…" : "CONNECTION SECURED"}
-                  </div>
-                  <h2 className="connected-title">{reconnecting && !connected ? "Reconnecting…" : "You're protected"}</h2>
-                  {reconnecting && !connected && (
-                    <p>Restoring your encrypted WireGuard tunnel.</p>
-                  )}
-                  {(connected || reconnecting) && (
-                    <button className="blueprint-disconnect" type="button" onClick={handleDisconnect} disabled={connecting && !reconnecting}>
-                      Disconnect
-                    </button>
-                  )}
-                  {reconnectToApply && (connected || reconnecting) && (
-                    <div className="reconnect-banner" role="status">
-                      Reconnect to apply
-                    </div>
-                  )}
-                  {connected && wgStats && (
-                    <div className="live-stats" aria-label="Live tunnel statistics">
-                      <span className="live-stats-label">LIVE STATS</span>
-                      <div className="live-stats-row">
-                        <div><strong>{formatBytes(wgStats.rx_bytes)}</strong><span>Download</span></div>
-                        <div><strong>{formatBytes(wgStats.tx_bytes)}</strong><span>Upload</span></div>
-                        <div><strong>{formatHandshakeAge(wgStats.last_handshake_sec)}</strong><span>Handshake</span></div>
-                      </div>
-                      {dnsBlockedThisSession !== null && (
-                        <div className="live-stats-dns">
-                          <span>Shield blocked this session</span>
-                          <strong>{dnsBlockedThisSession}</strong>
-                        </div>
-                      )}
-                      {connected && dnsGateway && (
-                        <div className="live-stats-dns-status" role="status">
-                          <strong>Veritas Shield on</strong>
-                          <span>Gateway {dnsGateway} · threat/tracker blocks via DoH upstreams. Well-known public DoH resolvers are blocked.</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-              {reconnectToApply && !connected && !reconnecting && !connecting && (
-                <div className="reconnect-banner" role="status">
-                  Reconnect to apply
-                </div>
-              )}
-              {statusMsg && !(connecting && /^connecting|creating secure/i.test(statusMsg)) && (
-                <div className={`status-msg ${connected ? "ok" : connecting || reconnecting ? "info" : "warn"} ${statusSticky || isStickyStatusMessage(statusMsg) ? "sticky" : ""}`}>
-                  <span>{statusMsg}</span>
-                  {(statusSticky || isStickyStatusMessage(statusMsg)) && (
-                    <button type="button" className="status-dismiss" onClick={dismissStatus} aria-label="Dismiss">
-                      Dismiss
-                    </button>
-                  )}
-                </div>
-              )}
-            </section>
-          </>
+          <HomeStage
+            connected={connected}
+            connecting={connecting || reconnecting}
+            subscriptionChecked={subscriptionChecked}
+            subscriptionActive={subscriptionActive}
+            transport={transport}
+            wgStats={wgStats}
+            dnsBlockedThisSession={dnsBlockedThisSession}
+            dnsGateway={dnsGateway}
+            statusMsg={statusMsg}
+            statusSticky={statusSticky || isStickyStatusMessage(statusMsg)}
+            onConnect={() => { void handleConnect(); }}
+            onDisconnect={() => { void handleDisconnect(); }}
+            onGetPremium={openAccount}
+            onDismissStatus={dismissStatus}
+          />
         )}
       </main>
 
@@ -1929,38 +1927,11 @@ function App() {
         open={showSettings}
         onClose={closeSettings}
         returnFocusRef={settingsCogRef}
-        subscriptionActive={subscriptionActive}
         linuxDesktop={linuxDesktop}
-        stealthMode={stealthMode}
-        connected={connected}
-        dnsGateway={dnsGateway}
-        dnsBlockedThisSession={dnsBlockedThisSession}
-        shieldPreset={shieldPreset}
-        onShieldPresetChange={(next) => {
-          const id = peerIdRef.current;
-          if (!id) return;
-          setShieldPreset(next);
-          void (async () => {
-            try {
-              const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${id}`, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ shield_preset: next }),
-              });
-              if (!response.ok) {
-                setStatusMsg("Could not update Veritas Shield preset");
-              }
-            } catch (err) {
-              if (err instanceof SessionExpiredError) expireAndReturnToSignIn();
-              else setStatusMsg("Could not update Veritas Shield preset");
-            }
-          })();
-        }}
-        onOpenPlans={openPlans}
+        onOpenAccount={openAccount}
         onOpenNetworkMap={openNetworkMap}
-        onOpenDevices={openDevices}
+        onOpenStealthSettings={openStealthSettings}
         onOpenTunnelSettings={openTunnelSettings}
-        onToggleStealthMode={toggleStealthMode}
         onSignOutEverywhere={handleSignOutEverywhere}
         onRequestSignOut={requestSignOut}
       />
