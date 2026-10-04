@@ -1,0 +1,14 @@
+title = "VeritasVPN"
+
+[extend]
+useDefault = true
+
+# Historical purchase-history test fixture. generic-api-key still runs everywhere else.
+[[allowlists]]
+description = "Fake provider transaction id in the purchase-history leak test"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["25afc1e169826a7ee2cf13ea9cdb77ce15438b87"]
+paths = ['''^services/billing-svc/internal/model/purchase_history_test\.go$''']
+regexTarget = "line"
+regexes = ['''btcpay-invoice-9f3c''']
