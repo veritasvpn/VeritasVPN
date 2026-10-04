@@ -299,7 +299,7 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
-          name: v${{ replace(github.ref_name, 'android-v', '') }}
+          name: ${{ github.ref_name == 'android-v0.2.84' && 'v0.2.84' || github.ref_name }}
           # This is the website APK, so production smoke should check it once
           # the install page pin matches. Linux packages are not replaced.
           make_latest: true
