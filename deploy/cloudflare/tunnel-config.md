@@ -37,7 +37,12 @@ The BTCPay hostname must remain public for customer invoice and checkout paths. 
 # Rate limiting
 /auth/login         → 5 req/5min per IP
 /auth/register      → 3 req/hour per IP
-/api/v1/wg/peers    → 10 req/min per IP
+# POST /api/v1/wg/peers only (peer provisioning). Do not cap GET.
+# Android and the Linux desktop each poll GET /api/v1/wg/peers about every
+# 5 seconds. On the VPN they share one egress IP with the account page, so a
+# 10/min cap on the read path returns 503 from origin nginx and the devices
+# page stays failed. Origin nginx enforces 10/min on non-GET /api/v1/wg/.
+POST /api/v1/wg/peers → 10 req/min per IP
 /api/v1/billing/*   → 10 req/min per IP
 
 # Block rules

@@ -358,6 +358,93 @@ fn wireguard_available(app: AppHandle) -> bool {
     resolve_wireguard_go(&app).is_ok()
 }
 
+#[derive(Debug, Serialize)]
+struct DesktopDeviceMetadata {
+    device_platform: String,
+    device_model: String,
+    device_os_version: String,
+    client_version: String,
+}
+
+fn desktop_platform_label(os: &str) -> String {
+    match os {
+        "linux" => "Linux".into(),
+        "macos" => "macOS".into(),
+        "windows" => "Windows".into(),
+        "android" => "Android".into(),
+        "" => "Desktop".into(),
+        other => {
+            let mut chars = other.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => "Desktop".into(),
+            }
+        }
+    }
+}
+
+fn bound_device_text(raw: &str, limit: usize) -> String {
+    let cleaned: String = raw.chars().filter(|c| !c.is_control()).collect();
+    cleaned.trim().chars().take(limit).collect()
+}
+
+fn machine_hostname() -> String {
+    if let Ok(raw) = fs::read_to_string("/etc/hostname") {
+        let name = raw.trim();
+        if !name.is_empty() {
+            return name.to_string();
+        }
+    }
+    if let Ok(output) = Command::new("hostname").output() {
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn desktop_os_version() -> String {
+    if let Ok(raw) = fs::read_to_string("/etc/os-release") {
+        for line in raw.lines() {
+            let line = line.trim();
+            if let Some(value) = line.strip_prefix("PRETTY_NAME=") {
+                let value = value.trim().trim_matches('"').trim();
+                if !value.is_empty() {
+                    return value.to_string();
+                }
+            }
+        }
+    }
+    desktop_platform_label(std::env::consts::OS)
+}
+
+/// Display fields for POST /api/v1/wg/peers. device_name is intentionally
+/// absent: a name the user set on the account page must survive reconnect.
+fn collect_desktop_device_metadata() -> DesktopDeviceMetadata {
+    let mut model = bound_device_text(&machine_hostname(), 100);
+    if model.is_empty() {
+        model = bound_device_text(std::env::consts::ARCH, 100);
+    }
+    DesktopDeviceMetadata {
+        device_platform: bound_device_text(&desktop_platform_label(std::env::consts::OS), 32),
+        device_model: model,
+        device_os_version: bound_device_text(&desktop_os_version(), 48),
+        client_version: bound_device_text(env!("CARGO_PKG_VERSION"), 48),
+    }
+}
+
+#[tauri::command]
+fn desktop_device_metadata() -> DesktopDeviceMetadata {
+    collect_desktop_device_metadata()
+}
+
 #[tauri::command]
 fn generate_wg_keys() -> Result<KeyPair, String> {
     let secret = StaticSecret::random_from_rng(OsRng);
@@ -3202,6 +3289,32 @@ mod security_tests {
     fn shell_quote_is_single_argument_safe() {
         assert_eq!(shell_quote("a'b"), r#"'a'\''b'"#);
     }
+
+    #[test]
+    fn desktop_platform_labels_match_the_account_page() {
+        assert_eq!(desktop_platform_label("linux"), "Linux");
+        assert_eq!(desktop_platform_label("macos"), "macOS");
+        assert_eq!(desktop_platform_label("windows"), "Windows");
+    }
+
+    #[test]
+    fn device_text_drops_controls_and_caps_length() {
+        assert_eq!(bound_device_text("  framework\n", 100), "framework");
+        assert_eq!(bound_device_text("abcdefghij", 4), "abcd");
+    }
+
+    #[test]
+    fn peer_metadata_has_platform_and_omits_a_custom_name() {
+        let metadata = collect_desktop_device_metadata();
+        assert!(!metadata.device_platform.is_empty());
+        assert!(!metadata.device_model.is_empty());
+        assert!(!metadata.client_version.is_empty());
+        let encoded = serde_json::to_string(&metadata).unwrap();
+        assert!(
+            !encoded.contains("device_name"),
+            "reconnect payload must not send device_name, got {encoded}"
+        );
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -3214,6 +3327,7 @@ pub fn run() {
             secure_credential_get,
             secure_credential_delete,
             wireguard_available,
+            desktop_device_metadata,
             generate_wg_keys,
             connect_wireguard,
             disconnect_wireguard,

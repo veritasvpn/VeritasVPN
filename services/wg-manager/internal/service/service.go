@@ -441,7 +441,8 @@ func (s *Service) DNSBlockedCount(ctx context.Context, assignedIP string) uint64
 
 func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, deviceID, deviceName, devicePlatform, deviceModel, deviceOSVersion, clientVersion, preferredRegion, clientIP, shieldPreset string) (*PeerConfig, error) {
 	tier = s.resolveTier(ctx, accountID, tier)
-	deviceID = strings.TrimSpace(deviceID)
+	requestedDeviceID := strings.TrimSpace(deviceID)
+	deviceID = requestedDeviceID
 	if deviceID == "" {
 		// Legacy clients without a stable install id always insert a new row so
 		// they cannot collide on the old UNIQUE(account_id, server_id) path.
@@ -473,6 +474,24 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 	if err := entitlement.CheckCreatePeer(tier, countForLimit, preferredRegion, s.freeRegions); err != nil {
 		return nil, err
 	}
+
+	// A reconnect may replace this device's active row. The Linux app also
+	// deletes the peer before creating it again, which leaves only a removed
+	// row. Blank create fields must not erase a dashboard name or platform
+	// already stored for that device.
+	metadataFrom := replacedPeer
+	if metadataFrom == nil && requestedDeviceID != "" {
+		prior, lookupErr := s.postgres.LatestPeerByAccountDevice(ctx, accountID, requestedDeviceID)
+		if lookupErr != nil && !errors.Is(lookupErr, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("lookup prior device metadata: %w", lookupErr)
+		}
+		if lookupErr == nil {
+			metadataFrom = prior
+		}
+	}
+	deviceName, devicePlatform, deviceModel, deviceOSVersion, clientVersion = mergeStoredDeviceMetadata(
+		deviceName, devicePlatform, deviceModel, deviceOSVersion, clientVersion, metadataFrom,
+	)
 
 	srv, err := s.scheduler.SelectServer(ctx, preferredRegion)
 	if err != nil {
@@ -645,6 +664,29 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		ClientVersion:          peer.ClientVersion,
 		ShieldPreset:           peer.ShieldPreset,
 	}, nil
+}
+
+// mergeStoredDeviceMetadata keeps a display field already stored for this
+// device when the create request leaves it blank. Android never sends
+// device_name, and the Linux desktop used to send only public_key and
+// device_id, so a reconnect would otherwise write "" over a name the user
+// set on the account page. A non-empty value still updates that field.
+func mergeStoredDeviceMetadata(name, platform, deviceModel, osVersion, clientVersion string, previous *model.Peer) (string, string, string, string, string) {
+	if previous == nil {
+		return name, platform, deviceModel, osVersion, clientVersion
+	}
+	return keepStoredDeviceField(name, previous.DeviceName),
+		keepStoredDeviceField(platform, previous.DevicePlatform),
+		keepStoredDeviceField(deviceModel, previous.DeviceModel),
+		keepStoredDeviceField(osVersion, previous.DeviceOSVersion),
+		keepStoredDeviceField(clientVersion, previous.ClientVersion)
+}
+
+func keepStoredDeviceField(incoming, stored string) string {
+	if strings.TrimSpace(incoming) == "" {
+		return stored
+	}
+	return incoming
 }
 
 func stripCIDR(ip string) string {
