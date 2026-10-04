@@ -1892,6 +1892,49 @@ input::placeholder { color: var(--paper-dim); }
 
 .billing-actions button:disabled { opacity: 0.55; }
 
+.purchase-history-block h4 {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.purchase-history-block > p,
+.purchase-empty {
+  margin-top: 4px;
+  color: var(--paper-muted);
+  font-size: 13px;
+}
+
+.purchase-history {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 4px 14px;
+  border-radius: 14px;
+  background: var(--card-elevated);
+}
+
+.purchase-history li {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.4fr) minmax(52px, 0.7fr) minmax(70px, 0.8fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  color: var(--paper-muted);
+  font-size: 13px;
+}
+
+.purchase-history li:first-child { border-top: 0; }
+
+.purchase-history li span:first-child {
+  color: var(--paper);
+  font-weight: 650;
+}
+
+.purchase-status.is-confirmed { color: var(--success); }
+.purchase-status.is-pending { color: var(--cyan-hover); }
+.purchase-status.is-failed,
+.purchase-status.is-refunded { color: #ffb74d; }
+
 .billing-active {
   text-align: center;
   color: var(--success);

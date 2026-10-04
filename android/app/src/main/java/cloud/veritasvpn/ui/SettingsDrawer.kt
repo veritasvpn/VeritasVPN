@@ -19,11 +19,23 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.rounded.CallSplit
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.Devices
+import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Icon
@@ -38,7 +50,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
@@ -52,10 +63,13 @@ import androidx.compose.ui.zIndex
 import cloud.veritasvpn.ui.theme.CardElevated
 import cloud.veritasvpn.ui.theme.Cyan
 import cloud.veritasvpn.ui.theme.CyanHover
+import cloud.veritasvpn.ui.theme.Ink
+import cloud.veritasvpn.ui.theme.Ink2
 import cloud.veritasvpn.ui.theme.Line
 import cloud.veritasvpn.ui.theme.Paper
 import cloud.veritasvpn.ui.theme.PaperDim
 import cloud.veritasvpn.ui.theme.PaperMuted
+import cloud.veritasvpn.ui.theme.CyanSoft
 import cloud.veritasvpn.ui.theme.ErrorRed
 import kotlin.math.roundToInt
 
@@ -66,7 +80,6 @@ private val DrawerCloseEasing = CubicBezierEasing(0.4f, 0f, 1f, 1f)
 fun SettingsDrawer(
     open: Boolean,
     onDismiss: () -> Unit,
-    isPremium: Boolean,
     onPlans: () -> Unit,
     onNetworkMap: () -> Unit,
     onStealthSettings: () -> Unit,
@@ -120,7 +133,7 @@ fun SettingsDrawer(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF010814).copy(alpha = scrimAlpha))
+                .background(Ink.copy(alpha = scrimAlpha))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -148,7 +161,7 @@ fun SettingsDrawer(
                 modifier = Modifier
                     .fillMaxHeight()
                     .width(drawerWidthDp)
-                    .background(CardElevated)
+                    .background(Brush.verticalGradient(listOf(CardElevated, Ink2, Ink)))
                     .safeDrawingPadding(),
             ) {
                 Row(
@@ -161,8 +174,7 @@ fun SettingsDrawer(
                     Text(
                         text = "Settings",
                         color = Paper,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
+                        style = MaterialTheme.typography.headlineMedium,
                     )
                     IconButton(
                         onClick = onDismiss,
@@ -183,15 +195,17 @@ fun SettingsDrawer(
                     modifier = Modifier
                         .weight(1f)
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                        .padding(horizontal = 4.dp, vertical = 6.dp),
                 ) {
                     SettingsDrawerSection(title = "Account & tools") {
                         SettingsDrawerNavItem(
-                            label = if (isPremium) "Premium" else "Plans",
+                            label = "Account",
+                            icon = Icons.Rounded.Person,
                             onClick = { navigate(onPlans) },
                         )
                         SettingsDrawerNavItem(
                             label = "Network map",
+                            icon = Icons.Rounded.Public,
                             onClick = { navigate(onNetworkMap) },
                         )
                     }
@@ -200,11 +214,13 @@ fun SettingsDrawer(
                         SettingsDrawerNavItem(
                             label = "Stealth",
                             note = "Auto · UDP only · Stealth always",
+                            icon = Icons.Rounded.VisibilityOff,
                             onClick = { navigate(onStealthSettings) },
                         )
                         SettingsDrawerNavItem(
                             label = "Split tunnel",
                             note = "Exclude LAN · per-app bypass",
+                            icon = Icons.AutoMirrored.Rounded.CallSplit,
                             onClick = { navigate(onTunnelSettings) },
                         )
                     }
@@ -212,11 +228,13 @@ fun SettingsDrawer(
                     SettingsDrawerSection(title = "Session") {
                         SettingsDrawerNavItem(
                             label = "Sign out from all devices",
+                            icon = Icons.Rounded.Devices,
                             danger = true,
                             onClick = { navigate(onSignOutEverywhere) },
                         )
                         SettingsDrawerNavItem(
                             label = "Sign out from this device",
+                            icon = Icons.AutoMirrored.Rounded.Logout,
                             danger = true,
                             onClick = { navigate(onSignOut) },
                         )
@@ -234,23 +252,31 @@ private fun SettingsDrawerSection(
     title: String,
     content: @Composable () -> Unit,
 ) {
-    Column(modifier = Modifier.padding(top = 6.dp, bottom = 10.dp)) {
+    Column(modifier = Modifier.padding(top = 20.dp, bottom = 2.dp)) {
         Text(
             text = title.uppercase(),
             color = PaperDim,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.2.sp,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelSmall,
+            letterSpacing = 1.6.sp,
+            modifier = Modifier.padding(start = 22.dp, end = 16.dp, bottom = 10.dp),
         )
-        content()
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 12.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Paper.copy(alpha = 0.055f),
+                            Paper.copy(alpha = 0.028f),
+                        )
+                    )
+                )
+                .padding(vertical = 6.dp),
+        ) {
+            content()
+        }
     }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .background(Line),
-    )
 }
 
 @Composable
@@ -260,33 +286,60 @@ private fun SettingsDrawerNavItem(
     note: String? = null,
     muted: Boolean = false,
     danger: Boolean = false,
+    icon: ImageVector? = null,
 ) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(9.dp))
-            .background(if (danger) ErrorRed.copy(alpha = 0.14f) else Color.Transparent)
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = label,
-            color = when {
-                danger -> ErrorRed
-                muted -> PaperMuted
-                else -> Paper
-            },
-            fontWeight = if (muted) FontWeight.Medium else FontWeight.SemiBold,
-            fontSize = 15.sp,
-        )
-        if (note != null) {
+        if (icon != null) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(if (danger) ErrorRed.copy(alpha = 0.14f) else CyanSoft),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = if (danger) ErrorRed else CyanHover,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Spacer(Modifier.width(14.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = note,
-                color = PaperDim,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(top = 2.dp),
+                text = label,
+                color = when {
+                    danger -> ErrorRed
+                    muted -> PaperMuted
+                    else -> Paper
+                },
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = if (muted) FontWeight.Medium else FontWeight.SemiBold,
+            )
+            if (note != null) {
+                Text(
+                    text = note,
+                    color = PaperDim,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+        if (!danger) {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                tint = PaperDim,
+                modifier = Modifier.size(18.dp),
             )
         }
     }

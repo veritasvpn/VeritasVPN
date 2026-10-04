@@ -176,6 +176,26 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		paymentState = model.PaymentStateSettled
 	}
 
+	// A checkout that is still pending after 4 days is failed in purchase
+	// history. Reconciliation above may already have marked a confirmed invoice
+	// completed; this update never matches those rows and does not change Premium.
+	if err := s.failStalePendingPayments(ctx, accountID); err != nil {
+		return nil, err
+	}
+	if paymentState != model.PaymentStateSettled && paymentState != model.PaymentStateNone {
+		_, pendingErr := s.db.GetLatestPendingPayment(ctx, accountID)
+		if errors.Is(pendingErr, pgx.ErrNoRows) {
+			paymentState = model.PaymentStateFailed
+		} else if pendingErr != nil {
+			return nil, pendingErr
+		}
+	}
+
+	recorded, err := s.db.ListAccountPayments(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
 	return &model.StatusResponse{
 		AccountID:          sub.AccountID,
 		Tier:               sub.Tier,
@@ -192,6 +212,7 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		PaymentState:       paymentState,
 		PaymentMessage:     paymentStateMessage(paymentState),
 		PollAfterSeconds:   paymentStatePollAfter(paymentState),
+		Payments:           model.PurchaseHistoryFrom(recorded),
 	}, nil
 }
 
@@ -497,6 +518,10 @@ func (s *BillingService) GetMockInvoice(invoiceID string) (provider.MockInvoice,
 }
 
 func (s *BillingService) ExpireDueSubscriptions(ctx context.Context) (int, error) {
+	staleErr := s.failStalePendingPayments(ctx, "")
+	if staleErr != nil {
+		s.log.Error("stale pending payment update failed", zap.Error(staleErr))
+	}
 	subs, err := s.db.ListExpiredPremium(ctx, time.Now().UTC())
 	if err != nil {
 		return 0, err
@@ -509,7 +534,52 @@ func (s *BillingService) ExpireDueSubscriptions(ctx context.Context) (int, error
 		}
 		n++
 	}
+	if staleErr != nil {
+		return n, staleErr
+	}
 	return n, nil
+}
+
+// stalePendingPaymentAge is how long a Bitcoin payment may stay pending before
+// purchase history shows it as failed. Confirmed payments are not eligible.
+const stalePendingPaymentAge = 4 * 24 * time.Hour
+
+func stalePendingCutoff(now time.Time) time.Time {
+	return now.UTC().Add(-stalePendingPaymentAge)
+}
+
+// paymentIsStalePending reports whether a stored payment should be marked
+// failed. The status must still be pending, and created_at must be strictly
+// more than 4 days before now. Completed payments are never stale.
+func paymentIsStalePending(status string, createdAt, now time.Time) bool {
+	if status != model.PaymentPending {
+		return false
+	}
+	return createdAt.Before(stalePendingCutoff(now))
+}
+
+// failStalePendingPayments applies paymentIsStalePending in the database.
+// An empty accountID updates every account, which is the hourly maintenance
+// path. A non-empty accountID updates only that account's stored payments.
+func (s *BillingService) failStalePendingPayments(ctx context.Context, accountID string) error {
+	cutoff := stalePendingCutoff(time.Now())
+	var n int64
+	var err error
+	if accountID == "" {
+		n, err = s.db.FailStalePendingPayments(ctx, cutoff)
+	} else {
+		n, err = s.db.FailStalePendingPaymentsForAccount(ctx, accountID, cutoff)
+	}
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		s.log.Info("marked stale pending payments failed",
+			zap.Int64("count", n),
+			zap.Bool("account_scoped", accountID != ""),
+		)
+	}
+	return nil
 }
 
 func (s *BillingService) expireOne(ctx context.Context, sub *model.Subscription) error {

@@ -4,6 +4,8 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -37,19 +39,34 @@ fun ConnectionMap(
             documentHeight = 600f
         }
     }
-    val animation = rememberInfiniteTransition(label = "vpn-map")
-    val progress by animation.animateFloat(
-        0f, 1f,
-        animationSpec = infiniteRepeatable(tween(1800, easing = LinearEasing)),
-        label = "route-progress"
-    )
-    val pulse by animation.animateFloat(
-        .8f, 1.5f,
-        animationSpec = infiniteRepeatable(tween(1000), RepeatMode.Reverse),
-        label = "location-pulse"
-    )
+    val motion = rememberMotionEnabled()
+    val progress = if (motion) {
+        val animation = rememberInfiniteTransition(label = "vpn-map")
+        animation.animateFloat(
+            0f, 1f,
+            animationSpec = infiniteRepeatable(tween(2400, easing = LinearEasing)),
+            label = "route-progress"
+        ).value
+    } else {
+        1f
+    }
+    val pulse = if (motion) {
+        val animation = rememberInfiniteTransition(label = "vpn-map-pulse")
+        animation.animateFloat(
+            .92f, 1.18f,
+            animationSpec = infiniteRepeatable(tween(1400), RepeatMode.Reverse),
+            label = "location-pulse"
+        ).value
+    } else {
+        1f
+    }
 
-    Canvas(modifier = modifier.fillMaxWidth().height(190.dp)) {
+    Canvas(
+        modifier
+            .fillMaxWidth()
+            .height(210.dp)
+            .clip(RoundedCornerShape(24.dp))
+    ) {
         drawRoundRect(
             brush = Brush.verticalGradient(listOf(Ink3, Ink2)),
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(22.dp.toPx())

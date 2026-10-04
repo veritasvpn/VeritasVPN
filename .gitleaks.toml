@@ -1,0 +1,8 @@
+title = "VeritasVPN"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Skip one historical test commit whose only hit is a fake provider transaction id"
+commits = ["25afc1e169826a7ee2cf13ea9cdb77ce15438b87"]
