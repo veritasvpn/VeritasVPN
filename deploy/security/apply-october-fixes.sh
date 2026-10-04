@@ -21,11 +21,16 @@ kubectl -n veritas get deployment/auth-svc deployment/veritas-proxy deployment/p
   networkpolicy/allow-egress-veritas-proxy networkpolicy/allow-egress-phishing-checker -o json | jq \
   'del(.items[].metadata.resourceVersion,.items[].metadata.uid,.items[].metadata.managedFields,.items[].status)' > "$snapshot_dir/before.json"
 echo "Rollback snapshot: $snapshot_dir"
+kubectl create --dry-run=client -f deploy/k8s/base/network-policy.yaml -o json | jq -s \
+  '{apiVersion:"v1",kind:"List",items:[.[] | (if .kind == "List" then .items[] else . end) | select(.metadata.name == "allow-egress-veritas-proxy" or .metadata.name == "allow-egress-phishing-checker")]}' > "$snapshot_dir/policies.json"
+jq -e '.items | length == 2' "$snapshot_dir/policies.json" >/dev/null
 rollback() {
   trap - ERR INT TERM
   echo 'Verification failed; restoring the scoped snapshot.' >&2
   kubectl apply -f "$snapshot_dir/before.json"
   kubectl -n veritas delete pod -l app=veritas-agent --wait=true
+  kubectl -n veritas wait --for=condition=Ready pod -l app=veritas-agent --timeout=120s || true
+  bash deploy/k8s/scripts/verify-core.sh || true
   exit 1
 }
 trap rollback ERR INT TERM
@@ -36,8 +41,7 @@ for service in veritas-proxy phishing-checker; do
   kubectl -n veritas set image "deployment/$service" "$service=${images[$service]}"
   kubectl -n veritas rollout status "deployment/$service" --timeout=120s
 done
-kubectl create --dry-run=client -f deploy/k8s/base/network-policy.yaml -o json | jq \
-  '{apiVersion:"v1",kind:"List",items:[.items[] | select(.metadata.name == "allow-egress-veritas-proxy" or .metadata.name == "allow-egress-phishing-checker")]}' | kubectl apply -f -
+kubectl apply -f "$snapshot_dir/policies.json"
 kubectl -n veritas set image daemonset/veritas-agent "veritas-agent=${images[veritas-agent]}"
 kubectl -n veritas delete pod -l app=veritas-agent --wait=true
 kubectl -n veritas wait --for=condition=Ready pod -l app=veritas-agent --timeout=120s
