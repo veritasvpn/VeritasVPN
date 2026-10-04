@@ -46,6 +46,11 @@ jobs:
           chmod +x deploy/ops/verify-agents-nginx-404.sh
           bash deploy/ops/verify-agents-nginx-404.sh
 
+      - name: Peer list reads are outside the provisioning rate limit
+        run: |
+          chmod +x deploy/ops/verify-wg-peer-rate-limit.sh
+          bash deploy/ops/verify-wg-peer-rate-limit.sh
+
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}

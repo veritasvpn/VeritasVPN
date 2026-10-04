@@ -182,6 +182,44 @@ function isLinuxDesktop(): boolean {
   return ua.includes("linux") && !ua.includes("android");
 }
 
+interface DesktopDeviceMetadata {
+  device_platform: string;
+  device_model: string;
+  device_os_version: string;
+  client_version: string;
+}
+
+function fallbackDevicePlatform(): string {
+  if (typeof navigator === "undefined") return "Desktop";
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("android")) return "Android";
+  if (ua.includes("windows")) return "Windows";
+  if (ua.includes("mac os") || ua.includes("macintosh")) return "macOS";
+  if (ua.includes("linux")) return "Linux";
+  return "Desktop";
+}
+
+// Same display fields Android sends. device_name is omitted so a name set on
+// the account page is not replaced when this device reconnects.
+async function deviceMetadataForPeer(): Promise<DesktopDeviceMetadata> {
+  try {
+    const reported = await invoke<DesktopDeviceMetadata>("desktop_device_metadata");
+    return {
+      device_platform: reported.device_platform?.trim() || fallbackDevicePlatform(),
+      device_model: reported.device_model?.trim() || "",
+      device_os_version: reported.device_os_version?.trim() || "",
+      client_version: reported.client_version?.trim() || "",
+    };
+  } catch {
+    return {
+      device_platform: fallbackDevicePlatform(),
+      device_model: "",
+      device_os_version: "",
+      client_version: "",
+    };
+  }
+}
+
 function readStealthChoice(): StealthChoice {
   try {
     const raw = localStorage.getItem(LS_STEALTH);
@@ -1310,10 +1348,18 @@ function App() {
 
       const keys = await invoke<KeyPair>("generate_wg_keys");
       const deviceId = getOrCreateDeviceId();
+      const metadata = await deviceMetadataForPeer();
       const res = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ public_key: keys.public_key, device_id: deviceId }),
+        body: JSON.stringify({
+          public_key: keys.public_key,
+          device_id: deviceId,
+          device_platform: metadata.device_platform,
+          device_model: metadata.device_model,
+          device_os_version: metadata.device_os_version,
+          client_version: metadata.client_version,
+        }),
       });
       const peer = (await res.json()) as PeerResponse & { code?: string };
       if (!res.ok) {

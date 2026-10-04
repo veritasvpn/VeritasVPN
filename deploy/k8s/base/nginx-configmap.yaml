@@ -18,7 +18,15 @@ data:
 
     limit_req_zone $rate_limit_key zone=auth_limit:10m rate=5r/s;
     limit_req_zone $rate_limit_key zone=billing_limit:10m rate=10r/m;
-    limit_req_zone $rate_limit_key zone=provisioning_limit:10m rate=10r/m;
+    # Peer reads are not provisioning. An empty key is not counted, so GET
+    # /api/v1/wg/peers (polled about every 5s, often from one shared VPN
+    # egress IP) does not consume the 10/minute budget or receive 503.
+    map $request_method $provisioning_limit_key {
+        default $rate_limit_key;
+        GET     "";
+        HEAD    "";
+    }
+    limit_req_zone $provisioning_limit_key zone=provisioning_limit:10m rate=10r/m;
     limit_req_zone $rate_limit_key zone=phishing_limit:10m rate=6r/m;
     limit_conn_zone $rate_limit_key zone=conn_limit:10m;
     limit_req_zone $rate_limit_key zone=global_limit:10m rate=60r/s;
@@ -188,6 +196,11 @@ data:
         }
 
         location /api/v1/wg/ {
+            # POST, PATCH, and DELETE stay at 10 requests/minute. GET is not
+            # counted: see $provisioning_limit_key. Connected clients poll
+            # GET /api/v1/wg/peers about every 5 seconds and share one VPN
+            # egress IP with the account devices page, so counting reads here
+            # makes nginx answer 503 and the page stays failed.
             limit_req zone=provisioning_limit burst=5 nodelay;
             proxy_pass http://wg-manager:8080/api/v1/wg/;
             proxy_hide_header Access-Control-Allow-Origin;
