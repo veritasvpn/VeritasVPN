@@ -167,9 +167,11 @@ data class AuthError(val error: String)
 data class PurchaseHistoryItem(
     @SerializedName("created_at") val createdAt: String? = null,
     @SerializedName("amount_cents") val amountCents: Long = 0,
-    val currency: String? = null,
-    val plan: String? = null,
-    val status: String? = null
+    // Same JSON names as the properties. Release R8 still renames the fields,
+    // and Gson only keeps a name that is written on @SerializedName.
+    @SerializedName("currency") val currency: String? = null,
+    @SerializedName("plan") val plan: String? = null,
+    @SerializedName("status") val status: String? = null
 )
 
 data class BillingStatus(
@@ -182,7 +184,10 @@ data class BillingStatus(
     @SerializedName("payment_state") val paymentState: String = "none",
     @SerializedName("payment_message") val paymentMessage: String? = null,
     @SerializedName("poll_after_seconds") val pollAfterSeconds: Int = 0,
-    val payments: List<PurchaseHistoryItem>? = null,
+    // The status payload's key is "payments". Without @SerializedName, R8
+    // renames the field and a real array stays null, which the account screen
+    // shows as purchase history that was never sent.
+    @SerializedName("payments") val payments: List<PurchaseHistoryItem>? = null,
     val error: String? = null
 )
 
