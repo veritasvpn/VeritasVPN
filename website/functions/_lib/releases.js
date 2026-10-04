@@ -17,22 +17,23 @@ const MAX_ASSET_BYTES = 100 * 1024 * 1024;
 
 export const DOWNLOADS = {
   "veritasvpn-android.apk": {
-    // v0.2.81 includes Android device metadata for the account dashboard and
-    // targets Android API 36. Keep this pin paired with the signed release.
-    tag: "v0.2.81",
-    sha256: "2f63446c0061de604f44308c262e175d172520a865c9d27d81d36d11c4ecccfd",
+    // v0.2.82 is the signed Android build (versionCode 68) with the account
+    // screen and premium UI. Keep this pin paired with the signed release.
+    // Play production stays on 0.2.81 / versionCode 67.
+    tag: "v0.2.82",
+    sha256: "3091a1ba0ed08196c20284d016a04c5b090e998765f6a250bfb392a9bce0bece",
     contentType: "application/vnd.android.package-archive",
     unavailable: "Android APK is temporarily unavailable.",
   },
   "veritasvpn-linux.deb": {
-    tag: "v0.2.77",
-    sha256: "656f2e0620d8e6bcaaa8ac0e136d8e2d33af2ba9d0af1384b2f8d27500358972",
+    tag: "v0.2.82",
+    sha256: "36c1032e759166c0f963c5f8ee80cbbd76b9ee40ddcd83f4c35fe0ad04bccee1",
     contentType: "application/vnd.debian.binary-package",
     unavailable: "Linux .deb is temporarily unavailable.",
   },
   "veritasvpn-linux.AppImage": {
-    tag: "v0.2.77",
-    sha256: "31bbccf3aa18c10ddad5bf98708aa1da1a2a1f5c23db4dbe829a6cc454071059",
+    tag: "v0.2.82",
+    sha256: "6c2f0b0920adde051292637ad077f56ebf7565e70fd19654eeb7903e2b0d2e3f",
     contentType: "application/octet-stream",
     unavailable: "Linux AppImage is temporarily unavailable.",
   },
