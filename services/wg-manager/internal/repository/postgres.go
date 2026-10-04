@@ -250,6 +250,23 @@ func (p *Postgres) IsActiveIPAssigned(ctx context.Context, serverID, assignedIP 
 	return assigned, nil
 }
 
+// LatestPeerByAccountDevice returns the newest peer row for a device,
+// including removed rows. Reconnect can delete the active peer before
+// creating the next one; display metadata still has to come from that row.
+func (p *Postgres) LatestPeerByAccountDevice(ctx context.Context, accountID, deviceID string) (*model.Peer, error) {
+	query := `SELECT ` + peerColumns + ` FROM peers
+	           WHERE account_id = $1 AND device_id = $2
+	           ORDER BY created_at DESC
+	           LIMIT 1`
+
+	peer := &model.Peer{}
+	err := p.pool.QueryRow(ctx, query, accountID, deviceID).Scan(scanPeerArgs(peer)...)
+	if err != nil {
+		return nil, fmt.Errorf("latest peer by account device: %w", err)
+	}
+	return peer, nil
+}
+
 func (p *Postgres) GetActivePeerByAccountDevice(ctx context.Context, accountID, deviceID string) (*model.Peer, error) {
 	query := `SELECT ` + peerColumns + ` FROM peers
 	           WHERE account_id = $1 AND device_id = $2
