@@ -27,6 +27,13 @@ test('limiter fails closed and authenticates each attempt', async () => {
  } finally {globalThis.fetch=original}
 });
 test('missing challenge secret never succeeds',async()=>assert.equal((await verifyTurnstile({},'arbitrary','192.0.2.1')).ok,false));
+test('signed quota requests do not consume sign-in nginx budget', async()=>{
+ const config=await readFile(new URL('../../../deploy/k8s/base/nginx-configmap.yaml',import.meta.url),'utf8');
+ const route=config.match(/location = \/api\/v1\/auth\/tool-limit \{([^}]+)\}/)[1];
+ assert.match(route,/limit_req zone=global_limit/);
+ assert.doesNotMatch(route,/zone=auth_limit/);
+ assert.match(config,/location \/api\/v1\/auth\/ \{\s*limit_req zone=auth_limit/);
+});
 test('bounded JSON rejects oversized bodies',async()=>{
  await assert.rejects(boundedJSON(new Response('x'.repeat(4097))));
  assert.deepEqual(await boundedJSON(new Response('{"ok":true}')),{ok:true});
