@@ -26,7 +26,7 @@ def attempt(forged=False):
     request = urllib.request.Request(
         "https://api.veritasvpn.cloud/api/v1/auth/tool-limit",
         data=json.dumps({"bucket": "check-dns-session", "ip": ip}).encode(),
-        headers={"Content-Type": "application/json", "X-Tool-Timestamp": timestamp,
+        headers={"Content-Type": "application/json", "User-Agent": "VeritasVPN-SecurityVerifier/1.0", "X-Tool-Timestamp": timestamp,
                  "X-Tool-Signature": "0" * 64 if forged else signature},
     )
     try:

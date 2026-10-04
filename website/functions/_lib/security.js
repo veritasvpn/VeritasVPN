@@ -75,6 +75,7 @@ export async function rateLimit(request, env, { bucket } = {}) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "User-Agent": "VeritasVPN-CheckTools/1.0",
         "X-Tool-Timestamp": timestamp,
         "X-Tool-Signature": signature,
       },
