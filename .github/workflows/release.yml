@@ -5,6 +5,15 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      linux_only:
+        description: Publish only the Linux deb and AppImage
+        type: boolean
+        default: false
+      tag:
+        description: Release tag to create, such as v0.2.83
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -55,6 +64,7 @@ jobs:
 
   build-android:
     name: Signed Android release artifacts
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_only != true }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -110,6 +120,7 @@ jobs:
 
   build-chrome:
     name: Chrome extension bundle
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_only != true }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -135,16 +146,40 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish complete supported release
+    name: Publish GitHub release
     needs: [build-linux, build-android]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      ${{
+        always() &&
+        needs.build-linux.result == 'success' &&
+        (needs.build-android.result == 'success' || needs.build-android.result == 'skipped') &&
+        (
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.linux_only == true)
+        )
+      }}
     runs-on: ubuntu-latest
     environment: production
     permissions:
       contents: write
       id-token: write
       attestations: write
+    env:
+      LINUX_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.linux_only == true && 'true' || 'false' }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
+      - name: Reject replacement of an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$RELEASE_TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "Release tag must look like v0.2.83, got: $RELEASE_TAG" >&2; exit 1 ;;
+          esac
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists and must not be replaced." >&2
+            exit 1
+          fi
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
@@ -152,16 +187,32 @@ jobs:
         run: |
           DEB="$(find artifacts/veritasvpn-linux-deb -type f -name '*.deb' -print -quit)"
           APPIMAGE="$(find artifacts/veritasvpn-linux-appimage -type f -name '*.AppImage' -print -quit)"
-          APK="$(find artifacts/veritasvpn-android -type f -name '*.apk' -print -quit)"
-          AAB="$(find artifacts/veritasvpn-android-aab -type f -name '*.aab' -print -quit)"
-          test -n "$DEB" && test -n "$APPIMAGE" && test -n "$APK" && test -n "$AAB"
+          test -n "$DEB" && test -n "$APPIMAGE"
           cp "$DEB" veritasvpn-linux.deb
           cp "$APPIMAGE" veritasvpn-linux.AppImage
-          cp "$APK" veritasvpn-android.apk
-          cp "$AAB" veritasvpn-android.aab
-          sha256sum veritasvpn-linux.deb veritasvpn-linux.AppImage veritasvpn-android.apk veritasvpn-android.aab > SHA256SUMS
+          dpkg-deb -f veritasvpn-linux.deb Version | grep -qx "${RELEASE_TAG#v}"
+          if [ "$LINUX_ONLY" = "true" ]; then
+            sha256sum veritasvpn-linux.deb veritasvpn-linux.AppImage > SHA256SUMS
+          else
+            APK="$(find artifacts/veritasvpn-android -type f -name '*.apk' -print -quit)"
+            AAB="$(find artifacts/veritasvpn-android-aab -type f -name '*.aab' -print -quit)"
+            test -n "$APK" && test -n "$AAB"
+            cp "$APK" veritasvpn-android.apk
+            cp "$AAB" veritasvpn-android.aab
+            sha256sum veritasvpn-linux.deb veritasvpn-linux.AppImage veritasvpn-android.apk veritasvpn-android.aab > SHA256SUMS
+          fi
           sha256sum --check SHA256SUMS
-      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+      - name: Attest Linux packages
+        if: env.LINUX_ONLY == 'true'
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            veritasvpn-linux.deb
+            veritasvpn-linux.AppImage
+            SHA256SUMS
+      - name: Attest supported client packages
+        if: env.LINUX_ONLY != 'true'
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: |
             veritasvpn-linux.deb
@@ -169,7 +220,26 @@ jobs:
             veritasvpn-android.apk
             veritasvpn-android.aab
             SHA256SUMS
+      - name: Create Linux-only GitHub release
+        if: env.LINUX_ONLY == 'true'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ env.RELEASE_TAG }}
+          # Keep v0.2.82 as GitHub "latest" so production smoke still checks the
+          # Android APK that the website serves. This release is Linux only.
+          make_latest: false
+          body: |
+            Linux desktop packages that report platform and hostname on the account devices page.
+            Android, Chrome, macOS, and Windows are not part of this release.
+          fail_on_unmatched_files: true
+          files: |
+            veritasvpn-linux.deb
+            veritasvpn-linux.AppImage
+            SHA256SUMS
       - name: Create GitHub release
+        if: env.LINUX_ONLY != 'true'
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           fail_on_unmatched_files: true
