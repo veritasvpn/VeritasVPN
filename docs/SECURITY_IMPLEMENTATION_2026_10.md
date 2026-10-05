@@ -69,6 +69,10 @@ signature, and enforce a minimum secure public Android version in CI instead of
 publishing a redundant Android version. The original release steps below apply
 only if verification finds that this existing release does not contain the fix.
 
+October 5 integration: preserve master d1df8fa's Android 0.2.84 website release
+and Linux 0.2.83 pins. Extend the same protected-tag signing boundary to the new
+android-v* release path; do not replace its published artifacts or change Play.
+
 - Release a new Android version containing current master and security fixes. Keep
   the existing signing identity. Do not silently replace an existing tag/artifact.
 - Update website tag/digest pins only after the signed immutable asset is available.

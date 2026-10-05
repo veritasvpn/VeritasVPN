@@ -2,8 +2,8 @@
 set -euo pipefail
 case "${GITHUB_REF:?}" in
   refs/heads/master) ;;
-  refs/tags/v*|refs/tags/linux-v*)
-    [[ "$GITHUB_REF" =~ ^refs/tags/(linux-)?v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1 ;;
+  refs/tags/v*|refs/tags/linux-v*|refs/tags/android-v*)
+    [[ "$GITHUB_REF" =~ ^refs/tags/((linux|android)-)?v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1 ;;
   *) echo 'Only master or a protected semantic version tag may be signed.' >&2; exit 1 ;;
 esac
 git fetch origin master
