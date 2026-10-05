@@ -7,13 +7,15 @@ import (
 	"github.com/veritasvpn/lib/logging"
 )
 
-// ShieldPolicy is the explicit toggle set. Older agents ignore the field and
-// keep using ShieldPreset. New agents map these booleans to categories.
+// ShieldPolicy is the explicit toggle set. Older agents ignore unknown fields
+// and keep using ShieldPreset. New agents map these booleans to categories.
+// BlockTrackers is independent of BlockAds.
 type ShieldPolicy struct {
 	Explicit       bool `json:"explicit"`
 	BlockMalicious bool `json:"block_malicious"`
 	BlockAds       bool `json:"block_ads"`
 	BlockAdult     bool `json:"block_adult"`
+	BlockTrackers  bool `json:"block_trackers"`
 }
 
 // PeerUpdate is the SSE payload consumed by veritas-agent.

@@ -13,16 +13,16 @@ images:
     digest: sha256:6ce1039fd853ef8c81e3bfcb2c46e9d64e1f85df6c0da8734e3ea9afedaa0dba
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    # Premium Shield toggles + migration 008 (13f41a6).
-    digest: sha256:e228b3f9be938f6298b7b9edbb8aab43014a52d90d906ae513760feab3ccbc1d
+    # Premium Shield Block trackers toggle + migration 009 (e506ecd).
+    digest: sha256:1158eee93a4d22b3228cf474112838a7a369c32656c31c1f18f3c708ebc8fed3
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
     # Stale-pending fail build running on the Dell.
     digest: sha256:00fae4e042e33ede23269587131466c5d889b896b8fb2ac68cda6274f68b0087
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    # Premium Shield per-peer policy enforcement (13f41a6).
-    digest: sha256:9e8e3f2d16509820166ff6c1efe8966e83f6ebf264d5a15fd9ab5f29956ecca0
+    # Premium Shield per-peer policy incl. Block trackers (e506ecd).
+    digest: sha256:0b45e094e189a9b9fbd918cd91fc9b65257338cadbf26ab9117028cee5b60e0f
   - name: localhost:31500/wstunnel
     newName: localhost:31500/wstunnel
     # Stealth tunnel image running on the Dell.

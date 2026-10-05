@@ -25,4 +25,4 @@ Disconnect vs connect and run a [DNS leak test](/check/dns.html). Resolvers shou
 
 ## VeritasVPN
 
-On VeritasVPN this capability is productized as **[Veritas Shield](/learn/what-is-veritas-shield.html)**: categorized feeds, Premium toggles for malicious sites, ads, and adult sites, and honesty about upstream DoH visibility. Filtering is DNS NXDOMAIN, not page rewriting. While connected, Android and Linux peers use `10.0.0.1` as DNS. Custom DoH can still bypass the lists.
+On VeritasVPN this capability is productized as **[Veritas Shield](/learn/what-is-veritas-shield.html)**: categorized feeds, Premium toggles for malicious sites, trackers, ads, and adult sites, and honesty about upstream DoH visibility. Filtering is DNS NXDOMAIN, not page rewriting. While connected, Android and Linux peers use `10.0.0.1` as DNS. Custom DoH can still bypass the lists.

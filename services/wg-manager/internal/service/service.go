@@ -51,6 +51,7 @@ type PeerConfig struct {
 	ShieldBlockMalicious   bool
 	ShieldBlockAds         bool
 	ShieldBlockAdult       bool
+	ShieldBlockTrackers    bool
 }
 
 type Service struct {
@@ -553,7 +554,7 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		return nil, err
 	}
 
-	shieldPresetOut, policySet, blockMalicious, blockAds, blockAdult := resolveShieldForCreate(shieldPreset, shield, replacedPeer)
+	shieldPresetOut, policySet, blockMalicious, blockAds, blockAdult, blockTrackers := resolveShieldForCreate(shieldPreset, shield, replacedPeer)
 	peer := &model.Peer{
 		AccountID:            accountID,
 		ServerID:             srv.ID,
@@ -573,6 +574,7 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		ShieldBlockMalicious: blockMalicious,
 		ShieldBlockAds:       blockAds,
 		ShieldBlockAdult:     blockAdult,
+		ShieldBlockTrackers:  blockTrackers,
 		CreatedAt:            time.Now(),
 	}
 
@@ -678,13 +680,14 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		ShieldBlockMalicious:   peer.ShieldBlockMalicious,
 		ShieldBlockAds:         peer.ShieldBlockAds,
 		ShieldBlockAdult:       peer.ShieldBlockAdult,
+		ShieldBlockTrackers:    peer.ShieldBlockTrackers,
 	}, nil
 }
 
 // resolveShieldForCreate keeps a replaced peer's preset until the client sends
 // toggles or an explicit legacy preset. Explicit toggles require the caller to
 // have already checked Premium.
-func resolveShieldForCreate(shieldPreset string, shield *entitlement.ShieldFlags, replaced *model.Peer) (preset string, policySet, malicious, ads, adult bool) {
+func resolveShieldForCreate(shieldPreset string, shield *entitlement.ShieldFlags, replaced *model.Peer) (preset string, policySet, malicious, ads, adult, trackers bool) {
 	preset = entitlement.ShieldPresetStandard
 	if replaced != nil {
 		preset = entitlement.NormalizeShieldPreset(replaced.ShieldPreset)
@@ -692,14 +695,15 @@ func resolveShieldForCreate(shieldPreset string, shield *entitlement.ShieldFlags
 		malicious = replaced.ShieldBlockMalicious
 		ads = replaced.ShieldBlockAds
 		adult = replaced.ShieldBlockAdult
+		trackers = replaced.ShieldBlockTrackers
 	}
 	if shield != nil {
-		return entitlement.AliasPreset(*shield), true, shield.BlockMalicious, shield.BlockAds, shield.BlockAdult
+		return entitlement.AliasPreset(*shield), true, shield.BlockMalicious, shield.BlockAds, shield.BlockAdult, shield.BlockTrackers
 	}
 	if strings.TrimSpace(shieldPreset) != "" {
-		return entitlement.NormalizeShieldPreset(shieldPreset), false, false, false, false
+		return entitlement.NormalizeShieldPreset(shieldPreset), false, false, false, false, false
 	}
-	return preset, policySet, malicious, ads, adult
+	return preset, policySet, malicious, ads, adult, trackers
 }
 
 // mergeStoredDeviceMetadata keeps a display field already stored for this
@@ -871,14 +875,14 @@ func (s *Service) UpdateShieldPreset(ctx context.Context, peerID, accountID, jwt
 	return peer, nil
 }
 
-// UpdateShieldPolicy stores the three Premium toggles and pushes them to the
+// UpdateShieldPolicy stores the four Premium toggles and pushes them to the
 // agent for the peer's current tunnel IP. The WireGuard session is not rebuilt.
 func (s *Service) UpdateShieldPolicy(ctx context.Context, peerID, accountID, jwtTier string, flags entitlement.ShieldFlags) (*model.Peer, error) {
 	tier := s.resolveTier(ctx, accountID, jwtTier)
 	if err := entitlement.CheckShieldUpdate(tier); err != nil {
 		return nil, err
 	}
-	peer, err := s.postgres.UpdatePeerShieldPolicy(ctx, peerID, accountID, entitlement.AliasPreset(flags), flags.BlockMalicious, flags.BlockAds, flags.BlockAdult)
+	peer, err := s.postgres.UpdatePeerShieldPolicy(ctx, peerID, accountID, entitlement.AliasPreset(flags), flags.BlockMalicious, flags.BlockAds, flags.BlockAdult, flags.BlockTrackers)
 	if err != nil {
 		return nil, err
 	}

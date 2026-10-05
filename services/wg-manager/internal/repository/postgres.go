@@ -17,7 +17,8 @@ const peerColumns = `id, account_id, server_id, device_id,
        allowed_ips, assigned_ip, status, COALESCE(shield_preset, 'standard'),
        created_at, last_handshake_at, expires_at,
        COALESCE(shield_policy_set, false), COALESCE(shield_block_malicious, false),
-       COALESCE(shield_block_ads, false), COALESCE(shield_block_adult, false)`
+       COALESCE(shield_block_ads, false), COALESCE(shield_block_adult, false),
+       COALESCE(shield_block_trackers, false)`
 
 func scanPeerArgs(peer *model.Peer) []any {
 	return []any{
@@ -25,7 +26,7 @@ func scanPeerArgs(peer *model.Peer) []any {
 		&peer.DeviceName, &peer.DevicePlatform, &peer.DeviceModel, &peer.DeviceOSVersion, &peer.ClientVersion,
 		&peer.Pubkey, &peer.PresharedKey, &peer.AllowedIPs, &peer.AssignedIP,
 		&peer.Status, &peer.ShieldPreset, &peer.CreatedAt, &peer.LastHandshakeAt, &peer.ExpiresAt,
-		&peer.ShieldPolicySet, &peer.ShieldBlockMalicious, &peer.ShieldBlockAds, &peer.ShieldBlockAdult,
+		&peer.ShieldPolicySet, &peer.ShieldBlockMalicious, &peer.ShieldBlockAds, &peer.ShieldBlockAdult, &peer.ShieldBlockTrackers,
 	}
 }
 
@@ -288,8 +289,9 @@ func (p *Postgres) CreatePeer(ctx context.Context, peer *model.Peer) error {
 	query := `INSERT INTO peers (account_id, server_id, device_id, device_name, device_platform,
 	           device_model, device_os_version, client_version, pubkey, preshared_key,
 	           allowed_ips, assigned_ip, status, shield_preset, expires_at,
-	           shield_policy_set, shield_block_malicious, shield_block_ads, shield_block_adult)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+	           shield_policy_set, shield_block_malicious, shield_block_ads, shield_block_adult,
+	           shield_block_trackers)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 	           RETURNING id, created_at`
 
 	return p.pool.QueryRow(ctx, query,
@@ -297,6 +299,7 @@ func (p *Postgres) CreatePeer(ctx context.Context, peer *model.Peer) error {
 		peer.DeviceModel, peer.DeviceOSVersion, peer.ClientVersion, peer.Pubkey, peer.PresharedKey,
 		peer.AllowedIPs, peer.AssignedIP, peer.Status, peer.ShieldPreset, peer.ExpiresAt,
 		peer.ShieldPolicySet, peer.ShieldBlockMalicious, peer.ShieldBlockAds, peer.ShieldBlockAdult,
+		peer.ShieldBlockTrackers,
 	).Scan(&peer.ID, &peer.CreatedAt)
 }
 
@@ -321,13 +324,15 @@ func (p *Postgres) UpdatePeerIdentity(ctx context.Context, peer *model.Peer) err
 		       shield_policy_set = $15,
 		       shield_block_malicious = $16,
 		       shield_block_ads = $17,
-		       shield_block_adult = $18
+		       shield_block_adult = $18,
+		       shield_block_trackers = $19
 	           WHERE id = $1 AND account_id = $13 AND status IN ('pending', 'active')
 	           RETURNING created_at`
 	return p.pool.QueryRow(ctx, query,
 		peer.ID, peer.ServerID, peer.DeviceName, peer.DevicePlatform, peer.DeviceModel, peer.DeviceOSVersion, peer.ClientVersion,
 		peer.Pubkey, peer.PresharedKey, peer.AllowedIPs, peer.AssignedIP, peer.ExpiresAt, peer.AccountID,
 		peer.ShieldPreset, peer.ShieldPolicySet, peer.ShieldBlockMalicious, peer.ShieldBlockAds, peer.ShieldBlockAdult,
+		peer.ShieldBlockTrackers,
 	).Scan(&peer.CreatedAt)
 }
 
@@ -345,15 +350,16 @@ func (p *Postgres) UpdatePeerShieldPreset(ctx context.Context, peerID, accountID
 	return peer, nil
 }
 
-// UpdatePeerShieldPolicy stores the three Premium toggles and a preset alias
+// UpdatePeerShieldPolicy stores the four Premium toggles and a preset alias
 // for agents that have not learned explicit flags yet.
-func (p *Postgres) UpdatePeerShieldPolicy(ctx context.Context, peerID, accountID, preset string, malicious, ads, adult bool) (*model.Peer, error) {
+func (p *Postgres) UpdatePeerShieldPolicy(ctx context.Context, peerID, accountID, preset string, malicious, ads, adult, trackers bool) (*model.Peer, error) {
 	query := `UPDATE peers SET shield_preset = $3, shield_policy_set = true,
-	             shield_block_malicious = $4, shield_block_ads = $5, shield_block_adult = $6
+	             shield_block_malicious = $4, shield_block_ads = $5, shield_block_adult = $6,
+	             shield_block_trackers = $7
 	           WHERE id = $1 AND account_id = $2 AND status IN ('pending', 'active')
 	           RETURNING ` + peerColumns
 	peer := &model.Peer{}
-	err := p.pool.QueryRow(ctx, query, peerID, accountID, preset, malicious, ads, adult).Scan(scanPeerArgs(peer)...)
+	err := p.pool.QueryRow(ctx, query, peerID, accountID, preset, malicious, ads, adult, trackers).Scan(scanPeerArgs(peer)...)
 	if err != nil {
 		return nil, fmt.Errorf("update peer shield policy: %w", err)
 	}

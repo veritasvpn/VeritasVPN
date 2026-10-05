@@ -26,6 +26,7 @@ func shieldPolicyForPeer(peer *model.Peer) *hub.ShieldPolicy {
 		BlockMalicious: peer.ShieldBlockMalicious,
 		BlockAds:       peer.ShieldBlockAds,
 		BlockAdult:     peer.ShieldBlockAdult,
+		BlockTrackers:  peer.ShieldBlockTrackers,
 	}
 }
 

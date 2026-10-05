@@ -407,6 +407,11 @@ export function ShieldSettingsScreen({
       subtitle: "Malware, phishing, scam, and cryptomining domains.",
     },
     {
+      key: "block_trackers",
+      title: "Block trackers",
+      subtitle: "Stop known tracker domains from resolving. A tracker served from the site itself can still run.",
+    },
+    {
       key: "block_adult",
       title: "Block adult sites",
       subtitle: "Known adult domains. Shield does not scan page content.",
@@ -417,7 +422,7 @@ export function ShieldSettingsScreen({
       <ScreenTopBar eyebrow="CONNECTION" title="Veritas Shield" onBack={onBack} />
       <p className="tunnel-section-label">ADVANCED VPN PROTECTION</p>
       <p className="tunnel-lead">
-        Blocks known domains in DNS while you are connected. This does not remove ads inside web pages.
+        Blocks known domains in DNS while you are connected. Ads or trackers loaded from the site itself can still run.
       </p>
       <p className="tunnel-lead">
         {!isPremium

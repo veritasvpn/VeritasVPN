@@ -42,6 +42,7 @@ type Peer struct {
 	ShieldBlockMalicious bool       `db:"shield_block_malicious"`
 	ShieldBlockAds       bool       `db:"shield_block_ads"`
 	ShieldBlockAdult     bool       `db:"shield_block_adult"`
+	ShieldBlockTrackers  bool       `db:"shield_block_trackers"`
 	CreatedAt            time.Time  `db:"created_at"`
 	LastHandshakeAt      *time.Time `db:"last_handshake_at"`
 	ExpiresAt            *time.Time `db:"expires_at"`
