@@ -15,7 +15,8 @@ const (
 // DefaultPreset is used when a tunnel IP has no peer mapping yet.
 const DefaultPreset = PresetStandard
 
-// AllFeedCategories is the full feed load set (includes ads for Aggressive).
+// AllFeedCategories is the full feed load set (ads and adult included so
+// per-peer toggles can turn them on without a reload).
 var AllFeedCategories = []string{
 	CategoryMalware,
 	CategoryPhishing,
@@ -23,6 +24,7 @@ var AllFeedCategories = []string{
 	CategoryCrypto,
 	CategoryTrackers,
 	CategoryAds,
+	CategoryAdult,
 }
 
 var presetCategories = map[string][]string{

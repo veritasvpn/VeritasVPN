@@ -37,6 +37,7 @@ import cloud.veritasvpn.ui.DashboardScreen
 import cloud.veritasvpn.ui.ReleaseLockdownDialog
 import cloud.veritasvpn.ui.AccountScreen
 import cloud.veritasvpn.ui.PaymentCheckoutScreen
+import cloud.veritasvpn.ui.ShieldSettingsScreen
 import cloud.veritasvpn.ui.StealthSettingsScreen
 import cloud.veritasvpn.ui.TunnelSettingsScreen
 import cloud.veritasvpn.ui.theme.VeritasVPNTheme
@@ -161,6 +162,7 @@ class MainActivity : ComponentActivity() {
                 var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
                 var showStealthSettings by remember { mutableStateOf(false) }
+                var showShieldSettings by remember { mutableStateOf(false) }
                 var showTunnelSettings by remember { mutableStateOf(false) }
                 var showKillSwitchRequired by remember { mutableStateOf(false) }
                 var pendingConnectAfterKillSwitch by remember { mutableStateOf(false) }
@@ -178,6 +180,9 @@ class MainActivity : ComponentActivity() {
                 var excludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
                 var bypassApps by remember { mutableStateOf(VpnSettings.bypassApps(context)) }
                 var stealthMode by remember { mutableStateOf(VpnSettings.stealthMode(context)) }
+                var shieldPolicy by remember { mutableStateOf(VpnSettings.shieldPolicy(context)) }
+                var shieldError by remember { mutableStateOf<String?>(null) }
+                val shieldWriteGeneration = remember { intArrayOf(0) }
                 var appliedExcludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
                 var appliedBypassApps by remember { mutableStateOf(VpnSettings.bypassApps(context)) }
                 var appliedStealthMode by remember { mutableStateOf(VpnSettings.stealthMode(context)) }
@@ -240,6 +245,7 @@ class MainActivity : ComponentActivity() {
                     checkoutMethod = null
                     showPlans = false
                     showStealthSettings = false
+                    showShieldSettings = false
                     showTunnelSettings = false
                     user = null
                 }
@@ -901,6 +907,59 @@ class MainActivity : ComponentActivity() {
                         onClose = { checkoutUrl = null; refreshBilling() },
                         onRefreshPlan = { refreshBilling() }
                     )
+                } else if (showShieldSettings) {
+                    ShieldSettingsScreen(
+                        policy = shieldPolicy,
+                        isPremium = billingStatus?.isPremium == true,
+                        connected = connected,
+                        error = shieldError,
+                        onPolicyChange = { next ->
+                            val previous = shieldPolicy
+                            val generation = ++shieldWriteGeneration[0]
+                            shieldPolicy = next
+                            shieldError = null
+                            VpnSettings.setShieldPolicy(context, next)
+                            val peerId = currentPeerId
+                            if (peerId.isNullOrBlank() || !connected) return@ShieldSettingsScreen
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    val failure = AuthenticatedApi.execute(authRepo, { token ->
+                                        ApiClient.patch("/api/v1/wg/peers/$peerId", next.wireBody(), token)
+                                    }) { res ->
+                                        if (res.isSuccessful) null
+                                        else ApiClient.parse<PeerResponse>(res)?.error?.takeIf { it.isNotBlank() }
+                                            ?: "Could not update Veritas Shield. Try again."
+                                    }
+                                    if (failure != null && generation == shieldWriteGeneration[0]) {
+                                        withContext(Dispatchers.Main) {
+                                            shieldPolicy = previous
+                                            VpnSettings.setShieldPolicy(context, previous)
+                                            shieldError = failure
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    if (generation != shieldWriteGeneration[0]) return@launch
+                                    withContext(Dispatchers.Main) {
+                                        shieldPolicy = previous
+                                        VpnSettings.setShieldPolicy(context, previous)
+                                        if (e is SessionExpiredException) {
+                                            handleSessionExpired()
+                                        } else {
+                                            shieldError = e.message?.takeIf { it.isNotBlank() }
+                                                ?: "Could not update Veritas Shield. Try again."
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        onUpgrade = {
+                            showShieldSettings = false
+                            showPlans = true
+                            if (billingStatus == null) refreshBilling()
+                        },
+                        onBack = { showShieldSettings = false }
+                    )
                 } else if (showStealthSettings) {
                     StealthSettingsScreen(
                         stealthMode = stealthMode,
@@ -984,6 +1043,7 @@ class MainActivity : ComponentActivity() {
                             if (billingStatus == null) refreshBilling()
                         },
                         onStealthSettings = { showStealthSettings = true },
+                        onShieldSettings = { showShieldSettings = true },
                         onTunnelSettings = { showTunnelSettings = true },
                         onOpenKillSwitchSettings = {
                             val opened = runCatching {
@@ -1129,10 +1189,10 @@ class MainActivity : ComponentActivity() {
                 val peer = AuthenticatedApi.execute(authRepo, { token ->
                     ApiClient.post(
                         "/api/v1/wg/peers",
-                        mapOf(
+                        mapOf<String, Any>(
                             "public_key" to keyPair.publicKey.toBase64(),
                             "device_id" to deviceId,
-                        ) + deviceMetadata(),
+                        ) + deviceMetadata() + VpnSettings.shieldPolicy(context).wireBody(),
                         token
                     )
                 }) { res ->

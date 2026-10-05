@@ -30,6 +30,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.MaterialTheme
@@ -83,6 +84,7 @@ fun SettingsDrawer(
     onPlans: () -> Unit,
     onNetworkMap: () -> Unit,
     onStealthSettings: () -> Unit,
+    onShieldSettings: () -> Unit,
     onTunnelSettings: () -> Unit,
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
@@ -216,6 +218,12 @@ fun SettingsDrawer(
                             note = "Auto · UDP only · Stealth always",
                             icon = Icons.Rounded.VisibilityOff,
                             onClick = { navigate(onStealthSettings) },
+                        )
+                        SettingsDrawerNavItem(
+                            label = "Veritas Shield",
+                            note = "Ads · malicious · adult",
+                            icon = Icons.Rounded.Shield,
+                            onClick = { navigate(onShieldSettings) },
                         )
                         SettingsDrawerNavItem(
                             label = "Split tunnel",

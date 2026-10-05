@@ -940,6 +940,34 @@ input::placeholder { color: var(--paper-dim); }
   transform: translateX(18px);
 }
 
+.shield-switch {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.shield-upgrade {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  background: var(--cyan);
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.shield-error {
+  margin: 0;
+  color: var(--cyan-hover);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .menu-static-note {
   margin: 2px 4px 6px;
   padding: 8px 10px;

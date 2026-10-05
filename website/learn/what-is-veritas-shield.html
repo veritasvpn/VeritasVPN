@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>What is Veritas Shield? — VeritasVPN Learn</title>
-  <meta name="description" content="DNS security layered on VeritasVPN—malware, phishing, scam, crypto, and tracker blocking with optional ads, while you are connected.">
+  <meta name="description" content="DNS security layered on VeritasVPN—malware, phishing, scam, crypto, and tracker blocking, with Premium toggles for ads, malicious sites, and adult sites.">
   <link rel="canonical" href="https://veritasvpn.cloud/learn/what-is-veritas-shield.html">
   <link rel="stylesheet" href="/css/style-typography1.css">
   <link rel="stylesheet" href="/css/learn.css">
@@ -53,23 +53,30 @@
         <a class="learn-back" href="/learn/">← All topics</a>
         <span class="learn-kicker">Protect</span>
         <h1>What is Veritas Shield?</h1>
-        <p class="learn-meta">Updated 2026-09-04</p>
-        <p class="learn-lede">Veritas Shield is the DNS security layer inside VeritasVPN. While the tunnel is up, lookups go through our gateway, threat feeds can NXDOMAIN dangerous names, and you can choose how aggressive the filter is.</p>
+        <p class="learn-meta">Updated 2026-10-05</p>
+        <p class="learn-lede">Veritas Shield is the DNS security layer inside VeritasVPN. While the tunnel is up, lookups go through our gateway and threat feeds can NXDOMAIN dangerous names. Premium can turn malicious sites, ads, and adult sites on or off independently.</p>
         <div class="learn-prose">
 <h2>VPN + Veritas Shield</h2>
 <p>``<code> Internet ↑ Veritas Shield   ← DNS security (block + filter) ↑ VeritasVPN       ← encrypted tunnel + exit ↑ You </code>``</p>
 <p>The product is <strong>encrypted tunnel plus DNS security</strong>—not a file antivirus and not a claim that every ad or tracker on earth disappears.</p>
 <h2>What it does</h2>
 <ol><li><strong>Forces DNS into the tunnel</strong> so your ISP’s resolver is not the default path</li><li><strong>Encrypts upstream</strong> (DNS-over-HTTPS) between our gateway and recursive resolvers</li><li><strong>Blocks known-bad and optional filter categories</strong> with NXDOMAIN</li><li><strong>Reduces common bypasses</strong> — plain DNS, DNS-over-TLS, and well-known public DoH targets from peers</li></ol>
-<h2>Presets</h2>
-<p>| Preset | Blocks | |--------|--------| | <strong>Security</strong> | Malware, phishing, scam, cryptomining | | <strong>Standard</strong> (default) | Security + trackers | | <strong>Aggressive</strong> | Standard + ads |</p>
-<p>Ads stay off by default because ad lists cause more false positives (CDNs, banks, captive portals). Aggressive mode is opt-in; operators can also publish a small allowlist for known false positives.</p>
+<h2>Toggles</h2>
+<p>On Android and Linux, Settings → Veritas Shield has three Premium controls. They change which domain lists the gateway enforces for your tunnel. They do not edit the page.</p>
+<ul><li><strong>Block malicious sites</strong> (default on) — malware, phishing, scam, and cryptomining domains</li><li><strong>Block ads</strong> (default off) — known ad domains</li><li><strong>Block adult sites</strong> (default off) — known adult domains</li></ul>
+<p>Trackers stay blocked with the usual connected policy. There is no separate tracker toggle. Ads stay off by default because ad lists cause more false positives (CDNs, banks, captive portals). Adult filtering is off until you turn it on. Operators can still publish a small allowlist for known false positives.</p>
+<p>Free accounts see Upgrade on these three controls and cannot enable them. A connected peer that never saved toggles keeps the previous Standard coverage: malicious sites and trackers on, ads and adult sites off.</p>
+<p>Changing a toggle updates DNS for the current connection. You do not need to rebuild the tunnel.</p>
 <h2>Honesty limits</h2>
-<ul><li>Upstream DoH resolvers still see hostnames we forward for <strong>non-blocked</strong> lookups</li><li>Uncommon or custom DoH endpoints remain a <strong>residual</strong> bypass risk</li><li>Shield does not inspect HTTPS bodies or replace browser updates</li></ul>
+<ul><li>This is <strong>DNS domain blocking</strong>, not full-page ad removal. An ad served from the same host as the page can still appear.</li><li>Upstream DoH resolvers still see hostnames we forward for <strong>non-blocked</strong> lookups</li><li>Uncommon or custom DoH endpoints remain a <strong>residual</strong> bypass risk</li><li>Shield does not inspect HTTPS bodies or replace browser updates</li></ul>
 <h2>Privacy</h2>
-<p>We do not log query names. In-app blocked counts are keyed by your temporary tunnel IP for the session—not your public WAN IP. Details: <a href="/privacy.html">Privacy Policy</a>.</p>
+<p>We do not log query names. In-app blocked counts are keyed by your temporary tunnel IP for the session—not your public WAN IP. The three toggles are stored with peer metadata so the gateway can apply them. Details: <a href="/privacy.html">Privacy Policy</a>.</p>
 <h2>How to verify</h2>
-<p>Connect on Android or Linux, then run a <a href="/check/dns.html">DNS leak test</a>. Resolvers should show the provider path. Product docs also describe a harmless self-test name that must return NXDOMAIN when Shield is healthy.</p>
+<p>Connect on Android or Linux with Premium, then run a <a href="/check/dns.html">DNS leak test</a>. Resolvers should show the provider path.</p>
+<p>With <strong>Block malicious sites</strong> on (the default), this harmless name must return NXDOMAIN:</p>
+<p><code>dns-protection-test.veritasvpn.invalid</code></p>
+<p>With <strong>Block adult sites</strong> on, this reserved name must return NXDOMAIN, and it should resolve when that toggle is off:</p>
+<p><code>adult-protection-test.veritasvpn.invalid</code></p>
 <h2>Related</h2>
 <p>For the general idea of filtering DNS inside a VPN (not product-specific), see <a href="/learn/what-is-protected-dns.html">What is protected DNS?</a>.</p>
         </div>

@@ -13,6 +13,7 @@ const (
 	CategoryCrypto   = "crypto"
 	CategoryTrackers = "trackers"
 	CategoryAds      = "ads"
+	CategoryAdult    = "adult"
 )
 
 // DefaultShieldCategories excludes ads (highest false-positive risk).
@@ -24,17 +25,25 @@ var DefaultShieldCategories = []string{
 	CategoryTrackers,
 }
 
-// defaultCategoryURLs are used when a category is enabled but has no
-// DNS_BLOCKLIST_URLS_<CATEGORY> override.
-var defaultCategoryURLs = map[string]string{
-	CategoryMalware:  "https://urlhaus.abuse.ch/downloads/hostfile/",
-	CategoryPhishing: "https://phishing.army/download/phishing_army_blocklist_extended.txt",
+// defaultCategoryURLs are used when a category is loaded but has no
+// DNS_BLOCKLIST_URLS_<CATEGORY> override. Adult lists are adult-only hosts
+// files (not unified ad/malware lists) so a domain is not labeled adult just
+// because it appeared in a combined feed.
+var defaultCategoryURLs = map[string][]string{
+	CategoryMalware:  {"https://urlhaus.abuse.ch/downloads/hostfile/"},
+	CategoryPhishing: {"https://phishing.army/download/phishing_army_blocklist_extended.txt"},
 	// CERT Polska domain blocklist — phishing/malware/scam mix used for scam coverage.
-	CategoryScam: "https://hole.cert.pl/domains/domains.txt",
-	CategoryCrypto: "https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt",
+	CategoryScam:   {"https://hole.cert.pl/domains/domains.txt"},
+	CategoryCrypto: {"https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt"},
 	// OISD small — ads+trackers compact list; used for trackers (and ads when enabled).
-	CategoryTrackers: "https://small.oisd.nl/",
-	CategoryAds: "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext",
+	CategoryTrackers: {"https://small.oisd.nl/"},
+	CategoryAds:      {"https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext"},
+	// OISD NSFW plus the Block List Project porn hosts file. Both are HTTPS
+	// and refreshed on the same schedule as the other category feeds.
+	CategoryAdult: {
+		"https://nsfw.oisd.nl/",
+		"https://raw.githubusercontent.com/blocklistproject/Lists/master/porn.txt",
+	},
 }
 
 var knownCategories = map[string]struct{}{
@@ -44,6 +53,7 @@ var knownCategories = map[string]struct{}{
 	CategoryCrypto:   {},
 	CategoryTrackers: {},
 	CategoryAds:      {},
+	CategoryAdult:    {},
 }
 
 // ShieldConfig configures categorized Veritas Shield blocklists.
@@ -60,7 +70,7 @@ type ShieldConfig struct {
 // LoadShieldSourcesFromEnv builds category → URL lists from environment.
 // DNS_SHIELD_CATEGORIES defaults to AllFeedCategories so every preset's feeds
 // are loaded; per-peer presets choose which categories apply at query time.
-// Per-category: DNS_BLOCKLIST_URLS_MALWARE, _PHISHING, _SCAM, _CRYPTO, _TRACKERS, _ADS.
+// Per-category: DNS_BLOCKLIST_URLS_MALWARE, _PHISHING, _SCAM, _CRYPTO, _TRACKERS, _ADS, _ADULT.
 // Legacy DNS_BLOCKLIST_URLS applies to malware+phishing when those category
 // vars are unset.
 func LoadShieldSourcesFromEnv() (categories []string, urls map[string][]string) {
@@ -96,8 +106,8 @@ func LoadShieldSourcesFromEnv() (categories []string, urls map[string][]string) 
 			urls[cat] = append([]string(nil), legacy...)
 			continue
 		}
-		if def, ok := defaultCategoryURLs[cat]; ok && def != "" {
-			urls[cat] = []string{def}
+		if defs := defaultCategoryURLs[cat]; len(defs) > 0 {
+			urls[cat] = append([]string(nil), defs...)
 		}
 	}
 	return categories, urls

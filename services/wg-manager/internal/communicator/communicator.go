@@ -13,8 +13,20 @@ import (
 )
 
 type AgentClient interface {
-	PushPeerUpdate(ctx context.Context, serverID string, action string, peerID string, publicKey string, presharedKey string, allowedIPs []string, shieldPreset string) error
+	PushPeerUpdate(ctx context.Context, serverID string, action string, peerID string, publicKey string, presharedKey string, allowedIPs []string, shieldPreset string, policy *hub.ShieldPolicy) error
 	Publish(serverID string, update hub.PeerUpdate) bool
+}
+
+func shieldPolicyForPeer(peer *model.Peer) *hub.ShieldPolicy {
+	if peer == nil || !peer.ShieldPolicySet {
+		return nil
+	}
+	return &hub.ShieldPolicy{
+		Explicit:       true,
+		BlockMalicious: peer.ShieldBlockMalicious,
+		BlockAds:       peer.ShieldBlockAds,
+		BlockAdult:     peer.ShieldBlockAdult,
+	}
 }
 
 type Communicator struct {
@@ -34,7 +46,7 @@ func (c *Communicator) PushPeerAdded(ctx context.Context, serverID string, peer 
 	if peer.PresharedKey != nil {
 		psk = *peer.PresharedKey
 	}
-	return c.pushWithBackoff(ctx, serverID, "ADD", peer.ID, peer.Pubkey, psk, peer.AllowedIPs, peer.ShieldPreset)
+	return c.pushWithBackoff(ctx, serverID, "ADD", peer.ID, peer.Pubkey, psk, peer.AllowedIPs, peer.ShieldPreset, shieldPolicyForPeer(peer))
 }
 
 func (c *Communicator) PushPeerRemoved(ctx context.Context, serverID string, peer *model.Peer) error {
@@ -42,7 +54,7 @@ func (c *Communicator) PushPeerRemoved(ctx context.Context, serverID string, pee
 	if len(ips) == 0 && peer.AssignedIP != "" {
 		ips = []string{peer.AssignedIP}
 	}
-	return c.pushWithBackoff(ctx, serverID, "REMOVE", peer.ID, peer.Pubkey, "", ips, "")
+	return c.pushWithBackoff(ctx, serverID, "REMOVE", peer.ID, peer.Pubkey, "", ips, "", nil)
 }
 
 // PushShieldPreset notifies the agent of a per-peer Veritas Shield policy change
@@ -58,6 +70,7 @@ func (c *Communicator) PushShieldPreset(serverID string, peer *model.Peer) bool 
 		AllowedIPs:   ips,
 		AssignedIP:   peer.AssignedIP,
 		ShieldPreset: peer.ShieldPreset,
+		ShieldPolicy: shieldPolicyForPeer(peer),
 	})
 }
 
@@ -81,14 +94,14 @@ func (c *Communicator) PublishUpdate(serverID string, update hub.PeerUpdate) boo
 	return ok
 }
 
-func (c *Communicator) pushWithBackoff(ctx context.Context, serverID, action, peerID, pubkey, psk string, allowedIPs []string, shieldPreset string) error {
+func (c *Communicator) pushWithBackoff(ctx context.Context, serverID, action, peerID, pubkey, psk string, allowedIPs []string, shieldPreset string, policy *hub.ShieldPolicy) error {
 	maxRetries := 3
 	baseDelay := 200 * time.Millisecond
 
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
 		callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := c.client.PushPeerUpdate(callCtx, serverID, action, peerID, pubkey, psk, allowedIPs, shieldPreset)
+		err := c.client.PushPeerUpdate(callCtx, serverID, action, peerID, pubkey, psk, allowedIPs, shieldPreset, policy)
 		cancel()
 
 		if err == nil {
@@ -140,7 +153,7 @@ func (s *SSEAgentClient) Publish(serverID string, update hub.PeerUpdate) bool {
 	return s.hub.Publish(serverID, update)
 }
 
-func (s *SSEAgentClient) PushPeerUpdate(ctx context.Context, serverID string, action string, peerID string, publicKey string, presharedKey string, allowedIPs []string, shieldPreset string) error {
+func (s *SSEAgentClient) PushPeerUpdate(ctx context.Context, serverID string, action string, peerID string, publicKey string, presharedKey string, allowedIPs []string, shieldPreset string, policy *hub.ShieldPolicy) error {
 	_ = ctx
 	ok := s.Publish(serverID, hub.PeerUpdate{
 		Action:       strings.ToUpper(action),
@@ -149,6 +162,7 @@ func (s *SSEAgentClient) PushPeerUpdate(ctx context.Context, serverID string, ac
 		PresharedKey: presharedKey,
 		AllowedIPs:   allowedIPs,
 		ShieldPreset: shieldPreset,
+		ShieldPolicy: policy,
 	})
 	if !ok {
 		return fmt.Errorf("no agent connected for server %s", serverID)

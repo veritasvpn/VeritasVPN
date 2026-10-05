@@ -23,24 +23,28 @@ type Server struct {
 }
 
 type Peer struct {
-	ID              string     `db:"id"`
-	AccountID       string     `db:"account_id"`
-	ServerID        string     `db:"server_id"`
-	DeviceID        string     `db:"device_id"`
-	DeviceName      string     `db:"device_name"`
-	DevicePlatform  string     `db:"device_platform"`
-	DeviceModel     string     `db:"device_model"`
-	DeviceOSVersion string     `db:"device_os_version"`
-	ClientVersion   string     `db:"client_version"`
-	Pubkey          string     `db:"pubkey"`
-	PresharedKey    *string    `db:"preshared_key"`
-	AllowedIPs      []string   `db:"allowed_ips"`
-	AssignedIP      string     `db:"assigned_ip"`
-	Status          string     `db:"status"`
-	ShieldPreset    string     `db:"shield_preset"`
-	CreatedAt       time.Time  `db:"created_at"`
-	LastHandshakeAt *time.Time `db:"last_handshake_at"`
-	ExpiresAt       *time.Time `db:"expires_at"`
+	ID                   string     `db:"id"`
+	AccountID            string     `db:"account_id"`
+	ServerID             string     `db:"server_id"`
+	DeviceID             string     `db:"device_id"`
+	DeviceName           string     `db:"device_name"`
+	DevicePlatform       string     `db:"device_platform"`
+	DeviceModel          string     `db:"device_model"`
+	DeviceOSVersion      string     `db:"device_os_version"`
+	ClientVersion        string     `db:"client_version"`
+	Pubkey               string     `db:"pubkey"`
+	PresharedKey         *string    `db:"preshared_key"`
+	AllowedIPs           []string   `db:"allowed_ips"`
+	AssignedIP           string     `db:"assigned_ip"`
+	Status               string     `db:"status"`
+	ShieldPreset         string     `db:"shield_preset"`
+	ShieldPolicySet      bool       `db:"shield_policy_set"`
+	ShieldBlockMalicious bool       `db:"shield_block_malicious"`
+	ShieldBlockAds       bool       `db:"shield_block_ads"`
+	ShieldBlockAdult     bool       `db:"shield_block_adult"`
+	CreatedAt            time.Time  `db:"created_at"`
+	LastHandshakeAt      *time.Time `db:"last_handshake_at"`
+	ExpiresAt            *time.Time `db:"expires_at"`
 }
 
 type ServerMetric struct {
