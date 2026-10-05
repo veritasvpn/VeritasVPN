@@ -17,17 +17,17 @@ const MAX_ASSET_BYTES = 100 * 1024 * 1024;
 
 export const DOWNLOADS = {
   "veritasvpn-android.apk": {
-    // v0.2.82 is the signed Android build (versionCode 68) with the account
-    // screen and premium UI. Keep this pin paired with the signed release.
-    // Play production stays on 0.2.81 / versionCode 67.
-    tag: "v0.2.82",
-    sha256: "3091a1ba0ed08196c20284d016a04c5b090e998765f6a250bfb392a9bce0bece",
+    // android-v0.2.84 is the signed website APK (versionCode 69) that keeps
+    // purchase-history JSON names through release shrinking. v* tags cannot be
+    // created here. Play production stays on 0.2.81 / versionCode 67.
+    tag: "android-v0.2.84",
+    sha256: "43bf91378e2dc6033db772f843ff0cd8b56ff4ee76fad232773fccac15df3e50",
     contentType: "application/vnd.android.package-archive",
     unavailable: "Android APK is temporarily unavailable.",
   },
   "veritasvpn-linux.deb": {
     // 0.2.83 reports platform and hostname. The git tag is linux-v0.2.83
-    // because v* tag creation is restricted. Android stays on v0.2.82.
+    // because v* tag creation is restricted. These Linux bytes stay put.
     tag: "linux-v0.2.83",
     sha256: "2f84fa1505bc38b4006b034629055a7b3724bf4d99c22829587a5524375ab736",
     contentType: "application/vnd.debian.binary-package",
