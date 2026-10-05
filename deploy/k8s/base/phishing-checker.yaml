@@ -38,7 +38,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: phishing-checker
-          image: localhost:31500/phishing-checker@sha256:31f3c895e33fe29de6b2b803a9029fee0f06d52f3a5471a63403b5e267509e61
+          image: localhost:31500/phishing-checker@sha256:fd6cb81e34d1936b05d542f5aa4ac76d72c7d831603c0007e7a71a18769fecac
           imagePullPolicy: IfNotPresent
           env:
             - name: RATE_LIMIT_PER_MINUTE

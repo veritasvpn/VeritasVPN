@@ -12,7 +12,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"os"
 	"sort"
@@ -20,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/veritasvpn/lib/netpolicy"
 )
 
 const (
@@ -274,23 +275,7 @@ func resolvePublic(ctx context.Context, host string) ([]net.IP, error) {
 }
 
 func isPublicIP(ip net.IP) bool {
-	addr, ok := netip.AddrFromSlice(ip)
-	addr = addr.Unmap()
-	if !ok || !addr.IsValid() || addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() {
-		return false
-	}
-	// Block CGNAT, documentation, benchmarking, and unique-local ranges too.
-	for _, prefix := range []netip.Prefix{
-		netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("192.0.0.0/24"),
-		netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.18.0.0/15"),
-		netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"),
-		netip.MustParsePrefix("2001:db8::/32"), netip.MustParsePrefix("fc00::/7"),
-	} {
-		if prefix.Contains(addr) {
-			return false
-		}
-	}
-	return true
+	return netpolicy.IsPublic(ip)
 }
 
 func inspectTLS(ctx context.Context, host, port string, ips []net.IP) *tlsInfo {
@@ -312,7 +297,7 @@ func inspectTLS(ctx context.Context, host, port string, ips []net.IP) *tlsInfo {
 		cancel()
 		state := connection.ConnectionState()
 		_ = connection.Close()
-		if len(state.PeerCertificates) == 0 {
+		if err != nil || !state.HandshakeComplete || len(state.VerifiedChains) == 0 || len(state.PeerCertificates) == 0 {
 			continue
 		}
 		cert := state.PeerCertificates[0]

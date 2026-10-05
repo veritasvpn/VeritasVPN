@@ -64,3 +64,11 @@ kubectl -n monitoring create secret generic redis-exporter-auth \
 
 Prefer `kubectl create secret` / `kubectl patch` / sealed-secrets. Never
 `kubectl apply -f secrets.yaml` unless you have verified every key is present.
+# Public check tool quota authentication
+
+`veritas-secrets.TOOLS_RATE_LIMIT_SECRET` must contain the same random secret
+(at least 32 characters) as the GitHub Actions secret `TOOLS_RATE_LIMIT_SECRET`.
+The Pages deployment installs it into the Pages project. Generate and provision
+it on the Dell; never commit the value. Seed the Kubernetes key before rolling
+out auth-svc. Missing/mismatched credentials fail closed with 503, not unlimited
+public-tool access. Deploy auth-svc before the Pages functions that use it.

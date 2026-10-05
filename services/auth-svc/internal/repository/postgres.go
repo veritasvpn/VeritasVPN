@@ -152,12 +152,19 @@ func (p *Postgres) GetAccountByEmail(ctx context.Context, email string) (*model.
 	return acc, nil
 }
 
-func (p *Postgres) UpdateAccountPassword(ctx context.Context, accountID, passwordHash string) error {
+func (p *Postgres) CompletePasswordReset(ctx context.Context, tokenHash, passwordHash string, revoke func(context.Context, string) error) error {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin password update: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var accountID string
+	// Lock the still-valid token's row. Concurrent redemption waits, then finds
+	// no token after the winner commits. Expiry is checked again in the update.
+	if err := tx.QueryRow(ctx, `SELECT id FROM accounts WHERE reset_token = $1
+		AND reset_token_expiry > NOW() AND account_status != 'deleted' FOR UPDATE`, tokenHash).Scan(&accountID); err != nil {
+		return fmt.Errorf("invalid or expired reset token")
+	}
 
 	// Completing a reset proves access to the mailbox that received the one-time token.
 	// Treat that account as verified and clear any outstanding verification token.
@@ -165,8 +172,9 @@ func (p *Postgres) UpdateAccountPassword(ctx context.Context, accountID, passwor
 		email_verified_at = COALESCE(email_verified_at, NOW()),
 		verification_token_hash = NULL, verification_token_expiry = NULL,
 		reset_token = NULL, reset_token_expiry = NULL
-		WHERE id = $1`
-	result, err := tx.Exec(ctx, query, accountID, passwordHash)
+		WHERE id = $1 AND reset_token = $3 AND reset_token_expiry > clock_timestamp()
+		AND account_status != 'deleted'`
+	result, err := tx.Exec(ctx, query, accountID, passwordHash, tokenHash)
 	if err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
@@ -178,12 +186,24 @@ func (p *Postgres) UpdateAccountPassword(ctx context.Context, accountID, passwor
 	if _, err := tx.Exec(ctx, `DELETE FROM refresh_tokens WHERE account_id = $1`, accountID); err != nil {
 		return fmt.Errorf("revoke sessions after password reset: %w", err)
 	}
+	// If revocation is unavailable, roll back the password/token changes.
+	// A DB commit failure after revocation only signs sessions out conservatively.
+	if err := revoke(ctx, accountID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
-func (p *Postgres) SetResetToken(ctx context.Context, accountID, token string, expiry time.Time) error {
-	query := `UPDATE accounts SET reset_token = $2, reset_token_expiry = $3 WHERE id = $1`
-	_, err := p.pool.Exec(ctx, query, accountID, token, expiry)
+func (p *Postgres) SetResetToken(ctx context.Context, accountID, token string, expiry time.Time) (bool, error) {
+	query := `UPDATE accounts SET reset_token = $2, reset_token_expiry = $3 WHERE id = $1
+		AND account_status != 'deleted' AND (reset_token IS NULL OR reset_token_expiry IS NULL OR reset_token_expiry <= NOW())`
+	result, err := p.pool.Exec(ctx, query, accountID, token, expiry)
+	return err == nil && result.RowsAffected() == 1, err
+}
+
+func (p *Postgres) ClearResetToken(ctx context.Context, accountID, tokenHash string) error {
+	_, err := p.pool.Exec(ctx, `UPDATE accounts SET reset_token = NULL, reset_token_expiry = NULL
+		WHERE id = $1 AND reset_token = $2`, accountID, tokenHash)
 	return err
 }
 

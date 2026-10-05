@@ -78,7 +78,7 @@ func classifySignInAttempts(ipAttempts, identityAttempts int64) (rateLimited, tu
 }
 
 // requireTurnstileForSignIn applies a risk step-up rather than challenging
-// every normal sign-in. Registration, anonymous account creation, recovery,
+// every normal sign-in. Registration, anonymous account creation,
 // and sensitive account actions continue to call verifyTurnstileIfRequired
 // unconditionally. Repeated attempts are still capped by the shared IP and
 // identity hard limits.
@@ -108,6 +108,7 @@ func (h *HTTPHandler) requireTurnstileForSignIn(w http.ResponseWriter, r *http.R
 
 func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", h.handleHealth)
+	mux.HandleFunc("/api/v1/auth/tool-limit", h.handleToolLimit)
 	mux.HandleFunc("/api/v1/auth/register", h.withCORS(h.handleRegister))
 	mux.HandleFunc("/api/v1/auth/signin", h.withCORS(h.handleSignIn))
 	mux.HandleFunc("/api/v1/auth/verify-email", h.withCORS(h.handleVerifyEmail))
@@ -431,6 +432,7 @@ func (h *HTTPHandler) handleResetPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var req struct {
 		Email string `json:"email"`
 	}
@@ -440,8 +442,18 @@ func (h *HTTPHandler) handleResetPassword(w http.ResponseWriter, r *http.Request
 	}
 
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	if len(req.Email) > 254 || !strings.Contains(req.Email, "@") {
+		writeHTTPError(w, http.StatusBadRequest, "enter a valid email address")
+		return
+	}
+	if h.service.RateLimited(r.Context(), "password-reset-hour-ip:"+clientIP(r), 10, time.Hour) ||
+		h.service.RateLimited(r.Context(), "password-reset-hour-email:"+logging.HashIdentifier(req.Email), 3, time.Hour) {
+		w.Header().Set("Retry-After", "3600")
+		writeHTTPError(w, http.StatusTooManyRequests, "recovery request limit reached; use the link already in your inbox or try later")
+		return
+	}
 	if h.service.RateLimited(r.Context(), "password-reset-ip:"+clientIP(r), 1, 30*time.Second) ||
-		h.service.RateLimited(r.Context(), "password-reset-email:"+req.Email, 1, 30*time.Second) {
+		h.service.RateLimited(r.Context(), "password-reset-email:"+logging.HashIdentifier(req.Email), 1, 30*time.Second) {
 		writeHTTPError(w, http.StatusTooManyRequests, "please wait 30 seconds before requesting another reset email")
 		return
 	}
@@ -461,6 +473,11 @@ func (h *HTTPHandler) handleCompleteReset(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if h.service.RateLimited(r.Context(), "reset-complete:"+clientIP(r), 10, time.Minute) {
+		writeHTTPError(w, http.StatusTooManyRequests, "too many recovery attempts; try later")
+		return
+	}
 	var req struct {
 		Token       string `json:"token"`
 		NewPassword string `json:"new_password"`

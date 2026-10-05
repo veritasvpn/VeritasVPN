@@ -60,7 +60,11 @@ jobs:
           DATABASE_URL: postgres://veritas:ci-test-password@localhost:5432/veritas?sslmode=disable
           REDIS_URL: redis://localhost:6379/0
           AGENT_AUTH_TOKEN: test-agent-token
+          SECURITY_TEST_DATABASE_URL: postgres://veritas:ci-test-password@localhost:5432/veritas?sslmode=disable
+          SECURITY_TEST_REDIS_URL: redis://localhost:6379/1
         run: |
+          go test -race ./lib/netpolicy/... ./services/phishing-checker/... ./services/browser-proxy/... ./services/auth-svc/internal/repository/...
+          go vet ./lib/netpolicy/... ./services/phishing-checker/...
           go test ./api/... ./lib/config/... ./lib/logging/... ./lib/crypto/... ./lib/jwt/... ./services/auth-svc/... ./services/wg-manager/... ./services/billing-svc/... ./services/veritas-agent/... ./services/browser-proxy/... ./services/bitcoin-readiness/... ./clients/cli/... -v -count=1 && go test ./services/telegram-notifier/... -v -count=1
           go vet ./api/... ./lib/config/... ./lib/logging/... ./lib/crypto/... ./lib/jwt/... ./services/auth-svc/... ./services/wg-manager/... ./services/billing-svc/... ./services/veritas-agent/... ./services/browser-proxy/... ./services/bitcoin-readiness/... ./clients/cli/...
 
@@ -74,7 +78,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - name: Run govulncheck
         run: |
-          for module in api lib/config lib/logging lib/crypto lib/jwt services/auth-svc services/wg-manager services/billing-svc services/veritas-agent services/browser-proxy clients/cli; do
+          for module in api lib/config lib/logging lib/crypto lib/jwt lib/netpolicy services/auth-svc services/wg-manager services/billing-svc services/veritas-agent services/browser-proxy services/phishing-checker clients/cli; do
             (cd "$module" && go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...)
           done
 
@@ -308,6 +312,8 @@ jobs:
           ! grep -RInE '<style|style="' website --include='*.html'
           ! grep -RInP '<script(?![^>]*\bsrc=)' website --include='*.html'
           ! grep -RIn 'minlength="[0-9]"' website clients/browser-extension
+      - name: Security regression tests
+        run: node --test website/functions/_lib/*.test.mjs scripts/verify-release-source.test.mjs
       - name: Validate shell scripts
         run: |
           find deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n

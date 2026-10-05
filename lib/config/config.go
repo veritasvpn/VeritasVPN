@@ -45,11 +45,12 @@ type Config struct {
 	BrowserProxyScheme      string
 	BrowserExpectedEgressIP string
 
-	ResendAPIKey       string
-	TurnstileSecretKey string
-	E2EAuthSecret      string
-	E2EAuthAccountID   string
-	PublicBaseURL      string
+	ResendAPIKey         string
+	TurnstileSecretKey   string
+	ToolsRateLimitSecret string
+	E2EAuthSecret        string
+	E2EAuthAccountID     string
+	PublicBaseURL        string
 
 	AccessTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
@@ -99,11 +100,12 @@ func Load() *Config {
 		BrowserProxyScheme:      envOrDefault("BROWSER_PROXY_SCHEME", "http"),
 		BrowserExpectedEgressIP: strings.TrimSpace(os.Getenv("BROWSER_EXPECTED_EGRESS_IP")),
 
-		ResendAPIKey:       os.Getenv("RESEND_API_KEY"),
-		TurnstileSecretKey: os.Getenv("TURNSTILE_SECRET_KEY"),
-		E2EAuthSecret:      strings.TrimSpace(os.Getenv("E2E_AUTH_SECRET")),
-		E2EAuthAccountID:   strings.TrimSpace(os.Getenv("VERITAS_E2E_ACCOUNT_ID")),
-		PublicBaseURL:      envOrDefault("PUBLIC_BASE_URL", "https://veritasvpn.cloud"),
+		ResendAPIKey:         os.Getenv("RESEND_API_KEY"),
+		TurnstileSecretKey:   os.Getenv("TURNSTILE_SECRET_KEY"),
+		ToolsRateLimitSecret: strings.TrimSpace(os.Getenv("TOOLS_RATE_LIMIT_SECRET")),
+		E2EAuthSecret:        strings.TrimSpace(os.Getenv("E2E_AUTH_SECRET")),
+		E2EAuthAccountID:     strings.TrimSpace(os.Getenv("VERITAS_E2E_ACCOUNT_ID")),
+		PublicBaseURL:        envOrDefault("PUBLIC_BASE_URL", "https://veritasvpn.cloud"),
 
 		AccessTokenTTL:  durationEnvOrDefault("ACCESS_TOKEN_TTL", 1*time.Hour),
 		RefreshTokenTTL: durationEnvOrDefault("REFRESH_TOKEN_TTL", 7*24*time.Hour),

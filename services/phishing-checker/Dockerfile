@@ -1,5 +1,6 @@
 FROM golang:1.25.13-alpine@sha256:1e0126852075c9c60731c8ba49088448b91f63e2aed97ca9d1a9791622a05946 AS builder
 WORKDIR /src
+COPY lib/netpolicy ./lib/netpolicy
 COPY services/phishing-checker/go.mod ./services/phishing-checker/
 COPY services/phishing-checker/main.go ./services/phishing-checker/
 WORKDIR /src/services/phishing-checker

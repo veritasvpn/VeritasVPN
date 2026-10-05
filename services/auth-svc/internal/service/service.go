@@ -429,9 +429,13 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, emailAddr string
 	}
 
 	expiry := time.Now().Add(20 * time.Minute)
-	if err := s.db.SetResetToken(ctx, acc.ID, hashInput(token), expiry); err != nil {
+	issued, err := s.db.SetResetToken(ctx, acc.ID, hashInput(token), expiry)
+	if err != nil {
 		return fmt.Errorf("set reset token: %w", err)
 	}
+	if !issued {
+		return nil
+	} // Keep the existing link usable; do not send duplicates.
 
 	s.log.Info("password reset requested",
 		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
@@ -446,6 +450,9 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, emailAddr string
 			HTML:    resetEmailHTML(resetURL),
 		}); err != nil {
 			s.log.Error("failed to send reset email", zap.Error(err))
+			if clearErr := s.db.ClearResetToken(ctx, acc.ID, hashInput(token)); clearErr != nil {
+				s.log.Error("failed to clear undelivered reset", zap.Error(clearErr))
+			}
 		} else {
 			s.log.Info("reset email sent", zap.String("account_hash", logging.HashIdentifier(acc.ID)))
 		}
@@ -481,19 +488,22 @@ func (s *AuthService) ResetPassword(ctx context.Context, resetToken, newPassword
 		return fmt.Errorf("hash password: %w", err)
 	}
 
-	if err := s.revokeAllAccessTokens(ctx, acc.ID); err != nil {
-		return fmt.Errorf("revoke sessions before password reset: %w", err)
-	}
-	if err := s.db.DeleteAllRefreshTokens(ctx, acc.ID); err != nil {
-		return fmt.Errorf("delete refresh tokens before password reset: %w", err)
-	}
-	if err := s.db.UpdateAccountPassword(ctx, acc.ID, passwordHash); err != nil {
-		return fmt.Errorf("update password: %w", err)
+	if err := s.db.CompletePasswordReset(ctx, hashInput(resetToken), passwordHash, s.revokeAllAccessTokens); err != nil {
+		return fmt.Errorf("complete password reset: %w", err)
 	}
 
 	s.log.Info("password reset completed",
 		zap.String("account_hash", logging.HashIdentifier(acc.ID)),
 	)
+	if s.email != nil && acc.Email != nil {
+		if err := s.email.Send(ctx, email.SendRequest{
+			From: "VeritasVPN <noreply@veritasvpn.cloud>", To: *acc.Email,
+			Subject: "Your VeritasVPN password was changed",
+			HTML:    `<p>Your VeritasVPN password was changed and existing sessions were revoked.</p><p>If this was not you, open veritasvpn.cloud directly to recover your account and secure your email account.</p>`,
+		}); err != nil {
+			s.log.Warn("password change notification failed", zap.Error(err))
+		}
+	}
 
 	return nil
 }

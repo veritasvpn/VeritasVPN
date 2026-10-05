@@ -14,7 +14,7 @@ export async function onRequestPost(context) {
   const foreign = rejectForeignOrigin(context.request);
   if (foreign) return foreign;
 
-  const limited = await rateLimit(context.request, {
+  const limited = await rateLimit(context.request, context.env, {
     bucket: "check-dns-session",
     limit: 20,
     windowSec: 60,

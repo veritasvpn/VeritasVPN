@@ -4,6 +4,7 @@ import {
   clientIP,
   verifyTurnstile,
   rejectForeignOrigin,
+  boundedJSON,
 } from "../../_lib/security.js";
 
 function flattenBreaches(data) {
@@ -31,7 +32,7 @@ export async function onRequestPost(context) {
   const foreign = rejectForeignOrigin(context.request);
   if (foreign) return foreign;
 
-  const limited = await rateLimit(context.request, {
+  const limited = await rateLimit(context.request, context.env, {
     bucket: "check-breach",
     limit: 10,
     windowSec: 60,
@@ -40,7 +41,7 @@ export async function onRequestPost(context) {
 
   let body;
   try {
-    body = await context.request.json();
+    body = await boundedJSON(context.request);
   } catch {
     return jsonResponse({ error: "Invalid JSON body" }, 400);
   }
@@ -50,7 +51,7 @@ export async function onRequestPost(context) {
     context.env,
     body && body.turnstile_token,
     ip
-  );
+  ).catch(() => ({ ok: false, error: "Verification unavailable" }));
   if (!turnstile.ok) {
     return jsonResponse({ error: turnstile.error || "Verification failed" }, 403);
   }
@@ -69,8 +70,12 @@ export async function onRequestPost(context) {
         Accept: "application/json",
         "User-Agent": "VeritasVPN-CheckTools",
       },
+      signal: AbortSignal.timeout(6000),
+      redirect: "error",
     }
-  );
+  ).catch(() => null);
+
+  if (!xo) return jsonResponse({ error: "Breach check is temporarily unavailable." }, 502);
 
   if (xo.status === 404) {
     return jsonResponse({
@@ -91,7 +96,8 @@ export async function onRequestPost(context) {
     );
   }
 
-  const data = await xo.json();
+  const data = await boundedJSON(xo, 262144).catch(() => null);
+  if (!data) return jsonResponse({ error: "Breach check is temporarily unavailable." }, 502);
   const breaches = flattenBreaches(data).slice(0, 50);
   return jsonResponse({
     breached: breaches.length > 0,
