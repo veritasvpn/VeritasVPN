@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { pinnedChecksumDocument, sha256Hex, verifiedReleaseBody, DOWNLOADS } from "./releases.js";
 
 test("published Android pin includes the lockdown security baseline", async () => {
-  const version = DOWNLOADS['veritasvpn-android.apk'].tag.match(/^v(\d+)\.(\d+)\.(\d+)$/);
+  const version = DOWNLOADS['veritasvpn-android.apk'].tag.match(/^(?:android-)?v(\d+)\.(\d+)\.(\d+)$/);
   assert.ok(version, 'a concrete semantic version is required');
   const [major, minor, patch] = version.slice(1).map(Number);
   assert.ok(major > 0 || minor > 2 || (minor === 2 && patch >= 82), 'Android 0.2.82 is the minimum security release');
