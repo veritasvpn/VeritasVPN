@@ -9,27 +9,27 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
+    # Auth image currently running on the Dell.
     digest: sha256:6ce1039fd853ef8c81e3bfcb2c46e9d64e1f85df6c0da8734e3ea9afedaa0dba
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    # Device metadata, friendly names, and WireGuard handshake reporting.
-    digest: sha256:c24f4c8f0fef7048bd2b4d45d9652e72c88a5dc4de5a6c2ef428d15054ea8187
+    # Premium Shield toggles + migration 008 (13f41a6).
+    digest: sha256:e228b3f9be938f6298b7b9edbb8aab43014a52d90d906ae513760feab3ccbc1d
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    # Payment-status reconciliation build that is running on the Dell.
-    # The older f0f79c16 pin would roll that back.
-    digest: sha256:dcf18faeb2d3242f2ea42f9de7dba59099ad6193fc7407278c593bf8e07d7a3a
+    # Stale-pending fail build running on the Dell.
+    digest: sha256:00fae4e042e33ede23269587131466c5d889b896b8fb2ac68cda6274f68b0087
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    # Reports only WireGuard handshake timestamps, mapped to peer IDs.
-    digest: sha256:d4e18eb1a2d05b6ee7b799003238b9cf86af92aa21e0a9b4899133c52a6576e7
+    # Premium Shield per-peer policy enforcement (13f41a6).
+    digest: sha256:9e8e3f2d16509820166ff6c1efe8966e83f6ebf264d5a15fd9ab5f29956ecca0
   - name: localhost:31500/wstunnel
     newName: localhost:31500/wstunnel
-    # 27 Aug audit build that is running on the Dell.
-    # The older 54ed2522 pin would roll the stealth tunnel back.
+    # Stealth tunnel image running on the Dell.
     digest: sha256:4169260f4a2dc84df3c97aeba46882d5f7ee1b6ef94427b6c7f86951fc3b89b1
   - name: localhost:31500/veritas-proxy
     newName: localhost:31500/veritas-proxy
+    # Proxy image currently running on the Dell.
     digest: sha256:33e7a3e011d899e78b4790da37f5a13144a9087d95fd2b5d4d616f9c9d4b0746
   - name: localhost:31500/telegram-notifier
     newName: localhost:31500/telegram-notifier
