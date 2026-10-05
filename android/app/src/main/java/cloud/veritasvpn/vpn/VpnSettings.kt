@@ -20,6 +20,7 @@ object VpnSettings {
     private const val KEY_SHIELD_MALICIOUS = "shield_block_malicious"
     private const val KEY_SHIELD_ADS = "shield_block_ads"
     private const val KEY_SHIELD_ADULT = "shield_block_adult"
+    private const val KEY_SHIELD_TRACKERS = "shield_block_trackers"
 
     /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
     val EXCLUDE_LAN_ALLOWED_IPS: List<String> = listOf(
@@ -72,13 +73,14 @@ object VpnSettings {
         prefs(context).edit().putString(KEY_STEALTH_MODE, mode.stored()).apply()
     }
 
-    /** Premium DNS filters. Malicious defaults on; ads and adult default off. */
+    /** Premium DNS filters. Malicious and trackers default on; ads and adult default off. */
     fun shieldPolicy(context: Context): ShieldPolicy {
         val stored = prefs(context)
         return ShieldPolicy(
             blockMalicious = stored.getBoolean(KEY_SHIELD_MALICIOUS, true),
             blockAds = stored.getBoolean(KEY_SHIELD_ADS, false),
             blockAdult = stored.getBoolean(KEY_SHIELD_ADULT, false),
+            blockTrackers = stored.getBoolean(KEY_SHIELD_TRACKERS, true),
         )
     }
 
@@ -87,6 +89,7 @@ object VpnSettings {
             .putBoolean(KEY_SHIELD_MALICIOUS, policy.blockMalicious)
             .putBoolean(KEY_SHIELD_ADS, policy.blockAds)
             .putBoolean(KEY_SHIELD_ADULT, policy.blockAdult)
+            .putBoolean(KEY_SHIELD_TRACKERS, policy.blockTrackers)
             .apply()
     }
 

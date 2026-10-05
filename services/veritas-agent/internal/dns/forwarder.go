@@ -65,7 +65,7 @@ type Forwarder struct {
 }
 
 // peerPolicy is the category set enforced for one tunnel address.
-// explicit means the three toggles replaced preset expansion.
+// explicit means the toggles replaced preset expansion.
 type peerPolicy struct {
 	explicit bool
 	preset   string

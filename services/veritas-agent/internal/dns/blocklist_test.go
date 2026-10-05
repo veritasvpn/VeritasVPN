@@ -117,11 +117,19 @@ func TestShieldPolicyJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"explicit":true,"block_malicious":true,"block_ads":false,"block_adult":true}`), &policy); err != nil {
 		t.Fatal(err)
 	}
-	if !policy.Explicit || !policy.BlockMalicious || policy.BlockAds || !policy.BlockAdult {
-		t.Fatalf("wire flags: %+v", policy)
+	if !policy.Explicit || !policy.BlockMalicious || policy.BlockAds || !policy.BlockAdult || !policy.BlockTrackers {
+		t.Fatalf("legacy wire flags must keep trackers on: %+v", policy)
 	}
-	if !containsCategory(CategoriesForFlags(policy.Flags()), CategoryAdult) {
-		t.Fatal("adult flag must map to the adult category")
+	if !containsCategory(CategoriesForFlags(policy.Flags()), CategoryAdult) || !containsCategory(CategoriesForFlags(policy.Flags()), CategoryTrackers) {
+		t.Fatal("adult flag must map to adult, and omitted trackers stay on")
+	}
+	var off ShieldPolicy
+	if err := json.Unmarshal([]byte(`{"explicit":true,"block_malicious":true,"block_ads":true,"block_adult":false,"block_trackers":false}`), &off); err != nil {
+		t.Fatal(err)
+	}
+	cats := CategoriesForFlags(off.Flags())
+	if off.BlockTrackers || !containsCategory(cats, CategoryAds) || containsCategory(cats, CategoryTrackers) {
+		t.Fatalf("trackers off must not merge into ads: %+v cats=%v", off, cats)
 	}
 }
 
@@ -141,12 +149,16 @@ func TestCategoriesForFlags(t *testing.T) {
 		t.Fatal("block ads should enable the ads category")
 	}
 
-	adult := CategoriesForFlags(ShieldFlags{BlockMalicious: false, BlockAdult: true})
+	adult := CategoriesForFlags(ShieldFlags{BlockMalicious: false, BlockAdult: true, BlockTrackers: true})
 	if containsCategory(adult, CategoryMalware) || containsCategory(adult, CategoryPhishing) {
 		t.Fatal("malicious off should drop threat categories")
 	}
-	if !containsCategory(adult, CategoryTrackers) || !containsCategory(adult, CategoryAdult) {
-		t.Fatalf("trackers stay on and adult follows its toggle: %v", adult)
+	if !containsCategory(adult, CategoryTrackers) || !containsCategory(adult, CategoryAdult) || containsCategory(adult, CategoryAds) {
+		t.Fatalf("trackers follow their toggle and adult stays independent: %v", adult)
+	}
+	trackersOff := CategoriesForFlags(ShieldFlags{BlockMalicious: true, BlockAds: true, BlockTrackers: false})
+	if containsCategory(trackersOff, CategoryTrackers) || !containsCategory(trackersOff, CategoryAds) {
+		t.Fatalf("ads must not imply trackers: %v", trackersOff)
 	}
 }
 
@@ -174,9 +186,12 @@ func TestForwarderAppliesFlagsPerPeerWithoutReconnect(t *testing.T) {
 	if _, ok := f.shouldBlock("10.0.0.8", "ads.example"); ok {
 		t.Fatal("ads must stay off on the default policy")
 	}
+	if _, ok := f.shouldBlock("10.0.0.8", "track.example"); !ok {
+		t.Fatal("peers with no saved flags keep Standard, which blocks trackers")
+	}
 
 	f.ApplyPeerShield([]string{"10.0.0.8/32"}, PresetStandard, &ShieldPolicy{
-		Explicit: true, BlockMalicious: true, BlockAds: true, BlockAdult: true,
+		Explicit: true, BlockMalicious: true, BlockAds: true, BlockAdult: true, BlockTrackers: true,
 	})
 	for _, name := range []string{ProtectedDNSTestDomain, AdultProtectionTestDomain, "ads.example", "track.example"} {
 		if _, ok := f.shouldBlock("10.0.0.8", name); !ok {
@@ -188,13 +203,23 @@ func TestForwarderAppliesFlagsPerPeerWithoutReconnect(t *testing.T) {
 	}
 
 	f.ApplyPeerShield([]string{"10.0.0.8/32"}, PresetAggressive, &ShieldPolicy{
-		Explicit: true, BlockMalicious: false, BlockAds: false, BlockAdult: false,
+		Explicit: true, BlockMalicious: true, BlockAds: true, BlockAdult: false, BlockTrackers: false,
+	})
+	if _, ok := f.shouldBlock("10.0.0.8", "track.example"); ok {
+		t.Fatal("block trackers off must stop blocking tracker domains without a tunnel rebuild")
+	}
+	if _, ok := f.shouldBlock("10.0.0.8", "ads.example"); !ok {
+		t.Fatal("turning trackers off must leave the ads category in place")
+	}
+
+	f.ApplyPeerShield([]string{"10.0.0.8/32"}, PresetAggressive, &ShieldPolicy{
+		Explicit: true, BlockMalicious: false, BlockAds: false, BlockAdult: false, BlockTrackers: false,
 	})
 	if _, ok := f.shouldBlock("10.0.0.8", ProtectedDNSTestDomain); ok {
 		t.Fatal("malicious off must stop blocking the malware test domain")
 	}
-	if _, ok := f.shouldBlock("10.0.0.8", "track.example"); !ok {
-		t.Fatal("trackers stay on when the three toggles are off")
+	if _, ok := f.shouldBlock("10.0.0.8", "track.example"); ok {
+		t.Fatal("trackers follow their own toggle when it is off")
 	}
 
 	f.SetPeerPreset([]string{"10.7.0.2/32"}, PresetSecurity)
@@ -206,7 +231,7 @@ func TestForwarderAppliesFlagsPerPeerWithoutReconnect(t *testing.T) {
 	}
 
 	f.allowlist = parseAllowlist("ads.example")
-	f.ApplyPeerShield([]string{"10.0.0.8/32"}, "", &ShieldPolicy{Explicit: true, BlockAds: true, BlockMalicious: true})
+	f.ApplyPeerShield([]string{"10.0.0.8/32"}, "", &ShieldPolicy{Explicit: true, BlockAds: true, BlockMalicious: true, BlockTrackers: true})
 	if _, ok := f.shouldBlock("10.0.0.8", "ads.example"); ok {
 		t.Fatal("allowlist must win over an enabled ads category")
 	}

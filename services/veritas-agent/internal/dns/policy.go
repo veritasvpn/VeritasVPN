@@ -1,32 +1,36 @@
 package dns
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
-// ShieldFlags are the three Premium toggles. Clients send these booleans.
+// ShieldFlags are the four Premium toggles. Clients send these booleans.
 // The agent maps them to categories; clients do not send category lists.
 //
-// Trackers are not a toggle in this release. Flag policy keeps them on so a
-// peer that leaves Block malicious sites at its default still matches today's
-// Standard preset (threats + trackers, ads off). Legacy presets still expand
-// on their own when no explicit flags are set — Security stays tracker-free.
+// Block trackers enables only the trackers category. It is not folded into ads.
+// Legacy presets still expand on their own when no explicit flags are set —
+// Security stays tracker-free, Standard keeps trackers on.
 type ShieldFlags struct {
 	BlockMalicious bool `json:"block_malicious"`
 	BlockAds       bool `json:"block_ads"`
 	BlockAdult     bool `json:"block_adult"`
+	BlockTrackers  bool `json:"block_trackers"`
 }
 
 // ShieldPolicy is the live per-peer payload from wg-manager.
-// Explicit reports that the three toggles replace preset expansion.
+// Explicit reports that the toggles replace preset expansion.
 type ShieldPolicy struct {
 	Explicit       bool `json:"explicit"`
 	BlockMalicious bool `json:"block_malicious"`
 	BlockAds       bool `json:"block_ads"`
 	BlockAdult     bool `json:"block_adult"`
+	BlockTrackers  bool `json:"block_trackers"`
 }
 
-// DefaultShieldFlags is the Premium screen default: malicious on, ads off, adult off.
+// DefaultShieldFlags is the Premium screen default: malicious on, trackers on, ads off, adult off.
 func DefaultShieldFlags() ShieldFlags {
-	return ShieldFlags{BlockMalicious: true, BlockAds: false, BlockAdult: false}
+	return ShieldFlags{BlockMalicious: true, BlockAds: false, BlockAdult: false, BlockTrackers: true}
 }
 
 // Flags returns the toggle view of a policy payload.
@@ -35,18 +39,48 @@ func (p ShieldPolicy) Flags() ShieldFlags {
 		BlockMalicious: p.BlockMalicious,
 		BlockAds:       p.BlockAds,
 		BlockAdult:     p.BlockAdult,
+		BlockTrackers:  p.BlockTrackers,
 	}
 }
 
-// CategoriesForFlags maps the three toggles onto the category set enforced
-// for one tunnel IP. Trackers stay enabled. Malicious covers malware,
-// phishing, scam, and crypto. Ads and adult follow their own toggles.
+// UnmarshalJSON defaults a missing block_trackers field to true. Older
+// wg-manager builds omit it and always enforced trackers for explicit policy.
+func (p *ShieldPolicy) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Explicit       bool  `json:"explicit"`
+		BlockMalicious bool  `json:"block_malicious"`
+		BlockAds       bool  `json:"block_ads"`
+		BlockAdult     bool  `json:"block_adult"`
+		BlockTrackers  *bool `json:"block_trackers"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	trackers := true
+	if raw.BlockTrackers != nil {
+		trackers = *raw.BlockTrackers
+	}
+	*p = ShieldPolicy{
+		Explicit:       raw.Explicit,
+		BlockMalicious: raw.BlockMalicious,
+		BlockAds:       raw.BlockAds,
+		BlockAdult:     raw.BlockAdult,
+		BlockTrackers:  trackers,
+	}
+	return nil
+}
+
+// CategoriesForFlags maps the four toggles onto the category set enforced
+// for one tunnel IP. Trackers follow their own toggle and are not merged
+// into ads. Malicious covers malware, phishing, scam, and crypto.
 func CategoriesForFlags(flags ShieldFlags) []string {
 	out := make([]string, 0, 7)
 	if flags.BlockMalicious {
 		out = append(out, CategoryMalware, CategoryPhishing, CategoryScam, CategoryCrypto)
 	}
-	out = append(out, CategoryTrackers)
+	if flags.BlockTrackers {
+		out = append(out, CategoryTrackers)
+	}
 	if flags.BlockAds {
 		out = append(out, CategoryAds)
 	}

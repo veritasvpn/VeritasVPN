@@ -60,7 +60,7 @@ fun ShieldSettingsScreen(
         Text("ADVANCED VPN PROTECTION", style = MaterialTheme.typography.labelSmall, color = PaperDim)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Blocks known domains in DNS while you are connected. This does not remove ads inside web pages.",
+            "Blocks known domains in DNS while you are connected. Ads or trackers loaded from the site itself can still run.",
             color = PaperMuted,
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -98,6 +98,15 @@ fun ShieldSettingsScreen(
             checked = policy.blockMalicious,
             locked = !isPremium,
             onCheckedChange = { onPolicyChange(policy.copy(blockMalicious = it)) },
+            onUpgrade = onUpgrade,
+        )
+        Spacer(Modifier.height(8.dp))
+        ShieldToggleRow(
+            title = "Block trackers",
+            subtitle = "Stop known tracker domains from resolving. A tracker served from the site itself can still run.",
+            checked = policy.blockTrackers,
+            locked = !isPremium,
+            onCheckedChange = { onPolicyChange(policy.copy(blockTrackers = it)) },
             onUpgrade = onUpgrade,
         )
         Spacer(Modifier.height(8.dp))

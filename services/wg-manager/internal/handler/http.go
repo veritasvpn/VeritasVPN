@@ -445,20 +445,22 @@ func peerResponse(peer *model.Peer) map[string]interface{} {
 }
 
 func shieldJSON(peer *model.Peer) map[string]bool {
-	flags := entitlement.EffectiveFlags(peer.ShieldPolicySet, peer.ShieldBlockMalicious, peer.ShieldBlockAds, peer.ShieldBlockAdult, peer.ShieldPreset)
+	flags := entitlement.EffectiveFlags(peer.ShieldPolicySet, peer.ShieldBlockMalicious, peer.ShieldBlockAds, peer.ShieldBlockAdult, peer.ShieldBlockTrackers, peer.ShieldPreset)
 	return map[string]bool{
 		"block_malicious": flags.BlockMalicious,
 		"block_ads":       flags.BlockAds,
 		"block_adult":     flags.BlockAdult,
+		"block_trackers":  flags.BlockTrackers,
 	}
 }
 
 func shieldJSONFromConfig(cfg *service.PeerConfig) map[string]bool {
-	flags := entitlement.EffectiveFlags(cfg.ShieldPolicySet, cfg.ShieldBlockMalicious, cfg.ShieldBlockAds, cfg.ShieldBlockAdult, cfg.ShieldPreset)
+	flags := entitlement.EffectiveFlags(cfg.ShieldPolicySet, cfg.ShieldBlockMalicious, cfg.ShieldBlockAds, cfg.ShieldBlockAdult, cfg.ShieldBlockTrackers, cfg.ShieldPreset)
 	return map[string]bool{
 		"block_malicious": flags.BlockMalicious,
 		"block_ads":       flags.BlockAds,
 		"block_adult":     flags.BlockAdult,
+		"block_trackers":  flags.BlockTrackers,
 	}
 }
 
@@ -471,6 +473,7 @@ func shieldPolicyWire(peer *model.Peer) *hub.ShieldPolicy {
 		BlockMalicious: peer.ShieldBlockMalicious,
 		BlockAds:       peer.ShieldBlockAds,
 		BlockAdult:     peer.ShieldBlockAdult,
+		BlockTrackers:  peer.ShieldBlockTrackers,
 	}
 }
 
