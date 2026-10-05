@@ -289,6 +289,7 @@ func (h *HTTPHandler) handlePeerStream(w http.ResponseWriter, r *http.Request) {
 				PresharedKey: psk,
 				AllowedIPs:   p.AllowedIPs,
 				ShieldPreset: entitlement.NormalizeShieldPreset(p.ShieldPreset),
+				ShieldPolicy: shieldPolicyWire(&p),
 			}
 			line, encErr := hub.EncodeSSE(update)
 			if encErr != nil {
@@ -387,15 +388,16 @@ func (h *HTTPHandler) handlePeerApplied(w http.ResponseWriter, r *http.Request) 
 }
 
 type createPeerRequest struct {
-	PublicKey       string `json:"public_key"`
-	DeviceID        string `json:"device_id"`
-	DeviceName      string `json:"device_name"`
-	DevicePlatform  string `json:"device_platform"`
-	DeviceModel     string `json:"device_model"`
-	DeviceOSVersion string `json:"device_os_version"`
-	ClientVersion   string `json:"client_version"`
-	Region          string `json:"region"`
-	ShieldPreset    string `json:"shield_preset"`
+	PublicKey       string          `json:"public_key"`
+	DeviceID        string          `json:"device_id"`
+	DeviceName      string          `json:"device_name"`
+	DevicePlatform  string          `json:"device_platform"`
+	DeviceModel     string          `json:"device_model"`
+	DeviceOSVersion string          `json:"device_os_version"`
+	ClientVersion   string          `json:"client_version"`
+	Region          string          `json:"region"`
+	ShieldPreset    string          `json:"shield_preset"`
+	Shield          json.RawMessage `json:"shield"`
 }
 
 // deviceMetadata is intentionally limited to a few display fields. It is
@@ -435,10 +437,56 @@ func peerResponse(peer *model.Peer) map[string]interface{} {
 	}
 	return map[string]interface{}{
 		"id": peer.ID, "assigned_ip": peer.AssignedIP, "shield_preset": peer.ShieldPreset,
+		"shield":      shieldJSON(peer),
 		"device_name": peer.DeviceName, "device_platform": peer.DevicePlatform,
 		"device_model": peer.DeviceModel, "device_os_version": peer.DeviceOSVersion,
 		"client_version": peer.ClientVersion, "last_handshake_at": lastHandshake,
 	}
+}
+
+func shieldJSON(peer *model.Peer) map[string]bool {
+	flags := entitlement.EffectiveFlags(peer.ShieldPolicySet, peer.ShieldBlockMalicious, peer.ShieldBlockAds, peer.ShieldBlockAdult, peer.ShieldPreset)
+	return map[string]bool{
+		"block_malicious": flags.BlockMalicious,
+		"block_ads":       flags.BlockAds,
+		"block_adult":     flags.BlockAdult,
+	}
+}
+
+func shieldJSONFromConfig(cfg *service.PeerConfig) map[string]bool {
+	flags := entitlement.EffectiveFlags(cfg.ShieldPolicySet, cfg.ShieldBlockMalicious, cfg.ShieldBlockAds, cfg.ShieldBlockAdult, cfg.ShieldPreset)
+	return map[string]bool{
+		"block_malicious": flags.BlockMalicious,
+		"block_ads":       flags.BlockAds,
+		"block_adult":     flags.BlockAdult,
+	}
+}
+
+func shieldPolicyWire(peer *model.Peer) *hub.ShieldPolicy {
+	if peer == nil || !peer.ShieldPolicySet {
+		return nil
+	}
+	return &hub.ShieldPolicy{
+		Explicit:       true,
+		BlockMalicious: peer.ShieldBlockMalicious,
+		BlockAds:       peer.ShieldBlockAds,
+		BlockAdult:     peer.ShieldBlockAdult,
+	}
+}
+
+func parseOptionalShield(raw json.RawMessage) (*entitlement.ShieldFlags, error) {
+	if len(bytesTrimSpace(raw)) == 0 || string(bytesTrimSpace(raw)) == "null" {
+		return nil, nil
+	}
+	flags, err := entitlement.ParseShieldFlags(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &flags, nil
+}
+
+func bytesTrimSpace(raw []byte) []byte {
+	return []byte(strings.TrimSpace(string(raw)))
 }
 
 func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
@@ -460,7 +508,12 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		name, platform, deviceModel, osVersion, clientVersion := cleanedCreateDeviceMetadata(req)
-		cfg, err := h.svc.CreatePeer(r.Context(), accountID, tier, req.PublicKey, req.DeviceID, name, platform, deviceModel, osVersion, clientVersion, req.Region, clientIPFromRequest(r), req.ShieldPreset)
+		shield, err := parseOptionalShield(req.Shield)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		cfg, err := h.svc.CreatePeer(r.Context(), accountID, tier, req.PublicKey, req.DeviceID, name, platform, deviceModel, osVersion, clientVersion, req.Region, clientIPFromRequest(r), req.ShieldPreset, shield)
 		if err != nil {
 			var planErr *entitlement.PlanError
 			if errors.As(err, &planErr) {
@@ -496,6 +549,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			"device_os_version":    cfg.DeviceOSVersion,
 			"client_version":       cfg.ClientVersion,
 			"shield_preset":        cfg.ShieldPreset,
+			"shield":               shieldJSONFromConfig(cfg),
 		})
 	case http.MethodGet:
 		peers, err := h.svc.ListPeers(r.Context(), accountID)
@@ -519,6 +573,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 				"assigned_ip":       p.AssignedIP,
 				"status":            p.Status,
 				"shield_preset":     entitlement.NormalizeShieldPreset(p.ShieldPreset),
+				"shield":            shieldJSON(&p),
 				"device_name":       p.DeviceName,
 				"device_platform":   p.DevicePlatform,
 				"device_model":      p.DeviceModel,
@@ -542,7 +597,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
-	accountID, _, err := h.accountFromRequest(r)
+	accountID, tier, err := h.accountFromRequest(r)
 	if err != nil {
 		h.writeError(w, http.StatusUnauthorized, "unauthorized", err)
 		return
@@ -564,11 +619,32 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodPatch:
 		var req struct {
-			ShieldPreset *string `json:"shield_preset"`
+			ShieldPreset *string         `json:"shield_preset"`
+			Shield       json.RawMessage `json:"shield"`
 			deviceMetadata
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		shield, err := parseOptionalShield(req.Shield)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if shield != nil {
+			peer, err := h.svc.UpdateShieldPolicy(r.Context(), peerID, accountID, tier, *shield)
+			if err != nil {
+				var planErr *entitlement.PlanError
+				if errors.As(err, &planErr) {
+					h.log.Warn("shield update denied by plan", "account_hash", logging.HashIdentifier(accountID), "tier", tier, "code", planErr.Code)
+					writeJSON(w, http.StatusForbidden, map[string]string{"error": planErr.Message, "code": planErr.Code})
+					return
+				}
+				h.writeError(w, http.StatusBadRequest, "update shield policy failed", err, "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
+				return
+			}
+			writeJSON(w, http.StatusOK, peerResponse(peer))
 			return
 		}
 		if req.ShieldPreset != nil {
@@ -576,8 +652,14 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "shield_preset is required"})
 				return
 			}
-			peer, err := h.svc.UpdateShieldPreset(r.Context(), peerID, accountID, *req.ShieldPreset)
+			peer, err := h.svc.UpdateShieldPreset(r.Context(), peerID, accountID, tier, *req.ShieldPreset)
 			if err != nil {
+				var planErr *entitlement.PlanError
+				if errors.As(err, &planErr) {
+					h.log.Warn("shield preset denied by plan", "account_hash", logging.HashIdentifier(accountID), "tier", tier, "code", planErr.Code)
+					writeJSON(w, http.StatusForbidden, map[string]string{"error": planErr.Message, "code": planErr.Code})
+					return
+				}
 				h.writeError(w, http.StatusBadRequest, "update shield preset failed", err, "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
 				return
 			}
@@ -585,7 +667,7 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.DeviceName == nil && req.DevicePlatform == nil && req.DeviceModel == nil && req.DeviceOSVersion == nil && req.ClientVersion == nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device metadata or shield_preset is required"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device metadata or shield is required"})
 			return
 		}
 		if req.DeviceName != nil {
@@ -635,6 +717,7 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 			"assigned_ip":       peer.AssignedIP,
 			"status":            peer.Status,
 			"shield_preset":     entitlement.NormalizeShieldPreset(peer.ShieldPreset),
+			"shield":            shieldJSON(peer),
 			"device_name":       peer.DeviceName,
 			"device_platform":   peer.DevicePlatform,
 			"device_model":      peer.DeviceModel,

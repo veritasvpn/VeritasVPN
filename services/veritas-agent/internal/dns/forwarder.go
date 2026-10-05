@@ -58,10 +58,18 @@ type Forwarder struct {
 	blockedMu       sync.Mutex
 	blockedByClient map[string]uint64 // tunnel client IP → blocked query count (no domains)
 
-	policyMu     sync.RWMutex
-	presetByIP   map[string]string // tunnel client IP → shield preset
+	policyMu      sync.RWMutex
+	policyByIP    map[string]peerPolicy // tunnel client IP → shield policy
 	defaultPreset string
-	allowlist    map[string]struct{}
+	allowlist     map[string]struct{}
+}
+
+// peerPolicy is the category set enforced for one tunnel address.
+// explicit means the three toggles replaced preset expansion.
+type peerPolicy struct {
+	explicit bool
+	preset   string
+	enabled  map[string]struct{}
 }
 
 type Config struct {
@@ -113,7 +121,7 @@ func New(cfg Config, observer Observer, log *logging.Logger) *Forwarder {
 		blocklist:       blocklist,
 		observer:        observer,
 		blockedByClient: make(map[string]uint64),
-		presetByIP:      make(map[string]string),
+		policyByIP:      make(map[string]peerPolicy),
 		defaultPreset:   NormalizePreset(cfg.DefaultPreset),
 		allowlist:       cfg.Allowlist,
 	}
@@ -151,6 +159,8 @@ func (f *Forwarder) ClearBlockedForCIDRs(cidrs []string) {
 }
 
 // SetPeerPreset associates a Veritas Shield preset with tunnel address(es).
+// Preset expansion is the compatibility path for peers that have not stored
+// independent toggles. It replaces any explicit category set for those IPs.
 func (f *Forwarder) SetPeerPreset(cidrs []string, preset string) {
 	if f == nil {
 		return
@@ -158,19 +168,55 @@ func (f *Forwarder) SetPeerPreset(cidrs []string, preset string) {
 	preset = NormalizePreset(preset)
 	f.policyMu.Lock()
 	defer f.policyMu.Unlock()
-	if f.presetByIP == nil {
-		f.presetByIP = make(map[string]string)
+	if f.policyByIP == nil {
+		f.policyByIP = make(map[string]peerPolicy)
 	}
 	for _, cidr := range cidrs {
 		ip := stripHost(cidr)
 		if ip == "" {
 			continue
 		}
-		f.presetByIP[ip] = preset
+		f.policyByIP[ip] = peerPolicy{preset: preset}
 	}
 }
 
-// ClearPeerPresets removes preset mappings for the given tunnel addresses.
+// SetPeerCategories applies an explicit category set to tunnel address(es)
+// without rebuilding the WireGuard peer. Later queries for those IPs use this
+// set immediately. An empty list enables nothing (trackers included only when
+// the caller puts them in categories).
+func (f *Forwarder) SetPeerCategories(cidrs []string, categories []string) {
+	if f == nil {
+		return
+	}
+	enabled := categorySet(categories)
+	f.policyMu.Lock()
+	defer f.policyMu.Unlock()
+	if f.policyByIP == nil {
+		f.policyByIP = make(map[string]peerPolicy)
+	}
+	for _, cidr := range cidrs {
+		ip := stripHost(cidr)
+		if ip == "" {
+			continue
+		}
+		f.policyByIP[ip] = peerPolicy{explicit: true, enabled: enabled}
+	}
+}
+
+// ApplyPeerShield stores either explicit toggle flags or a preset alias.
+// Explicit flags win so a connected peer changes DNS policy without a reconnect.
+func (f *Forwarder) ApplyPeerShield(cidrs []string, preset string, policy *ShieldPolicy) {
+	if f == nil {
+		return
+	}
+	if policy != nil && policy.Explicit {
+		f.SetPeerCategories(cidrs, CategoriesForFlags(policy.Flags()))
+		return
+	}
+	f.SetPeerPreset(cidrs, preset)
+}
+
+// ClearPeerPresets removes policy mappings for the given tunnel addresses.
 func (f *Forwarder) ClearPeerPresets(cidrs []string) {
 	if f == nil || len(cidrs) == 0 {
 		return
@@ -182,21 +228,44 @@ func (f *Forwarder) ClearPeerPresets(cidrs []string) {
 		if ip == "" {
 			continue
 		}
-		delete(f.presetByIP, ip)
+		delete(f.policyByIP, ip)
 	}
 }
 
-func (f *Forwarder) presetForClient(clientIP string) string {
+func (f *Forwarder) categoryEnabledForClient(clientIP, category string) bool {
+	category = strings.ToLower(strings.TrimSpace(category))
 	ip := stripHost(clientIP)
 	f.policyMu.RLock()
 	defer f.policyMu.RUnlock()
-	if p, ok := f.presetByIP[ip]; ok && p != "" {
-		return p
+	if pol, ok := f.policyByIP[ip]; ok {
+		if pol.explicit {
+			_, enabled := pol.enabled[category]
+			return enabled
+		}
+		if pol.preset != "" {
+			return CategoryEnabled(pol.preset, category)
+		}
 	}
-	if f.defaultPreset != "" {
-		return f.defaultPreset
+	preset := f.defaultPreset
+	if preset == "" {
+		preset = DefaultPreset
 	}
-	return DefaultPreset
+	return CategoryEnabled(preset, category)
+}
+
+// shouldBlock reports the category that would be NXDOMAIN'd for this client.
+func (f *Forwarder) shouldBlock(clientIP, name string) (string, bool) {
+	if f == nil || f.blocklist == nil {
+		return "", false
+	}
+	if AllowlistMatch(f.allowlist, name) {
+		return "", false
+	}
+	category, blocked := f.blocklist.BlockedCategory(name)
+	if !blocked || !f.categoryEnabledForClient(clientIP, category) {
+		return "", false
+	}
+	return category, true
 }
 
 func stripHost(addr string) string {
@@ -399,9 +468,7 @@ func (f *Forwarder) handleQuery(query []byte, write func([]byte) error, clientIP
 		return nil
 	}
 	if name, questionEnd, ok := queryName(query); ok {
-		if AllowlistMatch(f.allowlist, name) {
-			// Escape hatch — never block allowlisted names (Aggressive FP relief).
-		} else if cat, blocked := f.blocklist.BlockedCategory(name); blocked && CategoryEnabled(f.presetForClient(clientIP), cat) {
+		if cat, blocked := f.shouldBlock(clientIP, name); blocked {
 			f.observer.DNSQuery(true)
 			f.observer.DNSBlockedCategory(cat)
 			if clientIP != "" {

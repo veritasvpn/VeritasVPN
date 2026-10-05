@@ -140,7 +140,7 @@ def page_shell(title: str, description: str, canonical: str, body: str, active: 
 {nav_html(active)}
 {body}
 {footer_html()}
-  <script type="module" src="/js/site-nav.js"></script>
+  <script type="module" src="/js/site-nav.js?v=mobilefix1"></script>
 </body>
 </html>
 """

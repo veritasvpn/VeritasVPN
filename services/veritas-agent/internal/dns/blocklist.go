@@ -20,10 +20,13 @@ const (
 	blocklistFetchTimeout = 20 * time.Second
 	categoryStatePrefix   = "# veritas-shield-category:"
 
-	// ProtectedDNSTestDomain is a harmless, reserved name that lets an
-	// administrator verify the DNS protection path without visiting a real
-	// malicious website. It is deliberately included in every policy version.
+	// ProtectedDNSTestDomain is a harmless, reserved name in the malware
+	// category. It returns NXDOMAIN when Block malicious sites is on (the
+	// default) without visiting a real malicious website.
 	ProtectedDNSTestDomain = "dns-protection-test.veritasvpn.invalid"
+	// AdultProtectionTestDomain is a reserved name in the adult category.
+	// It resolves unless Block adult sites is enabled for that peer.
+	AdultProtectionTestDomain = "adult-protection-test.veritasvpn.invalid"
 )
 
 // Observer intentionally exposes aggregate events only. Implementations must
@@ -39,12 +42,12 @@ type Observer interface {
 
 type noopObserver struct{}
 
-func (noopObserver) DNSQuery(bool)                              {}
-func (noopObserver) DNSBlockedCategory(string)                  {}
-func (noopObserver) DNSUpstreamFailure()                        {}
-func (noopObserver) DNSBlocklistRefreshed(int, time.Time)       {}
-func (noopObserver) DNSBlocklistCategorySizes(map[string]int)   {}
-func (noopObserver) DNSBlocklistRefreshFailed()                 {}
+func (noopObserver) DNSQuery(bool)                            {}
+func (noopObserver) DNSBlockedCategory(string)                {}
+func (noopObserver) DNSUpstreamFailure()                      {}
+func (noopObserver) DNSBlocklistRefreshed(int, time.Time)     {}
+func (noopObserver) DNSBlocklistCategorySizes(map[string]int) {}
+func (noopObserver) DNSBlocklistRefreshFailed()               {}
 
 type Blocklist struct {
 	categories   []string
@@ -72,8 +75,8 @@ func NewBlocklist(legacyURLs, statePath string, refreshEvery time.Duration, obse
 		urls[CategoryPhishing] = append([]string(nil), legacy...)
 	} else {
 		for _, c := range cats {
-			if def, ok := defaultCategoryURLs[c]; ok {
-				urls[c] = []string{def}
+			if defs := defaultCategoryURLs[c]; len(defs) > 0 {
+				urls[c] = append([]string(nil), defs...)
 			}
 		}
 	}
@@ -385,6 +388,9 @@ func addBuiltInProtectionDomains(domains map[string]string) {
 	if _, ok := domains[ProtectedDNSTestDomain]; !ok {
 		domains[ProtectedDNSTestDomain] = CategoryMalware
 	}
+	if _, ok := domains[AdultProtectionTestDomain]; !ok {
+		domains[AdultProtectionTestDomain] = CategoryAdult
+	}
 	for _, d := range builtInDoHBypassDomains {
 		if _, ok := domains[d]; !ok {
 			domains[d] = CategoryMalware
@@ -411,7 +417,7 @@ func (b *Blocklist) writeState(domains map[string]string) error {
 		byCat[cat] = append(byCat[cat], domain)
 	}
 	order := append([]string(nil), b.categories...)
-	for _, extra := range []string{CategoryMalware, CategoryPhishing, CategoryScam, CategoryCrypto, CategoryTrackers, CategoryAds} {
+	for _, extra := range []string{CategoryMalware, CategoryPhishing, CategoryScam, CategoryCrypto, CategoryTrackers, CategoryAds, CategoryAdult} {
 		found := false
 		for _, c := range order {
 			if c == extra {

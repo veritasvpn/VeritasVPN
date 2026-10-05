@@ -47,6 +47,10 @@ type PeerConfig struct {
 	DeviceOSVersion        string
 	ClientVersion          string
 	ShieldPreset           string
+	ShieldPolicySet        bool
+	ShieldBlockMalicious   bool
+	ShieldBlockAds         bool
+	ShieldBlockAdult       bool
 }
 
 type Service struct {
@@ -439,7 +443,7 @@ func (s *Service) DNSBlockedCount(ctx context.Context, assignedIP string) uint64
 	return n
 }
 
-func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, deviceID, deviceName, devicePlatform, deviceModel, deviceOSVersion, clientVersion, preferredRegion, clientIP, shieldPreset string) (*PeerConfig, error) {
+func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, deviceID, deviceName, devicePlatform, deviceModel, deviceOSVersion, clientVersion, preferredRegion, clientIP, shieldPreset string, shield *entitlement.ShieldFlags) (*PeerConfig, error) {
 	tier = s.resolveTier(ctx, accountID, tier)
 	requestedDeviceID := strings.TrimSpace(deviceID)
 	deviceID = requestedDeviceID
@@ -473,6 +477,11 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 	}
 	if err := entitlement.CheckCreatePeer(tier, countForLimit, preferredRegion, s.freeRegions); err != nil {
 		return nil, err
+	}
+	if shield != nil {
+		if err := entitlement.CheckShieldUpdate(tier); err != nil {
+			return nil, err
+		}
 	}
 
 	// A reconnect may replace this device's active row. The Linux app also
@@ -544,29 +553,31 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		return nil, err
 	}
 
+	shieldPresetOut, policySet, blockMalicious, blockAds, blockAdult := resolveShieldForCreate(shieldPreset, shield, replacedPeer)
 	peer := &model.Peer{
-		AccountID:       accountID,
-		ServerID:        srv.ID,
-		DeviceID:        deviceID,
-		DeviceName:      deviceName,
-		DevicePlatform:  devicePlatform,
-		DeviceModel:     deviceModel,
-		DeviceOSVersion: deviceOSVersion,
-		ClientVersion:   clientVersion,
-		Pubkey:          publicKey,
-		PresharedKey:    &psk,
-		AllowedIPs:      []string{assignedIP},
-		AssignedIP:      assignedIP,
-		Status:          "pending",
-		ShieldPreset:    entitlement.NormalizeShieldPreset(shieldPreset),
-		CreatedAt:       time.Now(),
+		AccountID:            accountID,
+		ServerID:             srv.ID,
+		DeviceID:             deviceID,
+		DeviceName:           deviceName,
+		DevicePlatform:       devicePlatform,
+		DeviceModel:          deviceModel,
+		DeviceOSVersion:      deviceOSVersion,
+		ClientVersion:        clientVersion,
+		Pubkey:               publicKey,
+		PresharedKey:         &psk,
+		AllowedIPs:           []string{assignedIP},
+		AssignedIP:           assignedIP,
+		Status:               "pending",
+		ShieldPreset:         shieldPresetOut,
+		ShieldPolicySet:      policySet,
+		ShieldBlockMalicious: blockMalicious,
+		ShieldBlockAds:       blockAds,
+		ShieldBlockAdult:     blockAdult,
+		CreatedAt:            time.Now(),
 	}
 
 	if replacedPeer != nil {
 		peer.ID = replacedPeer.ID
-		if strings.TrimSpace(shieldPreset) == "" && replacedPeer.ShieldPreset != "" {
-			peer.ShieldPreset = entitlement.NormalizeShieldPreset(replacedPeer.ShieldPreset)
-		}
 		if err := s.postgres.UpdatePeerIdentity(ctx, peer); err != nil {
 			if stripCIDR(replacedPeer.AssignedIP) != assignedIP {
 				_ = s.redis.ReleaseIP(ctx, srv.ID, assignedIP)
@@ -663,7 +674,32 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		DeviceOSVersion:        peer.DeviceOSVersion,
 		ClientVersion:          peer.ClientVersion,
 		ShieldPreset:           peer.ShieldPreset,
+		ShieldPolicySet:        peer.ShieldPolicySet,
+		ShieldBlockMalicious:   peer.ShieldBlockMalicious,
+		ShieldBlockAds:         peer.ShieldBlockAds,
+		ShieldBlockAdult:       peer.ShieldBlockAdult,
 	}, nil
+}
+
+// resolveShieldForCreate keeps a replaced peer's preset until the client sends
+// toggles or an explicit legacy preset. Explicit toggles require the caller to
+// have already checked Premium.
+func resolveShieldForCreate(shieldPreset string, shield *entitlement.ShieldFlags, replaced *model.Peer) (preset string, policySet, malicious, ads, adult bool) {
+	preset = entitlement.ShieldPresetStandard
+	if replaced != nil {
+		preset = entitlement.NormalizeShieldPreset(replaced.ShieldPreset)
+		policySet = replaced.ShieldPolicySet
+		malicious = replaced.ShieldBlockMalicious
+		ads = replaced.ShieldBlockAds
+		adult = replaced.ShieldBlockAdult
+	}
+	if shield != nil {
+		return entitlement.AliasPreset(*shield), true, shield.BlockMalicious, shield.BlockAds, shield.BlockAdult
+	}
+	if strings.TrimSpace(shieldPreset) != "" {
+		return entitlement.NormalizeShieldPreset(shieldPreset), false, false, false, false
+	}
+	return preset, policySet, malicious, ads, adult
 }
 
 // mergeStoredDeviceMetadata keeps a display field already stored for this
@@ -819,10 +855,30 @@ func (s *Service) ListPeersForServer(ctx context.Context, serverID string) ([]mo
 	return s.postgres.ListPeersByServer(ctx, serverID)
 }
 
-// UpdateShieldPreset stores the peer's Veritas Shield policy and notifies the agent.
-func (s *Service) UpdateShieldPreset(ctx context.Context, peerID, accountID, preset string) (*model.Peer, error) {
+// UpdateShieldPreset stores a legacy preset and notifies the agent.
+// Aggressive (ads) requires Premium. Explicit toggles are cleared.
+func (s *Service) UpdateShieldPreset(ctx context.Context, peerID, accountID, jwtTier, preset string) (*model.Peer, error) {
 	preset = entitlement.NormalizeShieldPreset(preset)
+	tier := s.resolveTier(ctx, accountID, jwtTier)
+	if err := entitlement.CheckShieldPreset(tier, preset); err != nil {
+		return nil, err
+	}
 	peer, err := s.postgres.UpdatePeerShieldPreset(ctx, peerID, accountID, preset)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.communicator.PushShieldPreset(peer.ServerID, peer)
+	return peer, nil
+}
+
+// UpdateShieldPolicy stores the three Premium toggles and pushes them to the
+// agent for the peer's current tunnel IP. The WireGuard session is not rebuilt.
+func (s *Service) UpdateShieldPolicy(ctx context.Context, peerID, accountID, jwtTier string, flags entitlement.ShieldFlags) (*model.Peer, error) {
+	tier := s.resolveTier(ctx, accountID, jwtTier)
+	if err := entitlement.CheckShieldUpdate(tier); err != nil {
+		return nil, err
+	}
+	peer, err := s.postgres.UpdatePeerShieldPolicy(ctx, peerID, accountID, entitlement.AliasPreset(flags), flags.BlockMalicious, flags.BlockAds, flags.BlockAdult)
 	if err != nil {
 		return nil, err
 	}

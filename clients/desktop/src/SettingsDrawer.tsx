@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject, type TransitionEvent } from "react";
+import type { ShieldFlags } from "./shield";
 
 export type StealthChoice = "auto" | "udp" | "stealth";
 
@@ -10,6 +11,7 @@ export type SettingsDrawerProps = {
   onOpenAccount: () => void;
   onOpenNetworkMap: () => void;
   onOpenStealthSettings: () => void;
+  onOpenShieldSettings: () => void;
   onOpenTunnelSettings: () => void;
   onSignOutEverywhere: () => void;
   onRequestSignOut: () => void;
@@ -41,6 +43,15 @@ function IconStealth() {
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M4 12s3.2-6 8-6 8 6 8 6-3.2 6-8 6-8-6-8-6z" fill="none" stroke="currentColor" strokeWidth="1.8" />
       <path d="M5 5l14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconShield() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3.2 19 6v5.2c0 4.2-2.7 7.4-7 9.1-4.3-1.7-7-4.9-7-9.1V6l7-2.8z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M9.2 12.1 11.1 14l3.8-4.2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -114,6 +125,7 @@ export function SettingsDrawer({
   onOpenAccount,
   onOpenNetworkMap,
   onOpenStealthSettings,
+  onOpenShieldSettings,
   onOpenTunnelSettings,
   onSignOutEverywhere,
   onRequestSignOut,
@@ -232,6 +244,12 @@ export function SettingsDrawer({
                   onClick={onOpenStealthSettings}
                 />
               )}
+              <NavItem
+                label="Veritas Shield"
+                note="Ads · malicious · adult"
+                icon={<IconShield />}
+                onClick={onOpenShieldSettings}
+              />
               <NavItem
                 label="Split tunnel"
                 note="Exclude LAN"
@@ -355,6 +373,82 @@ export function StealthSettingsScreen({
             <span>{option.subtitle}</span>
           </span>
         </button>
+      ))}
+    </section>
+  );
+}
+
+export function ShieldSettingsScreen({
+  flags,
+  isPremium,
+  connected,
+  error,
+  onChange,
+  onUpgrade,
+  onBack,
+}: {
+  flags: ShieldFlags;
+  isPremium: boolean;
+  connected: boolean;
+  error: string;
+  onChange: (next: ShieldFlags) => void;
+  onUpgrade: () => void;
+  onBack: () => void;
+}) {
+  const rows: { key: keyof ShieldFlags; title: string; subtitle: string }[] = [
+    {
+      key: "block_ads",
+      title: "Block ads",
+      subtitle: "Stop known ad domains from resolving. A page can still show an ad that is not a separate domain.",
+    },
+    {
+      key: "block_malicious",
+      title: "Block malicious sites",
+      subtitle: "Malware, phishing, scam, and cryptomining domains.",
+    },
+    {
+      key: "block_adult",
+      title: "Block adult sites",
+      subtitle: "Known adult domains. Shield does not scan page content.",
+    },
+  ];
+  return (
+    <section className="tunnel-settings" aria-label="Veritas Shield">
+      <ScreenTopBar eyebrow="CONNECTION" title="Veritas Shield" onBack={onBack} />
+      <p className="tunnel-section-label">ADVANCED VPN PROTECTION</p>
+      <p className="tunnel-lead">
+        Blocks known domains in DNS while you are connected. This does not remove ads inside web pages.
+      </p>
+      <p className="tunnel-lead">
+        {!isPremium
+          ? "These filters are Premium. Upgrade to turn them on."
+          : connected
+            ? "Changes apply to this connection immediately."
+            : "Saved on this device. Applied the next time you connect."}
+      </p>
+      {error && <p className="shield-error" role="alert">{error}</p>}
+      {rows.map((row) => (
+        <div key={row.key} className={`tunnel-toggle-card${flags[row.key] && isPremium ? " is-on" : ""}`}>
+          <div>
+            <strong>{row.title}</strong>
+            <span>{row.subtitle}</span>
+          </div>
+          {isPremium ? (
+            <button
+              type="button"
+              className="shield-switch"
+              aria-pressed={flags[row.key]}
+              aria-label={row.title}
+              onClick={() => onChange({ ...flags, [row.key]: !flags[row.key] })}
+            >
+              <i className={flags[row.key] ? "on" : ""} aria-hidden="true" />
+            </button>
+          ) : (
+            <button type="button" className="shield-upgrade" onClick={onUpgrade}>
+              Upgrade
+            </button>
+          )}
+        </div>
       ))}
     </section>
   );

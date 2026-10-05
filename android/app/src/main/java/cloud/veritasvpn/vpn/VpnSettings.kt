@@ -17,6 +17,9 @@ object VpnSettings {
     private const val KEY_CURRENT_PEER_ID = "current_peer_id"
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_STEALTH_MODE = "stealth_mode"
+    private const val KEY_SHIELD_MALICIOUS = "shield_block_malicious"
+    private const val KEY_SHIELD_ADS = "shield_block_ads"
+    private const val KEY_SHIELD_ADULT = "shield_block_adult"
 
     /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
     val EXCLUDE_LAN_ALLOWED_IPS: List<String> = listOf(
@@ -67,6 +70,24 @@ object VpnSettings {
 
     fun setStealthMode(context: Context, mode: StealthMode) {
         prefs(context).edit().putString(KEY_STEALTH_MODE, mode.stored()).apply()
+    }
+
+    /** Premium DNS filters. Malicious defaults on; ads and adult default off. */
+    fun shieldPolicy(context: Context): ShieldPolicy {
+        val stored = prefs(context)
+        return ShieldPolicy(
+            blockMalicious = stored.getBoolean(KEY_SHIELD_MALICIOUS, true),
+            blockAds = stored.getBoolean(KEY_SHIELD_ADS, false),
+            blockAdult = stored.getBoolean(KEY_SHIELD_ADULT, false),
+        )
+    }
+
+    fun setShieldPolicy(context: Context, policy: ShieldPolicy) {
+        prefs(context).edit()
+            .putBoolean(KEY_SHIELD_MALICIOUS, policy.blockMalicious)
+            .putBoolean(KEY_SHIELD_ADS, policy.blockAds)
+            .putBoolean(KEY_SHIELD_ADULT, policy.blockAdult)
+            .apply()
     }
 
     fun bypassApps(context: Context): Set<String> {

@@ -62,13 +62,14 @@ type HeartbeatRequest struct {
 }
 
 type PeerUpdate struct {
-	Action       string   `json:"action"`
-	PeerID       string   `json:"peer_id"`
-	PublicKey    string   `json:"public_key"`
-	PresharedKey string   `json:"preshared_key"`
-	AllowedIPs   []string `json:"allowed_ips"`
-	AssignedIP   string   `json:"assigned_ip"`
-	ShieldPreset string   `json:"shield_preset,omitempty"`
+	Action       string               `json:"action"`
+	PeerID       string               `json:"peer_id"`
+	PublicKey    string               `json:"public_key"`
+	PresharedKey string               `json:"preshared_key"`
+	AllowedIPs   []string             `json:"allowed_ips"`
+	AssignedIP   string               `json:"assigned_ip"`
+	ShieldPreset string               `json:"shield_preset,omitempty"`
+	ShieldPolicy *dnssvc.ShieldPolicy `json:"shield_policy,omitempty"`
 }
 
 type AgentManagerClient interface {
@@ -779,10 +780,11 @@ func (a *Agent) handlePeerUpdate(update *PeerUpdate) {
 			return
 		}
 		if a.dnsForwarder != nil {
-			a.dnsForwarder.SetPeerPreset(update.AllowedIPs, update.ShieldPreset)
+			a.dnsForwarder.ApplyPeerShield(update.AllowedIPs, update.ShieldPreset, update.ShieldPolicy)
 		}
 		a.logger.Info("Peer added", zap.String("peer_id", update.PeerID),
-			zap.String("shield_preset", dnssvc.NormalizePreset(update.ShieldPreset)))
+			zap.String("shield_preset", dnssvc.NormalizePreset(update.ShieldPreset)),
+			zap.Bool("shield_explicit", update.ShieldPolicy != nil && update.ShieldPolicy.Explicit))
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := a.managerClient.ReportPeerApplied(ctx, a.serverID, update.PeerID, a.operationalAuthToken()); err != nil {
@@ -803,17 +805,18 @@ func (a *Agent) handlePeerUpdate(update *PeerUpdate) {
 			a.dnsForwarder.ClearBlockedForCIDRs(allowedIPs)
 		}
 		a.logger.Info("Peer removed", zap.String("peer_id", update.PeerID))
-	case "SHIELD_PRESET":
+	case "SHIELD_PRESET", "SHIELD_POLICY":
 		ips := update.AllowedIPs
 		if len(ips) == 0 && update.AssignedIP != "" {
 			ips = []string{update.AssignedIP}
 		}
 		if a.dnsForwarder != nil && len(ips) > 0 {
-			a.dnsForwarder.SetPeerPreset(ips, update.ShieldPreset)
+			a.dnsForwarder.ApplyPeerShield(ips, update.ShieldPreset, update.ShieldPolicy)
 		}
-		a.logger.Info("Shield preset updated",
+		a.logger.Info("Shield policy updated",
 			zap.String("peer_id", update.PeerID),
-			zap.String("shield_preset", dnssvc.NormalizePreset(update.ShieldPreset)))
+			zap.String("shield_preset", dnssvc.NormalizePreset(update.ShieldPreset)),
+			zap.Bool("shield_explicit", update.ShieldPolicy != nil && update.ShieldPolicy.Explicit))
 	default:
 		a.logger.Warn("Unknown peer update action",
 			zap.String("action", update.Action))

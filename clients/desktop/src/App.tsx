@@ -31,7 +31,8 @@ import {
 } from "./billing";
 import { AUTH_API } from "./config";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
-import { SettingsDrawer, StealthSettingsScreen, TunnelSettingsScreen, type StealthChoice } from "./SettingsDrawer";
+import { SettingsDrawer, ShieldSettingsScreen, StealthSettingsScreen, TunnelSettingsScreen, type StealthChoice } from "./SettingsDrawer";
+import { readShieldFlags, shieldRequest, writeShieldFlags, type ShieldFlags } from "./shield";
 import { HeroConnectControl, type HeroPhase } from "./HeroConnect";
 import veritasMark from "./assets/veritas-mark.png";
 import veritasLogo from "./assets/veritas-logo.png";
@@ -856,6 +857,9 @@ function App() {
   const [showNetworkMap, setShowNetworkMap] = useState(false);
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [showTunnelSettings, setShowTunnelSettings] = useState(false);
+  const [showShieldSettings, setShowShieldSettings] = useState(false);
+  const [shieldFlags, setShieldFlags] = useState<ShieldFlags>(() => readShieldFlags());
+  const [shieldError, setShieldError] = useState("");
   const [showStealthSettings, setShowStealthSettings] = useState(false);
   const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
   const [stealthMode, setStealthMode] = useState<StealthChoice>(() => (isLinuxDesktop() ? readStealthChoice() : "udp"));
@@ -886,6 +890,8 @@ function App() {
   const connectingRef = useRef(connecting);
   const excludeLanRef = useRef(excludeLan);
   const stealthModeRef = useRef(stealthMode);
+  const shieldFlagsRef = useRef(shieldFlags);
+  const shieldWriteGen = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -908,6 +914,7 @@ function App() {
   useEffect(() => { connectingRef.current = connecting; }, [connecting]);
   useEffect(() => { excludeLanRef.current = excludeLan; }, [excludeLan]);
   useEffect(() => { stealthModeRef.current = stealthMode; }, [stealthMode]);
+  useEffect(() => { shieldFlagsRef.current = shieldFlags; }, [shieldFlags]);
 
   useEffect(() => {
     if (resetCooldown <= 0) return;
@@ -924,6 +931,7 @@ function App() {
     setShowPlans(false);
     setShowStealthSettings(false);
     setShowTunnelSettings(false);
+    setShowShieldSettings(false);
     setShowSettings(false);
     // Tear down tunnel + kill switch like manual sign-out (expiry previously left VPN up).
     userDisconnectedRef.current = true;
@@ -1210,6 +1218,7 @@ function App() {
     setShowPlans(false);
     setShowTunnelSettings(false);
     setShowStealthSettings(false);
+    setShowShieldSettings(false);
   }, []);
 
   const openAccount = useCallback(() => {
@@ -1217,6 +1226,7 @@ function App() {
     setShowPlans(true);
     setShowTunnelSettings(false);
     setShowStealthSettings(false);
+    setShowShieldSettings(false);
     setShowCancelConfirmation(false);
     setBillingError("");
     refreshBillingStatus().catch((err) => setBillingError(err instanceof Error ? err.message : "Could not load your subscription."));
@@ -1359,6 +1369,7 @@ function App() {
           device_model: metadata.device_model,
           device_os_version: metadata.device_os_version,
           client_version: metadata.client_version,
+          ...shieldRequest(shieldFlagsRef.current),
         }),
       });
       const peer = (await res.json()) as PeerResponse & { code?: string };
@@ -1653,6 +1664,7 @@ function App() {
     setShowTunnelSettings(true);
     setShowPlans(false);
     setShowStealthSettings(false);
+    setShowShieldSettings(false);
     setShowNetworkMap(false);
   }, []);
 
@@ -1661,7 +1673,43 @@ function App() {
     setShowStealthSettings(true);
     setShowPlans(false);
     setShowTunnelSettings(false);
+    setShowShieldSettings(false);
     setShowNetworkMap(false);
+  }, []);
+
+  const openShieldSettings = useCallback(() => {
+    setShowSettings(false);
+    setShowShieldSettings(true);
+    setShowPlans(false);
+    setShowTunnelSettings(false);
+    setShowStealthSettings(false);
+    setShowNetworkMap(false);
+  }, []);
+
+  const applyShieldFlags = useCallback(async (next: ShieldFlags) => {
+    const previous = shieldFlagsRef.current;
+    const generation = ++shieldWriteGen.current;
+    setShieldFlags(next);
+    writeShieldFlags(next);
+    setShieldError("");
+    const id = peerIdRef.current;
+    if (!connectedRef.current || !id) return;
+    try {
+      const res = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(shieldRequest(next)),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || "Could not update Veritas Shield. Try again.");
+      }
+    } catch (err) {
+      if (generation !== shieldWriteGen.current || err instanceof SessionExpiredError) return;
+      writeShieldFlags(previous);
+      setShieldFlags(previous);
+      setShieldError(err instanceof Error ? err.message : "Could not update Veritas Shield. Try again.");
+    }
   }, []);
 
   const setExcludeLanValue = useCallback((next: boolean) => {
@@ -1689,6 +1737,7 @@ function App() {
     setShowPlans(false);
     setShowStealthSettings(false);
     setShowTunnelSettings(false);
+    setShowShieldSettings(false);
     setCheckoutUrl(null);
     userDisconnectedRef.current = true;
     clearReconnectTimer();
@@ -1884,12 +1933,12 @@ function App() {
     );
   }
 
-  const onHome = !showPlans && !showTunnelSettings && !showStealthSettings && !showNetworkMap;
+  const onHome = !showPlans && !showTunnelSettings && !showStealthSettings && !showShieldSettings && !showNetworkMap;
   return (
     <div className="app app-dashboard">
       {onHome && <header className="app-header blueprint-header">
         <img className="brand-logo" src={veritasLogo} alt="VeritasVPN" />
-        {!showPlans && !showTunnelSettings && !showStealthSettings && (
+        {!showPlans && !showTunnelSettings && !showStealthSettings && !showShieldSettings && (
           <button
             ref={settingsCogRef}
             className="glass-icon-button"
@@ -1925,6 +1974,16 @@ function App() {
             onCancelClick={() => setShowCancelConfirmation(true)}
             onCancelConfirm={() => cancelSubscription()}
             onCancelDismiss={() => setShowCancelConfirmation(false)}
+          />
+        ) : showShieldSettings ? (
+          <ShieldSettingsScreen
+            flags={shieldFlags}
+            isPremium={subscriptionActive}
+            connected={connected}
+            error={shieldError}
+            onChange={(next) => { void applyShieldFlags(next); }}
+            onUpgrade={openAccount}
+            onBack={() => setShowShieldSettings(false)}
           />
         ) : showStealthSettings ? (
           <StealthSettingsScreen
@@ -1977,6 +2036,7 @@ function App() {
         onOpenAccount={openAccount}
         onOpenNetworkMap={openNetworkMap}
         onOpenStealthSettings={openStealthSettings}
+        onOpenShieldSettings={openShieldSettings}
         onOpenTunnelSettings={openTunnelSettings}
         onSignOutEverywhere={handleSignOutEverywhere}
         onRequestSignOut={requestSignOut}

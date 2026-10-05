@@ -7,16 +7,26 @@ import (
 	"github.com/veritasvpn/lib/logging"
 )
 
+// ShieldPolicy is the explicit toggle set. Older agents ignore the field and
+// keep using ShieldPreset. New agents map these booleans to categories.
+type ShieldPolicy struct {
+	Explicit       bool `json:"explicit"`
+	BlockMalicious bool `json:"block_malicious"`
+	BlockAds       bool `json:"block_ads"`
+	BlockAdult     bool `json:"block_adult"`
+}
+
 // PeerUpdate is the SSE payload consumed by veritas-agent.
-// Action may be ADD, REMOVE, or SHIELD_PRESET.
+// Action may be ADD, REMOVE, SHIELD_PRESET, or SHIELD_POLICY.
 type PeerUpdate struct {
-	Action       string   `json:"action"`
-	PeerID       string   `json:"peer_id"`
-	PublicKey    string   `json:"public_key,omitempty"`
-	PresharedKey string   `json:"preshared_key,omitempty"`
-	AllowedIPs   []string `json:"allowed_ips,omitempty"`
-	AssignedIP   string   `json:"assigned_ip,omitempty"`
-	ShieldPreset string   `json:"shield_preset,omitempty"`
+	Action       string        `json:"action"`
+	PeerID       string        `json:"peer_id"`
+	PublicKey    string        `json:"public_key,omitempty"`
+	PresharedKey string        `json:"preshared_key,omitempty"`
+	AllowedIPs   []string      `json:"allowed_ips,omitempty"`
+	AssignedIP   string        `json:"assigned_ip,omitempty"`
+	ShieldPreset string        `json:"shield_preset,omitempty"`
+	ShieldPolicy *ShieldPolicy `json:"shield_policy,omitempty"`
 }
 
 type subscriber struct {
