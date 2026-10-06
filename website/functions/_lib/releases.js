@@ -26,16 +26,17 @@ export const DOWNLOADS = {
     unavailable: "Android APK is temporarily unavailable.",
   },
   "veritasvpn-linux.deb": {
-    // 0.2.83 reports platform and hostname. The git tag is linux-v0.2.83
-    // because v* tag creation is restricted. These Linux bytes stay put.
-    tag: "linux-v0.2.83",
-    sha256: "2f84fa1505bc38b4006b034629055a7b3724bf4d99c22829587a5524375ab736",
+    // linux-v0.2.87 matches the Android Shield desktop (lock-orb home,
+    // four Premium DNS toggles, always-on kill switch). v* tags cannot
+    // be created here. Android stays on android-v0.2.86.
+    tag: "linux-v0.2.87",
+    sha256: "a3d5d9ff635a94664b17625ce07dbe66a28c6833fe3997b719268289ee1586d1",
     contentType: "application/vnd.debian.binary-package",
     unavailable: "Linux .deb is temporarily unavailable.",
   },
   "veritasvpn-linux.AppImage": {
-    tag: "linux-v0.2.83",
-    sha256: "a7b964aafd044bd6848a92c3d88fd7927f10996ebd077b813ad71cc4fffcbfad",
+    tag: "linux-v0.2.87",
+    sha256: "e0698f55f702138731accbe169f0ac1f6828cc3d821ddd7a2707ee6a61d2c335",
     contentType: "application/octet-stream",
     unavailable: "Linux AppImage is temporarily unavailable.",
   },
