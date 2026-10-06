@@ -21,6 +21,8 @@ object VpnSettings {
     private const val KEY_SHIELD_ADS = "shield_block_ads"
     private const val KEY_SHIELD_ADULT = "shield_block_adult"
     private const val KEY_SHIELD_TRACKERS = "shield_block_trackers"
+    private const val KEY_SHARE_DIAGNOSTICS = "share_diagnostics"
+    private const val KEY_LAST_ERROR = "last_error"
 
     /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
     val EXCLUDE_LAN_ALLOWED_IPS: List<String> = listOf(
@@ -82,6 +84,29 @@ object VpnSettings {
             blockAdult = stored.getBoolean(KEY_SHIELD_ADULT, false),
             blockTrackers = stored.getBoolean(KEY_SHIELD_TRACKERS, true),
         )
+    }
+
+    /** Off unless the user opts in. Contact us includes a redacted report only when this is on. */
+    fun shareDiagnostics(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SHARE_DIAGNOSTICS, false)
+
+    fun setShareDiagnostics(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SHARE_DIAGNOSTICS, enabled).apply()
+    }
+
+    fun lastError(context: Context): String =
+        prefs(context).getString(KEY_LAST_ERROR, null).orEmpty()
+
+    fun setLastError(context: Context, message: String) {
+        val safe = message.replace('\n', ' ').replace('\r', ' ').trim().take(300)
+        if (
+            safe.contains("PrivateKey", ignoreCase = true) ||
+            safe.contains("PresharedKey", ignoreCase = true) ||
+            safe.contains("[Interface]", ignoreCase = true)
+        ) {
+            return
+        }
+        prefs(context).edit().putString(KEY_LAST_ERROR, safe).apply()
     }
 
     fun setShieldPolicy(context: Context, policy: ShieldPolicy) {

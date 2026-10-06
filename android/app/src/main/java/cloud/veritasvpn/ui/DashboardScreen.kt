@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,6 +38,7 @@ fun DashboardScreen(
     onStealthSettings: () -> Unit,
     onShieldSettings: () -> Unit,
     onTunnelSettings: () -> Unit,
+    onHelp: () -> Unit,
     onOpenKillSwitchSettings: () -> Unit,
     showKillSwitchRequired: Boolean,
     onDismissKillSwitchRequired: () -> Unit,
@@ -127,8 +129,13 @@ fun DashboardScreen(
                 modifier = Modifier.size(44.dp),
                 contentScale = ContentScale.Fit,
             )
-            GlassIconButton(onClick = { showSettingsMenu = true }, contentDescription = "Open settings") {
-                Icon(Icons.Rounded.Settings, contentDescription = null, tint = CyanHover, modifier = Modifier.size(21.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                GlassIconButton(onClick = onHelp, contentDescription = "Help and support") {
+                    Icon(Icons.AutoMirrored.Rounded.HelpOutline, contentDescription = null, tint = CyanHover, modifier = Modifier.size(21.dp))
+                }
+                GlassIconButton(onClick = { showSettingsMenu = true }, contentDescription = "Open settings") {
+                    Icon(Icons.Rounded.Settings, contentDescription = null, tint = CyanHover, modifier = Modifier.size(21.dp))
+                }
             }
         }
 
@@ -238,6 +245,7 @@ fun DashboardScreen(
         onStealthSettings = onStealthSettings,
         onShieldSettings = onShieldSettings,
         onTunnelSettings = onTunnelSettings,
+        onHelp = onHelp,
         onSignOut = {
             if (connected || connecting) showSignOutConfirmation = true else onSignOut()
         },
