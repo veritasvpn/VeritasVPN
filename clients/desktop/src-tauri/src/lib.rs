@@ -675,7 +675,8 @@ fn wireguard_stats_linux() -> WgTransferStats {
 async fn disconnect_wireguard(app: AppHandle, soft: Option<bool>) -> ConnectResult {
     let soft = soft.unwrap_or(false);
     // Soft disconnect is used by auto-reconnect / timeouts — never prompt.
-    // Intentional Disconnect (soft=false) may still use interactive elevation.
+    // Intentional disconnect prefers the passwordless teardown helper and only
+    // falls back to interactive elevation when that helper is missing.
     if !soft {
         stop_network_switch_watcher();
     }
@@ -2640,6 +2641,14 @@ if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
   resolvectl flush-caches 2>/dev/null || true
 fi
 rm -f "$DNS_BACKUP"
+# Optional on intentional disconnect. Soft reconnect omits this flag so the
+# passwordless helpers stay available for the next recovery.
+if [[ "${{1:-}}" == "--purge" ]]; then
+  rm -f /etc/sudoers.d/veritasvpn-soft
+  rm -f /etc/NetworkManager/dispatcher.d/50-veritasvpn
+  rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh
+  rmdir /var/lib/veritasvpn 2>/dev/null || true
+fi
 echo ok
 SOFT_TEARDOWN
   chmod 755 "$SOFT_DIR/teardown.sh"
@@ -2816,6 +2825,41 @@ echo ok
     Ok("WireGuard disconnected".into())
 }
 
+/// Drop pkexec/polkit text. Callers only learn whether the kill switch may
+/// still be holding traffic.
+fn user_facing_disconnect_error(_elevation_error: &str, remnants_visible: bool) -> String {
+    if remnants_visible {
+        "kill switch teardown may still be incomplete".into()
+    } else {
+        "disconnect authorization dismissed".into()
+    }
+}
+
+/// Unprivileged check for the tunnel iface or the blackhole kill-switch route.
+/// Both are installed with the firewall kill switch. If `ip` cannot be run,
+/// assume the teardown may be incomplete.
+#[cfg(target_os = "linux")]
+fn linux_kill_switch_remains_visible() -> bool {
+    let route = Command::new("ip").args(["route", "show"]).output();
+    let link = Command::new("ip").args(["link", "show", "dev", "veritas0"]).output();
+    if route.is_err() && link.is_err() {
+        return true;
+    }
+    let route_text = route
+        .ok()
+        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+        .unwrap_or_default();
+    let blackhole = route_text.lines().any(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("blackhole") && lower.contains("default")
+    });
+    let iface_up = link
+        .ok()
+        .map(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).contains("veritas0"))
+        .unwrap_or(false);
+    blackhole || iface_up
+}
+
 #[cfg(target_os = "linux")]
 fn bring_down_wireguard_linux(app: &AppHandle) -> Result<String, String> {
     let wg_go = resolve_wireguard_go(app)?;
@@ -2951,27 +2995,44 @@ echo ok
         fs::set_permissions(&script_path, perms).ok();
     }
 
-    // Soft / auto-reconnect teardown: passwordless helper only — never pkexec.
-    if is_soft_elevated() {
-        if Path::new(SOFT_TEARDOWN_HELPER).exists() {
-            match Command::new("timeout")
+    // Passwordless helper first for both soft reconnect and intentional
+    // disconnect. `--purge` removes the NOPASSWD helpers after the tunnel and
+    // kill switch are down; soft reconnect must leave them in place.
+    if Path::new(SOFT_TEARDOWN_HELPER).exists() {
+        let helper = if is_soft_elevated() {
+            Command::new("timeout")
                 .args(["20", "sudo", "-n", SOFT_TEARDOWN_HELPER])
                 .output()
-            {
-                Ok(out) if out.status.success() => {
-                    let _ = fs::remove_file(conf_path()?);
-                    let _ = fs::remove_file(peer_id_path()?);
-                    return Ok("WireGuard disconnected (soft)".into());
-                }
-                Ok(out) => {
-                    return Err(format!(
-                        "soft teardown helper failed: {}",
-                        String::from_utf8_lossy(&out.stderr)
-                    ));
-                }
-                Err(e) => return Err(format!("soft teardown helper spawn failed: {e}")),
+        } else {
+            Command::new("timeout")
+                .args(["20", "sudo", "-n", SOFT_TEARDOWN_HELPER, "--purge"])
+                .output()
+        };
+        match helper {
+            Ok(out) if out.status.success() => {
+                let _ = fs::remove_file(conf_path()?);
+                let _ = fs::remove_file(peer_id_path()?);
+                return Ok(if is_soft_elevated() {
+                    "WireGuard disconnected (soft)".into()
+                } else {
+                    "WireGuard disconnected".into()
+                });
+            }
+            Ok(out) if is_soft_elevated() => {
+                return Err(format!(
+                    "soft teardown helper failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            Err(e) if is_soft_elevated() => {
+                return Err(format!("soft teardown helper spawn failed: {e}"));
+            }
+            _ => {
+                // Intentional disconnect: helper missing a sudoers grant, or the
+                // script failed. Fall through to interactive elevation.
             }
         }
+    } else if is_soft_elevated() {
         // Fallback: sudo -n on the user-home script — still never pkexec.
         match run_elevated_noninteractive(&script) {
             Ok(()) => {
@@ -2983,11 +3044,16 @@ echo ok
         }
     }
 
+    if is_soft_elevated() {
+        return Err("soft teardown did not run".into());
+    }
+
     if let Err(elev_err) = run_elevated(&script) {
         let _ = fs::remove_file(conf_path()?);
         let _ = fs::remove_file(peer_id_path()?);
-        return Err(format!(
-            "disconnect needs administrator authorization: {elev_err}"
+        return Err(user_facing_disconnect_error(
+            &elev_err,
+            linux_kill_switch_remains_visible(),
         ));
     }
     let _ = fs::remove_file(conf_path()?);
@@ -3288,6 +3354,22 @@ mod security_tests {
     #[test]
     fn shell_quote_is_single_argument_safe() {
         assert_eq!(shell_quote("a'b"), r#"'a'\''b'"#);
+    }
+
+    #[test]
+    fn disconnect_failure_hides_polkit_text() {
+        let raw = "privilege operation failed: Error executing command as another user: Request dismissed";
+        let still_up = user_facing_disconnect_error(raw, true);
+        let cleared = user_facing_disconnect_error(raw, false);
+        assert!(
+            !still_up.to_lowercase().contains("pkexec")
+                && !still_up.contains("Request dismissed")
+                && !still_up.contains("privilege operation failed"),
+            "{still_up}"
+        );
+        assert!(still_up.contains("kill switch"));
+        assert_eq!(cleared, "disconnect authorization dismissed");
+        assert!(!cleared.contains("Request dismissed"));
     }
 
     #[test]

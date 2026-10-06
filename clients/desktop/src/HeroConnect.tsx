@@ -1,4 +1,5 @@
 import { useEffect, useRef, type Ref } from "react";
+import veritasMark from "./assets/veritas-mark.png";
 
 export type HeroPhase = "ready" | "upsell" | "checking" | "connecting" | "protected";
 
@@ -42,40 +43,31 @@ function actionName(phase: HeroPhase): string | null {
   return null;
 }
 
-function LockGlyph({ open }: { open: boolean }) {
-  return (
-    <svg className="hero-lock" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="5" y="11" width="14" height="10" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      {open ? (
-        <path
-          d="M8 11V8.2a4 4 0 0 1 7.7-1.5"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-        />
-      ) : (
-        <path
-          d="M8 11V8a4 4 0 0 1 8 0v3"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-        />
-      )}
-      <circle cx="12" cy="16" r="1.35" fill="currentColor" />
-    </svg>
-  );
+const MARK_DIM = { brightness: 0.58, saturate: 0.48, opacity: 0.66 };
+const MARK_FULL = { brightness: 1.08, saturate: 1.12, opacity: 1 };
+
+/** 0 at the dim end, 1 at full. One ramp from when connecting starts, then hold. */
+function connectGlow(elapsedMs: number): number {
+  const duration = 1400;
+  if (elapsedMs <= 0) return 0;
+  if (elapsedMs >= duration) return 1;
+  return fastOutSlowIn(elapsedMs / duration);
+}
+
+function applyMark(mark: HTMLImageElement, brightness: number, saturate: number, opacity: number) {
+  mark.style.filter = `brightness(${brightness}) saturate(${saturate})`;
+  mark.style.opacity = String(opacity);
 }
 
 /**
- * Lock circle only. The idle scale and the connecting arc are sampled from
- * elapsed time, not from connection progress, so a stalled backend cannot
- * freeze or restart them.
+ * Veritas mark inside the connect circle. Scale, arc, and the connecting
+ * brightness ramp are sampled from elapsed time, not from connection
+ * progress, so a stalled backend cannot freeze them.
  */
 export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) {
   const circleRef = useRef<HTMLElement | null>(null);
   const arcRef = useRef<SVGCircleElement | null>(null);
+  const markRef = useRef<HTMLImageElement | null>(null);
   const phaseRef = useRef(phase);
   const pressRef = useRef(1);
   const clickable = onClick != null && actionName(phase) != null;
@@ -86,6 +78,7 @@ export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) 
     let frame = 0;
     let seen = false;
     let wasSecured = false;
+    let liveStart: number | null = null;
     let arrival = 1;
     let arrivalFrom = 1;
     let arrivalStart = 0;
@@ -122,6 +115,25 @@ export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) 
         const rotation = motion ? ((now % 1100) / 1100) * 360 : 0;
         arc.setAttribute("transform", `rotate(${rotation - 90} 18 18)`);
       }
+      const mark = markRef.current;
+      if (mark) {
+        const live = current === "checking" || current === "connecting";
+        if (!live) liveStart = null;
+        else if (liveStart == null) liveStart = now;
+        if (current === "protected" || (live && !motion)) {
+          applyMark(mark, MARK_FULL.brightness, MARK_FULL.saturate, MARK_FULL.opacity);
+        } else if (live && liveStart != null) {
+          const glow = connectGlow(now - liveStart);
+          applyMark(
+            mark,
+            MARK_DIM.brightness + (MARK_FULL.brightness - MARK_DIM.brightness) * glow,
+            MARK_DIM.saturate + (MARK_FULL.saturate - MARK_DIM.saturate) * glow,
+            MARK_DIM.opacity + (MARK_FULL.opacity - MARK_DIM.opacity) * glow,
+          );
+        } else {
+          applyMark(mark, MARK_DIM.brightness, MARK_DIM.saturate, MARK_DIM.opacity);
+        }
+      }
       frame = window.requestAnimationFrame(tick);
     };
 
@@ -139,7 +151,7 @@ export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) 
     phase === "checking" ? "Checking plan…" : phase === "connecting" ? "Connecting…" : phase === "protected" ? "Protected" : null;
   const name = actionName(phase);
   const edgeClass =
-    phase === "protected" ? "is-protected" : phase === "upsell" ? "is-upsell" : "is-idle";
+    phase === "protected" ? "is-protected" : phase === "upsell" ? "is-upsell" : phase === "checking" || phase === "connecting" ? "is-connecting" : "is-idle";
 
   const setPressed = (pressed: boolean) => {
     pressRef.current = pressed && clickable ? 0.94 : 1;
@@ -148,9 +160,11 @@ export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) 
   const circleRefCallback: Ref<HTMLButtonElement & HTMLDivElement> = (node) => {
     circleRef.current = node;
   };
+  const showArc = phase === "checking" || phase === "connecting";
   const circle = (
     <>
-      {phase === "checking" || phase === "connecting" ? (
+      <img ref={markRef} className="hero-mark" src={veritasMark} alt="" />
+      {showArc && (
         <svg className="hero-arc" viewBox="0 0 36 36" aria-hidden="true">
           <circle
             ref={arcRef}
@@ -164,8 +178,6 @@ export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) 
             strokeDasharray="24.4 63.6"
           />
         </svg>
-      ) : (
-        <LockGlyph open={phase === "ready"} />
       )}
     </>
   );
