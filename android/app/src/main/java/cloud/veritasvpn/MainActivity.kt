@@ -32,8 +32,12 @@ import cloud.veritasvpn.auth.AuthenticatedApi
 import cloud.veritasvpn.auth.SessionExpiredException
 import cloud.veritasvpn.billing.BillingRepository
 import java.io.IOException
+import cloud.veritasvpn.support.isRecordableError
+import cloud.veritasvpn.support.sanitizeError
 import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.DashboardScreen
+import cloud.veritasvpn.ui.DiagnosticsScreen
+import cloud.veritasvpn.ui.HelpScreen
 import cloud.veritasvpn.ui.ReleaseLockdownDialog
 import cloud.veritasvpn.ui.AccountScreen
 import cloud.veritasvpn.ui.PaymentCheckoutScreen
@@ -164,6 +168,10 @@ class MainActivity : ComponentActivity() {
                 var showStealthSettings by remember { mutableStateOf(false) }
                 var showShieldSettings by remember { mutableStateOf(false) }
                 var showTunnelSettings by remember { mutableStateOf(false) }
+                var showHelp by remember { mutableStateOf(false) }
+                var showDiagnostics by remember { mutableStateOf(false) }
+                var shareDiagnostics by remember { mutableStateOf(VpnSettings.shareDiagnostics(context)) }
+                var lastError by remember { mutableStateOf(VpnSettings.lastError(context)) }
                 var showKillSwitchRequired by remember { mutableStateOf(false) }
                 var pendingConnectAfterKillSwitch by remember { mutableStateOf(false) }
                 var showReleaseLockdown by remember { mutableStateOf(false) }
@@ -247,6 +255,8 @@ class MainActivity : ComponentActivity() {
                     showStealthSettings = false
                     showShieldSettings = false
                     showTunnelSettings = false
+                    showHelp = false
+                    showDiagnostics = false
                     user = null
                 }
 
@@ -894,6 +904,15 @@ class MainActivity : ComponentActivity() {
                     excludeLan != appliedExcludeLan || bypassApps != appliedBypassApps
                 val stealthDirty = stealthMode != appliedStealthMode
 
+                LaunchedEffect(statusMsg) {
+                    val message = statusMsg
+                    if (!isRecordableError(message)) return@LaunchedEffect
+                    val safe = sanitizeError(message)
+                    if (safe == "none" || safe == lastError) return@LaunchedEffect
+                    lastError = safe
+                    VpnSettings.setLastError(context, safe)
+                }
+
                 if (user == null) {
                     AuthScreen(onAuthenticated = {
                         billingStatus = null
@@ -985,6 +1004,30 @@ class MainActivity : ComponentActivity() {
                         },
                         onBack = { showTunnelSettings = false }
                     )
+                } else if (showDiagnostics) {
+                    DiagnosticsScreen(
+                        connected = connected,
+                        connecting = connecting,
+                        handshakeEpochMs = handshakeMs,
+                        transport = transport,
+                        lastError = lastError,
+                        onBack = { showDiagnostics = false },
+                    )
+                } else if (showHelp) {
+                    HelpScreen(
+                        shareDiagnostics = shareDiagnostics,
+                        onShareDiagnosticsChange = { enabled ->
+                            shareDiagnostics = enabled
+                            VpnSettings.setShareDiagnostics(context, enabled)
+                        },
+                        connected = connected,
+                        connecting = connecting,
+                        handshakeEpochMs = handshakeMs,
+                        transport = transport,
+                        lastError = lastError,
+                        onOpenDiagnostics = { showDiagnostics = true },
+                        onBack = { showHelp = false },
+                    )
                 } else if (showPlans) {
                     AccountScreen(
                         email = user?.email,
@@ -1045,6 +1088,7 @@ class MainActivity : ComponentActivity() {
                         onStealthSettings = { showStealthSettings = true },
                         onShieldSettings = { showShieldSettings = true },
                         onTunnelSettings = { showTunnelSettings = true },
+                        onHelp = { showHelp = true },
                         onOpenKillSwitchSettings = {
                             val opened = runCatching {
                                 context.startActivity(VpnKillSwitch.systemVpnSettingsIntent())

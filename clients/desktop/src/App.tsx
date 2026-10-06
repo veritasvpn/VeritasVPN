@@ -32,6 +32,8 @@ import {
 import { AUTH_API } from "./config";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
 import { SettingsDrawer, ShieldSettingsScreen, StealthSettingsScreen, TunnelSettingsScreen, type StealthChoice } from "./SettingsDrawer";
+import { HelpSupport } from "./HelpSupport";
+import { choosePublicEndpoint, isRecordableError, readStoredLastError, sanitizeError, writeStoredLastError } from "./support";
 import { readShieldFlags, shieldRequest, writeShieldFlags, type ShieldFlags } from "./shield";
 import { HeroConnectControl, type HeroPhase } from "./HeroConnect";
 import {
@@ -889,6 +891,12 @@ function App() {
   const [shieldFlags, setShieldFlags] = useState<ShieldFlags>(() => readShieldFlags());
   const [shieldError, setShieldError] = useState("");
   const [showStealthSettings, setShowStealthSettings] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [diagEndpoint, setDiagEndpoint] = useState("");
+  const [lastError, setLastError] = useState(() => {
+    const stored = readStoredLastError();
+    return stored === "none" ? "" : stored;
+  });
   const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
   const [stealthMode, setStealthMode] = useState<StealthChoice>(() => (isLinuxDesktop() ? readStealthChoice() : "udp"));
   const [transport, setTransport] = useState<"" | "udp" | "stealth" | "switching">("");
@@ -1070,6 +1078,14 @@ function App() {
       writeStealthChoice("udp");
     }
   }, [linuxDesktop, stealthMode]);
+
+  useEffect(() => {
+    if (!isRecordableError(statusMsg)) return;
+    const safe = sanitizeError(statusMsg);
+    if (safe === "none") return;
+    setLastError(safe);
+    writeStoredLastError(safe);
+  }, [statusMsg]);
 
   useEffect(() => {
     if (!statusMsg) return;
@@ -1264,10 +1280,22 @@ function App() {
     setShowTunnelSettings(false);
     setShowStealthSettings(false);
     setShowShieldSettings(false);
+    setShowHelp(false);
+  }, []);
+
+  const openHelp = useCallback(() => {
+    setShowSettings(false);
+    setShowHelp(true);
+    setShowPlans(false);
+    setShowTunnelSettings(false);
+    setShowStealthSettings(false);
+    setShowShieldSettings(false);
+    setShowNetworkMap(false);
   }, []);
 
   const openAccount = useCallback(() => {
     setShowSettings(false);
+    setShowHelp(false);
     setShowPlans(true);
     setShowTunnelSettings(false);
     setShowStealthSettings(false);
@@ -1444,6 +1472,12 @@ function App() {
         const useStealth = attempts[attempt];
         if (useStealth) triedStealth = true;
         if (useStealth && attempt > 0) setTransport("switching");
+        setDiagEndpoint(choosePublicEndpoint(
+          peer.server_endpoint || "",
+          peer.server_endpoint_wan || "",
+          useStealth ? peer.stealth_endpoint || "" : "",
+          useStealth ? "stealth" : "udp",
+        ));
         try {
           const result = await invoke<ConnectResult>("connect_wireguard", {
             config: {
@@ -1714,6 +1748,7 @@ function App() {
     setShowStealthSettings(false);
     setShowShieldSettings(false);
     setShowNetworkMap(false);
+    setShowHelp(false);
   }, []);
 
   const openStealthSettings = useCallback(() => {
@@ -1723,6 +1758,7 @@ function App() {
     setShowTunnelSettings(false);
     setShowShieldSettings(false);
     setShowNetworkMap(false);
+    setShowHelp(false);
   }, []);
 
   const openShieldSettings = useCallback(() => {
@@ -1732,6 +1768,7 @@ function App() {
     setShowTunnelSettings(false);
     setShowStealthSettings(false);
     setShowNetworkMap(false);
+    setShowHelp(false);
   }, []);
 
   const applyShieldFlags = useCallback(async (next: ShieldFlags) => {
@@ -1786,6 +1823,7 @@ function App() {
     setShowStealthSettings(false);
     setShowTunnelSettings(false);
     setShowShieldSettings(false);
+    setShowHelp(false);
     setCheckoutUrl(null);
     userDisconnectedRef.current = true;
     clearReconnectTimer();
@@ -1981,14 +2019,27 @@ function App() {
     );
   }
 
-  const onHome = !showPlans && !showTunnelSettings && !showStealthSettings && !showShieldSettings && !showNetworkMap;
+  const onHome = !showPlans && !showTunnelSettings && !showStealthSettings && !showShieldSettings && !showNetworkMap && !showHelp;
   return (
     <div className="app app-dashboard">
       {onHome && <header className="app-header blueprint-header">
         <img className="brand-logo" src={veritasLogo} alt="VeritasVPN" />
-        {!showPlans && !showTunnelSettings && !showStealthSettings && !showShieldSettings && (
+        <div className="header-actions">
+          <button
+            type="button"
+            className="glass-icon-button"
+            onClick={openHelp}
+            aria-label="Help and support"
+          >
+            <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <circle cx="12" cy="12" r="8" />
+              <path d="M9.4 9.3a2.6 2.6 0 1 1 3.4 2.5c-.7.3-1.2.8-1.2 1.6V14" />
+              <circle cx="12" cy="16.8" r="0.8" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
           <button
             ref={settingsCogRef}
+            type="button"
             className="glass-icon-button"
             onClick={() => setShowSettings((open) => !open)}
             aria-label="Open settings"
@@ -2000,11 +2051,21 @@ function App() {
               <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
             </svg>
           </button>
-        )}
+        </div>
       </header>}
 
       <main className="blueprint-main">
-        {showPlans ? (
+        {showHelp ? (
+          <HelpSupport
+            connected={connected}
+            connecting={connecting || reconnecting}
+            handshakeEpochSec={wgStats?.last_handshake_sec ?? 0}
+            transport={transport}
+            endpoint={diagEndpoint}
+            lastError={lastError}
+            onBack={() => setShowHelp(false)}
+          />
+        ) : showPlans ? (
           <AccountScreen
             email={user.email}
             accountId={user.account_id}
@@ -2092,6 +2153,7 @@ function App() {
         onOpenStealthSettings={openStealthSettings}
         onOpenShieldSettings={openShieldSettings}
         onOpenTunnelSettings={openTunnelSettings}
+        onOpenHelp={openHelp}
         onSignOutEverywhere={handleSignOutEverywhere}
         onRequestSignOut={requestSignOut}
       />

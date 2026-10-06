@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.draw.clip
@@ -86,6 +87,7 @@ fun SettingsDrawer(
     onStealthSettings: () -> Unit,
     onShieldSettings: () -> Unit,
     onTunnelSettings: () -> Unit,
+    onHelp: () -> Unit,
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
 ) {
@@ -209,6 +211,12 @@ fun SettingsDrawer(
                             label = "Network map",
                             icon = Icons.Rounded.Public,
                             onClick = { navigate(onNetworkMap) },
+                        )
+                        SettingsDrawerNavItem(
+                            label = "Help",
+                            note = "Support and diagnostics",
+                            icon = Icons.AutoMirrored.Rounded.HelpOutline,
+                            onClick = { navigate(onHelp) },
                         )
                     }
 

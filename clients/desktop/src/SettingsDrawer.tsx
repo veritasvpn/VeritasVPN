@@ -13,6 +13,7 @@ export type SettingsDrawerProps = {
   onOpenStealthSettings: () => void;
   onOpenShieldSettings: () => void;
   onOpenTunnelSettings: () => void;
+  onOpenHelp: () => void;
   onSignOutEverywhere: () => void;
   onRequestSignOut: () => void;
 };
@@ -84,6 +85,16 @@ function IconLogout() {
   );
 }
 
+function IconHelp() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M9.4 9.3a2.6 2.6 0 1 1 3.4 2.5c-.7.3-1.2.8-1.2 1.6V14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="12" cy="16.8" r="0.8" fill="currentColor" />
+    </svg>
+  );
+}
+
 function IconChevron() {
   return (
     <svg className="settings-chevron" viewBox="0 0 24 24" aria-hidden="true">
@@ -127,6 +138,7 @@ export function SettingsDrawer({
   onOpenStealthSettings,
   onOpenShieldSettings,
   onOpenTunnelSettings,
+  onOpenHelp,
   onSignOutEverywhere,
   onRequestSignOut,
 }: SettingsDrawerProps) {
@@ -230,6 +242,7 @@ export function SettingsDrawer({
             <div className="settings-group">
               <NavItem label="Account" icon={<IconAccount />} onClick={onOpenAccount} />
               <NavItem label="Network map" icon={<IconMap />} onClick={onOpenNetworkMap} />
+              <NavItem label="Help" note="Support and diagnostics" icon={<IconHelp />} onClick={onOpenHelp} />
             </div>
           </section>
 
