@@ -143,17 +143,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 lastUnderlayIdentity = null
                 lastChosenEndpoint = null
                 lastRebindAtMs = 0L
-                vpnStatePrefs().edit()
-                    .putString(KEY_CONFIG, config)
-                    .putString(KEY_UDP_CONFIG, config)
-                    .putString(KEY_ENDPOINT_LAN, endpointLan)
-                    .putString(KEY_ENDPOINT_WAN, endpointWan)
-                    .putString(KEY_STEALTH_ENDPOINT, stealthEndpoint)
-                    .putString(KEY_STEALTH_PREFIX, stealthPrefix)
-                    .putString(KEY_STEALTH_MODE, stealthMode.ifBlank { StealthMode.AUTO.stored() })
-                    .putBoolean(KEY_STEALTH_AVAILABLE, stealthAvailable)
-                    .putBoolean(KEY_RESUME_STEALTH, false)
-                    .apply()
                 activeTransport = if (StealthMode.fromStored(stealthMode) == StealthMode.STEALTH) {
                     "stealth"
                 } else {
@@ -167,6 +156,24 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
                 transitionJob = scope.launch {
                     try {
+                        // Encrypted prefs open the keystore. That work stays off
+                        // the main thread so the connect-circle frame clock is
+                        // not stalled while the session is saved. The same lock
+                        // disconnect uses keeps a late clear from being overwritten.
+                        synchronized(tunnelOpLock) {
+                            if (connectGen != sessionGeneration) return@launch
+                            vpnStatePrefs().edit()
+                                .putString(KEY_CONFIG, config)
+                                .putString(KEY_UDP_CONFIG, config)
+                                .putString(KEY_ENDPOINT_LAN, endpointLan)
+                                .putString(KEY_ENDPOINT_WAN, endpointWan)
+                                .putString(KEY_STEALTH_ENDPOINT, stealthEndpoint)
+                                .putString(KEY_STEALTH_PREFIX, stealthPrefix)
+                                .putString(KEY_STEALTH_MODE, stealthMode.ifBlank { StealthMode.AUTO.stored() })
+                                .putBoolean(KEY_STEALTH_AVAILABLE, stealthAvailable)
+                                .putBoolean(KEY_RESUME_STEALTH, false)
+                                .apply()
+                        }
                         // Wait for a prior teardown, but keep the first startup
                         // path direct and free of an extra DOWN call.
                         pendingDisconnect?.join()

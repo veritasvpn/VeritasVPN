@@ -1,4 +1,4 @@
-import { useEffect, useRef, type Ref } from "react";
+import { useEffect, useRef } from "react";
 import veritasMark from "./assets/veritas-mark.png";
 
 export type HeroPhase = "ready" | "upsell" | "checking" | "connecting" | "protected";
@@ -36,6 +36,23 @@ export function pulseUnitFromElapsed(nowMs: number): number {
   return fastOutSlowIn(1 - (t - half) / half);
 }
 
+/** Stronger while disconnected or connecting; softer once protected. */
+export function heroPulseAmplitude(phase: HeroPhase, motion: boolean): number {
+  if (!motion) return 0;
+  return phase === "protected" ? 0.06 : 0.16;
+}
+
+/**
+ * Ease idle-pulse strength without restarting the pulse phase.
+ * Matches Android's 280ms envelope.
+ */
+export function pulseEnvelope(from: number, to: number, elapsedMs: number, durationMs = 280): number {
+  if (from === to || elapsedMs <= 0) return from;
+  if (elapsedMs >= durationMs) return to;
+  const t = fastOutSlowIn(elapsedMs / durationMs);
+  return from + (to - from) * t;
+}
+
 function actionName(phase: HeroPhase): string | null {
   if (phase === "ready") return "Connect";
   if (phase === "upsell") return "Get Premium";
@@ -60,69 +77,63 @@ function applyMark(mark: HTMLImageElement, brightness: number, saturate: number,
 }
 
 /**
- * Veritas mark inside the connect circle. Scale, arc, and the connecting
- * brightness ramp are sampled from elapsed time, not from connection
- * progress, so a stalled backend cannot freeze them.
+ * Veritas mark inside the connect circle. Scale and the brightness ramp are
+ * sampled from elapsed time, not from connection progress, so a stalled
+ * backend cannot freeze them. The same frame loop keeps running from
+ * connecting into protected; the circle node is not remounted on that handoff.
  */
 export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) {
-  const circleRef = useRef<HTMLElement | null>(null);
-  const arcRef = useRef<SVGCircleElement | null>(null);
+  const circleRef = useRef<HTMLButtonElement | null>(null);
   const markRef = useRef<HTMLImageElement | null>(null);
   const phaseRef = useRef(phase);
+  const onClickRef = useRef(onClick);
   const pressRef = useRef(1);
   const clickable = onClick != null && actionName(phase) != null;
   phaseRef.current = phase;
+  onClickRef.current = onClick;
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     let frame = 0;
-    let seen = false;
-    let wasSecured = false;
     let liveStart: number | null = null;
-    let arrival = 1;
-    let arrivalFrom = 1;
-    let arrivalStart = 0;
-    let arrivalActive = false;
+    let envFrom = 0;
+    let envTo = 0;
+    let envStart = 0;
+    let envReady = false;
 
     const tick = (now: number) => {
       const motion = !media.matches;
       const current = phaseRef.current;
-      const secured = current === "protected";
-      if (!seen) {
-        seen = true;
-        wasSecured = secured;
-      } else if (motion && secured !== wasSecured) {
-        wasSecured = secured;
-        arrivalFrom = secured ? 0.86 : 1.08;
-        arrivalStart = now;
-        arrivalActive = true;
+      const target = heroPulseAmplitude(current, motion);
+      if (!envReady || !motion) {
+        envFrom = target;
+        envTo = target;
+        envStart = now;
+        envReady = true;
+      } else if (envTo !== target) {
+        envFrom = pulseEnvelope(envFrom, envTo, now - envStart);
+        envTo = target;
+        envStart = now;
       }
-      if (arrivalActive) {
-        const t = Math.min(1, (now - arrivalStart) / 420);
-        const eased = 1 - (1 - t) ** 3;
-        arrival = arrivalFrom + (1 - arrivalFrom) * eased;
-        if (t >= 1) {
-          arrival = 1;
-          arrivalActive = false;
-        }
-      }
-      const amplitude = !motion ? 0 : secured ? 0.06 : 0.16;
-      const scale = (1 + pulseUnitFromElapsed(now) * amplitude) * pressRef.current * arrival;
+      const amplitude = motion ? pulseEnvelope(envFrom, envTo, now - envStart) : 0;
+      const scale = (1 + pulseUnitFromElapsed(now) * amplitude) * pressRef.current;
       const circle = circleRef.current;
       if (circle) circle.style.transform = `scale(${scale})`;
-      const arc = arcRef.current;
-      if (arc) {
-        const rotation = motion ? ((now % 1100) / 1100) * 360 : 0;
-        arc.setAttribute("transform", `rotate(${rotation - 90} 18 18)`);
-      }
       const mark = markRef.current;
       if (mark) {
         const live = current === "checking" || current === "connecting";
-        if (!live) liveStart = null;
-        else if (liveStart == null) liveStart = now;
-        if (current === "protected" || (live && !motion)) {
+        // Protected keeps liveStart so the brightness ramp does not jump.
+        if (current !== "protected") {
+          if (live) {
+            if (liveStart == null) liveStart = now;
+          } else {
+            liveStart = null;
+          }
+        }
+        const settledProtected = current === "protected" && liveStart == null;
+        if (settledProtected || (current === "protected" && !motion) || (live && !motion)) {
           applyMark(mark, MARK_FULL.brightness, MARK_FULL.saturate, MARK_FULL.opacity);
-        } else if (live && liveStart != null) {
+        } else if ((live || current === "protected") && liveStart != null) {
           const glow = connectGlow(now - liveStart);
           applyMark(
             mark,
@@ -154,32 +165,13 @@ export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) 
     phase === "protected" ? "is-protected" : phase === "upsell" ? "is-upsell" : phase === "checking" || phase === "connecting" ? "is-connecting" : "is-idle";
 
   const setPressed = (pressed: boolean) => {
-    pressRef.current = pressed && clickable ? 0.94 : 1;
+    const canPress = onClickRef.current != null && actionName(phaseRef.current) != null;
+    pressRef.current = pressed && canPress ? 0.94 : 1;
   };
 
-  const circleRefCallback: Ref<HTMLButtonElement & HTMLDivElement> = (node) => {
-    circleRef.current = node;
-  };
-  const showArc = phase === "checking" || phase === "connecting";
+  const idleLabel = phase === "checking" || phase === "connecting" ? "Connecting" : "Connection";
   const circle = (
-    <>
-      <img ref={markRef} className="hero-mark" src={veritasMark} alt="" />
-      {showArc && (
-        <svg className="hero-arc" viewBox="0 0 36 36" aria-hidden="true">
-          <circle
-            ref={arcRef}
-            cx="18"
-            cy="18"
-            r="14"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeDasharray="24.4 63.6"
-          />
-        </svg>
-      )}
-    </>
+    <img ref={markRef} className="hero-mark" src={veritasMark} alt="" />
   );
 
   return (
@@ -189,26 +181,25 @@ export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) 
           <p>Not connected</p>
         </div>
       )}
-      {clickable && name ? (
-        <button
-          ref={circleRefCallback}
-          type="button"
-          className="hero-circle"
-          aria-label={name}
-          aria-describedby={phase === "protected" ? "hero-protected-state" : phase === "ready" ? "hero-idle-state" : undefined}
-          onClick={onClick}
-          onPointerDown={() => setPressed(true)}
-          onPointerUp={() => setPressed(false)}
-          onPointerLeave={() => setPressed(false)}
-          onPointerCancel={() => setPressed(false)}
-        >
-          {circle}
-        </button>
-      ) : (
-        <div ref={circleRefCallback} className="hero-circle" aria-hidden="true">
-          {circle}
-        </div>
-      )}
+      <button
+        ref={circleRef}
+        type="button"
+        className={`hero-circle${clickable ? "" : " is-static"}`}
+        aria-label={name ?? idleLabel}
+        aria-disabled={clickable ? undefined : true}
+        aria-describedby={phase === "protected" ? "hero-protected-state" : phase === "ready" ? "hero-idle-state" : undefined}
+        tabIndex={clickable ? 0 : -1}
+        onClick={() => {
+          const click = onClickRef.current;
+          if (click && actionName(phaseRef.current)) click();
+        }}
+        onPointerDown={() => setPressed(true)}
+        onPointerUp={() => setPressed(false)}
+        onPointerLeave={() => setPressed(false)}
+        onPointerCancel={() => setPressed(false)}
+      >
+        {circle}
+      </button>
       {phase === "ready" && <span id="hero-idle-state" className="sr-only">Not connected</span>}
       {(caption || phase === "upsell") && (
         <div className={`hero-caption${phase === "upsell" ? " is-upsell" : ""}`}>

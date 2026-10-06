@@ -5,7 +5,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -16,7 +15,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -42,13 +40,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -100,14 +94,19 @@ internal fun heroMarkLive(phase: HeroPhase): Boolean {
 }
 
 /**
- * Keeps the ramp clock across checking → connecting. Clears it only when the
- * control leaves that pair, so a status update cannot restart the glow.
- * Returns -1 when the mark is not in the live ramp.
+ * Keeps the ramp clock across checking → connecting → protected. Clears it
+ * only when the control leaves that sequence, so a status update cannot
+ * restart the glow or jump the mark brightness.
+ * Returns -1 at the disconnected dim end, and when protected was reached
+ * with no ramp in progress (the mark is already fully bright).
  */
-internal fun nextHeroMarkLiveStartMs(previousStartMs: Long, live: Boolean, nowMs: Long): Long {
-    if (!live) return -1L
-    if (previousStartMs < 0L) return nowMs
-    return previousStartMs
+internal fun nextHeroMarkLiveStartMs(previousStartMs: Long, phase: HeroPhase, nowMs: Long): Long {
+    return when (phase) {
+        HeroPhase.Checking, HeroPhase.Connecting ->
+            if (previousStartMs < 0L) nowMs else previousStartMs
+        HeroPhase.Protected -> previousStartMs
+        else -> -1L
+    }
 }
 
 /** 0 at the dim end, 1 at full. Absolute elapsed time, so a dropped frame catches up. */
@@ -124,9 +123,13 @@ internal fun heroMarkGlow(elapsedMs: Long): Float {
 internal fun heroMarkLook(phase: HeroPhase, motion: Boolean, elapsedLiveMs: Long): HeroMarkLook {
     val live = heroMarkLive(phase)
     val glow = when {
-        phase == HeroPhase.Protected -> 1f
+        // A negative elapsed means there is no ramp in progress. Protected
+        // reached that way (session already up) is fully bright. A ramp that
+        // started while connecting keeps running so the handoff does not jump.
+        phase == HeroPhase.Protected && (!motion || elapsedLiveMs < 0L) -> 1f
+        phase == HeroPhase.Protected -> heroMarkGlow(elapsedLiveMs)
         live && !motion -> 1f
-        live -> heroMarkGlow(elapsedLiveMs)
+        live -> heroMarkGlow(elapsedLiveMs.coerceAtLeast(0L))
         else -> 0f
     }
     return HeroMarkLook(
@@ -161,9 +164,10 @@ private fun lerp(start: Float, stop: Float, fraction: Float): Float {
 }
 
 /**
- * Veritas mark inside the connect circle. The idle pulse, connecting arc, and
- * the checking/connecting brightness ramp are sampled from elapsed time, not
- * from connection progress, so a stalled backend cannot freeze them.
+ * Veritas mark inside the connect circle. The idle pulse and the brightness
+ * ramp are sampled from elapsed time, not from connection progress, so a
+ * stalled backend cannot freeze them. The same clock keeps running from
+ * connecting into protected; nothing about that handoff remounts this layer.
  */
 @Composable
 fun HeroConnectControl(
@@ -184,31 +188,31 @@ fun HeroConnectControl(
     )
     // Circle-only pulse. Disconnected travels farther so the control reads as
     // tappable; protected keeps the same loop at a lower amplitude. Connecting
-    // and checking use that same uninterrupted loop. Animator scale 0 holds
-    // the circle at rest. No rings outside the button.
+    // and checking use that same uninterrupted loop. The phase of the loop is
+    // wall-clock time, and the amplitude eases toward the new strength, so
+    // connecting → protected never snaps, restarts, or holds still.
+    val pulseTarget = heroPulseAmplitude(phase, motion)
+    val pulseFrom = remember { floatArrayOf(pulseTarget) }
+    val pulseTo = remember { floatArrayOf(pulseTarget) }
+    val pulseEnvelopeStartMs = remember { longArrayOf(nowMs) }
     val pulseAmplitude = if (!motion) {
         0f
-    } else if (phase == HeroPhase.Protected) {
-        0.06f
     } else {
-        0.16f
+        pulseEnvelope(pulseFrom[0], pulseTo[0], nowMs - pulseEnvelopeStartMs[0])
+    }
+    SideEffect {
+        if (!motion) {
+            pulseFrom[0] = 0f
+            pulseTo[0] = 0f
+            pulseEnvelopeStartMs[0] = nowMs
+        } else if (pulseTo[0] != pulseTarget) {
+            pulseFrom[0] = pulseAmplitude
+            pulseTo[0] = pulseTarget
+            pulseEnvelopeStartMs[0] = nowMs
+        }
     }
     val pulseScale = 1f + pulseUnitFromElapsed(nowMs) * pulseAmplitude
     val secured = phase == HeroPhase.Protected
-    val arrival = remember { Animatable(1f) }
-    val arrivalSeen = remember { booleanArrayOf(false) }
-    LaunchedEffect(secured) {
-        if (!arrivalSeen[0]) {
-            arrivalSeen[0] = true
-            return@LaunchedEffect
-        }
-        if (!motion) {
-            arrival.snapTo(1f)
-            return@LaunchedEffect
-        }
-        arrival.snapTo(if (secured) 0.86f else 1.08f)
-        arrival.animateTo(1f, spring(dampingRatio = 0.58f, stiffness = 380f))
-    }
     val edge = when (phase) {
         HeroPhase.Protected -> Cyan
         HeroPhase.Upsell -> RoyalHover
@@ -228,18 +232,18 @@ fun HeroConnectControl(
         HeroPhase.Protected -> "Disconnect"
         else -> null
     }
-    val live = heroMarkLive(phase)
-    // Remembered across recomposition, including checking → connecting, so a
-    // stalled handshake cannot restart the ramp. Not Compose state: the frame
-    // clock above already recomposes while motion is on.
+    // Remembered across recomposition, including checking → connecting →
+    // protected, so a stalled handshake cannot restart the ramp or drop the
+    // mark back to dim. Not Compose state: the frame clock above already
+    // recomposes while motion is on.
     val liveStartMs = remember { longArrayOf(-1L) }
     val startedAt = nextHeroMarkLiveStartMs(
         previousStartMs = liveStartMs[0],
-        live = live,
+        phase = phase,
         nowMs = SystemClock.elapsedRealtime(),
     )
     SideEffect { liveStartMs[0] = startedAt }
-    val elapsedLiveMs = if (startedAt < 0L) 0L else nowMs - startedAt
+    val elapsedLiveMs = if (startedAt < 0L) -1L else nowMs - startedAt
     val mark = heroMarkLook(phase = phase, motion = motion, elapsedLiveMs = elapsedLiveMs)
 
     Column(
@@ -274,7 +278,7 @@ fun HeroConnectControl(
         Box(
             modifier = Modifier
                 .graphicsLayer {
-                    val scale = pressScale * pulseScale * arrival.value
+                    val scale = pressScale * pulseScale
                     scaleX = scale
                     scaleY = scale
                 }
@@ -318,9 +322,6 @@ fun HeroConnectControl(
                     heroMarkColorMatrix(mark.brightness, mark.saturate),
                 ),
             )
-            if (live) {
-                ContinuousBusyGlyph(nowMs = nowMs, spinning = motion)
-            }
         }
         AnimatedContent(
             targetState = phase,
@@ -400,7 +401,7 @@ private fun rememberElapsedRealtime(enabled: Boolean): Long {
     return now.longValue
 }
 
-private fun pulseUnitFromElapsed(nowMs: Long): Float {
+internal fun pulseUnitFromElapsed(nowMs: Long): Float {
     val half = 1280L
     val t = nowMs % (half * 2)
     return if (t < half) {
@@ -410,30 +411,19 @@ private fun pulseUnitFromElapsed(nowMs: Long): Float {
     }
 }
 
+/** Stronger while disconnected or connecting; softer once protected. Zero when motion is off. */
+internal fun heroPulseAmplitude(phase: HeroPhase, motion: Boolean): Float {
+    if (!motion) return 0f
+    return if (phase == HeroPhase.Protected) 0.06f else 0.16f
+}
+
 /**
- * Orbit drawn over the mark. Matches the desktop hero-arc: viewBox 36, r 14,
- * stroke 2.5, laid out at 100dp so it sits outside the 68dp mark. Rotation is
- * elapsed time, and reduced motion holds the arc still.
+ * Ease idle-pulse strength from [from] toward [to]. The pulse phase is a
+ * separate wall clock, so this envelope never restarts that loop.
  */
-@Composable
-private fun ContinuousBusyGlyph(nowMs: Long, spinning: Boolean) {
-    val rotation = if (spinning) ((nowMs % 1100L).toFloat() / 1100f) * 360f else 0f
-    Canvas(Modifier.size(100.dp)) {
-        val scale = size.minDimension / 36f
-        val strokePx = 2.5f * scale
-        val diameter = 28f * scale
-        val topLeft = Offset(
-            (size.width - diameter) / 2f,
-            (size.height - diameter) / 2f,
-        )
-        drawArc(
-            color = CyanHover,
-            startAngle = rotation - 90f,
-            sweepAngle = 100f,
-            useCenter = false,
-            topLeft = topLeft,
-            size = Size(diameter, diameter),
-            style = Stroke(width = strokePx, cap = StrokeCap.Round),
-        )
-    }
+internal fun pulseEnvelope(from: Float, to: Float, elapsedMs: Long, durationMs: Long = 280L): Float {
+    if (from == to || elapsedMs <= 0L) return from
+    if (elapsedMs >= durationMs) return to
+    val t = FastOutSlowInEasing.transform(elapsedMs.toFloat() / durationMs.toFloat())
+    return from + (to - from) * t
 }

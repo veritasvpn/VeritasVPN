@@ -18,11 +18,24 @@ class HeroMarkLookTest {
     }
 
     @Test
-    fun protectedIsFullImmediately() {
+    fun protectedIsFullWhenTheRampIsAlreadySettled() {
         for (motion in listOf(true, false)) {
-            val look = heroMarkLook(HeroPhase.Protected, motion = motion, elapsedLiveMs = 0L)
-            assertFull(look)
+            assertFull(heroMarkLook(HeroPhase.Protected, motion = motion, elapsedLiveMs = -1L))
+            assertFull(heroMarkLook(HeroPhase.Protected, motion = motion, elapsedLiveMs = 1400L))
         }
+        assertFull(heroMarkLook(HeroPhase.Protected, motion = false, elapsedLiveMs = 0L))
+    }
+
+    @Test
+    fun protectedContinuesTheConnectingRamp() {
+        val elapsed = 700L
+        val connecting = heroMarkLook(HeroPhase.Connecting, motion = true, elapsedLiveMs = elapsed)
+        val protectedPhase = heroMarkLook(HeroPhase.Protected, motion = true, elapsedLiveMs = elapsed)
+        assertEquals(connecting.brightness, protectedPhase.brightness, 0.0001f)
+        assertEquals(connecting.saturate, protectedPhase.saturate, 0.0001f)
+        assertEquals(connecting.opacity, protectedPhase.opacity, 0.0001f)
+        assertTrue(protectedPhase.brightness > 0.58f)
+        assertTrue(protectedPhase.brightness < 1.08f)
     }
 
     @Test
@@ -63,20 +76,49 @@ class HeroMarkLookTest {
     }
 
     @Test
-    fun liveClockSurvivesCheckingToConnectingAndRestartsAfterDisconnect() {
-        val checking = nextHeroMarkLiveStartMs(previousStartMs = -1L, live = true, nowMs = 1_000L)
+    fun liveClockSurvivesConnectingIntoProtectedAndRestartsAfterDisconnect() {
+        val checking = nextHeroMarkLiveStartMs(previousStartMs = -1L, phase = HeroPhase.Checking, nowMs = 1_000L)
         assertEquals(1_000L, checking)
-        val connecting = nextHeroMarkLiveStartMs(previousStartMs = checking, live = true, nowMs = 5_000L)
+        val connecting = nextHeroMarkLiveStartMs(previousStartMs = checking, phase = HeroPhase.Connecting, nowMs = 5_000L)
         assertEquals(1_000L, connecting)
-        val disconnected = nextHeroMarkLiveStartMs(previousStartMs = connecting, live = false, nowMs = 6_000L)
+        val protectedPhase = nextHeroMarkLiveStartMs(previousStartMs = connecting, phase = HeroPhase.Protected, nowMs = 5_500L)
+        assertEquals(1_000L, protectedPhase)
+        val alreadyUp = nextHeroMarkLiveStartMs(previousStartMs = -1L, phase = HeroPhase.Protected, nowMs = 5_500L)
+        assertEquals(-1L, alreadyUp)
+        val disconnected = nextHeroMarkLiveStartMs(previousStartMs = protectedPhase, phase = HeroPhase.Ready, nowMs = 6_000L)
         assertEquals(-1L, disconnected)
-        val again = nextHeroMarkLiveStartMs(previousStartMs = disconnected, live = true, nowMs = 7_000L)
+        val again = nextHeroMarkLiveStartMs(previousStartMs = disconnected, phase = HeroPhase.Connecting, nowMs = 7_000L)
         assertEquals(7_000L, again)
         assertTrue(heroMarkLive(HeroPhase.Checking))
         assertTrue(heroMarkLive(HeroPhase.Connecting))
         assertFalse(heroMarkLive(HeroPhase.Ready))
         assertFalse(heroMarkLive(HeroPhase.Upsell))
         assertFalse(heroMarkLive(HeroPhase.Protected))
+    }
+
+    @Test
+    fun pulsePhaseIsWallClockAndSurvivesTheProtectedHandoff() {
+        val during = pulseUnitFromElapsed(2_500L)
+        val after = pulseUnitFromElapsed(2_500L)
+        assertEquals(during, after, 0f)
+        assertEquals(pulseUnitFromElapsed(400L), pulseUnitFromElapsed(400L + 2_560L), 0.0001f)
+        assertTrue(pulseUnitFromElapsed(200L) > pulseUnitFromElapsed(0L))
+    }
+
+    @Test
+    fun pulseStrengthEasesWithoutLeavingTheLoop() {
+        assertEquals(0.16f, heroPulseAmplitude(HeroPhase.Ready, motion = true), 0f)
+        assertEquals(0.16f, heroPulseAmplitude(HeroPhase.Connecting, motion = true), 0f)
+        assertEquals(0.16f, heroPulseAmplitude(HeroPhase.Checking, motion = true), 0f)
+        assertEquals(0.06f, heroPulseAmplitude(HeroPhase.Protected, motion = true), 0f)
+        assertEquals(0f, heroPulseAmplitude(HeroPhase.Protected, motion = false), 0f)
+
+        assertEquals(0.16f, pulseEnvelope(0.16f, 0.06f, 0L), 0.0001f)
+        val mid = pulseEnvelope(0.16f, 0.06f, 100L)
+        assertTrue(mid < 0.16f)
+        assertTrue(mid > 0.06f)
+        assertEquals(0.06f, pulseEnvelope(0.16f, 0.06f, 280L), 0.0001f)
+        assertEquals(0.16f, pulseEnvelope(0.16f, 0.16f, 10_000L), 0.0001f)
     }
 
     @Test
