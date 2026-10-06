@@ -13,12 +13,11 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,14 +29,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.LockOpen
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
@@ -49,9 +45,13 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -78,6 +78,93 @@ enum class HeroPhase {
     Protected,
 }
 
+/** Desktop MARK_DIM / MARK_FULL. Dim is disconnected; full is protected. */
+private const val MARK_DIM_BRIGHTNESS = 0.58f
+private const val MARK_DIM_SATURATE = 0.48f
+private const val MARK_DIM_OPACITY = 0.66f
+private const val MARK_FULL_BRIGHTNESS = 1.08f
+private const val MARK_FULL_SATURATE = 1.12f
+private const val MARK_FULL_OPACITY = 1f
+
+/** One ramp from when checking/connecting starts, then hold. Same 1.4s as desktop. */
+private const val MARK_GLOW_DURATION_MS = 1400L
+
+internal data class HeroMarkLook(
+    val brightness: Float,
+    val saturate: Float,
+    val opacity: Float,
+)
+
+internal fun heroMarkLive(phase: HeroPhase): Boolean {
+    return phase == HeroPhase.Checking || phase == HeroPhase.Connecting
+}
+
+/**
+ * Keeps the ramp clock across checking → connecting. Clears it only when the
+ * control leaves that pair, so a status update cannot restart the glow.
+ * Returns -1 when the mark is not in the live ramp.
+ */
+internal fun nextHeroMarkLiveStartMs(previousStartMs: Long, live: Boolean, nowMs: Long): Long {
+    if (!live) return -1L
+    if (previousStartMs < 0L) return nowMs
+    return previousStartMs
+}
+
+/** 0 at the dim end, 1 at full. Absolute elapsed time, so a dropped frame catches up. */
+internal fun heroMarkGlow(elapsedMs: Long): Float {
+    if (elapsedMs <= 0L) return 0f
+    if (elapsedMs >= MARK_GLOW_DURATION_MS) return 1f
+    return FastOutSlowInEasing.transform(elapsedMs.toFloat() / MARK_GLOW_DURATION_MS.toFloat())
+}
+
+/**
+ * Reduced motion skips the ramp and shows the end state: full while checking,
+ * connecting, or protected, and dim while disconnected.
+ */
+internal fun heroMarkLook(phase: HeroPhase, motion: Boolean, elapsedLiveMs: Long): HeroMarkLook {
+    val live = heroMarkLive(phase)
+    val glow = when {
+        phase == HeroPhase.Protected -> 1f
+        live && !motion -> 1f
+        live -> heroMarkGlow(elapsedLiveMs)
+        else -> 0f
+    }
+    return HeroMarkLook(
+        brightness = lerp(MARK_DIM_BRIGHTNESS, MARK_FULL_BRIGHTNESS, glow),
+        saturate = lerp(MARK_DIM_SATURATE, MARK_FULL_SATURATE, glow),
+        opacity = lerp(MARK_DIM_OPACITY, MARK_FULL_OPACITY, glow),
+    )
+}
+
+/**
+ * CSS `brightness()` then `saturate()` from the desktop hero mark.
+ * Brightness is a uniform RGB scale, so it commutes with saturation; the
+ * matrix still applies brightness first to match that filter list.
+ */
+internal fun heroMarkColorMatrix(brightness: Float, saturate: Float): ColorMatrix {
+    val invSat = 1f - saturate
+    val r = 0.213f * invSat
+    val g = 0.715f * invSat
+    val b = 0.072f * invSat
+    return ColorMatrix(
+        floatArrayOf(
+            brightness * (r + saturate), brightness * g, brightness * b, 0f, 0f,
+            brightness * r, brightness * (g + saturate), brightness * b, 0f, 0f,
+            brightness * r, brightness * g, brightness * (b + saturate), 0f, 0f,
+            0f, 0f, 0f, 1f, 0f,
+        ),
+    )
+}
+
+private fun lerp(start: Float, stop: Float, fraction: Float): Float {
+    return start + (stop - start) * fraction
+}
+
+/**
+ * Veritas mark inside the connect circle. The idle pulse, connecting arc, and
+ * the checking/connecting brightness ramp are sampled from elapsed time, not
+ * from connection progress, so a stalled backend cannot freeze them.
+ */
 @Composable
 fun HeroConnectControl(
     phase: HeroPhase,
@@ -141,20 +228,19 @@ fun HeroConnectControl(
         HeroPhase.Protected -> "Disconnect"
         else -> null
     }
-    val glyphSpec = if (motion) {
-        (fadeIn(tween(420, easing = FastOutSlowInEasing)) +
-            scaleIn(
-                initialScale = 0.68f,
-                animationSpec = tween(520, easing = FastOutSlowInEasing),
-            )) togetherWith
-            (fadeOut(tween(180, easing = FastOutSlowInEasing)) +
-                scaleOut(
-                    targetScale = 0.82f,
-                    animationSpec = tween(220, easing = FastOutSlowInEasing),
-                ))
-    } else {
-        EnterTransition.None togetherWith ExitTransition.None
-    }
+    val live = heroMarkLive(phase)
+    // Remembered across recomposition, including checking → connecting, so a
+    // stalled handshake cannot restart the ramp. Not Compose state: the frame
+    // clock above already recomposes while motion is on.
+    val liveStartMs = remember { longArrayOf(-1L) }
+    val startedAt = nextHeroMarkLiveStartMs(
+        previousStartMs = liveStartMs[0],
+        live = live,
+        nowMs = SystemClock.elapsedRealtime(),
+    )
+    SideEffect { liveStartMs[0] = startedAt }
+    val elapsedLiveMs = if (startedAt < 0L) 0L else nowMs - startedAt
+    val mark = heroMarkLook(phase = phase, motion = motion, elapsedLiveMs = elapsedLiveMs)
 
     Column(
         modifier = modifier,
@@ -222,40 +308,18 @@ fun HeroConnectControl(
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            AnimatedContent(
-                targetState = phase,
-                transitionSpec = { glyphSpec },
-                label = "hero-glyph",
-            ) { current ->
-                when (current) {
-                    HeroPhase.Checking, HeroPhase.Connecting -> {
-                        ContinuousBusyGlyph(nowMs = nowMs, spinning = motion)
-                    }
-                    HeroPhase.Protected -> {
-                        Icon(
-                            Icons.Rounded.Lock,
-                            contentDescription = null,
-                            tint = Cyan,
-                            modifier = Modifier.size(52.dp),
-                        )
-                    }
-                    HeroPhase.Upsell -> {
-                        Icon(
-                            Icons.Rounded.Lock,
-                            contentDescription = null,
-                            tint = CyanHover,
-                            modifier = Modifier.size(52.dp),
-                        )
-                    }
-                    HeroPhase.Ready -> {
-                        Icon(
-                            Icons.Rounded.LockOpen,
-                            contentDescription = null,
-                            tint = CyanHover,
-                            modifier = Modifier.size(52.dp),
-                        )
-                    }
-                }
+            Image(
+                painter = painterResource(cloud.veritasvpn.R.drawable.veritas_mark),
+                contentDescription = null,
+                modifier = Modifier.size(68.dp),
+                contentScale = ContentScale.Fit,
+                alpha = mark.opacity,
+                colorFilter = ColorFilter.colorMatrix(
+                    heroMarkColorMatrix(mark.brightness, mark.saturate),
+                ),
+            )
+            if (live) {
+                ContinuousBusyGlyph(nowMs = nowMs, spinning = motion)
             }
         }
         AnimatedContent(
@@ -346,19 +410,29 @@ private fun pulseUnitFromElapsed(nowMs: Long): Float {
     }
 }
 
+/**
+ * Orbit drawn over the mark. Matches the desktop hero-arc: viewBox 36, r 14,
+ * stroke 2.5, laid out at 100dp so it sits outside the 68dp mark. Rotation is
+ * elapsed time, and reduced motion holds the arc still.
+ */
 @Composable
 private fun ContinuousBusyGlyph(nowMs: Long, spinning: Boolean) {
     val rotation = if (spinning) ((nowMs % 1100L).toFloat() / 1100f) * 360f else 0f
-    Canvas(Modifier.size(36.dp)) {
-        val strokePx = 2.5.dp.toPx()
-        val inset = strokePx / 2f
+    Canvas(Modifier.size(100.dp)) {
+        val scale = size.minDimension / 36f
+        val strokePx = 2.5f * scale
+        val diameter = 28f * scale
+        val topLeft = Offset(
+            (size.width - diameter) / 2f,
+            (size.height - diameter) / 2f,
+        )
         drawArc(
             color = CyanHover,
             startAngle = rotation - 90f,
             sweepAngle = 100f,
             useCenter = false,
-            topLeft = Offset(inset, inset),
-            size = Size(size.width - strokePx, size.height - strokePx),
+            topLeft = topLeft,
+            size = Size(diameter, diameter),
             style = Stroke(width = strokePx, cap = StrokeCap.Round),
         )
     }
