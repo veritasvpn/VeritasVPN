@@ -246,7 +246,7 @@ export function SettingsDrawer({
               )}
               <NavItem
                 label="Veritas Shield"
-                note="Ads · malicious · adult"
+                note="Ads · malicious · trackers · adult"
                 icon={<IconShield />}
                 onClick={onOpenShieldSettings}
               />

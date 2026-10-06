@@ -26,14 +26,14 @@ Select VeritasVPN and turn on both Always-on VPN and Block connections without V
 
 ## Stealth / connection modes
 
-Android Auto tries UDP first, then Stealth on port 443. UDP only and Stealth always live under Settings → Connection. Linux is Settings → Stealth mode. Reconnect to apply. Not a claim of undetectability.
+Android and Linux both default to Auto: UDP first, then Stealth on port 443. UDP only and Stealth always live under Settings → Stealth. Reconnect from Home to apply. Not a claim of undetectability.
 
 ```
 Stealth wraps WireGuard in a TLS WebSocket on port 443 so it looks more like ordinary HTTPS. Use it on networks that block or throttle plain WireGuard UDP. This helps on restrictive networks; it is not a claim of undetectability.
 
 On Android, open Settings → Connection. Auto (the default) tries UDP WireGuard first and switches to Stealth if that handshake does not complete. The VPN stays on during that switch. UDP only stays on plain WireGuard, with no Stealth fallback. Stealth always starts on Stealth. Reconnect to apply a change.
 
-On Linux, enable Settings → Stealth mode, then reconnect. Direct UDP remains the default when Stealth is off.
+On Linux, open Settings → Stealth. Auto is the default. UDP only never falls back. Stealth always starts inside TLS. Reconnect from Home to apply a change. Tap the lock to connect or disconnect. There is no separate Connect button and no kill-switch off switch.
 ```
 
 ## BTCPay

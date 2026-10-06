@@ -796,9 +796,10 @@ function HomeStage({
             <strong>Veritas Shield on</strong>
             <span>
               {dnsGateway ? `Gateway ${dnsGateway}` : "Tunnel gateway"}
-              {" · malware/phishing blocks via DoH upstreams. Well-known public DoH resolvers are blocked."}
+              {" · DNS blocks for the filters that are on. Ads or trackers inside a page can still run. Well-known public DoH resolvers are blocked."}
             </span>
           </div>
+          <p className="killswitch-status">Kill switch on. Non-VPN traffic stays blocked until you disconnect.</p>
         </div>
       )}
       {statusMsg && !hideStatus && (
