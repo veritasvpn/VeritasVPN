@@ -34,6 +34,17 @@ import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
 import { SettingsDrawer, ShieldSettingsScreen, StealthSettingsScreen, TunnelSettingsScreen, type StealthChoice } from "./SettingsDrawer";
 import { readShieldFlags, shieldRequest, writeShieldFlags, type ShieldFlags } from "./shield";
 import { HeroConnectControl, type HeroPhase } from "./HeroConnect";
+import {
+  DEVICE_LOCATION_FALLBACK,
+  labelPlaces,
+  plausibleLatLng,
+  projectLatLng,
+  PARAGUAY_NODE,
+  routeCurve,
+  WORLD_MAP_HEIGHT,
+  WORLD_MAP_WIDTH,
+} from "./connectionMap";
+import { statusAfterDisconnectFailure } from "./disconnectStatus";
 import veritasMark from "./assets/veritas-mark.png";
 import veritasLogo from "./assets/veritas-logo.png";
 import "./App.css";
@@ -415,29 +426,45 @@ function PurchaseHistory({ status, loading, error }: { status: BillingStatus | n
   );
 }
 
+function routeLabelStyle(point: { x: number; y: number }): { left: string; top: string } {
+  return {
+    left: `${(point.x / WORLD_MAP_WIDTH) * 100}%`,
+    top: `${(point.y / WORLD_MAP_HEIGHT) * 100}%`,
+  };
+}
+
 function ConnectionMap({
   connected,
   connecting,
   deviceLabel,
+  deviceLatitude,
+  deviceLongitude,
 }: {
   connected: boolean;
   connecting: boolean;
   deviceLabel: string;
+  deviceLatitude: number | null;
+  deviceLongitude: number | null;
 }) {
+  const deviceLatLng = plausibleLatLng(deviceLatitude, deviceLongitude) ?? DEVICE_LOCATION_FALLBACK;
+  const device = projectLatLng(deviceLatLng.lat, deviceLatLng.lng);
+  const server = projectLatLng(PARAGUAY_NODE.lat, PARAGUAY_NODE.lng);
+  const route = routeCurve(device, server);
+  const places = labelPlaces(device, server);
   return (
     <section className={`connection-map ${connected ? "is-connected" : ""}`} aria-label="VPN route to Paraguay">
       <div className="map-topline"><span>LIVE ROUTE</span><span className="map-latency">{connected ? "ENCRYPTED" : connecting ? "CONNECTING" : "READY"}</span></div>
       <img className="world-map" src="/world-map.svg" alt="World map" />
-      <svg className="route-overlay" viewBox="0 0 900 430" aria-hidden="true">
+      <svg className="route-overlay" viewBox={`0 0 ${WORLD_MAP_WIDTH} ${WORLD_MAP_HEIGHT}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
         <defs><linearGradient id="routeGradient" x1="0" x2="1"><stop offset="0" stopColor="#09C7F5"/><stop offset="1" stopColor="#0756D9"/></linearGradient><filter id="routeGlow"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
-        <path className="route-shadow" d="M134 135C274 79 391 154 523 294S592 326 621 322"/>
-        <path className="route-line" d="M134 135C274 79 391 154 523 294S592 326 621 322"/>
-        <circle className="route-particle" r="4"><animateMotion dur="2.8s" repeatCount="indefinite" path="M134 135C274 79 391 154 523 294S592 326 621 322"/></circle>
-        <g className="map-origin" transform="translate(134 135)"><circle r="6"/><circle className="map-pulse" r="14"/></g>
-        <g className="map-destination" transform="translate(621 322)"><circle className="map-pulse" r="19"/><circle r="8"/></g>
+        <path className="route-shadow" d={route}/>
+        <path className="route-line" d={route}/>
+        <circle className="route-particle" r="5"><animateMotion dur="2.8s" repeatCount="indefinite" path={route}/></circle>
+        <g className="map-origin" transform={`translate(${device.x.toFixed(1)} ${device.y.toFixed(1)})`}><circle r="8"/><circle className="map-pulse" r="18"/></g>
+        <g className="map-destination" transform={`translate(${server.x.toFixed(1)} ${server.y.toFixed(1)})`}><circle className="map-pulse" r="24"/><circle r="10"/></g>
       </svg>
-      <div className="route-label route-label-origin"><span>YOUR DEVICE</span><strong>{connected ? "Encrypted route" : deviceLabel}</strong></div>
-      <div className="route-label route-label-destination"><span>PARAGUAY</span><strong>Asunción metro</strong></div>
+      <div className={`route-label is-${places.device}`} style={routeLabelStyle(device)}><span>YOUR DEVICE</span><strong>{connected ? "Encrypted route" : deviceLabel}</strong></div>
+      <div className={`route-label is-${places.server}`} style={routeLabelStyle(server)}><span>PARAGUAY</span><strong>Asunción metro</strong></div>
     </section>
   );
 }
@@ -874,6 +901,8 @@ function App() {
   const [dnsGateway, setDnsGateway] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [deviceLabel, setDeviceLabel] = useState("Current location");
+  const [deviceLatitude, setDeviceLatitude] = useState<number | null>(null);
+  const [deviceLongitude, setDeviceLongitude] = useState<number | null>(null);
   const connectPeerRef = useRef("");
   const authBootstrapGenerationRef = useRef(0);
   const userDisconnectedRef = useRef(false);
@@ -1014,9 +1043,24 @@ function App() {
     if (!user) return;
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
-      () => setDeviceLabel("Your location"),
-      () => setDeviceLabel("Current location"),
-      { maximumAge: 600_000, timeout: 5000 }
+      (position) => {
+        const next = plausibleLatLng(position.coords.latitude, position.coords.longitude);
+        if (!next) {
+          setDeviceLatitude(null);
+          setDeviceLongitude(null);
+          setDeviceLabel("Current location");
+          return;
+        }
+        setDeviceLatitude(next.lat);
+        setDeviceLongitude(next.lng);
+        setDeviceLabel("Your location");
+      },
+      () => {
+        setDeviceLatitude(null);
+        setDeviceLongitude(null);
+        setDeviceLabel("Current location");
+      },
+      { maximumAge: 600_000, timeout: 8000 }
     );
   }, [user]);
 
@@ -1495,26 +1539,29 @@ function App() {
       hadInterfaceUpRef.current = false;
     };
     const oldPeer = peerId;
+    let teardownFailedMsg = "";
     try {
-      let teardownFailedMsg = "";
       if (tunnelMode === "wireguard" || peerId) {
         const result = await invoke<ConnectResult>("disconnect_wireguard");
         if (!result.success) {
-          teardownFailedMsg =
-            result.message ||
-            "Disconnect incomplete — approve the admin prompt, or run: sudo bash ~/.veritasvpn/teardown.sh";
+          teardownFailedMsg = result.message || "kill switch teardown may still be incomplete";
         }
       }
-      // Always revoke the server peer on intentional disconnect, even when local
-      // teardown fails — otherwise the kernel peer lingers until PEER_STALE_AFTER.
-      if (oldPeer) await deletePeer(oldPeer);
-      clearUi();
-      setStatusMsg(teardownFailedMsg);
     } catch (err) {
-      if (oldPeer) await deletePeer(oldPeer);
-      clearUi();
-      setStatusMsg(err instanceof Error ? err.message : "Disconnect failed");
+      teardownFailedMsg = err instanceof Error ? err.message : "kill switch teardown may still be incomplete";
     }
+    // Always revoke the server peer on intentional disconnect, even when local
+    // teardown fails — otherwise the kernel peer lingers until PEER_STALE_AFTER.
+    if (oldPeer) {
+      try {
+        await deletePeer(oldPeer);
+      } catch {
+        // Peer revoke is best-effort. It must not surface as a home-screen error.
+      }
+    }
+    clearUi();
+    setStatusSticky(false);
+    setStatusMsg(statusAfterDisconnectFailure(teardownFailedMsg));
   }, [tunnelMode, peerId, clearReconnectTimer, deletePeer]);
   handleDisconnectRef.current = handleDisconnect;
 
@@ -2003,7 +2050,13 @@ function App() {
         ) : showNetworkMap ? (
           <section className="network-map-view">
             <div className="map-view-head"><div><span>NETWORK MAP</span><h2>Your secure route</h2></div><button type="button" onClick={() => setShowNetworkMap(false)}>Back</button></div>
-            <ConnectionMap connected={connected} connecting={connecting || reconnecting} deviceLabel={deviceLabel} />
+            <ConnectionMap
+              connected={connected}
+              connecting={connecting || reconnecting}
+              deviceLabel={deviceLabel}
+              deviceLatitude={deviceLatitude}
+              deviceLongitude={deviceLongitude}
+            />
             <div className="map-summary">
               <div><span>CONNECTION</span><strong>{connected ? "Encrypted route active" : connecting || reconnecting ? "Establishing route…" : "No secure route"}</strong></div>
               <b className={connected ? "on" : connecting || reconnecting ? "connecting" : ""}>{connected ? "SECURED" : connecting || reconnecting ? "CONNECTING" : "OFFLINE"}</b>

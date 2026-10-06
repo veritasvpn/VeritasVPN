@@ -434,7 +434,7 @@ export function ShieldSettingsScreen({
       {error && <p className="shield-error" role="alert">{error}</p>}
       {rows.map((row) => (
         <div key={row.key} className={`tunnel-toggle-card${flags[row.key] && isPremium ? " is-on" : ""}`}>
-          <div>
+          <div className="tunnel-toggle-copy">
             <strong>{row.title}</strong>
             <span>{row.subtitle}</span>
           </div>
@@ -489,7 +489,7 @@ export function TunnelSettingsScreen({
         onClick={() => onExcludeLanChange(!excludeLan)}
         aria-pressed={excludeLan}
       >
-        <div>
+        <div className="tunnel-toggle-copy">
           <strong>Allow local network access</strong>
           <span>Keep devices on your home, office, or hotel network reachable. Internet traffic still uses VeritasVPN.</span>
         </div>
