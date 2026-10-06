@@ -73,7 +73,7 @@
                     </li>
                     <li>
                         <strong>Sign in & Connect</strong>
-                        <p>Launch VeritasVPN, sign in with your account, and press Connect. Linux app requires <code>sudo</code> access to create and tear down the WireGuard tunnel. While connected, DNS uses Veritas Shield automatically.</p>
+                        <p>Launch VeritasVPN and sign in. Tap the lock on Home to connect or disconnect. There is no separate Connect button. Linux asks for <code>sudo</code> to create and tear down the WireGuard tunnel. While connected, the kill switch stays on and DNS uses Veritas Shield. Premium filters for malicious sites, trackers, ads, and adult sites are under Settings → Veritas Shield. They block known domains in DNS. Ads or trackers loaded from the page itself can still run.</p>
                     </li>
                 </ol>
                 <p class="downloads-note"><strong>Compatibility:</strong> Linux x86_64 (amd64) on Debian, Ubuntu, or any AppImage-compatible distribution.</p>
@@ -84,14 +84,14 @@
         <section class="downloads install-section">
             <div class="container install-steps">
                 <h2>Stealth mode</h2>
-                <p>On restrictive networks that block or throttle plain WireGuard UDP, enable <strong>Settings → Stealth mode</strong>, then reconnect. Stealth wraps the tunnel in a TLS WebSocket so traffic looks more like ordinary HTTPS. Direct UDP remains the default when Stealth is off. This helps on harsh networks; it is not a claim of undetectability.</p>
+                <p>On restrictive networks, open <strong>Settings → Stealth</strong>. Auto is the default: try UDP first, then Stealth if that handshake does not complete. UDP only never falls back. Stealth always starts with WireGuard inside TLS. Reconnect from Home to apply a change. This helps on harsh networks; it is not a claim of undetectability.</p>
             </div>
         </section>
 
         <section class="downloads install-section">
             <div class="container install-steps">
                 <h2>Kill switch</h2>
-                <p>The Linux kill switch is always on while connected (no off option). It blocks non-VPN traffic at the firewall and routing layers if the tunnel drops, so your real IP and DNS do not leak over the clear connection. Connect requires nftables or iptables. This is a full-device WireGuard tunnel. The Chrome extension, if you use one, only proxies the browser. <a href="/support.html#chrome-vs-full-tunnel">How those differ</a>.</p>
+                <p>The Linux kill switch is always on while connected. There is no off switch in the app. It blocks non-VPN traffic at the firewall and routing layers if the tunnel drops, so your real IP and DNS do not leak over the clear connection. Connecting requires nftables or iptables. This is a full-device WireGuard tunnel. The Chrome extension, if you use one, only proxies the browser. <a href="/support.html#chrome-vs-full-tunnel">How those differ</a>.</p>
                 <h2>Auto-reconnect</h2>
                 <p>Auto-reconnect is always on (no off option). If the tunnel drops while you intended to stay connected, the app restores it automatically.</p>
             </div>

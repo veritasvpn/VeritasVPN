@@ -63,12 +63,12 @@ Email accounts do not use that file. Use Forgot password on the sign-in form. Th
 Select VeritasVPN and turn on both Always-on VPN and Block connections without VPN. The tunnel stays blocked until both are on for VeritasVPN. The app cannot turn those system switches on for you. It explains them and opens Android VPN settings. There is no in-app kill-switch off. After both are on, return to the app and Connect continues. Cancel leaves you disconnected.</pre>
 
       <h2 id="stealth">Stealth / connection modes</h2>
-      <p>Android Auto tries UDP first, then Stealth. UDP only and Stealth always are in connection settings. Linux is a Settings toggle. Reconnect to apply. This is not a claim of undetectability.</p>
+      <p>Android and Linux both default to Auto: UDP first, then Stealth. UDP only and Stealth always are under Settings → Stealth. Reconnect from Home to apply. This is not a claim of undetectability.</p>
       <pre class="support-snippet">Stealth wraps WireGuard in a TLS WebSocket on port 443 so it looks more like ordinary HTTPS. Use it on networks that block or throttle plain WireGuard UDP. This helps on restrictive networks; it is not a claim of undetectability.
 
 On Android, open Settings → Connection. Auto (the default) tries UDP WireGuard first and switches to Stealth if that handshake does not complete. The VPN stays on during that switch. UDP only stays on plain WireGuard, with no Stealth fallback. Stealth always starts on Stealth. Reconnect to apply a change.
 
-On Linux, enable Settings → Stealth mode, then reconnect. Direct UDP remains the default when Stealth is off.</pre>
+On Linux, open Settings → Stealth. Auto is the default. UDP only never falls back. Stealth always starts inside TLS. Reconnect from Home to apply a change. Tap the lock to connect or disconnect. There is no separate Connect button and no kill-switch off switch.</pre>
 
       <h2 id="btcpay">Bitcoin invoice (BTCPay)</h2>
       <p>Pay the invoice on-chain, wait for confirmations, then refresh the account. The status page billing row is checkout health, not your invoice.</p>

@@ -24,10 +24,12 @@ macOS: run `./scripts/bundle-wg-macos.sh` before build. Stealth is disabled in t
 
 ## Stealth notes
 
-- Settings → **Stealth mode** (Linux). Requires server `stealth_available` + bundled `src-tauri/resources/bin/wstunnel`.
-- Toggle Exclude LAN / Stealth while connected → banner **Reconnect to apply**.
-- Connected badge shows **Direct UDP** or **Stealth TLS**.
-- Kill switch is always on for the whole Linux session while connected (firewall + fail-closed routes; no off option). Connect aborts if the firewall ruleset cannot be installed.
+- Settings → **Stealth** (Linux): Auto, UDP only, or Stealth always. Requires server `stealth_available` + bundled `src-tauri/resources/bin/wstunnel`.
+- Change Exclude LAN or Stealth while connected → banner **Reconnect from Home to apply these changes**.
+- Connected home shows **Direct UDP**, **Stealth**, or **Switching to Stealth…**.
+- Home connect control is the lock circle. There is no separate Connect or Disconnect button and no exposure diagram.
+- Settings → **Veritas Shield** has four Premium DNS toggles: malicious sites, trackers, ads, and adult sites. Copy stays DNS-only.
+- Kill switch is always on while connected (firewall + fail-closed routes; no in-app off toggle). Connect aborts if the firewall ruleset cannot be installed.
 - Auto-reconnect is always on (no off option).
 
 See `src-tauri/resources/README.md` for binary paths.
