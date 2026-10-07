@@ -23,11 +23,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.ui.theme.CyanHover
-import cloud.veritasvpn.ui.theme.glassSurface
 import cloud.veritasvpn.ui.theme.ErrorRed
 import cloud.veritasvpn.ui.theme.Paper
 import cloud.veritasvpn.ui.theme.PaperMuted
+import cloud.veritasvpn.ui.theme.PremiumBackdrop
+import cloud.veritasvpn.ui.theme.PremiumEnter
 import cloud.veritasvpn.ui.theme.Royal
+import cloud.veritasvpn.ui.theme.glassSurface
 
 /**
  * Prominent disclosure shown before Android's VPN consent dialog, until the
