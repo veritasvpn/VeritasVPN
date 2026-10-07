@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Encrypted SharedPreferences backed by the Android Keystore.
@@ -16,12 +17,21 @@ object SecurePrefs {
     private const val TAG = "SecurePrefs"
     private const val MIGRATION_FLAG = "__veritas_secure_migrated_v1"
 
+    /**
+     * MasterKey and EncryptedSharedPreferences construction hits the keystore.
+     * Doing that on the UI thread stalls the connect-circle frame clock, so
+     * each file is opened once and reused.
+     */
+    private val cache = ConcurrentHashMap<String, SharedPreferences>()
+
     fun open(context: Context, legacyName: String): SharedPreferences {
         val appContext = context.applicationContext
         val secureName = "${legacyName}_secure"
+        cache[secureName]?.let { return it }
         val encrypted = createEncrypted(appContext, secureName)
         migrateFromPlaintext(appContext, legacyName, encrypted)
-        return encrypted
+        val raced = cache.putIfAbsent(secureName, encrypted)
+        return raced ?: encrypted
     }
 
     private fun createEncrypted(context: Context, fileName: String): SharedPreferences {

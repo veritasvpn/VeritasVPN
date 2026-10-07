@@ -674,12 +674,12 @@ class MainActivity : ComponentActivity() {
                                         reconnectJob = null
                                         userWantsConnected = true
                                         hadEstablishedSession = true
-                                        appliedExcludeLan = VpnSettings.excludeLan(this@MainActivity)
-                                        appliedBypassApps = VpnSettings.bypassApps(this@MainActivity)
-                                        appliedStealthMode = VpnSettings.stealthMode(this@MainActivity)
-                                        excludeLan = appliedExcludeLan
-                                        bypassApps = appliedBypassApps
-                                        stealthMode = appliedStealthMode
+                                        // Copy the in-memory tunnel prefs. Re-opening
+                                        // encrypted storage here runs on the main thread
+                                        // and freezes the hero pulse until Protected paints.
+                                        appliedExcludeLan = excludeLan
+                                        appliedBypassApps = bypassApps
+                                        appliedStealthMode = stealthMode
                                         intent.getStringExtra(VeritasVpnService.EXTRA_TRANSPORT)
                                             ?.let { transport = it }
                                         statusMsg = null
