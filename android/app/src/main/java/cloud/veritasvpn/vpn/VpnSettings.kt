@@ -23,6 +23,7 @@ object VpnSettings {
     private const val KEY_SHIELD_TRACKERS = "shield_block_trackers"
     private const val KEY_SHARE_DIAGNOSTICS = "share_diagnostics"
     private const val KEY_LAST_ERROR = "last_error"
+    private const val KEY_VPN_DISCLOSURE_ACCEPTED = "vpn_disclosure_accepted"
 
     /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
     val EXCLUDE_LAN_ALLOWED_IPS: List<String> = listOf(
@@ -92,6 +93,14 @@ object VpnSettings {
 
     fun setShareDiagnostics(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SHARE_DIAGNOSTICS, enabled).apply()
+    }
+
+    /** True only after the in-app VPN disclosure has been accepted. */
+    fun vpnDisclosureAccepted(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_VPN_DISCLOSURE_ACCEPTED, false)
+
+    fun setVpnDisclosureAccepted(context: Context, accepted: Boolean) {
+        prefs(context).edit().putBoolean(KEY_VPN_DISCLOSURE_ACCEPTED, accepted).apply()
     }
 
     fun lastError(context: Context): String =

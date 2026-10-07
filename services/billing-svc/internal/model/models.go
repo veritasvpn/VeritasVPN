@@ -13,7 +13,6 @@ const (
 
 	PaymentNone   = "none"
 	PaymentBTCPay = "btcpay"
-	PaymentStripe = "stripe"
 
 	PaymentPending   = "pending"
 	PaymentCompleted = "completed"

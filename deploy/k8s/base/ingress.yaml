@@ -9,6 +9,8 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600s"
     # Tunnel origin is plain HTTP; edge already serves HTTPS to clients.
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # The controller's default access log records client IPs. Keep it off.
+    nginx.ingress.kubernetes.io/enable-access-log: "false"
 spec:
   ingressClassName: nginx
   rules:

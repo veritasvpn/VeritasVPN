@@ -25,6 +25,12 @@
   margin: 2rem 0 0.75rem;
 }
 
+.legal-page h3 {
+  font-size: 1.12rem;
+  margin: 1.35rem 0 0.45rem;
+  letter-spacing: -0.02em;
+}
+
 .legal-page p,
 .legal-page li {
   color: var(--text-secondary, #cbd5e1);

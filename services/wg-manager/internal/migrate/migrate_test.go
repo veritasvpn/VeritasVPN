@@ -5,6 +5,23 @@ import (
 	"testing"
 )
 
+func TestRemovedPeerPurgeMigrationRecordsRemovalTime(t *testing.T) {
+	body, err := files.ReadFile("010_purge_removed_peers.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+	if !strings.Contains(sql, "removed_at") {
+		t.Fatal("migration must record when a peer was removed")
+	}
+	if !strings.Contains(sql, "COALESCE(last_handshake_at, created_at)") {
+		t.Fatal("existing removed peers must be backfilled from the last known time")
+	}
+	if !strings.Contains(sql, "status = 'removed'") {
+		t.Fatal("backfill must apply only to removed peers")
+	}
+}
+
 func TestBlockTrackersMigrationBackfillsExplicitPolicyOnce(t *testing.T) {
 	body, err := files.ReadFile("009_shield_block_trackers.sql")
 	if err != nil {

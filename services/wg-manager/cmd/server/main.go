@@ -90,6 +90,8 @@ func main() {
 		log.Fatal("failed to start account teardown sync", "error", err)
 	}
 	log.Info("listening for account teardown requests")
+	svc.StartRemovedPeerPurge(ctx)
+	log.Info("removed peer purge scheduled", "retention", repository.RemovedPeerRetention.String())
 	svc.SetFreeAllowedRegions(entitlement.ParseFreeRegions(os.Getenv("FREE_ALLOWED_REGIONS")))
 	if lanIP := strings.TrimSpace(os.Getenv("LAN_ENDPOINT_IP")); lanIP != "" {
 		lanPort := int32(51820)

@@ -10,8 +10,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,13 +43,23 @@ fun AccountScreen(
     paymentMessage: String?,
     error: String?,
     purchaseHistoryFailed: Boolean = false,
+    deletingAccount: Boolean = false,
+    deleteError: String? = null,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onCheckout: (String, String) -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    onDeleteAccount: (String, String) -> Unit = { _, _ -> },
 ) {
     var showCancelConfirmation by remember { mutableStateOf(false) }
+    var showDeleteConfirmation by remember { mutableStateOf(false) }
+    var deletePassword by remember { mutableStateOf("") }
+    var turnstileToken by remember { mutableStateOf("") }
+    var turnstileResetKey by remember { mutableIntStateOf(0) }
+    var turnstileReady by remember { mutableStateOf(false) }
+    var turnstileExecuteVersion by remember { mutableIntStateOf(0) }
     var selectedPlan by remember { mutableStateOf("premium_monthly") }
+    val requiresPassword = !email.isNullOrBlank()
     val periodEnd = remember(billingStatus?.currentPeriodEnd) {
         formatBillingDate(billingStatus?.currentPeriodEnd)
     }
@@ -98,7 +111,7 @@ fun AccountScreen(
         Text("Your account, plan, and Bitcoin payments.", color = PaperDim, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(18.dp))
         Text(
-            "VeritasVPN stores an anonymous account ID and Bitcoin purchase history.",
+            "VeritasVPN stores your account email if you use one, an Account ID, device details for connected peers, and payment records.",
             modifier = Modifier
                 .fillMaxWidth()
                 .glassSurface(RoundedCornerShape(20.dp))
@@ -241,6 +254,108 @@ fun AccountScreen(
             refreshing = refreshing,
             loadFailed = purchaseHistoryFailed || (error != null && billingStatus?.payments == null)
         )
+        Spacer(Modifier.height(28.dp))
+        Text("Delete account", color = Paper, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Permanently deletes this account, signs you out, and removes the data we store for it. This cannot be undone.",
+            color = PaperMuted,
+            fontSize = 13.sp,
+            lineHeight = 19.sp
+        )
+        if (!showDeleteConfirmation) {
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { showDeleteConfirmation = true },
+                enabled = !deletingAccount,
+                modifier = Modifier.fillMaxWidth(),
+                border = BorderStroke(1.dp, ErrorRed.copy(alpha = .6f))
+            ) {
+                Text("Delete account", color = ErrorRed, fontWeight = FontWeight.Bold)
+            }
+        } else {
+            Spacer(Modifier.height(12.dp))
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .glassSurface(RoundedCornerShape(20.dp))
+                    .padding(16.dp)
+            ) {
+                Text("Delete this account?", color = Paper, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    if (requiresPassword) {
+                        "Enter your password to confirm. You will be signed out of this device."
+                    } else {
+                        "Complete the security check to confirm. You will be signed out of this device."
+                    },
+                    color = PaperMuted,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp
+                )
+                Spacer(Modifier.height(12.dp))
+                if (requiresPassword) {
+                    OutlinedTextField(
+                        value = deletePassword,
+                        onValueChange = { deletePassword = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        enabled = !deletingAccount
+                    )
+                } else {
+                    TurnstileWebView(
+                        resetKey = turnstileResetKey,
+                        executeVersion = turnstileExecuteVersion,
+                        isReady = turnstileReady,
+                        showInteractive = true,
+                        onToken = { turnstileToken = it },
+                        onReady = {
+                            turnstileReady = true
+                            if (turnstileToken.isBlank()) turnstileExecuteVersion += 1
+                        },
+                        onInteractiveRequired = {},
+                        onError = {
+                            turnstileToken = ""
+                            turnstileReady = false
+                            turnstileResetKey += 1
+                        },
+                    )
+                }
+                deleteError?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = WarningOrange, fontSize = 13.sp)
+                }
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { onDeleteAccount(deletePassword, turnstileToken) },
+                    enabled = !deletingAccount && (
+                        if (requiresPassword) deletePassword.isNotBlank() else turnstileToken.isNotBlank()
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
+                ) {
+                    Text(
+                        if (deletingAccount) "Deleting…" else "Delete account permanently",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                TextButton(
+                    onClick = {
+                        if (!deletingAccount) {
+                            showDeleteConfirmation = false
+                            deletePassword = ""
+                            turnstileToken = ""
+                        }
+                    },
+                    enabled = !deletingAccount,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Keep my account", color = CyanHover) }
+            }
+        }
         Spacer(Modifier.height(24.dp))
     }
     }
