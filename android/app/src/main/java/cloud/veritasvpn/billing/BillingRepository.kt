@@ -6,7 +6,7 @@ import cloud.veritasvpn.api.CheckoutResponse
 import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.auth.AuthenticatedApi
 
-class BillingRepository(private val auth: AuthRepository) {
+class BillingRepository(internal val auth: AuthRepository) {
     fun status(): BillingStatus = AuthenticatedApi.execute(
         auth,
         { token -> ApiClient.getFast("/api/v1/billing/status", token) }
@@ -16,32 +16,6 @@ class BillingRepository(private val auth: AuthRepository) {
             throw billingError(response.code, data?.error, "Could not load your plan.")
         }
         data ?: throw Error("The server returned an invalid plan response.")
-    }
-
-    fun createCheckout(paymentMethod: String, planId: String): String = AuthenticatedApi.execute(
-        auth,
-        { token ->
-            ApiClient.post(
-                "/api/v1/billing/subscribe",
-                mapOf(
-                    "tier" to "premium",
-                    "payment_method" to paymentMethod,
-                    "plan_id" to planId,
-                    "return_target" to "android"
-                ),
-                token
-            )
-        }
-    ) { response ->
-        val data = ApiClient.parse<CheckoutResponse>(response)
-        if (!response.isSuccessful) {
-            throw billingError(response.code, data?.error, "Could not start checkout.")
-        }
-        data?.checkoutUrl?.takeIf { url ->
-            url.startsWith("https://btcpay-mainnet.veritasvpn.cloud/") ||
-                url.startsWith("https://btcpay.veritasvpn.cloud/")
-        }
-            ?: throw Error("The server returned an invalid checkout URL.")
     }
 
     fun cancel() {

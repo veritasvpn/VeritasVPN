@@ -7,6 +7,7 @@ Project planning and design docs that are more specific than the root `IMPLEMENT
 | Doc | Topic |
 |-----|--------|
 | `BITCOIN_PAYMENTS_IMPLEMENTATION_PLAN.md` | Bitcoin-only billing via BTCPay; Free + $5 Premium |
+| `play-billing.md` | Google Play Billing for the Play build, and the website APK split |
 | `ACCOUNT_DASHBOARD_IMPLEMENTATION_PLAN.md` | Logged-in Proton-like account dashboard; auth-aware CTAs |
 | `MTU_STRATEGY.md` | Intentional server 1420 / client 1280 WireGuard MTU defaults |
 | `SUPPORT_SNIPPETS.md` | Paste-ready support replies; public copy is `website/support.html` |

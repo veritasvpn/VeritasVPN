@@ -121,13 +121,15 @@ jobs:
           ORG_GRADLE_PROJECT_VERITAS_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ORG_GRADLE_PROJECT_VERITAS_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ORG_GRADLE_PROJECT_VERITAS_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew test assembleRelease bundleRelease --no-daemon
+        # direct is the website APK (BTCPay). play is the Play Console bundle
+        # (Google Play Billing only). Do not publish the Play AAB as the website APK.
+        run: ./gradlew test assembleDirectRelease bundlePlayRelease --no-daemon
         working-directory: android
       - name: Verify APK signature
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
           test -n "$APKSIGNER"
-          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/direct/release/app-direct-release.apk
         working-directory: android
       - name: Verify website APK version and purchase history
         if: startsWith(github.ref, 'refs/tags/android-v')
@@ -135,24 +137,24 @@ jobs:
           expected="${GITHUB_REF_NAME#android-v}"
           AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
           test -x "$AAPT"
-          badging="$("$AAPT" dump badging app/build/outputs/apk/release/app-release.apk)"
+          badging="$("$AAPT" dump badging app/build/outputs/apk/direct/release/app-direct-release.apk)"
           printf '%s\n' "$badging" | grep -q "versionName='${expected}'"
-          python3 ../scripts/verify-android-purchase-history-apk.py app/build/outputs/apk/release/app-release.apk
+          python3 ../scripts/verify-android-purchase-history-apk.py app/build/outputs/apk/direct/release/app-direct-release.apk
         working-directory: android
       - name: Verify Android App Bundle signature
         # App bundles are JAR-signed. Verify their integrity and signer without
         # requiring the release certificate to chain to a public CA.
-        run: jarsigner -verify -certs app/build/outputs/bundle/release/app-release.aab
+        run: jarsigner -verify -certs app/build/outputs/bundle/playRelease/app-play-release.aab
         working-directory: android
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: veritasvpn-android
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: android/app/build/outputs/apk/direct/release/app-direct-release.apk
           if-no-files-found: error
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: veritasvpn-android-aab
-          path: android/app/build/outputs/bundle/release/app-release.aab
+          path: android/app/build/outputs/bundle/playRelease/app-play-release.aab
           if-no-files-found: error
       - name: Remove signing material
         if: always()
@@ -329,8 +331,9 @@ jobs:
           # the install page pin matches. Linux packages are not replaced.
           make_latest: true
           body: |
-            Signed Android website build. Purchase history JSON names are kept through release shrinking.
-            Linux packages stay on linux-v0.2.83. Google Play is not part of this release.
+            Signed Android website APK (direct flavor, Bitcoin checkout). Purchase history JSON names are kept through release shrinking.
+            The Play App Bundle in this release is the play flavor for Play Console. It is not the website download.
+            Linux packages stay on linux-v0.2.83.
           fail_on_unmatched_files: true
           files: |
             veritasvpn-android.apk

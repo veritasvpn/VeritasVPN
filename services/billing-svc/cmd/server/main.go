@@ -135,6 +135,23 @@ func main() {
 		PremiumPeriodDays:    cfg.PremiumPeriodDays,
 		BitcoinReadinessURL:  cfg.BitcoinReadinessURL,
 	})
+	if cfg.GooglePlayEnabled() {
+		playClient, err := provider.NewGooglePlayClient(cfg.GooglePlayPackageName, cfg.GooglePlayServiceAccountFile)
+		if err != nil {
+			log.Error("Google Play billing disabled because credentials could not be loaded", zap.Error(err))
+		} else {
+			var push provider.PushVerifier
+			if cfg.GooglePlayRTDNAudience != "" {
+				push = provider.NewGooglePubSubAuth(cfg.GooglePlayRTDNAudience, cfg.GooglePlayRTDNServiceAccount)
+			} else {
+				log.Warn("GOOGLE_PLAY_RTDN_AUDIENCE is empty — Play renewals will not be applied until the app verifies them")
+			}
+			svc.SetPlayBilling(service.NewPlayBilling(log, db, playClient, push, svc.PublishEvent))
+			log.Info("Google Play billing configured", zap.String("package", cfg.GooglePlayPackageName))
+		}
+	} else {
+		log.Info("Google Play billing is not configured")
+	}
 
 	tokenVerifier, err := tokenauth.NewVerifierWithKeys(
 		cfg.JWTSecret,

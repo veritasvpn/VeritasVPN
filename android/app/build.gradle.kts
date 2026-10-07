@@ -15,9 +15,12 @@ val releaseSigningConfigured = listOf(
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
 val releaseTaskRequested = gradle.startParameter.taskNames.any { task ->
-    task.contains("assembleRelease", ignoreCase = true) ||
-        task.contains("bundleRelease", ignoreCase = true) ||
-        task.contains("publishRelease", ignoreCase = true)
+    val name = task.substringAfterLast(":")
+    name.contains("Release", ignoreCase = true) && (
+        name.contains("assemble", ignoreCase = true) ||
+            name.contains("bundle", ignoreCase = true) ||
+            name.contains("publish", ignoreCase = true)
+        )
 }
 
 if (releaseTaskRequested && !releaseSigningConfigured) {
@@ -61,6 +64,20 @@ android {
         }
     }
 
+    // play: Google Play Billing only. This is the artifact uploaded to Play.
+    // direct: sideloaded website APK. It keeps the existing BTCPay checkout.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("play") {
+            dimension = "distribution"
+            buildConfigField("boolean", "PLAY_BILLING", "true")
+        }
+        create("direct") {
+            dimension = "distribution"
+            buildConfigField("boolean", "PLAY_BILLING", "false")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -73,6 +90,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -95,6 +113,8 @@ dependencies {
     implementation("com.caverock:androidsvg-aar:1.4")
 
     implementation("com.wireguard.android:tunnel:1.0.20260102")
+    // Play Billing stays off the website APK. The direct flavor cannot call it.
+    "playImplementation"("com.android.billingclient:billing:9.1.0")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
     testImplementation("junit:junit:4.13.2")
 

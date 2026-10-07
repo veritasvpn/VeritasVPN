@@ -11,9 +11,10 @@ const (
 	StatusPastDue  = "past_due"
 	StatusPending  = "pending"
 
-	PaymentNone   = "none"
-	PaymentBTCPay = "btcpay"
-	PaymentStripe = "stripe"
+	PaymentNone       = "none"
+	PaymentBTCPay     = "btcpay"
+	PaymentStripe     = "stripe"
+	PaymentGooglePlay = "google_play"
 
 	PaymentPending   = "pending"
 	PaymentCompleted = "completed"
@@ -44,8 +45,11 @@ type Subscription struct {
 	BillingPeriod      string    `json:"billing_period"`
 	PriceCents         int64     `json:"price_cents"`
 	PeriodDays         int       `json:"period_days"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	// ExternalRef is the active Google Play purchase token when PaymentMethod
+	// is google_play. It is never returned to clients.
+	ExternalRef string    `json:"-"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type PaymentRecord struct {
@@ -59,6 +63,7 @@ type PaymentRecord struct {
 	CreatedAt             time.Time `json:"created_at"`
 	PlanID                string    `json:"plan_id"`
 	PeriodDays            int       `json:"period_days"`
+	Provider              string    `json:"provider,omitempty"`
 }
 
 // StatusResponse is returned by GET /billing/status.
@@ -91,4 +96,5 @@ type PurchaseHistoryItem struct {
 	Currency    string    `json:"currency"`
 	Plan        string    `json:"plan"`
 	Status      string    `json:"status"`
+	Provider    string    `json:"provider,omitempty"`
 }

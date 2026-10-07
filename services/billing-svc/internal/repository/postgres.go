@@ -25,8 +25,8 @@ func (p *Postgres) Ping(ctx context.Context) error {
 
 func (p *Postgres) CreateSubscription(ctx context.Context, sub *model.Subscription) error {
 	query := `INSERT INTO subscriptions (account_id, tier, status, payment_method,
-	           current_period_start, current_period_end, cancel_at_period_end, plan_id, billing_period, price_cents, period_days, created_at, updated_at)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	           current_period_start, current_period_end, cancel_at_period_end, plan_id, billing_period, price_cents, period_days, external_ref, created_at, updated_at)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	           ON CONFLICT (account_id) DO UPDATE SET
 	               tier = EXCLUDED.tier,
 	               status = EXCLUDED.status,
@@ -48,7 +48,7 @@ func (p *Postgres) CreateSubscription(ctx context.Context, sub *model.Subscripti
 	return p.pool.QueryRow(ctx, query,
 		sub.AccountID, sub.Tier, sub.Status, sub.PaymentMethod,
 		sub.CurrentPeriodStart, sub.CurrentPeriodEnd, sub.CancelAtPeriodEnd,
-		sub.PlanID, sub.BillingPeriod, sub.PriceCents, sub.PeriodDays,
+		sub.PlanID, sub.BillingPeriod, sub.PriceCents, sub.PeriodDays, sub.ExternalRef,
 		sub.CreatedAt, sub.UpdatedAt,
 	).Scan(&sub.ID, &sub.CreatedAt, &sub.UpdatedAt)
 }
@@ -57,7 +57,7 @@ func (p *Postgres) GetSubscription(ctx context.Context, accountID string) (*mode
 	query := `SELECT id, account_id, tier, status, payment_method,
 	           current_period_start, current_period_end, cancel_at_period_end,
 	           plan_id, billing_period, price_cents, period_days,
-	           created_at, updated_at
+	           created_at, updated_at, external_ref
 	           FROM subscriptions WHERE account_id = $1`
 
 	sub := &model.Subscription{}
@@ -65,7 +65,7 @@ func (p *Postgres) GetSubscription(ctx context.Context, accountID string) (*mode
 		&sub.ID, &sub.AccountID, &sub.Tier, &sub.Status, &sub.PaymentMethod,
 		&sub.CurrentPeriodStart, &sub.CurrentPeriodEnd, &sub.CancelAtPeriodEnd,
 		&sub.PlanID, &sub.BillingPeriod, &sub.PriceCents, &sub.PeriodDays,
-		&sub.CreatedAt, &sub.UpdatedAt,
+		&sub.CreatedAt, &sub.UpdatedAt, &sub.ExternalRef,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -81,13 +81,13 @@ func (p *Postgres) UpdateSubscription(ctx context.Context, sub *model.Subscripti
 	           tier = $2, status = $3, payment_method = $4,
 	           current_period_start = $5, current_period_end = $6,
 	           cancel_at_period_end = $7, plan_id = $8, billing_period = $9,
-	           price_cents = $10, period_days = $11, updated_at = NOW()
+	           price_cents = $10, period_days = $11, external_ref = $12, updated_at = NOW()
 	           WHERE id = $1`
 
 	_, err := p.pool.Exec(ctx, query,
 		sub.ID, sub.Tier, sub.Status, sub.PaymentMethod,
 		sub.CurrentPeriodStart, sub.CurrentPeriodEnd, sub.CancelAtPeriodEnd,
-		sub.PlanID, sub.BillingPeriod, sub.PriceCents, sub.PeriodDays,
+		sub.PlanID, sub.BillingPeriod, sub.PriceCents, sub.PeriodDays, sub.ExternalRef,
 	)
 	return err
 }
@@ -108,17 +108,21 @@ func (p *Postgres) CancelSubscription(ctx context.Context, accountID string) err
 
 func (p *Postgres) CreatePaymentRecord(ctx context.Context, pr *model.PaymentRecord) error {
 	query := `INSERT INTO payment_records (subscription_id, account_id, amount, currency,
-	           status, provider_transaction_id, plan_id, period_days, created_at)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	           status, provider_transaction_id, plan_id, period_days, created_at, provider)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	           ON CONFLICT (provider_transaction_id) DO UPDATE SET
 	               provider_transaction_id = EXCLUDED.provider_transaction_id
 	           RETURNING id, created_at`
 
 	pr.CreatedAt = time.Now().UTC()
+	providerName := pr.Provider
+	if providerName == "" {
+		providerName = model.PaymentBTCPay
+	}
 
 	return p.pool.QueryRow(ctx, query,
 		pr.SubscriptionID, pr.AccountID, pr.Amount, pr.Currency,
-		pr.Status, pr.ProviderTransactionID, pr.PlanID, pr.PeriodDays, pr.CreatedAt,
+		pr.Status, pr.ProviderTransactionID, pr.PlanID, pr.PeriodDays, pr.CreatedAt, providerName,
 	).Scan(&pr.ID, &pr.CreatedAt)
 }
 
@@ -169,7 +173,8 @@ const purchaseHistoryLimit = 100
 // ListAccountPayments returns Bitcoin payments already stored for an account,
 // newest first. It does not select invoice or transaction identifiers.
 func (p *Postgres) ListAccountPayments(ctx context.Context, accountID string) ([]model.PaymentRecord, error) {
-	query := `SELECT pr.amount, pr.currency, pr.status, COALESCE(pr.plan_id, ''), pr.period_days, pr.created_at
+	query := `SELECT pr.amount, pr.currency, pr.status, COALESCE(pr.plan_id, ''), pr.period_days, pr.created_at,
+	                 COALESCE(pr.provider, 'btcpay')
 	          FROM payment_records pr
 	          WHERE pr.account_id = $1
 	             OR (
@@ -187,7 +192,7 @@ func (p *Postgres) ListAccountPayments(ctx context.Context, accountID string) ([
 	out := make([]model.PaymentRecord, 0)
 	for rows.Next() {
 		var pr model.PaymentRecord
-		if err := rows.Scan(&pr.Amount, &pr.Currency, &pr.Status, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt); err != nil {
+		if err := rows.Scan(&pr.Amount, &pr.Currency, &pr.Status, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt, &pr.Provider); err != nil {
 			return nil, fmt.Errorf("scan account payment: %w", err)
 		}
 		out = append(out, pr)
@@ -204,7 +209,8 @@ func (p *Postgres) ListAccountPayments(ctx context.Context, accountID string) ([
 func (p *Postgres) FailStalePendingPayments(ctx context.Context, cutoff time.Time) (int64, error) {
 	query := `UPDATE payment_records
 	          SET status = $1
-	          WHERE status = $2 AND created_at < $3`
+	          WHERE status = $2 AND created_at < $3
+	            AND COALESCE(provider, 'btcpay') <> 'google_play'`
 	ct, err := p.pool.Exec(ctx, query, model.PaymentFailed, model.PaymentPending, cutoff.UTC())
 	if err != nil {
 		return 0, fmt.Errorf("fail stale pending payments: %w", err)
@@ -220,6 +226,7 @@ func (p *Postgres) FailStalePendingPaymentsForAccount(ctx context.Context, accou
 	          SET status = $1
 	          WHERE pr.status = $2
 	            AND pr.created_at < $3
+	            AND COALESCE(pr.provider, 'btcpay') <> 'google_play'
 	            AND (
 	              pr.account_id = $4
 	              OR (
@@ -280,12 +287,12 @@ func (p *Postgres) SettlePaymentTx(
 	           tier = $2, status = $3, payment_method = $4,
 	           current_period_start = $5, current_period_end = $6,
 	           cancel_at_period_end = $7, plan_id = $8, billing_period = $9,
-	           price_cents = $10, period_days = $11, updated_at = NOW()
+	           price_cents = $10, period_days = $11, external_ref = $12, updated_at = NOW()
 	           WHERE id = $1`
 	if _, err := tx.Exec(ctx, updateQuery,
 		sub.ID, sub.Tier, sub.Status, sub.PaymentMethod,
 		sub.CurrentPeriodStart, sub.CurrentPeriodEnd, sub.CancelAtPeriodEnd,
-		sub.PlanID, sub.BillingPeriod, sub.PriceCents, sub.PeriodDays,
+		sub.PlanID, sub.BillingPeriod, sub.PriceCents, sub.PeriodDays, sub.ExternalRef,
 	); err != nil {
 		return false, fmt.Errorf("update subscription: %w", err)
 	}
@@ -329,7 +336,7 @@ func getSubscriptionForUpdate(ctx context.Context, tx pgx.Tx, accountID string) 
 	query := `SELECT id, account_id, tier, status, payment_method,
 	           current_period_start, current_period_end, cancel_at_period_end,
 	           plan_id, billing_period, price_cents, period_days,
-	           created_at, updated_at
+	           created_at, updated_at, external_ref
 	           FROM subscriptions WHERE account_id = $1 FOR UPDATE`
 
 	sub := &model.Subscription{}
@@ -337,7 +344,7 @@ func getSubscriptionForUpdate(ctx context.Context, tx pgx.Tx, accountID string) 
 		&sub.ID, &sub.AccountID, &sub.Tier, &sub.Status, &sub.PaymentMethod,
 		&sub.CurrentPeriodStart, &sub.CurrentPeriodEnd, &sub.CancelAtPeriodEnd,
 		&sub.PlanID, &sub.BillingPeriod, &sub.PriceCents, &sub.PeriodDays,
-		&sub.CreatedAt, &sub.UpdatedAt,
+		&sub.CreatedAt, &sub.UpdatedAt, &sub.ExternalRef,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -352,7 +359,7 @@ func (p *Postgres) ListExpiredPremium(ctx context.Context, now time.Time) ([]*mo
 	query := `SELECT id, account_id, tier, status, payment_method,
 	           current_period_start, current_period_end, cancel_at_period_end,
 	           plan_id, billing_period, price_cents, period_days,
-	           created_at, updated_at
+	           created_at, updated_at, external_ref
 	           FROM subscriptions
 	           WHERE tier = $1 AND status = $2 AND current_period_end < $3`
 
@@ -369,11 +376,126 @@ func (p *Postgres) ListExpiredPremium(ctx context.Context, now time.Time) ([]*mo
 			&sub.ID, &sub.AccountID, &sub.Tier, &sub.Status, &sub.PaymentMethod,
 			&sub.CurrentPeriodStart, &sub.CurrentPeriodEnd, &sub.CancelAtPeriodEnd,
 			&sub.PlanID, &sub.BillingPeriod, &sub.PriceCents, &sub.PeriodDays,
-			&sub.CreatedAt, &sub.UpdatedAt,
+			&sub.CreatedAt, &sub.UpdatedAt, &sub.ExternalRef,
 		); err != nil {
 			return nil, err
 		}
 		out = append(out, sub)
 	}
 	return out, rows.Err()
+}
+
+// ErrPurchaseAccountConflict means a Google Play purchase token is already
+// stored for a different Veritas account.
+var ErrPurchaseAccountConflict = errors.New("purchase token is already linked to another account")
+
+// PaymentAccount returns the account stored for a provider transaction, or
+// empty when that transaction has not been recorded.
+func (p *Postgres) PaymentAccount(ctx context.Context, providerTxnID string) (string, error) {
+	payment, err := p.GetPaymentByProviderTxn(ctx, providerTxnID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return payment.AccountID, nil
+}
+
+// UpdateGooglePlay locks the account subscription and the purchase-token row,
+// then lets apply decide the entitlement. The purchase token is the idempotency
+// key: a second call updates the same payment_records row.
+func (p *Postgres) UpdateGooglePlay(
+	ctx context.Context,
+	accountID, token string,
+	apply func(sub *model.Subscription, existing *model.PaymentRecord) (*model.PaymentRecord, string, error),
+) (string, error) {
+	if err := p.ensureSubscriptionRow(ctx, accountID); err != nil {
+		return "", err
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+
+	sub, err := getSubscriptionForUpdate(ctx, tx, accountID)
+	if err != nil {
+		return "", err
+	}
+	existing, err := getPaymentForUpdate(ctx, tx, token)
+	if errors.Is(err, pgx.ErrNoRows) {
+		existing = nil
+	} else if err != nil {
+		return "", err
+	}
+	if existing != nil && existing.AccountID != "" && existing.AccountID != accountID {
+		return "", ErrPurchaseAccountConflict
+	}
+
+	payment, event, err := apply(sub, existing)
+	if err != nil {
+		return "", err
+	}
+	if payment == nil || payment.ProviderTransactionID == "" {
+		return "", fmt.Errorf("google play payment was not recorded")
+	}
+	payment.Provider = model.PaymentGooglePlay
+	payment.ProviderTransactionID = token
+	payment.AccountID = accountID
+	payment.SubscriptionID = sub.ID
+
+	updateQuery := `UPDATE subscriptions SET
+	           tier = $2, status = $3, payment_method = $4,
+	           current_period_start = $5, current_period_end = $6,
+	           cancel_at_period_end = $7, plan_id = $8, billing_period = $9,
+	           price_cents = $10, period_days = $11, external_ref = $12, updated_at = NOW()
+	           WHERE id = $1`
+	if _, err := tx.Exec(ctx, updateQuery,
+		sub.ID, sub.Tier, sub.Status, sub.PaymentMethod,
+		sub.CurrentPeriodStart, sub.CurrentPeriodEnd, sub.CancelAtPeriodEnd,
+		sub.PlanID, sub.BillingPeriod, sub.PriceCents, sub.PeriodDays, sub.ExternalRef,
+	); err != nil {
+		return "", fmt.Errorf("update google play subscription: %w", err)
+	}
+
+	upsert := `INSERT INTO payment_records (subscription_id, account_id, amount, currency,
+	           status, provider_transaction_id, plan_id, period_days, created_at, provider)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	           ON CONFLICT (provider_transaction_id) DO UPDATE SET
+	               status = EXCLUDED.status,
+	               amount = EXCLUDED.amount,
+	               currency = EXCLUDED.currency,
+	               plan_id = EXCLUDED.plan_id,
+	               period_days = EXCLUDED.period_days,
+	               provider = EXCLUDED.provider,
+	               subscription_id = EXCLUDED.subscription_id,
+	               account_id = EXCLUDED.account_id`
+	createdAt := time.Now().UTC()
+	if existing != nil && !existing.CreatedAt.IsZero() {
+		createdAt = existing.CreatedAt
+	}
+	if _, err := tx.Exec(ctx, upsert,
+		payment.SubscriptionID, payment.AccountID, payment.Amount, payment.Currency,
+		payment.Status, payment.ProviderTransactionID, payment.PlanID, payment.PeriodDays,
+		createdAt, model.PaymentGooglePlay,
+	); err != nil {
+		return "", fmt.Errorf("upsert google play payment: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return event, nil
+}
+
+func (p *Postgres) ensureSubscriptionRow(ctx context.Context, accountID string) error {
+	now := time.Now().UTC()
+	end := now.Add(100 * 365 * 24 * time.Hour)
+	query := `INSERT INTO subscriptions (account_id, tier, status, payment_method,
+	           current_period_start, current_period_end, cancel_at_period_end,
+	           plan_id, billing_period, price_cents, period_days, external_ref, created_at, updated_at)
+	           VALUES ($1, 'free', 'active', 'none', $2, $3, FALSE, 'free', 'lifetime', 0, 0, '', $2, $2)
+	           ON CONFLICT (account_id) DO NOTHING`
+	_, err := p.pool.Exec(ctx, query, accountID, now, end)
+	return err
 }

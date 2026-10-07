@@ -171,13 +171,15 @@ data class PurchaseHistoryItem(
     // and Gson only keeps a name that is written on @SerializedName.
     @SerializedName("currency") val currency: String? = null,
     @SerializedName("plan") val plan: String? = null,
-    @SerializedName("status") val status: String? = null
+    @SerializedName("status") val status: String? = null,
+    @SerializedName("provider") val provider: String? = null
 )
 
 data class BillingStatus(
     val tier: String = "free",
     val status: String = "active",
     @SerializedName("payment_method") val paymentMethod: String = "none",
+    @SerializedName("plan_id") val planId: String? = null,
     @SerializedName("current_period_end") val currentPeriodEnd: String? = null,
     @SerializedName("cancel_at_period_end") val cancelAtPeriodEnd: Boolean = false,
     @SerializedName("is_premium") val isPremium: Boolean = false,
