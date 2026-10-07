@@ -17,24 +17,24 @@ const MAX_ASSET_BYTES = 100 * 1024 * 1024;
 
 export const DOWNLOADS = {
   "veritasvpn-android.apk": {
-    // android-v0.2.89 is the signed website APK (versionCode 73) with
-    // Help & Support (#198) on Android and Linux.
+    // android-v0.2.90 is the signed website APK (versionCode 74) with
+    // the connect circle pulsing through Protected (#201).
     // Play production stays on the older Play-tracked build.
-    tag: "android-v0.2.89",
-    sha256: "7f8d6eaf3dac5422be2360e671df07617bb54ef6efd7a661298d1db88fa7bb9d",
+    tag: "android-v0.2.90",
+    sha256: "92b6761136304c6bbbdefc3721f313511afbc0f0a8d488486f79103bb9caf0af",
     contentType: "application/vnd.android.package-archive",
     unavailable: "Android APK is temporarily unavailable.",
   },
   "veritasvpn-linux.deb": {
-    // linux-v0.2.89: Help & Support (#198) on Android and Linux.
-    tag: "linux-v0.2.89",
-    sha256: "635374ffff57c3120af3eec201d972e7a5bc108865b9d21d64893d8876f92465",
+    // linux-v0.2.90: connect circle pulsing through Protected (#201).
+    tag: "linux-v0.2.90",
+    sha256: "60baddacc91482e259e71da212468544f81c1fbe94cb8a0166cf44cf4353013d",
     contentType: "application/vnd.debian.binary-package",
     unavailable: "Linux .deb is temporarily unavailable.",
   },
   "veritasvpn-linux.AppImage": {
-    tag: "linux-v0.2.89",
-    sha256: "e7774e98f23103f428a4d56150280af270415a6d7886d41343c71f041a7eb5a9",
+    tag: "linux-v0.2.90",
+    sha256: "eec7029323df556b0efbd783a2f149ecfe6c9777211114485fbe07fc7deee9eb",
     contentType: "application/octet-stream",
     unavailable: "Linux AppImage is temporarily unavailable.",
   },
