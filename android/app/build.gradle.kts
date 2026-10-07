@@ -35,8 +35,8 @@ android {
         targetSdk = 36
         // Google Play requires a new monotonically increasing version code for
         // every uploaded release artifact.
-        versionCode = 73
-        versionName = "0.2.89"
+        versionCode = 74
+        versionName = "0.2.90"
     }
 
     signingConfigs {
