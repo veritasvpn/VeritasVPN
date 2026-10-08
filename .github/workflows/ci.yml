@@ -249,7 +249,7 @@ jobs:
           fi
           test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null
-          "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;35.0.0"
       - name: Assemble and test Android app
         working-directory: android
         run: ./gradlew test assemblePlayDebug assembleDirectDebug --no-daemon
