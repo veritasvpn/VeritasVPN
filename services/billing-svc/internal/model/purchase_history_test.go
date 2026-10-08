@@ -92,7 +92,7 @@ func TestPurchaseHistoryOmitsPaymentReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(raw)
-	for _, leaked := range []string{secret, "payment-row", "subscription-row", "account-row", "provider_transaction_id", "invoice", "address"} {
+	for _, leaked := range []string{secret, "payment-row", "subscription-row", "account-row", "provider_transaction_id", "invoice", "address", "fake-txid"} {
 		if strings.Contains(body, leaked) {
 			t.Fatalf("history leaked %q: %s", leaked, body)
 		}
@@ -106,10 +106,13 @@ func TestPurchaseHistoryOmitsPaymentReferences(t *testing.T) {
 	}
 	for key := range decoded[0] {
 		switch key {
-		case "created_at", "amount_cents", "currency", "plan", "status":
+		case "created_at", "amount_cents", "currency", "plan", "status", "provider":
 		default:
 			t.Fatalf("unexpected history field %q", key)
 		}
+	}
+	if decoded[0]["provider"] != "btcpay" {
+		t.Fatalf("provider = %v, want btcpay", decoded[0]["provider"])
 	}
 }
 

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="account_intro">Your account, plan, and Bitcoin payments.</string>
+    <string name="account_privacy_note">VeritasVPN stores your account email if you use one, an Account ID, device details for connected peers, and payment records.</string>
+    <string name="plan_feature_checkout">Private Bitcoin checkout</string>
+    <string name="pay_section_title">Pay privately</string>
+    <string name="pay_section_body">Complete checkout in your browser. Premium activates automatically after confirmation.</string>
+    <string name="pay_button_idle">Pay with Bitcoin</string>
+    <string name="pay_button_busy">Opening Bitcoin checkout…</string>
+    <string name="pending_payment_body">Premium activates automatically once Bitcoin confirms.</string>
+    <string name="purchase_history_subtitle">Bitcoin payments recorded for this account.</string>
+</resources>

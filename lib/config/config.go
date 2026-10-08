@@ -29,6 +29,11 @@ type Config struct {
 	BTCPayPublicURL     string
 	BitcoinReadinessURL string
 
+	GooglePlayPackageName        string
+	GooglePlayServiceAccountFile string
+	GooglePlayRTDNAudience       string
+	GooglePlayRTDNServiceAccount string
+
 	PremiumPriceUSDCents int64
 	PremiumPeriodDays    int
 	CheckoutSuccessURL   string
@@ -79,6 +84,11 @@ func Load() *Config {
 		BTCPayWebhookSecret: os.Getenv("BTCPAY_WEBHOOK_SECRET"),
 		BTCPayPublicURL:     os.Getenv("BTCPAY_PUBLIC_URL"),
 		BitcoinReadinessURL: os.Getenv("BITCOIN_READINESS_URL"),
+
+		GooglePlayPackageName:        envOrDefault("GOOGLE_PLAY_PACKAGE_NAME", "cloud.veritasvpn"),
+		GooglePlayServiceAccountFile: strings.TrimSpace(os.Getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON")),
+		GooglePlayRTDNAudience:       strings.TrimSpace(os.Getenv("GOOGLE_PLAY_RTDN_AUDIENCE")),
+		GooglePlayRTDNServiceAccount: strings.TrimSpace(os.Getenv("GOOGLE_PLAY_RTDN_PUSH_SERVICE_ACCOUNT")),
 
 		PremiumPriceUSDCents: int64EnvOrDefault("PREMIUM_PRICE_USD_CENTS", 300),
 		PremiumPeriodDays:    intEnvOrDefault("PREMIUM_PERIOD_DAYS", 30),
@@ -212,6 +222,12 @@ func (c *Config) UseMockBTCPay() bool {
 		return false
 	}
 	return c.BTCPayAPIKey == "" || c.BTCPayServerURL == "" || strings.Contains(c.BTCPayServerURL, "btcpay:49392")
+}
+
+// GooglePlayEnabled reports whether a service-account file is configured.
+// An empty path leaves Play endpoints disabled; Bitcoin billing is unchanged.
+func (c *Config) GooglePlayEnabled() bool {
+	return strings.TrimSpace(c.GooglePlayServiceAccountFile) != ""
 }
 
 // RequireBTCPayProduction validates that production billing has real BTCPay credentials

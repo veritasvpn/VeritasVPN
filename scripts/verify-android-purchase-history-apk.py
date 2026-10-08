@@ -15,7 +15,7 @@ import zipfile
 # purchase-history key that was already annotated before the fix, then require
 # the keys that release shrinking used to drop.
 ANCHOR = "amount_cents"
-REQUIRED = ("payments", "currency", "plan", "status", "amount_cents", "created_at")
+REQUIRED = ("payments", "currency", "plan", "status", "amount_cents", "created_at", "provider")
 
 
 def uleb128(data, offset):

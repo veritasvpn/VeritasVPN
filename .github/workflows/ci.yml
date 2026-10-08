@@ -252,7 +252,7 @@ jobs:
           "$SDKMANAGER" --install "platforms;android-35" "build-tools;35.0.0"
       - name: Assemble and test Android app
         working-directory: android
-        run: ./gradlew test assembleDebug --no-daemon
+        run: ./gradlew test assemblePlayDebug assembleDirectDebug --no-daemon
 
   validate-website-extension:
     name: Validate website and Chrome extension

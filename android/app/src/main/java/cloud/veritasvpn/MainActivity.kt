@@ -27,7 +27,10 @@ import cloud.veritasvpn.api.PeerResponse
 import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.auth.AuthenticatedApi
 import cloud.veritasvpn.auth.SessionExpiredException
+import cloud.veritasvpn.BuildConfig
 import cloud.veritasvpn.billing.BillingRepository
+import cloud.veritasvpn.billing.StoreBillingCallbacks
+import cloud.veritasvpn.billing.createStoreBilling
 import java.io.IOException
 import cloud.veritasvpn.support.SupportLinks
 import cloud.veritasvpn.support.isRecordableError
@@ -39,7 +42,7 @@ import cloud.veritasvpn.ui.DiagnosticsScreen
 import cloud.veritasvpn.ui.HelpScreen
 import cloud.veritasvpn.ui.ReleaseLockdownDialog
 import cloud.veritasvpn.ui.AccountScreen
-import cloud.veritasvpn.ui.PaymentCheckoutScreen
+import cloud.veritasvpn.ui.ExternalCheckout
 import cloud.veritasvpn.ui.ShieldSettingsScreen
 import cloud.veritasvpn.ui.StealthSettingsScreen
 import cloud.veritasvpn.ui.TunnelSettingsScreen
@@ -151,6 +154,11 @@ class MainActivity : ComponentActivity() {
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
                 val billingRepo = remember { BillingRepository(authRepo) }
+                val storeBilling = remember { createStoreBilling(context.applicationContext, billingRepo) }
+                DisposableEffect(storeBilling) {
+                    storeBilling.connect()
+                    onDispose { storeBilling.close() }
+                }
                 val restoringSavedVpnSession = remember(context) {
                     VeritasVpnService.hasSavedSession(context)
                 }
@@ -207,6 +215,7 @@ class MainActivity : ComponentActivity() {
                 var purchaseHistoryFailed by remember { mutableStateOf(false) }
                 var checkoutMethod by remember { mutableStateOf<String?>(null) }
                 var checkoutUrl by remember { mutableStateOf<String?>(null) }
+                var playPurchasePending by remember { mutableStateOf(false) }
                 var waitingForCheckoutSettlement by remember { mutableStateOf(false) }
                 val observedBillingReturnVersion = billingReturnVersion
 
@@ -256,6 +265,7 @@ class MainActivity : ComponentActivity() {
                     billingError = null
                     purchaseHistoryFailed = false
                     checkoutMethod = null
+                    playPurchasePending = false
                     showPlans = false
                     showStealthSettings = false
                     showShieldSettings = false
@@ -337,26 +347,44 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                fun startCheckout(paymentMethod: String, planId: String) {
-                    if (checkoutMethod != null) return
-                    checkoutMethod = paymentMethod
-                    billingError = null
-                    scope.launch {
-                        try {
-                            val createdCheckoutUrl = withContext(Dispatchers.IO) {
-                                billingRepo.createCheckout(paymentMethod, planId)
-                            }
-                            checkoutUrl = createdCheckoutUrl
-                        } catch (e: Exception) {
-                            if (e is SessionExpiredException) {
-                                handleSessionExpired()
-                                return@launch
-                            }
-                            billingError = e.message ?: "Could not open checkout."
-                        } finally {
-                            checkoutMethod = null
-                        }
+                fun storeCallbacks(): StoreBillingCallbacks = object : StoreBillingCallbacks {
+                    override fun onCheckoutUrl(url: String) {
+                        checkoutUrl = url
+                        checkoutMethod = null
                     }
+
+                    override fun onPending(message: String) {
+                        playPurchasePending = true
+                        billingError = null
+                        checkoutMethod = null
+                    }
+
+                    override fun onVerified() {
+                        playPurchasePending = false
+                        checkoutMethod = null
+                        billingError = null
+                        refreshBilling(force = true)
+                    }
+
+                    override fun onError(message: String) {
+                        playPurchasePending = false
+                        checkoutMethod = null
+                        billingError = message
+                    }
+
+                    override fun onSessionExpired() {
+                        checkoutMethod = null
+                        handleSessionExpired()
+                    }
+                }
+
+                fun startStorePurchase(planId: String) {
+                    val accountId = user?.accountId ?: return
+                    if (checkoutMethod != null) return
+                    val activity = context as? Activity ?: return
+                    checkoutMethod = "store"
+                    billingError = null
+                    storeBilling.purchase(activity, planId, accountId, storeCallbacks())
                 }
 
                 LaunchedEffect(user?.accountId) {
@@ -367,6 +395,9 @@ class MainActivity : ComponentActivity() {
                         billingStatus = readCachedBillingStatus(context, user!!.accountId)
                         billingRefreshing = false
                         refreshBilling()
+                        if (BuildConfig.PLAY_BILLING) {
+                            storeBilling.restore(user!!.accountId, storeCallbacks())
+                        }
                     }
                 }
 
@@ -910,8 +941,8 @@ class MainActivity : ComponentActivity() {
                         cancellationInProgress = false
                         user = authRepo.getStoredUser()
                     })
-                } else if (checkoutUrl != null) {
-                    PaymentCheckoutScreen(
+                } else if (!BuildConfig.PLAY_BILLING && checkoutUrl != null) {
+                    ExternalCheckout(
                         checkoutUrl = checkoutUrl!!,
                         onClose = { checkoutUrl = null; refreshBilling() },
                         onRefreshPlan = { refreshBilling() }
@@ -1044,12 +1075,18 @@ class MainActivity : ComponentActivity() {
                         paymentMessage = billingStatus?.paymentMessage,
                         error = billingError,
                         purchaseHistoryFailed = purchaseHistoryFailed,
+                        playBilling = BuildConfig.PLAY_BILLING,
+                        playPurchasePending = playPurchasePending,
                         deletingAccount = deletingAccount,
                         deleteError = deleteAccountError,
                         onBack = { showPlans = false },
                         onRefresh = { refreshBilling() },
-                        onCheckout = { method, plan -> startCheckout(method, plan) },
+                        onPurchase = { plan -> startStorePurchase(plan) },
                         onCancel = { cancelSubscription() },
+                        onManageSubscription = {
+                            val activity = context as? Activity ?: return@AccountScreen
+                            storeBilling.manageSubscription(activity, billingStatus?.planId)
+                        },
                         onDeleteAccount = { password, turnstileToken ->
                             if (deletingAccount) return@AccountScreen
                             deletingAccount = true

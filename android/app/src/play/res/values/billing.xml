@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="account_intro">Your account, plan, and purchases.</string>
+    <string name="account_privacy_note">VeritasVPN stores your account email if you use one, an Account ID, device details for connected peers, and payment records.</string>
+    <string name="plan_feature_checkout">Google Play subscription</string>
+    <string name="pay_section_title">Subscribe</string>
+    <string name="pay_section_body">Google Play handles payment. Premium activates after the purchase is verified.</string>
+    <string name="pay_button_idle">Subscribe with Google Play</string>
+    <string name="pay_button_busy">Contacting Google Play…</string>
+    <string name="pending_payment_body">Google Play is still processing this subscription. Premium starts when the payment completes.</string>
+    <string name="purchase_history_subtitle">Payments recorded for this account.</string>
+</resources>

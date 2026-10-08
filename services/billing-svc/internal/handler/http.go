@@ -48,6 +48,8 @@ func (h *BillingHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/billing/cancel", h.withCORS(h.handleCancel))
 	mux.HandleFunc("/api/v1/billing/status", h.withCORS(h.handleStatus))
 	mux.HandleFunc("/api/v1/billing/webhook/btcpay", h.handleBTCPayWebhook)
+	mux.HandleFunc("/api/v1/billing/google-play/verify", h.withCORS(h.handleGooglePlayVerify))
+	mux.HandleFunc("/api/v1/billing/webhook/google-play", h.handleGooglePlayNotification)
 	if h.enableMock {
 		mux.HandleFunc("/api/v1/billing/mock-checkout", h.handleMockCheckout)
 		mux.HandleFunc("/api/v1/billing/mock-settle", h.handleMockSettle)
@@ -258,6 +260,73 @@ func (h *BillingHandler) handleBTCPayWebhook(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *BillingHandler) handleGooglePlayVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	uid, ok := h.requireUID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		ProductID     string `json:"product_id"`
+		PurchaseToken string `json:"purchase_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	result, err := h.service.VerifyGooglePlayPurchase(r.Context(), uid, req.ProductID, req.PurchaseToken)
+	if err != nil {
+		h.writePlayError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *BillingHandler) handleGooglePlayNotification(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	payload, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	if err := h.service.ProcessGooglePlayNotification(r.Context(), payload, r.Header.Get("Authorization")); err != nil {
+		h.log.Warn("google play notification rejected", zap.Error(err))
+		h.writePlayError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *BillingHandler) writePlayError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrPlayNotConfigured):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, service.ErrPlayRTDNNotConfigured):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, service.ErrPlayAccountMismatch):
+		writeError(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, service.ErrPlayUnknownProduct), errors.Is(err, service.ErrPlayPurchaseNotFound), errors.Is(err, service.ErrPlayRejected):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
+		message := err.Error()
+		if strings.HasPrefix(message, "rtdn auth:") || strings.Contains(message, "push token") || strings.Contains(message, "missing push authorization") {
+			writeError(w, http.StatusUnauthorized, "google play notification was not authorized")
+			return
+		}
+		if strings.Contains(message, "package mismatch") || strings.Contains(message, "invalid") || strings.Contains(message, "required") || strings.Contains(message, "too long") {
+			writeError(w, http.StatusBadRequest, message)
+			return
+		}
+		writeError(w, http.StatusBadGateway, "Google Play could not be reached")
+	}
 }
 
 func (h *BillingHandler) handleMockCheckout(w http.ResponseWriter, r *http.Request) {

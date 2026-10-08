@@ -20,10 +20,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import cloud.veritasvpn.R
 import cloud.veritasvpn.api.BillingStatus
 import cloud.veritasvpn.api.PurchaseHistoryItem
 import cloud.veritasvpn.ui.theme.*
@@ -43,12 +45,15 @@ fun AccountScreen(
     paymentMessage: String?,
     error: String?,
     purchaseHistoryFailed: Boolean = false,
+    playBilling: Boolean = false,
+    playPurchasePending: Boolean = false,
     deletingAccount: Boolean = false,
     deleteError: String? = null,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
-    onCheckout: (String, String) -> Unit,
+    onPurchase: (String) -> Unit,
     onCancel: () -> Unit,
+    onManageSubscription: () -> Unit = {},
     onDeleteAccount: (String, String) -> Unit = { _, _ -> },
 ) {
     var showCancelConfirmation by remember { mutableStateOf(false) }
@@ -64,8 +69,10 @@ fun AccountScreen(
         formatBillingDate(billingStatus?.currentPeriodEnd)
     }
     val hasPeriodEnd = !billingStatus?.currentPeriodEnd.isNullOrBlank()
-    val paymentPending = paymentState == "awaiting_payment" ||
+    val paymentPending = playPurchasePending || paymentState == "awaiting_payment" ||
         paymentState == "awaiting_confirmation" || paymentState == "checking"
+    val checkoutFeature = stringResource(R.string.plan_feature_checkout)
+    val pendingFallback = stringResource(R.string.pending_payment_body)
     LaunchedEffect(billingStatus?.cancelAtPeriodEnd) {
         if (billingStatus?.cancelAtPeriodEnd == true) showCancelConfirmation = false
     }
@@ -108,10 +115,10 @@ fun AccountScreen(
     ) {
         PremiumTopBar(eyebrow = "SIGNED IN", title = "Account", onBack = onBack)
         Spacer(Modifier.height(4.dp))
-        Text("Your account, plan, and Bitcoin payments.", color = PaperDim, style = MaterialTheme.typography.bodyMedium)
+        Text(stringResource(R.string.account_intro), color = PaperDim, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(18.dp))
         Text(
-            "VeritasVPN stores your account email if you use one, an Account ID, device details for connected peers, and payment records.",
+            stringResource(R.string.account_privacy_note),
             modifier = Modifier
                 .fillMaxWidth()
                 .glassSurface(RoundedCornerShape(20.dp))
@@ -183,7 +190,7 @@ fun AccountScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            paymentMessage ?: "Premium activates automatically once Bitcoin confirms.",
+                            paymentMessage ?: pendingFallback,
                             color = PaperMuted,
                             fontSize = 13.sp,
                             lineHeight = 19.sp
@@ -197,7 +204,7 @@ fun AccountScreen(
         PlanCard(
             name = "Premium", price = if (selectedPlan == "premium_annual") "$30" else "$3",
             suffix = if (selectedPlan == "premium_annual") "/year" else "/month", current = premium,
-            features = listOf("Paraguay WireGuard egress", "Up to 5 VPN devices", "Private Bitcoin checkout", "Chrome, Android, and Linux access"),
+            features = listOf("Paraguay WireGuard egress", "Up to 5 VPN devices", checkoutFeature, "Chrome, Android, and Linux access"),
             emphasized = true
         )
         if (!premium && !paymentPending) {
@@ -210,16 +217,41 @@ fun AccountScreen(
 
         if (!premium && !paymentPending) {
             Spacer(Modifier.height(18.dp))
-            Text("Pay privately", color = Paper, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            Text("Complete checkout in your browser. Premium activates automatically after confirmation.", color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
+            Text(stringResource(R.string.pay_section_title), color = Paper, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.pay_section_body), color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
             Spacer(Modifier.height(12.dp))
             Button(
-                onClick = { onCheckout("btcpay", selectedPlan) },
+                onClick = { onPurchase(selectedPlan) },
                 enabled = checkoutMethod == null,
                 modifier = Modifier.fillMaxWidth().height(50.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Royal)
-            ) { Text(if (checkoutMethod == "btcpay") "Opening Bitcoin checkout…" else "Pay with Bitcoin", color = Color.White, fontWeight = FontWeight.Bold) }
+            ) {
+                Text(
+                    stringResource(if (checkoutMethod != null) R.string.pay_button_busy else R.string.pay_button_idle),
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        } else if (premium && playBilling && billingStatus?.paymentMethod == "google_play") {
+            Spacer(Modifier.height(18.dp))
+            Text("Premium is active", color = SuccessGreen, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = onManageSubscription,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Royal),
+            ) { Text("Manage subscription", color = Color.White, fontWeight = FontWeight.Bold) }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Change or cancel in Google Play. Premium stays active until the period Google Play reports has ended.",
+                color = PaperMuted,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
         } else if (premium) {
             Spacer(Modifier.height(18.dp))
             Text("Premium is active", color = SuccessGreen, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
@@ -395,7 +427,7 @@ private fun PurchaseHistorySection(
 ) {
     Text("Purchase history", color = Paper, fontSize = 17.sp, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(4.dp))
-    Text("Bitcoin payments recorded for this account.", color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
+    Text(stringResource(R.string.purchase_history_subtitle), color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
     Spacer(Modifier.height(12.dp))
     when {
         payments == null && refreshing && !loadFailed -> {
@@ -439,7 +471,7 @@ private fun PurchaseHistoryRow(payment: PurchaseHistoryItem) {
             Text(formatBillingDate(payment.createdAt).let { if (payment.createdAt.isNullOrBlank()) "—" else it }, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(2.dp))
             Text(
-                "${purchasePlanLabel(payment.plan)} · ${formatPurchaseAmount(payment.amountCents, payment.currency)}",
+                purchaseHistoryDetail(payment),
                 color = PaperMuted,
                 fontSize = 13.sp
             )
@@ -464,6 +496,11 @@ private fun formatPurchaseAmount(cents: Long, currency: String?): String {
     } else {
         "$sign$value ${currency.uppercase()}"
     }
+}
+
+private fun purchaseHistoryDetail(payment: PurchaseHistoryItem): String {
+    val base = "${purchasePlanLabel(payment.plan)} · ${formatPurchaseAmount(payment.amountCents, payment.currency)}"
+    return if (payment.provider == "google_play") "$base · Google Play" else base
 }
 
 private fun purchasePlanLabel(plan: String?): String = when (plan) {

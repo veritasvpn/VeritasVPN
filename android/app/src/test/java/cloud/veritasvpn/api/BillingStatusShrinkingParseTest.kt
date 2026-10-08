@@ -35,7 +35,8 @@ class BillingStatusShrinkingParseTest {
                   "amount_cents": 3000,
                   "currency": "usd",
                   "plan": "annual",
-                  "status": "completed"
+                  "status": "completed",
+                  "provider": "google_play"
                 }
               ]
             }
@@ -52,6 +53,7 @@ class BillingStatusShrinkingParseTest {
         assertEquals("usd", payment.currency)
         assertEquals("annual", payment.plan)
         assertEquals("completed", payment.status)
+        assertEquals("google_play", payment.provider)
     }
 
     @Test

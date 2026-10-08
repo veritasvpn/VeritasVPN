@@ -33,6 +33,7 @@ type BillingService struct {
 	mock     *provider.MockBTCPayProvider
 	cfg      BillingConfig
 	http     *http.Client
+	play     *PlayBilling
 }
 
 func New(
@@ -590,6 +591,7 @@ func (s *BillingService) expireOne(ctx context.Context, sub *model.Subscription)
 	sub.CurrentPeriodStart = now
 	sub.CurrentPeriodEnd = now.Add(100 * 365 * 24 * time.Hour)
 	sub.CancelAtPeriodEnd = false
+	sub.ExternalRef = ""
 	if err := s.db.UpdateSubscription(ctx, sub); err != nil {
 		return err
 	}
@@ -615,6 +617,12 @@ func renewedEventPayload(
 		"period_days":    periodDays,
 		"period_end":     periodEnd.UTC(),
 	}
+}
+
+// PublishEvent sends a subscription lifecycle event. Play Billing uses it so
+// auth-svc hears the same subjects as Bitcoin settlement.
+func (s *BillingService) PublishEvent(subject string, payload map[string]interface{}) {
+	s.publishEvent(subject, payload)
 }
 
 func (s *BillingService) publishEvent(subject string, payload map[string]interface{}) {

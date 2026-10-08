@@ -16,6 +16,7 @@ func PurchaseHistoryFrom(records []PaymentRecord) []PurchaseHistoryItem {
 			Currency:    purchaseCurrency(record.Currency),
 			Plan:        purchasePlan(record),
 			Status:      purchaseStatus(record.Status),
+			Provider:    purchaseProvider(record.Provider),
 		})
 	}
 	return out
@@ -40,6 +41,16 @@ func purchasePlan(record PaymentRecord) string {
 		return "annual"
 	}
 	return "monthly"
+}
+
+func purchaseProvider(provider string) string {
+	switch provider {
+	case PaymentGooglePlay, PaymentBTCPay, PaymentStripe:
+		return provider
+	default:
+		// Rows written before the provider column existed are Bitcoin charges.
+		return PaymentBTCPay
+	}
 }
 
 func purchaseStatus(status string) string {
