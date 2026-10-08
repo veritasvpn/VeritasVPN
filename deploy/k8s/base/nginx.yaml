@@ -80,6 +80,10 @@ spec:
               drop: ["ALL"]
           volumeMounts:
             - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: nginx-config
               mountPath: /etc/nginx/conf.d
             - name: website
               mountPath: /usr/share/nginx/html

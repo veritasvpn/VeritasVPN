@@ -170,6 +170,11 @@ if [[ "$synthetic_conclusion" == "success" && -n "$synthetic_updated" ]]; then
   synthetic_age=$(( ($(date +%s) - synthetic_ts) / 3600 ))
   if (( synthetic_ts > 0 && synthetic_age <= 3 )); then
     ok "external WireGuard synthetic passed ${synthetic_age}h ago"
+  elif (( synthetic_ts > 0 && synthetic_age <= 6 )); then
+    # GitHub scheduled workflows can be delayed during runner congestion. A
+    # result inside two missed hourly windows is degraded monitoring, not proof
+    # that the VPN itself has failed.
+    warn "external WireGuard synthetic passed ${synthetic_age}h ago; scheduled probe is delayed"
   else
     bad 'external WireGuard synthetic result is stale'
   fi

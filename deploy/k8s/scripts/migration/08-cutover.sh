@@ -17,6 +17,7 @@ docker compose ps 2>/dev/null | grep -q . && echo "  WARNING: some containers st
 
 echo "Deploying k3s cloudflared..."
 kubectl apply -f "$REPO_ROOT/deploy/k8s/ingress-nginx/cloudflared.yaml"
+kubectl apply -f "$REPO_ROOT/deploy/k8s/ingress-nginx/namespace-security.yaml"
 kubectl apply -f "$REPO_ROOT/deploy/k8s/ingress-nginx/network-policies.yaml"
 
 echo "Waiting for cloudflared..."

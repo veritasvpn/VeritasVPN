@@ -19,6 +19,12 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "VeritasVPN API is unavailable"
+      - alert: PublicAPIBackendNotReady
+        expr: probe_success{instance="https://api.veritasvpn.cloud/readyz"} == 0
+        for: 3m
+        labels: { severity: critical }
+        annotations:
+          summary: "The public API edge is reachable but its application backend is not ready"
       - alert: PublicAPILatencyHigh
         expr: probe_duration_seconds{instance="https://api.veritasvpn.cloud/healthz"} > 2
         for: 10m
@@ -74,6 +80,56 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "Dell memory usage exceeds 90%"
+      - alert: DellSecurityUpdatesPending
+        expr: veritas_host_security_updates_pending > 0
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Dell security updates are pending"
+          description: "Install the pending security updates during the next approved maintenance window."
+      - alert: DellRebootRequired
+        expr: veritas_host_reboot_required == 1
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Dell requires a reboot to finish maintenance"
+      - alert: DellFirmwareUpdatesPending
+        expr: veritas_host_firmware_updates_pending > 0
+        for: 6h
+        labels: { severity: warning }
+        annotations:
+          summary: "Dell firmware updates are pending"
+          description: "Review firmware urgency and schedule a powered maintenance window."
+      - alert: EncryptedBackupTooOld
+        expr: veritas_backup_age_seconds < 0 or veritas_backup_age_seconds > 93600
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "The newest encrypted backup is missing or older than 26 hours"
+      - alert: BackupVerificationFailed
+        expr: veritas_backup_verify_ok != 1
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "The latest encrypted backup verification did not succeed"
+      - alert: BackupRestoreRehearsalFailed
+        expr: veritas_backup_restore_rehearsal_ok != 1
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "The latest isolated backup restore rehearsal did not succeed"
+      - alert: ExternalVPNSyntheticFailed
+        expr: veritas_external_vpn_synthetic_success != 1
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "The latest external VPN end-to-end test failed or could not be read"
+      - alert: ExternalVPNSyntheticStale
+        expr: veritas_external_vpn_synthetic_age_seconds < 0 or veritas_external_vpn_synthetic_age_seconds > 21600
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "The external VPN end-to-end result is older than six hours"
       - alert: KubernetesContainerRestarting
         # Only alert while the pod still exists (avoids sticky alerts after a CrashLoop pod is deleted).
         expr: |
