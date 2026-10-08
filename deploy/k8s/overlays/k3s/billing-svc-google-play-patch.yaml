@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing-svc
+  namespace: veritas
+spec:
+  template:
+    spec:
+      containers:
+        - name: billing-svc
+          env:
+            - name: GOOGLE_PLAY_PACKAGE_NAME
+              value: cloud.veritasvpn
+            - name: GOOGLE_PLAY_SERVICE_ACCOUNT_JSON
+              value: /var/run/google-play/service-account.json
+            - name: GOOGLE_PLAY_RTDN_AUDIENCE
+              value: https://api.veritasvpn.cloud/api/v1/billing/webhook/google-play
+            - name: GOOGLE_PLAY_RTDN_PUSH_SERVICE_ACCOUNT
+              value: play-rtdn-push@veritasvpn-play.iam.gserviceaccount.com
+          volumeMounts:
+            - name: google-play
+              mountPath: /var/run/google-play
+              readOnly: true
+      volumes:
+        - name: google-play
+          secret:
+            secretName: google-play-billing
+            items:
+              - key: service-account.json
+                path: service-account.json
