@@ -10,6 +10,7 @@ import {
   signInWithAccountId as doSignInAccountId,
   registerAnonymous as doRegisterAnonymous,
   signOut as doSignOut,
+  deleteAccount as doDeleteAccount,
   resetPassword,
   resendVerification,
   validateSignupPassword,
@@ -37,12 +38,8 @@ import { choosePublicEndpoint, isRecordableError, readStoredLastError, sanitizeE
 import { readShieldFlags, shieldRequest, writeShieldFlags, type ShieldFlags } from "./shield";
 import { HeroConnectControl, type HeroPhase } from "./HeroConnect";
 import {
-  DEVICE_LOCATION_FALLBACK,
-  labelPlaces,
-  plausibleLatLng,
   projectLatLng,
   PARAGUAY_NODE,
-  routeCurve,
   WORLD_MAP_HEIGHT,
   WORLD_MAP_WIDTH,
 } from "./connectionMap";
@@ -438,35 +435,19 @@ function routeLabelStyle(point: { x: number; y: number }): { left: string; top: 
 function ConnectionMap({
   connected,
   connecting,
-  deviceLabel,
-  deviceLatitude,
-  deviceLongitude,
 }: {
   connected: boolean;
   connecting: boolean;
-  deviceLabel: string;
-  deviceLatitude: number | null;
-  deviceLongitude: number | null;
 }) {
-  const deviceLatLng = plausibleLatLng(deviceLatitude, deviceLongitude) ?? DEVICE_LOCATION_FALLBACK;
-  const device = projectLatLng(deviceLatLng.lat, deviceLatLng.lng);
   const server = projectLatLng(PARAGUAY_NODE.lat, PARAGUAY_NODE.lng);
-  const route = routeCurve(device, server);
-  const places = labelPlaces(device, server);
   return (
-    <section className={`connection-map ${connected ? "is-connected" : ""}`} aria-label="VPN route to Paraguay">
-      <div className="map-topline"><span>LIVE ROUTE</span><span className="map-latency">{connected ? "ENCRYPTED" : connecting ? "CONNECTING" : "READY"}</span></div>
+    <section className={`connection-map ${connected ? "is-connected" : ""}`} aria-label="VeritasVPN server in Paraguay">
+      <div className="map-topline"><span>SERVER LOCATION</span><span className="map-latency">{connected ? "ENCRYPTED" : connecting ? "CONNECTING" : "READY"}</span></div>
       <img className="world-map" src="/world-map.svg" alt="World map" />
       <svg className="route-overlay" viewBox={`0 0 ${WORLD_MAP_WIDTH} ${WORLD_MAP_HEIGHT}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-        <defs><linearGradient id="routeGradient" x1="0" x2="1"><stop offset="0" stopColor="#09C7F5"/><stop offset="1" stopColor="#0756D9"/></linearGradient><filter id="routeGlow"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
-        <path className="route-shadow" d={route}/>
-        <path className="route-line" d={route}/>
-        <circle className="route-particle" r="5"><animateMotion dur="2.8s" repeatCount="indefinite" path={route}/></circle>
-        <g className="map-origin" transform={`translate(${device.x.toFixed(1)} ${device.y.toFixed(1)})`}><circle r="8"/><circle className="map-pulse" r="18"/></g>
         <g className="map-destination" transform={`translate(${server.x.toFixed(1)} ${server.y.toFixed(1)})`}><circle className="map-pulse" r="24"/><circle r="10"/></g>
       </svg>
-      <div className={`route-label is-${places.device}`} style={routeLabelStyle(device)}><span>YOUR DEVICE</span><strong>{connected ? "Encrypted route" : deviceLabel}</strong></div>
-      <div className={`route-label is-${places.server}`} style={routeLabelStyle(server)}><span>PARAGUAY</span><strong>Asunción metro</strong></div>
+      <div className="route-label is-below" style={routeLabelStyle(server)}><span>SERVER</span><strong>Asunción, Paraguay</strong></div>
     </section>
   );
 }
@@ -513,6 +494,9 @@ function AccountScreen({
   onCancelClick,
   onCancelConfirm,
   onCancelDismiss,
+  deletingAccount,
+  deleteError,
+  onDeleteAccount,
 }: {
   email?: string;
   accountId: string;
@@ -530,13 +514,19 @@ function AccountScreen({
   onCancelClick: () => void;
   onCancelConfirm: () => void;
   onCancelDismiss: () => void;
+  deletingAccount: boolean;
+  deleteError: string;
+  onDeleteAccount: (password: string) => void;
 }) {
+  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
   const premium = billingStatus?.is_premium === true;
   const paymentPending = hasPendingBitcoinConfirmation(billingStatus);
   const price = selectedPlan === "premium_annual" ? "$30" : "$3";
   const suffix = selectedPlan === "premium_annual" ? "/year" : "/month";
   const shownEmail = email?.trim() || "";
   const shownAccountId = accountId.trim();
+  const requiresPassword = shownEmail.length > 0;
   return (
     <section className="plans-screen" aria-label="Account">
       <div className="plans-head">
@@ -551,7 +541,7 @@ function AccountScreen({
         </div>
       </div>
       <p className="screen-sub">Your account, plan, and Bitcoin payments.</p>
-      <p className="account-disclosure">VeritasVPN stores an anonymous account ID and Bitcoin purchase history.</p>
+      <p className="account-disclosure">VeritasVPN stores your account email if you use one, an Account ID, device details for connected peers, and payment records. The Linux device name may be this computer's hostname.</p>
       {(shownEmail || shownAccountId) && (
         <div className="account-identity">
           {shownEmail && (
@@ -662,6 +652,43 @@ function AccountScreen({
         </>
       ) : null}
       <PurchaseHistory status={billingStatus} loading={billingLoading} error={billingError} />
+      <div className="account-delete">
+        <h4>Delete account</h4>
+        <p>Permanently deletes this account, signs you out, and removes the data we store for it. This cannot be undone.</p>
+        {!showDeleteConfirmation ? (
+          <button type="button" className="account-delete-button" onClick={() => setShowDeleteConfirmation(true)} disabled={deletingAccount}>
+            Delete account
+          </button>
+        ) : (
+          <div className="billing-cancel-confirm" role="alertdialog" aria-modal="true">
+            <strong>Delete this account?</strong>
+            <p>{requiresPassword ? "Enter your password to confirm. You will be signed out of this device." : "Complete the security check to confirm. You will be signed out of this device."}</p>
+            {requiresPassword && (
+              <label className="account-delete-password">
+                Password
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={deletePassword}
+                  onChange={(event) => setDeletePassword(event.target.value)}
+                  disabled={deletingAccount}
+                />
+              </label>
+            )}
+            {deleteError && <div className="billing-error">{deleteError}</div>}
+            <div>
+              <button type="button" disabled={deletingAccount} onClick={() => { setShowDeleteConfirmation(false); setDeletePassword(""); }}>Keep my account</button>
+              <button
+                type="button"
+                disabled={deletingAccount || (requiresPassword && deletePassword.trim().length === 0)}
+                onClick={() => onDeleteAccount(deletePassword)}
+              >
+                {deletingAccount ? "Deleting…" : "Delete account permanently"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -908,9 +935,8 @@ function App() {
   const [dnsBlockedBaseline, setDnsBlockedBaseline] = useState<number | null>(null);
   const [dnsGateway, setDnsGateway] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
-  const [deviceLabel, setDeviceLabel] = useState("Current location");
-  const [deviceLatitude, setDeviceLatitude] = useState<number | null>(null);
-  const [deviceLongitude, setDeviceLongitude] = useState<number | null>(null);
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState("");
   const connectPeerRef = useRef("");
   const authBootstrapGenerationRef = useRef(0);
   const userDisconnectedRef = useRef(false);
@@ -1046,31 +1072,6 @@ function App() {
     }
     refreshBillingStatus().catch(() => undefined);
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!user) return;
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const next = plausibleLatLng(position.coords.latitude, position.coords.longitude);
-        if (!next) {
-          setDeviceLatitude(null);
-          setDeviceLongitude(null);
-          setDeviceLabel("Current location");
-          return;
-        }
-        setDeviceLatitude(next.lat);
-        setDeviceLongitude(next.lng);
-        setDeviceLabel("Your location");
-      },
-      () => {
-        setDeviceLatitude(null);
-        setDeviceLongitude(null);
-        setDeviceLabel("Current location");
-      },
-      { maximumAge: 600_000, timeout: 8000 }
-    );
-  }, [user]);
 
   useEffect(() => {
     if (!linuxDesktop && stealthMode !== "udp") {
@@ -1834,6 +1835,23 @@ function App() {
     void doSignOut().catch(() => undefined);
   }, [connected, connecting, handleDisconnect, user, clearReconnectTimer]);
 
+  const handleDeleteAccount = useCallback(async (password: string) => {
+    if (!user || deletingAccount) return;
+    setDeletingAccount(true);
+    setDeleteAccountError("");
+    try {
+      const turnstileToken = user.email?.trim() ? "" : await obtainTurnstileToken();
+      await doDeleteAccount({ password, turnstileToken });
+      localStorage.removeItem("veritas_last_error");
+      setLastError("");
+      setDeletingAccount(false);
+      handleSignOut();
+    } catch (err) {
+      setDeletingAccount(false);
+      setDeleteAccountError(err instanceof Error ? err.message : "Could not delete the account.");
+    }
+  }, [user, deletingAccount, handleSignOut]);
+
   const handleSignOutEverywhere = useCallback(() => {
     setShowSettings(false);
     // Capture the current token before local sign-out erases it. The remote
@@ -2081,6 +2099,9 @@ function App() {
             onSelectPlan={setSelectedPlan}
             onCheckout={() => startCheckout()}
             onCancelClick={() => setShowCancelConfirmation(true)}
+            deletingAccount={deletingAccount}
+            deleteError={deleteAccountError}
+            onDeleteAccount={(password) => { void handleDeleteAccount(password); }}
             onCancelConfirm={() => cancelSubscription()}
             onCancelDismiss={() => setShowCancelConfirmation(false)}
           />
@@ -2110,13 +2131,10 @@ function App() {
           />
         ) : showNetworkMap ? (
           <section className="network-map-view">
-            <div className="map-view-head"><div><span>NETWORK MAP</span><h2>Your secure route</h2></div><button type="button" onClick={() => setShowNetworkMap(false)}>Back</button></div>
+            <div className="map-view-head"><div><span>NETWORK MAP</span><h2>Server location</h2></div><button type="button" onClick={() => setShowNetworkMap(false)}>Back</button></div>
             <ConnectionMap
               connected={connected}
               connecting={connecting || reconnecting}
-              deviceLabel={deviceLabel}
-              deviceLatitude={deviceLatitude}
-              deviceLongitude={deviceLongitude}
             />
             <div className="map-summary">
               <div><span>CONNECTION</span><strong>{connected ? "Encrypted route active" : connecting || reconnecting ? "Establishing route…" : "No secure route"}</strong></div>

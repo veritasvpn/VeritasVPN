@@ -630,13 +630,14 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		return nil, fmt.Errorf("wait for WireGuard peer acknowledgement: %w", err)
 	}
 
+	// clientIP is used only to pick a LAN or WAN endpoint for this response.
+	// It is not written to the database or to logs.
 	s.log.Info("peer created",
 		"peer_hash", logging.HashIdentifier(peer.ID),
 		"account_hash", logging.HashIdentifier(accountID),
 		"device_id", deviceID,
 		"server_id", srv.ID,
 		"assigned_ip", assignedIP,
-		"client_ip", clientIP,
 		"server_endpoint", endpoint,
 	)
 
@@ -762,6 +763,36 @@ func (s *Service) waitForPeerActive(ctx context.Context, peerID, accountID strin
 			return ctx.Err()
 		case <-ticker.C:
 		}
+	}
+}
+
+// StartRemovedPeerPurge deletes peers that have been marked removed for
+// longer than repository.RemovedPeerRetention. It runs once at start and
+// then every six hours until ctx is cancelled.
+func (s *Service) StartRemovedPeerPurge(ctx context.Context) {
+	go func() {
+		s.purgeRemovedPeers(ctx)
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.purgeRemovedPeers(ctx)
+			}
+		}
+	}()
+}
+
+func (s *Service) purgeRemovedPeers(ctx context.Context) {
+	n, err := s.postgres.PurgeRemovedPeers(ctx, time.Now().Add(-repository.RemovedPeerRetention))
+	if err != nil {
+		s.log.Warn("removed peer purge failed", "error", err)
+		return
+	}
+	if n > 0 {
+		s.log.Info("purged removed peers", "count", n)
 	}
 }
 

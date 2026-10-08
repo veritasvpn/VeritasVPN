@@ -79,6 +79,13 @@ object ApiClient {
         return executeWithRetry(requestFactory = { builder.build() })
     }
 
+    fun delete(path: String, body: Map<String, Any>, token: String): Response {
+        val requestBody = gson.toJson(body).toRequestBody(JSON)
+        val builder = Request.Builder().url("$BASE_URL$path").delete(requestBody)
+            .header("Authorization", "Bearer $token")
+        return executeWithRetry(requestFactory = { builder.build() })
+    }
+
     fun get(path: String, token: String): Response {
         val builder = Request.Builder().url("$BASE_URL$path").get()
             .header("Authorization", "Bearer $token")

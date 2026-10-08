@@ -205,6 +205,21 @@ class AuthRepository(context: Context) {
         prefs.edit().clear().apply()
     }
 
+    /**
+     * Permanently deletes the signed-in account. Email accounts must send the
+     * password. Anonymous accounts must send a Turnstile token when the server
+     * requires the security check.
+     */
+    fun deleteAccount(password: String, turnstileToken: String) {
+        val token = getAccessToken() ?: throw Error("Not signed in.")
+        val payload = mutableMapOf<String, Any>()
+        if (password.isNotBlank()) payload["password"] = password
+        if (turnstileToken.isNotBlank()) payload["turnstile_token"] = turnstileToken
+        ApiClient.delete("/api/v1/auth/account", payload, token).use { res ->
+            if (res.code != 204 && !res.isSuccessful) throw Error(extractError(res))
+        }
+    }
+
     fun logoutAllSessions() {
         val token = getAccessToken() ?: throw Error("Not signed in.")
         ApiClient.post("/api/v1/auth/logout-all", emptyMap(), token).use { res ->

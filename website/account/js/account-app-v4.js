@@ -535,8 +535,8 @@ function renderSecurity() {
           <li>Stealth (Android &amp; Linux)</li>
           <li>Kill switch always on (Linux firewall; Android Always-on + lockdown required to connect)</li>
           <li>Split tunnel</li>
-          <li>No traffic logs — see Privacy Policy for operational data</li>
-          <li>Paid with Bitcoin (no card required)</li>
+          <li>No browsing or traffic-content logs — see the Privacy Policy for operational data</li>
+          <li>Bitcoin on the website and Linux app. The Google Play app uses Google Play Billing.</li>
           <li><a href="/canary.txt">Warrant canary</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></li>
         </ul>
         <div class="account-actions">

@@ -10,9 +10,6 @@ import android.content.IntentFilter
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
-import android.os.CancellationSignal
-import android.content.pm.PackageManager
-import android.location.LocationManager
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -32,9 +29,11 @@ import cloud.veritasvpn.auth.AuthenticatedApi
 import cloud.veritasvpn.auth.SessionExpiredException
 import cloud.veritasvpn.billing.BillingRepository
 import java.io.IOException
+import cloud.veritasvpn.support.SupportLinks
 import cloud.veritasvpn.support.isRecordableError
 import cloud.veritasvpn.support.sanitizeError
 import cloud.veritasvpn.ui.AuthScreen
+import cloud.veritasvpn.ui.VpnDisclosureScreen
 import cloud.veritasvpn.ui.DashboardScreen
 import cloud.veritasvpn.ui.DiagnosticsScreen
 import cloud.veritasvpn.ui.HelpScreen
@@ -116,6 +115,10 @@ private fun writeCachedBillingStatus(
     editor.apply()
 }
 
+private fun clearBillingCache(context: Context) {
+    SecurePrefs.open(context, BILLING_CACHE_PREFS).edit().clear().apply()
+}
+
 class MainActivity : ComponentActivity() {
     private lateinit var authRepo: AuthRepository
     private var peerCleanupJob: Job? = null
@@ -163,8 +166,10 @@ class MainActivity : ComponentActivity() {
                         if (restoringSavedVpnSession) "Restoring secure connection…" else null
                     )
                 }
-                var deviceLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
                 var showPlans by remember { mutableStateOf(false) }
+                var showVpnDisclosure by remember { mutableStateOf(false) }
+                var deletingAccount by remember { mutableStateOf(false) }
+                var deleteAccountError by remember { mutableStateOf<String?>(null) }
                 var showStealthSettings by remember { mutableStateOf(false) }
                 var showShieldSettings by remember { mutableStateOf(false) }
                 var showTunnelSettings by remember { mutableStateOf(false) }
@@ -597,12 +602,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val locationPermissionLauncher = rememberLauncherForActivityResult(
-                    ActivityResultContracts.RequestPermission()
-                ) { granted ->
-                    if (granted) requestDeviceLocation(context) { deviceLocation = it }
-                }
-
                 LaunchedEffect(connecting, awaitingVpnConsent) {
                     if (connecting && !awaitingVpnConsent) {
                         // First-connect only. Never timeout-disconnect an established session.
@@ -634,19 +633,6 @@ class MainActivity : ComponentActivity() {
                             reconnecting = false
                             connected = true
                             statusMsg = null
-                        }
-                    }
-                }
-
-                LaunchedEffect(user) {
-                    if (user != null) {
-                        if (ContextCompat.checkSelfPermission(
-                                context, Manifest.permission.ACCESS_COARSE_LOCATION
-                            ) == PackageManager.PERMISSION_GRANTED
-                        ) {
-                            requestDeviceLocation(context) { deviceLocation = it }
-                        } else {
-                            locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
                         }
                     }
                 }
@@ -799,6 +785,10 @@ class MainActivity : ComponentActivity() {
                         statusMsg = "An active subscription is required. Open Plans to subscribe."
                         return
                     }
+                    if (!VpnSettings.vpnDisclosureAccepted(context)) {
+                        showVpnDisclosure = true
+                        return
+                    }
                     // Show the connecting hero before any binder or settings work.
                     // prepare() and the lockdown read both hit system processes and
                     // stall the frame clock if they run on the UI thread.
@@ -926,6 +916,20 @@ class MainActivity : ComponentActivity() {
                         onClose = { checkoutUrl = null; refreshBilling() },
                         onRefreshPlan = { refreshBilling() }
                     )
+                } else if (showVpnDisclosure) {
+                    VpnDisclosureScreen(
+                        onAccept = {
+                            VpnSettings.setVpnDisclosureAccepted(context, true)
+                            showVpnDisclosure = false
+                            requestConnect()
+                        },
+                        onDecline = { showVpnDisclosure = false },
+                        onOpenPrivacy = {
+                            if (!SupportLinks.openHttps(context, SupportLinks.PRIVACY)) {
+                                statusMsg = "Could not open the privacy policy."
+                            }
+                        },
+                    )
                 } else if (showShieldSettings) {
                     ShieldSettingsScreen(
                         policy = shieldPolicy,
@@ -1040,10 +1044,40 @@ class MainActivity : ComponentActivity() {
                         paymentMessage = billingStatus?.paymentMessage,
                         error = billingError,
                         purchaseHistoryFailed = purchaseHistoryFailed,
+                        deletingAccount = deletingAccount,
+                        deleteError = deleteAccountError,
                         onBack = { showPlans = false },
                         onRefresh = { refreshBilling() },
                         onCheckout = { method, plan -> startCheckout(method, plan) },
-                        onCancel = { cancelSubscription() }
+                        onCancel = { cancelSubscription() },
+                        onDeleteAccount = { password, turnstileToken ->
+                            if (deletingAccount) return@AccountScreen
+                            deletingAccount = true
+                            deleteAccountError = null
+                            scope.launch {
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        authRepo.deleteAccount(password, turnstileToken)
+                                    }
+                                    userWantsConnected = false
+                                    hadEstablishedSession = false
+                                    cancelReconnect()
+                                    disconnectVpnService()
+                                    clearBillingCache(context)
+                                    VpnSettings.setCurrentPeerId(context, null)
+                                    VpnSettings.setLastError(context, "")
+                                    lastError = ""
+                                    deletingAccount = false
+                                    deleteAccountError = null
+                                    clearLocalSessionUi()
+                                    noteIntentionalDisconnect()
+                                } catch (e: Exception) {
+                                    deletingAccount = false
+                                    deleteAccountError = e.message?.takeIf { it.isNotBlank() }
+                                        ?: "Could not delete the account."
+                                }
+                            }
+                        }
                     )
                 } else {
                     DashboardScreen(
@@ -1108,8 +1142,6 @@ class MainActivity : ComponentActivity() {
                         isPremium = billingStatus?.isPremium == true,
                         billingReady = billingStatus != null,
                         statusMsg = statusMsg,
-                        deviceLatitude = deviceLocation?.first,
-                        deviceLongitude = deviceLocation?.second,
                         rxBytes = rxBytes,
                         txBytes = txBytes,
                         handshakeMs = handshakeMs,
@@ -1139,36 +1171,6 @@ class MainActivity : ComponentActivity() {
                         settingsError = releaseLockdownError,
                     )
                 }
-            }
-        }
-    }
-
-    private fun requestDeviceLocation(
-        context: Context,
-        onLocation: (Pair<Double, Double>) -> Unit
-    ) {
-        if (ContextCompat.checkSelfPermission(
-                context, Manifest.permission.ACCESS_COARSE_LOCATION
-            ) != PackageManager.PERMISSION_GRANTED
-        ) return
-        val manager = context.getSystemService(LocationManager::class.java) ?: return
-        val provider = when {
-            manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-            manager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-            else -> return
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            manager.getCurrentLocation(
-                provider,
-                CancellationSignal(),
-                ContextCompat.getMainExecutor(context)
-            ) { location ->
-                if (location != null) onLocation(location.latitude to location.longitude)
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            manager.getLastKnownLocation(provider)?.let {
-                onLocation(it.latitude to it.longitude)
             }
         }
     }

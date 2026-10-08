@@ -411,7 +411,8 @@ func (p *Postgres) GetPeerForServer(ctx context.Context, peerID, serverID string
 
 func (p *Postgres) MarkPeerRemovedForServer(ctx context.Context, peerID, serverID string) (bool, error) {
 	result, err := p.pool.Exec(ctx,
-		`UPDATE peers SET status = 'removed' WHERE id = $1 AND server_id = $2
+		`UPDATE peers SET status = 'removed', removed_at = COALESCE(removed_at, NOW())
+		  WHERE id = $1 AND server_id = $2
 		  AND status IN ('pending', 'active')`, peerID, serverID)
 	if err != nil {
 		return false, fmt.Errorf("mark peer removed: %w", err)
@@ -508,7 +509,24 @@ func (p *Postgres) UpdatePeerStatusForServer(ctx context.Context, peerID, server
 
 func (p *Postgres) DeletePeer(ctx context.Context, peerID, accountID string) error {
 	_, err := p.pool.Exec(ctx,
-		`UPDATE peers SET status = 'removed' WHERE id = $1 AND account_id = $2`,
+		`UPDATE peers SET status = 'removed', removed_at = COALESCE(removed_at, NOW())
+		 WHERE id = $1 AND account_id = $2`,
 		peerID, accountID)
 	return err
+}
+
+// RemovedPeerRetention is how long a disconnected peer row is kept after it
+// is marked removed. Account deletion deletes the row immediately.
+const RemovedPeerRetention = 30 * 24 * time.Hour
+
+// PurgeRemovedPeers hard-deletes peers that have been removed longer than
+// olderThan. Active and pending rows are never matched.
+func (p *Postgres) PurgeRemovedPeers(ctx context.Context, olderThan time.Time) (int64, error) {
+	result, err := p.pool.Exec(ctx,
+		`DELETE FROM peers WHERE status = 'removed' AND removed_at IS NOT NULL AND removed_at < $1`,
+		olderThan)
+	if err != nil {
+		return 0, fmt.Errorf("purge removed peers: %w", err)
+	}
+	return result.RowsAffected(), nil
 }
