@@ -22,8 +22,6 @@ type Config struct {
 	LogLevel       string
 	Environment    string
 
-	StripeSecretKey     string
-	StripeWebhookSecret string
 	BTCPayServerURL     string
 	BTCPayAPIKey        string
 	BTCPayStoreID       string
@@ -38,7 +36,6 @@ type Config struct {
 
 	PremiumPriceUSDCents int64
 	PremiumPeriodDays    int
-	FirebaseProjectID    string
 	CheckoutSuccessURL   string
 	CheckoutCancelURL    string
 	CORSOrigins          string
@@ -81,8 +78,6 @@ func Load() *Config {
 		LogLevel:       envOrDefault("LOG_LEVEL", "info"),
 		Environment:    envOrDefault("ENVIRONMENT", "development"),
 
-		StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
-		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
 		BTCPayServerURL:     os.Getenv("BTCPAY_SERVER_URL"),
 		BTCPayAPIKey:        os.Getenv("BTCPAY_API_KEY"),
 		BTCPayStoreID:       envOrDefault("BTCPAY_STORE_ID", "default"),
@@ -97,7 +92,6 @@ func Load() *Config {
 
 		PremiumPriceUSDCents: int64EnvOrDefault("PREMIUM_PRICE_USD_CENTS", 300),
 		PremiumPeriodDays:    intEnvOrDefault("PREMIUM_PERIOD_DAYS", 30),
-		FirebaseProjectID:    envOrDefault("FIREBASE_PROJECT_ID", "veritasvpn-37cf6"),
 		CheckoutSuccessURL:   envOrDefault("CHECKOUT_SUCCESS_URL", "http://localhost:8000/billing/success.html"),
 		CheckoutCancelURL:    envOrDefault("CHECKOUT_CANCEL_URL", "http://localhost:8000/billing/cancel.html"),
 		CORSOrigins:          envOrDefault("CORS_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000"),

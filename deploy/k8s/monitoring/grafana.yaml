@@ -95,6 +95,7 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
     nginx.ingress.kubernetes.io/proxy-body-size: 2m
+    nginx.ingress.kubernetes.io/enable-access-log: "false"
 spec:
   ingressClassName: nginx
   rules:

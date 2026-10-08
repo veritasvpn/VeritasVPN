@@ -48,7 +48,7 @@
   <main class="legal-page">
     <div class="container">
       <h1>Cookie Policy</h1>
-      <p class="legal-meta">Effective: 2026-07-28 · Last updated: 2026-07-28</p>
+      <p class="legal-meta">Effective: 2026-07-28 · Last updated: October 7, 2026.</p>
 
       <div class="legal-notice">
         Short summary of how we use cookies and similar storage on veritasvpn.cloud.
@@ -59,12 +59,13 @@
       <ul>
         <li><strong>Essential session storage:</strong> tokens or flags needed to keep you signed in on the account pages and clients that talk to our API.</li>
         <li><strong>Preference storage:</strong> simple UI preferences (for example theme or dismissed notices) if enabled in the product.</li>
-        <li><strong>Security / edge:</strong> Cloudflare or our reverse proxy may set cookies required for bot protection or routing.</li>
+        <li><strong>Security / edge:</strong> Cloudflare Turnstile sets cookies when a security check runs on the website, the account page, or the Android sign-in WebView. That WebView allows third-party cookies so the check can finish. Turnstile also receives the client IP for that check. We do not keep the IP afterward.</li>
+        <li><strong>Fonts:</strong> some download pages request fonts from fonts.gstatic.com (Google Fonts). That request can send your IP address to Google. The marketing homepage does not load those fonts.</li>
       </ul>
 
       <h2>2. What we do not use (today)</h2>
       <ul>
-        <li>Third-party advertising cookies</li>
+        <li>Third-party advertising cookies. Turnstile and Google Fonts, listed above, are not advertising cookies</li>
         <li>Cross-site marketing pixels on the marketing homepage</li>
         <li>Analytics SDKs that sell profiles to advertisers</li>
       </ul>

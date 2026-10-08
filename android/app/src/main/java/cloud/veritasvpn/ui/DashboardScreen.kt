@@ -45,8 +45,6 @@ fun DashboardScreen(
     isPremium: Boolean,
     billingReady: Boolean,
     statusMsg: String?,
-    deviceLatitude: Double?,
-    deviceLongitude: Double?,
     rxBytes: Long = 0,
     txBytes: Long = 0,
     handshakeMs: Long = 0,
@@ -145,8 +143,6 @@ fun DashboardScreen(
             NetworkMapView(
                 connected = connected,
                 connecting = connecting,
-                deviceLatitude = deviceLatitude,
-                deviceLongitude = deviceLongitude,
                 onBack = { showNetworkMap = false }
             )
         } else {
@@ -342,8 +338,6 @@ private fun formatHandshakeAge(handshakeMs: Long): String {
 private fun NetworkMapView(
     connected: Boolean,
     connecting: Boolean,
-    deviceLatitude: Double?,
-    deviceLongitude: Double?,
     onBack: () -> Unit
 ) {
     Row(
@@ -353,7 +347,7 @@ private fun NetworkMapView(
     ) {
         Column {
             Text("NETWORK MAP", style = MaterialTheme.typography.labelSmall, color = CyanHover)
-            Text("Your secure route", style = MaterialTheme.typography.headlineMedium, color = Paper)
+            Text("Server location", style = MaterialTheme.typography.headlineMedium, color = Paper)
         }
         TextButton(onClick = onBack) { Text("Back", color = CyanHover, fontWeight = FontWeight.SemiBold) }
     }
@@ -361,9 +355,9 @@ private fun NetworkMapView(
     ConnectionMap(
         connected = connected,
         connecting = connecting,
-        deviceLatitude = deviceLatitude,
-        deviceLongitude = deviceLongitude
     )
+    Spacer(Modifier.height(10.dp))
+    Text("Asunción, Paraguay", color = PaperMuted, fontSize = 13.sp)
     Spacer(Modifier.height(18.dp))
     Row(
         Modifier

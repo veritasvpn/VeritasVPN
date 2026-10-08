@@ -1463,6 +1463,51 @@ div.tunnel-toggle-card {
   font-weight: 500;
 }
 
+.account-delete {
+  display: grid;
+  gap: 8px;
+  margin-top: 28px;
+}
+
+.account-delete h4 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.account-delete > p {
+  margin: 0;
+  color: var(--paper-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.account-delete-button {
+  min-height: 44px;
+  border: 1px solid rgba(255, 107, 122, 0.6);
+  border-radius: 12px;
+  background: transparent;
+  color: #ff6b7a;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.account-delete-password {
+  display: grid;
+  gap: 6px;
+  color: var(--paper-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.account-delete-password input {
+  min-height: 44px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--ink2);
+  color: var(--paper);
+  padding: 0 12px;
+}
+
 .account-identity {
   display: grid;
   gap: 14px;

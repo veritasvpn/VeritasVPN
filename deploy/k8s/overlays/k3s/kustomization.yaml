@@ -13,8 +13,8 @@ images:
     digest: sha256:6ce1039fd853ef8c81e3bfcb2c46e9d64e1f85df6c0da8734e3ea9afedaa0dba
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    # Premium Shield Block trackers toggle + migration 009 (e506ecd).
-    digest: sha256:1158eee93a4d22b3228cf474112838a7a369c32656c31c1f18f3c708ebc8fed3
+    # Privacy-policy image running on the Dell (61f4bd8).
+    digest: sha256:ea7613f9dbb65107271c456ecbcc7fb24b752478185e9caf0695c4f42d6e3eab
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
     # Stale-pending fail build running on the Dell.

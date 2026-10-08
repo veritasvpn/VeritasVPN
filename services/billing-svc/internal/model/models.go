@@ -13,8 +13,9 @@ const (
 
 	PaymentNone       = "none"
 	PaymentBTCPay     = "btcpay"
-	PaymentStripe     = "stripe"
 	PaymentGooglePlay = "google_play"
+	// PaymentStripe labels legacy payment_records rows only. There is no Stripe integration.
+	PaymentStripe = "stripe"
 
 	PaymentPending   = "pending"
 	PaymentCompleted = "completed"

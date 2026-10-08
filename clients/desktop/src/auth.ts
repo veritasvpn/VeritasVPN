@@ -420,6 +420,37 @@ export async function downloadAccountFile(): Promise<void> {
   URL.revokeObjectURL(blobUrl);
 }
 
+/** Permanently deletes the signed-in account, then clears local credentials. */
+export async function deleteAccount(options: { password?: string; turnstileToken?: string } = {}): Promise<void> {
+  const token = getStoredToken();
+  if (!token) throw new Error("Sign in first.");
+  const body: Record<string, string> = {};
+  if (options.password?.trim()) body.password = options.password;
+  if (options.turnstileToken?.trim()) body.turnstile_token = options.turnstileToken;
+  const res = await fetch(`${AUTH_API}/api/v1/auth/account`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "X-Veritas-Client": "desktop",
+    },
+    body: JSON.stringify(body),
+    maxRedirections: 0,
+  });
+  if (res.status !== 204) {
+    const text = await res.text();
+    let message = "Could not delete the account.";
+    try {
+      const data = JSON.parse(text) as AuthError;
+      if (data.error) message = humanizeError(data.error);
+    } catch {
+      if (text.trim()) message = humanizeError(text);
+    }
+    throw new Error(message);
+  }
+  await signOut();
+}
+
 export async function signOut(): Promise<void> {
   localStorage.removeItem(STORAGE_KEYS.user);
   localStorage.removeItem(STORAGE_KEYS.accessToken);
