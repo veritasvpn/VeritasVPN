@@ -9,16 +9,16 @@ resources:
 images:
   - name: localhost:31500/auth-svc
     newName: localhost:31500/auth-svc
-    # Auth image currently running on the Dell.
-    digest: sha256:6ce1039fd853ef8c81e3bfcb2c46e9d64e1f85df6c0da8734e3ea9afedaa0dba
+    # Auth image currently running on the Dell (98bb35b).
+    digest: sha256:d72c2a713b66d2b071d13dbb786605761195b9e4072bfae3ee19a4ac0945afd1
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
     # Privacy-policy image running on the Dell (61f4bd8).
     digest: sha256:ea7613f9dbb65107271c456ecbcc7fb24b752478185e9caf0695c4f42d6e3eab
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    # Stale-pending fail build running on the Dell.
-    digest: sha256:00fae4e042e33ede23269587131466c5d889b896b8fb2ac68cda6274f68b0087
+    # Play Billing image currently running on the Dell (98bb35b).
+    digest: sha256:6a2ee667019f9e21c152556eb6cfe33c89d523cbb8e25e762a11effad5af608c
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     # Premium Shield per-peer policy incl. Block trackers (e506ecd).
