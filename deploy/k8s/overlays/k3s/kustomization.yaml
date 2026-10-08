@@ -104,3 +104,8 @@ patches:
 
   # Redis/NATS auth env vars live in base manifests (auth-svc, wg-manager, billing-svc).
   # Do not JSON-patch env value/valueFrom here — that creates invalid dual fields on apply.
+
+  - path: billing-svc-google-play-patch.yaml
+    target:
+      kind: Deployment
+      name: billing-svc
