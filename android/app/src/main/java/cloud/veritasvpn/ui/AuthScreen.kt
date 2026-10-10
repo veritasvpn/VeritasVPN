@@ -128,12 +128,13 @@ fun AuthScreen(
     val authRepo = remember(context) { cloud.veritasvpn.auth.AuthRepository(context) }
 
     fun submitWithTurnstileToken() {
-        val preflight = NetworkPreflight.check(context)
-        if (preflight is NetworkPreflight.Result.Blocked) {
-            error = preflight.message
-            lockdownBlocked = preflight.openVpnSettings
+        val lockdownCheck = NetworkPreflight.checkLockdownOnly(context)
+        if (lockdownCheck is NetworkPreflight.Result.Blocked) {
+            error = lockdownCheck.message
+            lockdownBlocked = lockdownCheck.openVpnSettings
             return
         }
+        lockdownBlocked = false
         loading = true
         retryStatus = null
         scope.launch {
@@ -163,12 +164,15 @@ fun AuthScreen(
                     error = null
                 } else {
                     verificationResendEmail = e.email
-                    error = e.message
+                    error = context.getString(cloud.veritasvpn.R.string.error_verify_email_first)
                 }
             } catch (e: cloud.veritasvpn.auth.AuthRepository.AccountAlreadyExists) {
-                error = e.message
+                error = context.getString(cloud.veritasvpn.R.string.error_account_already_exists)
                 verificationResendEmail = e.email
             } catch (e: cloud.veritasvpn.auth.AuthRepository.TurnstileRequired) {
+                // A token can be expired or rejected by Turnstile. It is
+                // single-use, so discard it and recreate the WebView before
+                // asking the person to complete the fresh challenge.
                 signInTurnstileRequired = true
                 turnstileToken = ""
                 turnstileReady = false
@@ -177,7 +181,7 @@ fun AuthScreen(
                 pendingTurnstileSubmit = true
                 error = null
             } catch (e: Exception) {
-                error = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
+                error = NetworkPreflight.classifyFailure(context, e)
                 if (needsTurnstile) {
                     turnstileToken = ""
                     turnstileReady = false
@@ -263,12 +267,13 @@ fun AuthScreen(
                     if (email.isBlank()) {
                         error = "Enter your email address."
                     } else {
-                        val preflight = NetworkPreflight.check(context)
-                        if (preflight is NetworkPreflight.Result.Blocked) {
-                            error = preflight.message
-                            lockdownBlocked = preflight.openVpnSettings
+                        val lockdownCheck = NetworkPreflight.checkLockdownOnly(context)
+                        if (lockdownCheck is NetworkPreflight.Result.Blocked) {
+                            error = lockdownCheck.message
+                            lockdownBlocked = lockdownCheck.openVpnSettings
                             return@Button
                         }
+                        lockdownBlocked = false
                         loading = true
                         error = null
                         scope.launch {
@@ -277,7 +282,7 @@ fun AuthScreen(
                                 resetSent = true
                                 resetCooldown = 30
                             } catch (e: Exception) {
-                                error = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
+                                error = NetworkPreflight.classifyFailure(context, e)
                             } finally {
                                 loading = false
                             }
@@ -330,12 +335,13 @@ fun AuthScreen(
             Button(
                 onClick = {
                     val email = pendingVerificationEmail ?: return@Button
-                    val preflight = NetworkPreflight.check(context)
-                    if (preflight is NetworkPreflight.Result.Blocked) {
-                        error = preflight.message
-                        lockdownBlocked = preflight.openVpnSettings
+                    val lockdownCheck = NetworkPreflight.checkLockdownOnly(context)
+                    if (lockdownCheck is NetworkPreflight.Result.Blocked) {
+                        error = lockdownCheck.message
+                        lockdownBlocked = lockdownCheck.openVpnSettings
                         return@Button
                     }
+                    lockdownBlocked = false
                     resendLoading = true
                     notice = null
                     error = null
@@ -344,7 +350,7 @@ fun AuthScreen(
                             withContext(Dispatchers.IO) { authRepo.resendVerification(email) }
                             notice = "A new verification link was sent to $email."
                         } catch (e: Exception) {
-                            error = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
+                            error = NetworkPreflight.classifyFailure(context, e)
                         } finally {
                             resendLoading = false
                         }
@@ -521,12 +527,13 @@ fun AuthScreen(
         verificationResendEmail?.let { pendingEmail ->
             OutlinedButton(
                 onClick = {
-                    val preflight = NetworkPreflight.check(context)
-                    if (preflight is NetworkPreflight.Result.Blocked) {
-                        error = preflight.message
-                        lockdownBlocked = preflight.openVpnSettings
+                    val lockdownCheck = NetworkPreflight.checkLockdownOnly(context)
+                    if (lockdownCheck is NetworkPreflight.Result.Blocked) {
+                        error = lockdownCheck.message
+                        lockdownBlocked = lockdownCheck.openVpnSettings
                         return@OutlinedButton
                     }
+                    lockdownBlocked = false
                     resendLoading = true
                     notice = null
                     scope.launch {
@@ -538,7 +545,7 @@ fun AuthScreen(
                             verificationResendEmail = null
                             notice = "A new verification link was sent to $pendingEmail."
                         } catch (e: Exception) {
-                            error = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
+                            error = NetworkPreflight.classifyFailure(context, e)
                         } finally {
                             resendLoading = false
                         }

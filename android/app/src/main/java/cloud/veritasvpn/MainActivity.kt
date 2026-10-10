@@ -336,7 +336,7 @@ class MainActivity : ComponentActivity() {
                             val hadCachedStatus = billingStatus != null
                             if (!hadCachedStatus) billingStatus = BillingStatus()
                             billingError = if (!hadCachedStatus) {
-                                e.message ?: "Could not load your plan."
+                                cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                             } else {
                                 null
                             }
@@ -835,8 +835,7 @@ class MainActivity : ComponentActivity() {
                                 if (!userWantsConnected) return@withContext
                                 connecting = false
                                 userWantsConnected = false
-                                statusMsg = e.message?.takeIf { it.isNotBlank() }
-                                    ?: "Could not request VPN permission."
+                                statusMsg = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                             }
                             return@launch
                         }
@@ -1329,8 +1328,7 @@ class MainActivity : ComponentActivity() {
                         return@withContext
                     }
                     setConnecting(false)
-                    setStatus(e.message?.takeIf { it.isNotBlank() }
-                        ?: "Connection failed. Check your network and try again.")
+                    setStatus(cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context))
                     onFailure?.invoke()
                 }
             }

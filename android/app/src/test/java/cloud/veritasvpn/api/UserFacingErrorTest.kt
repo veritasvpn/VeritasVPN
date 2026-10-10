@@ -63,6 +63,12 @@ class UserFacingErrorTest {
     }
 
     @Test
+    fun authRepositoryError_passesThroughMessage() {
+        val error = cloud.veritasvpn.auth.AuthRepository.Error("Incorrect email or password.")
+        assertEquals("Incorrect email or password.", error.message)
+    }
+
+    @Test
     fun exceptionMessages_areNotUserFriendly() {
         val errors = listOf(
             SocketTimeoutException("timeout"),

@@ -222,7 +222,7 @@ class AuthRepository(context: Context) {
 
     fun logoutAllSessions() {
         val token = getAccessToken() ?: throw Error("Not signed in.")
-        ApiClient.post("/api/v1/auth/logout-all", emptyMap(), token).use { res ->
+        ApiClient.post("/api/v1/auth/logout-all", emptyMap(), token, retryOnTimeout = false).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))
         }
         signOut()

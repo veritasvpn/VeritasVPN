@@ -12,16 +12,27 @@ object NetworkPreflight {
         data class Blocked(val message: String, val openVpnSettings: Boolean = false) : Result()
     }
 
-    fun check(context: Context): Result {
+    fun classifyFailure(context: Context, error: Throwable): String {
+        val lockdownOn = VpnKillSwitch.isLockdownEnabled(context)
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val tunnelUp = isVpnTunnelUp(cm)
+        if (lockdownOn && !tunnelUp) {
+            return context.getString(R.string.error_lockdown_blocking)
+        }
+
         val active = cm?.activeNetwork
         val caps = active?.let { cm.getNetworkCapabilities(it) }
         val hasInternet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
         if (!hasInternet) {
-            return Result.Blocked(context.getString(R.string.error_offline))
+            return context.getString(R.string.error_offline)
         }
 
+        return cloud.veritasvpn.api.UserFacingError.toUserMessage(error, context)
+    }
+
+    fun checkLockdownOnly(context: Context): Result {
         val lockdownOn = VpnKillSwitch.isLockdownEnabled(context)
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val tunnelUp = isVpnTunnelUp(cm)
         if (lockdownOn && !tunnelUp) {
             return Result.Blocked(
@@ -29,7 +40,6 @@ object NetworkPreflight {
                 openVpnSettings = true
             )
         }
-
         return Result.Ok
     }
 

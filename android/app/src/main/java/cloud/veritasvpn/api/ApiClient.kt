@@ -38,11 +38,16 @@ object ApiClient {
     @PublishedApi
     internal val gson = Gson()
 
-    fun post(path: String, body: Map<String, Any>, token: String? = null): Response {
+    fun post(
+        path: String,
+        body: Map<String, Any>,
+        token: String? = null,
+        retryOnTimeout: Boolean = true
+    ): Response {
         val b = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").post(b)
         token?.let { builder.header("Authorization", "Bearer $it") }
-        return executeWithRetry(requestFactory = { builder.build() })
+        return executeWithRetry(requestFactory = { builder.build() }, maxRetries = if (retryOnTimeout) 2 else 0)
     }
 
     /**
@@ -72,26 +77,26 @@ object ApiClient {
         val b = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").patch(b)
             .header("Authorization", "Bearer $token")
-        return executeWithRetry(requestFactory = { builder.build() })
+        return executeWithRetry(requestFactory = { builder.build() }, maxRetries = 0)
     }
 
     fun delete(path: String, token: String): Response {
         val builder = Request.Builder().url("$BASE_URL$path").delete()
             .header("Authorization", "Bearer $token")
-        return executeWithRetry(requestFactory = { builder.build() })
+        return executeWithRetry(requestFactory = { builder.build() }, maxRetries = 0)
     }
 
     fun delete(path: String, body: Map<String, Any>, token: String): Response {
         val requestBody = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").delete(requestBody)
             .header("Authorization", "Bearer $token")
-        return executeWithRetry(requestFactory = { builder.build() })
+        return executeWithRetry(requestFactory = { builder.build() }, maxRetries = 0)
     }
 
     fun get(path: String, token: String): Response {
         val builder = Request.Builder().url("$BASE_URL$path").get()
             .header("Authorization", "Bearer $token")
-        return executeWithRetry(requestFactory = { builder.build() })
+        return executeWithRetry(requestFactory = { builder.build() }, maxRetries = 2)
     }
 
     /**
@@ -119,7 +124,7 @@ object ApiClient {
             .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .build()
-        return executeWithRetry({ request }, validationClient).use { response ->
+        return executeWithRetry({ request }, validationClient, maxRetries = 2).use { response ->
             if (!response.isSuccessful) {
                 throw IOException("HTTP " + response.code + " during VPN egress validation")
             }
@@ -130,17 +135,24 @@ object ApiClient {
 
     private fun executeWithRetry(
         requestFactory: () -> Request,
-        httpClient: OkHttpClient = client
+        httpClient: OkHttpClient = client,
+        maxRetries: Int = 2
     ): Response {
         var lastError: IOException? = null
-        repeat(4) { attempt ->
+        val totalAttempts = maxRetries + 1
+        repeat(totalAttempts) { attempt ->
             try {
                 return httpClient.newCall(requestFactory()).execute()
             } catch (error: IOException) {
                 lastError = error
-                if (!isTransientNetworkError(error) || attempt == 3) throw error
+                if (!isTransientNetworkError(error) || attempt == totalAttempts - 1) throw error
+                val backoffMs = when (attempt) {
+                    0 -> 1000L
+                    1 -> 2000L
+                    else -> 2000L
+                }
                 try {
-                    Thread.sleep(250L shl attempt)
+                    Thread.sleep(backoffMs)
                 } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw error

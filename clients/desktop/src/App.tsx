@@ -44,6 +44,7 @@ import {
   WORLD_MAP_WIDTH,
 } from "./connectionMap";
 import { statusAfterDisconnectFailure } from "./disconnectStatus";
+import { toUserMessage } from "./errorMapper";
 import veritasMark from "./assets/veritas-mark.png";
 import veritasLogo from "./assets/veritas-logo.png";
 import "./App.css";
@@ -1046,7 +1047,7 @@ function App() {
       if (!hadCached) {
         setBillingStatus(null);
         setSubscriptionActive(false);
-        setBillingError(err instanceof Error ? err.message : "Could not load your subscription.");
+        setBillingError(toUserMessage(err));
       }
       setSubscriptionChecked(true);
       return billingStatus;
@@ -1230,7 +1231,7 @@ function App() {
         setVerificationResendEmail(err.email);
         setError(err.message);
       } else {
-        setError(err instanceof Error ? err.message : "Auth failed");
+        setError(toUserMessage(err));
       }
     } finally {
       setLoading(false);
@@ -1249,7 +1250,7 @@ function App() {
       setResetSent(true);
       setResetCooldown(30);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not send the reset link. Try again.");
+      setError(toUserMessage(err));
     } finally {
       setLoading(false);
     }
@@ -1266,7 +1267,7 @@ function App() {
       if (!targetEmail) setVerificationResendEmail("");
       setNotice(`A new verification link was sent to ${emailToResend}.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not resend the verification email. Try again.");
+      setError(toUserMessage(err));
     } finally {
       setResendLoading(false);
     }
@@ -1303,7 +1304,7 @@ function App() {
     setShowShieldSettings(false);
     setShowCancelConfirmation(false);
     setBillingError("");
-    refreshBillingStatus().catch((err) => setBillingError(err instanceof Error ? err.message : "Could not load your subscription."));
+    refreshBillingStatus().catch((err) => setBillingError(toUserMessage(err)));
   }, [refreshBillingStatus]);
 
   const startCheckout = useCallback(async () => {
@@ -1332,7 +1333,7 @@ function App() {
         expireAndReturnToSignIn();
         return;
       }
-      setBillingError(err instanceof Error ? err.message : "Could not start checkout.");
+      setBillingError(toUserMessage(err));
     } finally {
       setBillingBusy(false);
       setCheckoutMethod(null);
@@ -1358,7 +1359,7 @@ function App() {
         expireAndReturnToSignIn();
         return;
       }
-      setBillingError(err instanceof Error ? err.message : "Could not cancel your subscription.");
+      setBillingError(toUserMessage(err));
     } finally {
       setBillingBusy(false);
     }
@@ -1794,7 +1795,7 @@ function App() {
       if (generation !== shieldWriteGen.current || err instanceof SessionExpiredError) return;
       writeShieldFlags(previous);
       setShieldFlags(previous);
-      setShieldError(err instanceof Error ? err.message : "Could not update Veritas Shield. Try again.");
+      setShieldError(toUserMessage(err));
     }
   }, []);
 
@@ -1848,7 +1849,7 @@ function App() {
       handleSignOut();
     } catch (err) {
       setDeletingAccount(false);
-      setDeleteAccountError(err instanceof Error ? err.message : "Could not delete the account.");
+      setDeleteAccountError(toUserMessage(err));
     }
   }, [user, deletingAccount, handleSignOut]);
 
