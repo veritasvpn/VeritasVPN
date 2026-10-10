@@ -50,22 +50,17 @@ class UserFacingErrorTest {
     }
 
     @Test
-    fun apiException_containsServerMessage() {
-        val error = ApiException("Server error message", 500)
-        assertEquals("Server error message", error.serverMessage)
-        assertEquals(500, error.httpCode)
-    }
-
-    @Test
-    fun apiExceptionWithoutServerMessage_isNull() {
-        val error = ApiException(null, 500)
-        assertEquals(null, error.serverMessage)
-    }
-
-    @Test
-    fun authRepositoryError_passesThroughMessage() {
+    fun authRepositoryError_implementsUserVisibleError() {
         val error = cloud.veritasvpn.auth.AuthRepository.Error("Incorrect email or password.")
-        assertEquals("Incorrect email or password.", error.message)
+        assert(error is UserVisibleError)
+        assertEquals("Incorrect email or password.", error.userMessage)
+    }
+
+    @Test
+    fun billingRepositoryError_implementsUserVisibleError() {
+        val error = cloud.veritasvpn.billing.BillingRepository.Error("Device limit reached.")
+        assert(error is UserVisibleError)
+        assertEquals("Device limit reached.", error.userMessage)
     }
 
     @Test

@@ -1,6 +1,7 @@
 import { AUTH_API } from "./config";
 import { fetch } from "@tauri-apps/plugin-http";
 import { invoke } from "@tauri-apps/api/core";
+import { ApiError } from "./errorMapper";
 
 interface AuthResponse {
   access_token?: string;
@@ -154,7 +155,7 @@ async function authAPI(
     data = { error: extractAuthError(undefined, res.status, text) };
   }
   if (!res.ok) {
-    throw new Error(humanizeError(extractAuthError(data, res.status, text)));
+    throw new ApiError(humanizeError(extractAuthError(data, res.status, text)), res.status);
   }
   return data;
 }
@@ -351,7 +352,7 @@ export async function signUp(
     if (msg === "An account with this email already exists.") {
       throw new AccountAlreadyExistsError(normalizedEmail);
     }
-    throw new Error(msg);
+    throw new ApiError(msg, res.status);
   }
   if (data.verification_required) {
     throw new VerificationRequiredError(normalizedEmail);
@@ -446,7 +447,7 @@ export async function deleteAccount(options: { password?: string; turnstileToken
     } catch {
       if (text.trim()) message = humanizeError(text);
     }
-    throw new Error(message);
+    throw new ApiError(message, res.status);
   }
   await signOut();
 }

@@ -1278,10 +1278,10 @@ class MainActivity : ComponentActivity() {
                 }) { res ->
                     if (!res.isSuccessful) {
                         val err = ApiClient.parse<PeerResponse>(res)?.error
-                        throw IllegalStateException(err ?: "Failed to create peer")
+                        throw PeerError(err ?: "Failed to create peer")
                     }
                     ApiClient.parse<PeerResponse>(res)
-                        ?: throw IllegalStateException("Invalid VPN server response")
+                        ?: throw PeerError("Invalid VPN server response")
                 }
                 if (!shouldContinue()) return@launch
                 val config = buildWireGuardConfig(context, peer, keyPair)
@@ -1372,3 +1372,5 @@ class MainActivity : ComponentActivity() {
         handleBillingReturn(intent)
     }
 }
+
+class PeerError(override val userMessage: String) : Exception(userMessage), cloud.veritasvpn.api.UserVisibleError
