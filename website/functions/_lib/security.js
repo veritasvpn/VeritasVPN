@@ -63,8 +63,12 @@ export function rejectForeignOrigin(request) {
 export async function rateLimit(request, env, { bucket } = {}) {
   const ip = clientIP(request);
   const secret = env?.TOOLS_RATE_LIMIT_SECRET || "";
-  const unavailable = () => jsonResponse({ error: "Rate limit unavailable. Try again shortly." }, 503, { "Retry-After": "60" });
-  if (secret.length < 32 || !ip || !["check-ip", "check-dns-session", "check-breach"].includes(bucket)) return unavailable();
+  // Coarse, non-sensitive failure codes help operators distinguish an edge
+  // rejection from configuration or availability failures. Never echo payloads,
+  // signatures, IPs, secrets or upstream response bodies.
+  const unavailable = (code) => jsonResponse({ error: "Rate limit unavailable. Try again shortly." }, 503, { "Retry-After": "60", "X-Veritas-Limiter-Status": code });
+  if (secret.length < 32) return unavailable("configuration");
+  if (!ip || !["check-ip", "check-dns-session", "check-breach"].includes(bucket)) return unavailable("request");
   try {
     const timestamp = String(Math.floor(Date.now() / 1000));
     const encoder = new TextEncoder();
@@ -86,9 +90,9 @@ export async function rateLimit(request, env, { bucket } = {}) {
     await response.body?.cancel();
     if (response.status === 204) return null;
     if (response.status === 429) return jsonResponse({ error: "Too many requests. Try again shortly." }, 429, { "Retry-After": "60" });
-    return unavailable();
+    return unavailable(`upstream-${response.status}`);
   } catch {
-    return unavailable();
+    return unavailable("transport");
   }
 }
 
