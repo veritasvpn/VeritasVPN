@@ -336,7 +336,7 @@ class MainActivity : ComponentActivity() {
                             val hadCachedStatus = billingStatus != null
                             if (!hadCachedStatus) billingStatus = BillingStatus()
                             billingError = if (!hadCachedStatus) {
-                                e.message ?: "Could not load your plan."
+                                cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                             } else {
                                 null
                             }
@@ -482,7 +482,7 @@ class MainActivity : ComponentActivity() {
                                 handleSessionExpired()
                                 return@launch
                             }
-                            billingError = e.message ?: "Could not cancel your subscription."
+                            billingError = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                         } finally { cancellationInProgress = false }
                     }
                 }
@@ -835,8 +835,7 @@ class MainActivity : ComponentActivity() {
                                 if (!userWantsConnected) return@withContext
                                 connecting = false
                                 userWantsConnected = false
-                                statusMsg = e.message?.takeIf { it.isNotBlank() }
-                                    ?: "Could not request VPN permission."
+                                statusMsg = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                             }
                             return@launch
                         }
@@ -1000,8 +999,7 @@ class MainActivity : ComponentActivity() {
                                         if (e is SessionExpiredException) {
                                             handleSessionExpired()
                                         } else {
-                                            shieldError = e.message?.takeIf { it.isNotBlank() }
-                                                ?: "Could not update Veritas Shield. Try again."
+                                            shieldError = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                                         }
                                     }
                                 }
@@ -1110,8 +1108,7 @@ class MainActivity : ComponentActivity() {
                                     noteIntentionalDisconnect()
                                 } catch (e: Exception) {
                                     deletingAccount = false
-                                    deleteAccountError = e.message?.takeIf { it.isNotBlank() }
-                                        ?: "Could not delete the account."
+                                    deleteAccountError = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                                 }
                             }
                         }
@@ -1281,10 +1278,10 @@ class MainActivity : ComponentActivity() {
                 }) { res ->
                     if (!res.isSuccessful) {
                         val err = ApiClient.parse<PeerResponse>(res)?.error
-                        throw IllegalStateException(err ?: "Failed to create peer")
+                        throw PeerError(err ?: "Failed to create peer")
                     }
                     ApiClient.parse<PeerResponse>(res)
-                        ?: throw IllegalStateException("Invalid VPN server response")
+                        ?: throw PeerError("Invalid VPN server response")
                 }
                 if (!shouldContinue()) return@launch
                 val config = buildWireGuardConfig(context, peer, keyPair)
@@ -1331,8 +1328,7 @@ class MainActivity : ComponentActivity() {
                         return@withContext
                     }
                     setConnecting(false)
-                    setStatus(e.message?.takeIf { it.isNotBlank() }
-                        ?: "Connection failed. Check your network and try again.")
+                    setStatus(cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context))
                     onFailure?.invoke()
                 }
             }
@@ -1376,3 +1372,5 @@ class MainActivity : ComponentActivity() {
         handleBillingReturn(intent)
     }
 }
+
+class PeerError(override val userMessage: String) : Exception(userMessage), cloud.veritasvpn.api.UserVisibleError

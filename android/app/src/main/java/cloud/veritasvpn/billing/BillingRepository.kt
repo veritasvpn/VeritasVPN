@@ -21,7 +21,7 @@ class BillingRepository(internal val auth: AuthRepository) {
     fun cancel() {
         AuthenticatedApi.execute(
             auth,
-            { token -> ApiClient.post("/api/v1/billing/cancel", emptyMap<String, Any>(), token) }
+            { token -> ApiClient.post("/api/v1/billing/cancel", emptyMap<String, Any>(), token, retryOnTimeout = false) }
         ) { response ->
             if (!response.isSuccessful) {
                 val data = ApiClient.parse<CheckoutResponse>(response)
@@ -37,5 +37,5 @@ class BillingRepository(internal val auth: AuthRepository) {
         return Error(serverMessage?.takeIf { it.isNotBlank() } ?: fallback)
     }
 
-    class Error(message: String) : Exception(message)
+    class Error(override val userMessage: String) : Exception(userMessage), cloud.veritasvpn.api.UserVisibleError
 }

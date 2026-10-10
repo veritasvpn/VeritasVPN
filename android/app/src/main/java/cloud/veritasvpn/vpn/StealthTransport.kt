@@ -59,7 +59,14 @@ class StealthTransport(
                 try {
                     runSession()
                 } catch (e: Exception) {
-                    lastError = e.message ?: e.javaClass.simpleName
+                    lastError = when (e) {
+                        is java.net.SocketTimeoutException,
+                        is java.io.InterruptedIOException -> "Connection timed out"
+                        is java.net.UnknownHostException -> "Could not resolve server address"
+                        is java.net.ConnectException -> "Could not connect to server"
+                        is javax.net.ssl.SSLException -> "Secure connection failed"
+                        else -> e.javaClass.simpleName
+                    }
                 }
                 closeActiveSocket()
                 if (running.get()) {

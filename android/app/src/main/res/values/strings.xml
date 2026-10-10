@@ -1,4 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">VeritasVPN</string>
+    <string name="error_server_timeout">VeritasVPN\'s server didn\'t respond in time. Check your internet connection and try again.</string>
+    <string name="error_cannot_reach_server">Can\'t reach VeritasVPN. Check that you\'re online and try again.</string>
+    <string name="error_secure_connection_failed">Secure connection failed. Check your network (public Wi-Fi may block it) and try again.</string>
+    <string name="error_generic">Something went wrong. Please try again.</string>
+    <string name="error_offline">You\'re offline. Check your internet connection and try again.</string>
+    <string name="error_lockdown_blocking">Android\'s \'Block connections without VPN\' is blocking VeritasVPN from reaching its server. Turn it off temporarily in VPN settings, sign in, then turn it back on.</string>
+    <string name="action_open_vpn_settings">Open VPN settings</string>
+    <string name="status_retrying">Still connecting…</string>
+    <string name="error_verify_email_first">Verify your email before signing in.</string>
+    <string name="error_account_already_exists">An account with this email already exists.</string>
 </resources>

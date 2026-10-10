@@ -87,7 +87,8 @@ class AuthRepository(context: Context) {
         if (turnstileToken.isNotBlank()) payload["turnstile_token"] = turnstileToken
         val data = ApiClient.post(
             "/api/v1/auth/signin",
-            payload
+            payload,
+            retryOnTimeout = turnstileToken.isBlank()
         ).use { res ->
             if (!res.isSuccessful) {
                 val message = extractError(res)
@@ -138,7 +139,8 @@ class AuthRepository(context: Context) {
     fun resendVerification(email: String) {
         ApiClient.post(
             "/api/v1/auth/resend-verification",
-            mapOf("email" to email.trim().lowercase())
+            mapOf("email" to email.trim().lowercase()),
+            retryOnTimeout = true
         ).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))
         }
@@ -149,7 +151,8 @@ class AuthRepository(context: Context) {
         if (turnstileToken.isNotBlank()) payload["turnstile_token"] = turnstileToken
         val data = ApiClient.post(
             "/api/v1/auth/signin-account",
-            payload
+            payload,
+            retryOnTimeout = turnstileToken.isBlank()
         ).use { res ->
             if (!res.isSuccessful) {
                 val message = extractError(res)
@@ -182,7 +185,11 @@ class AuthRepository(context: Context) {
 
     fun resetPassword(email: String) {
         val normalized = email.trim().lowercase()
-        ApiClient.post("/api/v1/auth/reset-password", mapOf("email" to normalized)).use { res ->
+        ApiClient.post(
+            "/api/v1/auth/reset-password",
+            mapOf("email" to normalized),
+            retryOnTimeout = true
+        ).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))
         }
     }
@@ -222,7 +229,7 @@ class AuthRepository(context: Context) {
 
     fun logoutAllSessions() {
         val token = getAccessToken() ?: throw Error("Not signed in.")
-        ApiClient.post("/api/v1/auth/logout-all", emptyMap(), token).use { res ->
+        ApiClient.post("/api/v1/auth/logout-all", emptyMap(), token, retryOnTimeout = false).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))
         }
         signOut()
@@ -266,5 +273,5 @@ class AuthRepository(context: Context) {
 
     class TurnstileRequired : Exception("Security check required.")
 
-    class Error(msg: String) : Exception(msg)
+    class Error(override val userMessage: String) : Exception(userMessage), cloud.veritasvpn.api.UserVisibleError
 }

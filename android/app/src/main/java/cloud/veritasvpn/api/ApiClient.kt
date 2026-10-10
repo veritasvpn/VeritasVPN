@@ -6,8 +6,10 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.net.ConnectException
 import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
@@ -36,11 +38,22 @@ object ApiClient {
     @PublishedApi
     internal val gson = Gson()
 
-    fun post(path: String, body: Map<String, Any>, token: String? = null): Response {
+    fun post(
+        path: String,
+        body: Map<String, Any>,
+        token: String? = null,
+        retryOnTimeout: Boolean = false
+    ): Response {
         val b = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").post(b)
         token?.let { builder.header("Authorization", "Bearer $it") }
-        return executeWithRetry(requestFactory = { builder.build() })
+        val callTimeout = if (retryOnTimeout) 15L else 20L
+        val retryClient = if (retryOnTimeout) {
+            client.newBuilder().callTimeout(callTimeout, TimeUnit.SECONDS).build()
+        } else {
+            client
+        }
+        return executeWithRetry(requestFactory = { builder.build() }, httpClient = retryClient, retryOnTimeout = retryOnTimeout)
     }
 
     /**
@@ -70,26 +83,26 @@ object ApiClient {
         val b = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").patch(b)
             .header("Authorization", "Bearer $token")
-        return executeWithRetry(requestFactory = { builder.build() })
+        return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = false)
     }
 
     fun delete(path: String, token: String): Response {
         val builder = Request.Builder().url("$BASE_URL$path").delete()
             .header("Authorization", "Bearer $token")
-        return executeWithRetry(requestFactory = { builder.build() })
+        return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = false)
     }
 
     fun delete(path: String, body: Map<String, Any>, token: String): Response {
         val requestBody = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").delete(requestBody)
             .header("Authorization", "Bearer $token")
-        return executeWithRetry(requestFactory = { builder.build() })
+        return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = false)
     }
 
     fun get(path: String, token: String): Response {
         val builder = Request.Builder().url("$BASE_URL$path").get()
             .header("Authorization", "Bearer $token")
-        return executeWithRetry(requestFactory = { builder.build() })
+        return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = true)
     }
 
     /**
@@ -117,7 +130,7 @@ object ApiClient {
             .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .build()
-        return executeWithRetry({ request }, validationClient).use { response ->
+        return executeWithRetry({ request }, validationClient, retryOnTimeout = false).use { response ->
             if (!response.isSuccessful) {
                 throw IOException("HTTP " + response.code + " during VPN egress validation")
             }
@@ -128,17 +141,29 @@ object ApiClient {
 
     private fun executeWithRetry(
         requestFactory: () -> Request,
-        httpClient: OkHttpClient = client
+        httpClient: OkHttpClient = client,
+        retryOnTimeout: Boolean = false
     ): Response {
         var lastError: IOException? = null
-        repeat(4) { attempt ->
+        val maxRetries = 2
+        repeat(maxRetries + 1) { attempt ->
             try {
                 return httpClient.newCall(requestFactory()).execute()
             } catch (error: IOException) {
                 lastError = error
-                if (!isTransientNetworkError(error) || attempt == 3) throw error
+                val shouldRetry = when {
+                    error is ConnectException || error is UnknownHostException || error is NoRouteToHostException -> true
+                    retryOnTimeout && (error is SocketTimeoutException || error is InterruptedIOException) -> true
+                    else -> false
+                }
+                if (!shouldRetry || attempt == maxRetries) throw error
+                val backoffMs = when (attempt) {
+                    0 -> 1000L
+                    1 -> 2000L
+                    else -> 2000L
+                }
                 try {
-                    Thread.sleep(250L shl attempt)
+                    Thread.sleep(backoffMs)
                 } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw error
@@ -147,11 +172,6 @@ object ApiClient {
         }
         throw lastError ?: IOException("Network request failed")
     }
-
-    private fun isTransientNetworkError(error: IOException): Boolean =
-        error is UnknownHostException ||
-            error is NoRouteToHostException ||
-            error is ConnectException
 
     inline fun <reified T> parse(response: Response): T? {
         val body = response.body?.string() ?: return null
