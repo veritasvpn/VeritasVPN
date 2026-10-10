@@ -47,7 +47,13 @@ object ApiClient {
         val b = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").post(b)
         token?.let { builder.header("Authorization", "Bearer $it") }
-        return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = retryOnTimeout)
+        val callTimeout = if (retryOnTimeout) 15L else 20L
+        val retryClient = if (retryOnTimeout) {
+            client.newBuilder().callTimeout(callTimeout, TimeUnit.SECONDS).build()
+        } else {
+            client
+        }
+        return executeWithRetry(requestFactory = { builder.build() }, httpClient = retryClient, retryOnTimeout = retryOnTimeout)
     }
 
     /**
@@ -124,7 +130,7 @@ object ApiClient {
             .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .build()
-        return executeWithRetry({ request }, validationClient, retryOnTimeout = true).use { response ->
+        return executeWithRetry({ request }, validationClient, retryOnTimeout = false).use { response ->
             if (!response.isSuccessful) {
                 throw IOException("HTTP " + response.code + " during VPN egress validation")
             }

@@ -2096,7 +2096,7 @@ function App() {
             selectedPlan={selectedPlan}
             showCancelConfirmation={showCancelConfirmation}
             onBack={() => setShowPlans(false)}
-            onRefresh={() => refreshBillingStatus().catch((err) => setBillingError(err instanceof Error ? err.message : "Could not load your subscription."))}
+            onRefresh={() => refreshBillingStatus().catch((err) => setBillingError(toUserMessage(err)))}
             onSelectPlan={setSelectedPlan}
             onCheckout={() => startCheckout()}
             onCancelClick={() => setShowCancelConfirmation(true)}

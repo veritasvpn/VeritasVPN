@@ -27,6 +27,7 @@ import com.wireguard.config.Config
 import cloud.veritasvpn.MainActivity
 import cloud.veritasvpn.R
 import cloud.veritasvpn.api.ApiClient
+import cloud.veritasvpn.api.UserFacingError
 import cloud.veritasvpn.secure.SecurePrefs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -528,10 +529,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     "Could not start the VPN service."
                 BackendException.Reason.GO_ACTIVATION_ERROR_CODE ->
                     "The WireGuard backend failed to start (${e.format.joinToString()})."
-                else -> e.message ?: "Connection failed."
+                else -> UserFacingError.toUserMessage(e, this)
             }
         }
-        return e.message?.takeIf { it.isNotBlank() } ?: "Connection failed. Check your network and try again."
+        return UserFacingError.toUserMessage(e, this)
     }
 
     private suspend fun verifyTunnelEgress(): String {
