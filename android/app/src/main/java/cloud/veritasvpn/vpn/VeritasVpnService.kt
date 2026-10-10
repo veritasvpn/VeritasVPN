@@ -44,6 +44,8 @@ import java.io.ByteArrayInputStream
 
 class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
+    class VpnError(override val userMessage: String) : Exception(userMessage), cloud.veritasvpn.api.UserVisibleError
+
     private val backend by lazy { GoBackend(applicationContext) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var transitionJob: Job? = null
@@ -187,8 +189,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                             return@launch
                         }
                         if (state != Tunnel.State.UP) {
-                            throw IllegalStateException(
-                                "WireGuard backend did not enter the UP state"
+                            throw VpnError(
+                                "The VPN tunnel didn't start. Try again."
                             )
                         }
                         // The WireGuard interface is ready at this point. Do not
@@ -551,8 +553,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             if (attempt < 2) delay(250)
         }
-        throw IllegalStateException(
-            "VPN egress validation timed out; no encrypted traffic was confirmed"
+        throw VpnError(
+            "Connected, but no traffic got through the VPN. Try again or switch server."
         )
     }
 
@@ -848,7 +850,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val resumeStealth = vpnStatePrefs().getBoolean(KEY_RESUME_STEALTH, false)
         return when (val plan = StealthPlanner.initial(mode, offer, resumeStealth)) {
             InitialTransport.STEALTH_UNAVAILABLE ->
-                throw IllegalStateException("Stealth is not available on the VPN node yet.")
+                throw VpnError("Stealth is not available on the VPN node yet.")
             InitialTransport.STEALTH -> bringUp(udpConfig, gen, stealth = true, offer = offer)
             InitialTransport.UDP -> {
                 val baseline = latestHandshakeMs()
@@ -1002,7 +1004,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun startStealth(offer: StealthOffer): String {
         val endpoint = WstunnelProtocol.parseEndpoint(offer.endpoint)
-            ?: throw IllegalStateException("Stealth endpoint is invalid")
+            ?: throw VpnError("Stealth mode isn't available right now.")
         WstunnelProtocol.upgradePath(offer.pathPrefix)
         stopStealthTransport()
         val transport = StealthTransport(
