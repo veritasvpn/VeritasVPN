@@ -208,6 +208,13 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "A required VeritasVPN monitoring scrape is missing"
+      - alert: ScrapeTargetDown
+        expr: up == 0
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "Prometheus cannot scrape {{ $labels.job }}"
+          description: "{{ $labels.job }} at {{ $labels.instance }} has been down for 10 minutes. Host and backup alerts that depend on it are blind."
       - alert: AlertmanagerUnavailable
         expr: up{job="prometheus"} == 1 and prometheus_notifications_alertmanagers_discovered < 1
         for: 5m
