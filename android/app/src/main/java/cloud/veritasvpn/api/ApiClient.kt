@@ -6,8 +6,10 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.net.ConnectException
 import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
@@ -151,7 +153,9 @@ object ApiClient {
     private fun isTransientNetworkError(error: IOException): Boolean =
         error is UnknownHostException ||
             error is NoRouteToHostException ||
-            error is ConnectException
+            error is ConnectException ||
+            error is SocketTimeoutException ||
+            error is InterruptedIOException
 
     inline fun <reified T> parse(response: Response): T? {
         val body = response.body?.string() ?: return null

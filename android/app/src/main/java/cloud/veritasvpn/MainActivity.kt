@@ -482,7 +482,7 @@ class MainActivity : ComponentActivity() {
                                 handleSessionExpired()
                                 return@launch
                             }
-                            billingError = e.message ?: "Could not cancel your subscription."
+                            billingError = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                         } finally { cancellationInProgress = false }
                     }
                 }
@@ -1000,8 +1000,7 @@ class MainActivity : ComponentActivity() {
                                         if (e is SessionExpiredException) {
                                             handleSessionExpired()
                                         } else {
-                                            shieldError = e.message?.takeIf { it.isNotBlank() }
-                                                ?: "Could not update Veritas Shield. Try again."
+                                            shieldError = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                                         }
                                     }
                                 }
@@ -1110,8 +1109,7 @@ class MainActivity : ComponentActivity() {
                                     noteIntentionalDisconnect()
                                 } catch (e: Exception) {
                                     deletingAccount = false
-                                    deleteAccountError = e.message?.takeIf { it.isNotBlank() }
-                                        ?: "Could not delete the account."
+                                    deleteAccountError = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                                 }
                             }
                         }

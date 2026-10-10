@@ -44,9 +44,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 
 enum class AuthMode { SIGN_IN, SIGN_UP }
 enum class AuthMethod { EMAIL, ACCOUNT_ID }
@@ -81,6 +79,8 @@ fun AuthScreen(
     var turnstileInteractive by remember { mutableStateOf(false) }
     var pendingTurnstileSubmit by remember { mutableStateOf(false) }
     var signInTurnstileRequired by remember { mutableStateOf(false) }
+    var retryStatus by remember { mutableStateOf<String?>(null) }
+    var lockdownBlocked by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     // Creation remains protected up front. Ordinary sign-ins stay fast until
     // the server detects repeated attempts and asks this client to step up.
@@ -128,20 +128,25 @@ fun AuthScreen(
     val authRepo = remember(context) { cloud.veritasvpn.auth.AuthRepository(context) }
 
     fun submitWithTurnstileToken() {
+        val preflight = NetworkPreflight.check(context)
+        if (preflight is NetworkPreflight.Result.Blocked) {
+            error = preflight.message
+            lockdownBlocked = preflight.openVpnSettings
+            return
+        }
         loading = true
+        retryStatus = null
         scope.launch {
             try {
-                val user = withTimeout(15_000L) {
-                    withContext(Dispatchers.IO) {
-                        when {
-                            method == AuthMethod.EMAIL && mode == AuthMode.SIGN_IN ->
-                                authRepo.signIn(email, password, turnstileToken)
-                            method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP ->
-                                authRepo.signUp(email, password, turnstileToken)
-                            method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN ->
-                                authRepo.signInWithAccountId(accountId, turnstileToken)
-                            else -> authRepo.registerAnonymous(turnstileToken)
-                        }
+                val user = withContext(Dispatchers.IO) {
+                    when {
+                        method == AuthMethod.EMAIL && mode == AuthMode.SIGN_IN ->
+                            authRepo.signIn(email, password, turnstileToken)
+                        method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP ->
+                            authRepo.signUp(email, password, turnstileToken)
+                        method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN ->
+                            authRepo.signInWithAccountId(accountId, turnstileToken)
+                        else -> authRepo.registerAnonymous(turnstileToken)
                     }
                 }
                 if (method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_UP) {
@@ -149,8 +154,6 @@ fun AuthScreen(
                 } else {
                     onAuthenticated()
                 }
-            } catch (e: TimeoutCancellationException) {
-                resetTurnstile("The account request timed out. Please try again.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: cloud.veritasvpn.auth.AuthRepository.VerificationRequired) {
@@ -167,9 +170,6 @@ fun AuthScreen(
                 verificationResendEmail = e.email
             } catch (e: cloud.veritasvpn.auth.AuthRepository.TurnstileRequired) {
                 signInTurnstileRequired = true
-                // A token can be expired or rejected by Turnstile. It is
-                // single-use, so discard it and recreate the WebView before
-                // asking the person to complete the fresh challenge.
                 turnstileToken = ""
                 turnstileReady = false
                 turnstileInteractive = false
@@ -177,10 +177,7 @@ fun AuthScreen(
                 pendingTurnstileSubmit = true
                 error = null
             } catch (e: Exception) {
-                error = e.message?.takeIf { it.isNotBlank() }
-                    ?: "Sign in failed. Check your connection and try again."
-                // The server may have consumed the token even when it could not
-                // complete the request, so start the replacement challenge now.
+                error = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                 if (needsTurnstile) {
                     turnstileToken = ""
                     turnstileReady = false
@@ -189,6 +186,7 @@ fun AuthScreen(
                 }
             } finally {
                 loading = false
+                retryStatus = null
             }
         }
     }
@@ -265,6 +263,12 @@ fun AuthScreen(
                     if (email.isBlank()) {
                         error = "Enter your email address."
                     } else {
+                        val preflight = NetworkPreflight.check(context)
+                        if (preflight is NetworkPreflight.Result.Blocked) {
+                            error = preflight.message
+                            lockdownBlocked = preflight.openVpnSettings
+                            return@Button
+                        }
                         loading = true
                         error = null
                         scope.launch {
@@ -273,7 +277,7 @@ fun AuthScreen(
                                 resetSent = true
                                 resetCooldown = 30
                             } catch (e: Exception) {
-                                error = e.message ?: "Could not send the reset link. Try again."
+                                error = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                             } finally {
                                 loading = false
                             }
@@ -326,6 +330,12 @@ fun AuthScreen(
             Button(
                 onClick = {
                     val email = pendingVerificationEmail ?: return@Button
+                    val preflight = NetworkPreflight.check(context)
+                    if (preflight is NetworkPreflight.Result.Blocked) {
+                        error = preflight.message
+                        lockdownBlocked = preflight.openVpnSettings
+                        return@Button
+                    }
                     resendLoading = true
                     notice = null
                     error = null
@@ -334,7 +344,7 @@ fun AuthScreen(
                             withContext(Dispatchers.IO) { authRepo.resendVerification(email) }
                             notice = "A new verification link was sent to $email."
                         } catch (e: Exception) {
-                            error = e.message ?: "Could not resend the verification email. Try again."
+                            error = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                         } finally {
                             resendLoading = false
                         }
@@ -494,11 +504,29 @@ fun AuthScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(bottom = 12.dp)
             )
+            if (lockdownBlocked) {
+                Button(
+                    onClick = {
+                        context.startActivity(cloud.veritasvpn.vpn.VpnKillSwitch.systemVpnSettingsIntent())
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Royal)
+                ) {
+                    Text(context.getString(cloud.veritasvpn.R.string.action_open_vpn_settings), color = Color.White)
+                }
+            }
         }
 
         verificationResendEmail?.let { pendingEmail ->
             OutlinedButton(
                 onClick = {
+                    val preflight = NetworkPreflight.check(context)
+                    if (preflight is NetworkPreflight.Result.Blocked) {
+                        error = preflight.message
+                        lockdownBlocked = preflight.openVpnSettings
+                        return@OutlinedButton
+                    }
                     resendLoading = true
                     notice = null
                     scope.launch {
@@ -510,7 +538,7 @@ fun AuthScreen(
                             verificationResendEmail = null
                             notice = "A new verification link was sent to $pendingEmail."
                         } catch (e: Exception) {
-                            error = e.message ?: "Could not resend the verification email. Try again."
+                            error = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                         } finally {
                             resendLoading = false
                         }
