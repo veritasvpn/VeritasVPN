@@ -229,7 +229,7 @@ class PlayStoreBilling(
         io.execute {
             if (closed.get()) return@execute
             try {
-                val verified = verifyWithServer(productId, purchase.purchaseToken)
+                val verified = kotlinx.coroutines.runBlocking { verifyWithServer(productId, purchase.purchaseToken) }
                 if (verified.pending) {
                     main.post { callbacks?.onPending("Google Play is still processing this subscription.") }
                     return@execute
@@ -246,7 +246,7 @@ class PlayStoreBilling(
         }
     }
 
-    private fun verifyWithServer(productId: String, purchaseToken: String): PlayVerifyResponse =
+    private suspend fun verifyWithServer(productId: String, purchaseToken: String): PlayVerifyResponse =
         AuthenticatedApi.execute(
             billing.auth,
             { token ->
