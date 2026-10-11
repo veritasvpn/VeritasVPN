@@ -197,6 +197,10 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		return nil, err
 	}
 
+	// Determine trial eligibility: user is eligible if they've never had a trial
+	// and have no payment history (or only failed payments)
+	trialEligible := isTrialEligible(recorded)
+
 	return &model.StatusResponse{
 		AccountID:          sub.AccountID,
 		Tier:               sub.Tier,
@@ -214,7 +218,18 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		PaymentMessage:     paymentStateMessage(paymentState),
 		PollAfterSeconds:   paymentStatePollAfter(paymentState),
 		Payments:           model.PurchaseHistoryFrom(recorded),
+		TrialEligible:      trialEligible,
 	}, nil
+}
+
+func isTrialEligible(payments []model.PaymentRecord) bool {
+	for _, p := range payments {
+		// If user has any successful trial or payment, they're not eligible
+		if p.Status == "completed" || p.IsTrial {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *BillingService) reconcilePendingPayment(ctx context.Context, accountID string) (string, error) {

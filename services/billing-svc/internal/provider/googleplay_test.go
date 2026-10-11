@@ -34,7 +34,7 @@ func TestParseSubscriptionPurchase(t *testing.T) {
 	    "offerDetails": {"basePlanId": "monthly"}
 	  }]
 	}`)
-	got, err := ParseSubscriptionPurchase(body)
+	got, err := ParseSubscriptionPurchase(body, time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -65,6 +65,7 @@ type PaymentRecord struct {
 	PlanID                string    `json:"plan_id"`
 	PeriodDays            int       `json:"period_days"`
 	Provider              string    `json:"provider,omitempty"`
+	IsTrial               bool      `json:"is_trial,omitempty"`
 }
 
 // StatusResponse is returned by GET /billing/status.
@@ -88,6 +89,7 @@ type StatusResponse struct {
 	PaymentMessage     string                `json:"payment_message,omitempty"`
 	PollAfterSeconds   int                   `json:"poll_after_seconds,omitempty"`
 	Payments           []PurchaseHistoryItem `json:"payments"`
+	TrialEligible      bool                  `json:"trial_eligible"`
 }
 
 // PurchaseHistoryItem is one Bitcoin payment already stored for an account.

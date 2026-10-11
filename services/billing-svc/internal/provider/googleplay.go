@@ -40,11 +40,14 @@ type SubscriptionPurchase struct {
 type PlayLineItem struct {
 	ProductID        string
 	BasePlanID       string
+	OfferID          string
+	OfferTags        []string
 	Expiry           time.Time
 	AutoRenewEnabled bool
 	PriceCents       int64
 	Currency         string
 	HasPrice         bool
+	InTrial          bool
 }
 
 // PlayClient fetches a subscription purchase from the Google Play Developer API.
@@ -166,7 +169,7 @@ func (c *GooglePlayClient) GetSubscription(ctx context.Context, purchaseToken st
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return ParseSubscriptionPurchase(body)
+		return ParseSubscriptionPurchase(body, c.now())
 	case http.StatusNotFound:
 		return nil, ErrPlayPurchaseNotFound
 	case http.StatusBadRequest, http.StatusForbidden:
@@ -242,7 +245,7 @@ func (c *GooglePlayClient) signedJWT() (string, error) {
 	return signed, nil
 }
 
-func ParseSubscriptionPurchase(body []byte) (*SubscriptionPurchase, error) {
+func ParseSubscriptionPurchase(body []byte, now time.Time) (*SubscriptionPurchase, error) {
 	var raw struct {
 		SubscriptionState          string `json:"subscriptionState"`
 		LatestOrderID              string `json:"latestOrderId"`
@@ -263,7 +266,9 @@ func ParseSubscriptionPurchase(body []byte) (*SubscriptionPurchase, error) {
 				} `json:"recurringPrice"`
 			} `json:"autoRenewingPlan"`
 			OfferDetails *struct {
-				BasePlanID string `json:"basePlanId"`
+				BasePlanID string   `json:"basePlanId"`
+				OfferID    string   `json:"offerId"`
+				OfferTags  []string `json:"offerTags"`
 			} `json:"offerDetails"`
 		} `json:"lineItems"`
 	}
@@ -309,6 +314,26 @@ func ParseSubscriptionPurchase(body []byte) (*SubscriptionPurchase, error) {
 		}
 		if item.OfferDetails != nil {
 			line.BasePlanID = item.OfferDetails.BasePlanID
+			line.OfferID = item.OfferDetails.OfferID
+			line.OfferTags = item.OfferDetails.OfferTags
+			// Detect trial: offerId contains "trial" or offerTags contains "trial"
+			hasTrialTag := false
+			for _, tag := range line.OfferTags {
+				if strings.ToLower(tag) == "trial" {
+					hasTrialTag = true
+					break
+				}
+			}
+			if !hasTrialTag && strings.Contains(strings.ToLower(line.OfferID), "trial") {
+				hasTrialTag = true
+			}
+			// Only mark as in trial if we have the tag AND we're still in the trial period
+			// Trial period is typically 7 days from start time
+			if hasTrialTag {
+				trialDuration := 7 * 24 * time.Hour // 7 days
+				trialEnd := out.Start.Add(trialDuration)
+				line.InTrial = now.Before(trialEnd)
+			}
 		}
 		out.LineItems = append(out.LineItems, line)
 	}

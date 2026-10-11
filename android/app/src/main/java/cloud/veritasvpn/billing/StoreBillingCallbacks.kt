@@ -12,7 +12,18 @@ interface StoreBillingCallbacks {
     fun onVerified() {}
     fun onError(message: String) {}
     fun onSessionExpired() {}
+    fun onTrialOffers(offers: Map<String, TrialOffer>) {}
 }
+
+/**
+ * Trial offer information from the store.
+ */
+data class TrialOffer(
+    val planId: String,
+    val trialDays: Int,
+    val priceAfterTrial: String,
+    val period: String
+)
 
 /**
  * Flavor-specific store client. [usesPlayBilling] is a compile-time constant
@@ -22,7 +33,8 @@ interface StoreBilling {
     val usesPlayBilling: Boolean
     fun connect()
     fun close()
-    fun purchase(activity: Activity, planId: String, accountId: String, callbacks: StoreBillingCallbacks)
+    fun purchase(activity: Activity, planId: String, accountId: String, callbacks: StoreBillingCallbacks, trialAllowed: Boolean = false)
     fun restore(accountId: String, callbacks: StoreBillingCallbacks)
     fun manageSubscription(activity: Activity, planId: String?)
+    fun queryTrialOffers(planIds: List<String>, callbacks: StoreBillingCallbacks) {}
 }

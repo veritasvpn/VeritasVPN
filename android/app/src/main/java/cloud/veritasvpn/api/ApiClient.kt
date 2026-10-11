@@ -217,6 +217,7 @@ data class BillingStatus(
     // renames the field and a real array stays null, which the account screen
     // shows as purchase history that was never sent.
     @SerializedName("payments") val payments: List<PurchaseHistoryItem>? = null,
+    @SerializedName("trial_eligible") val trialEligible: Boolean = false,
     val error: String? = null
 )
 
