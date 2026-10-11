@@ -191,6 +191,10 @@ suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
     }
     enqueue(object : Callback {
         override fun onResponse(call: Call, response: Response) {
+            if (cont.isCancelled) {
+                response.close()
+                return
+            }
             cont.resume(response)
         }
 

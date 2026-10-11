@@ -142,11 +142,12 @@ class AuthRepository(context: Context) {
         return user
     }
 
-    suspend fun resendVerification(email: String) {
+    suspend fun resendVerification(email: String, onRetry: ((attempt: Int) -> Unit)? = null) {
         ApiClient.post(
             "/api/v1/auth/resend-verification",
             mapOf("email" to email.trim().lowercase()),
-            retryOnTimeout = true
+            retryOnTimeout = true,
+            onRetry = onRetry
         ).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))
         }
@@ -194,12 +195,13 @@ class AuthRepository(context: Context) {
         return user
     }
 
-    suspend fun resetPassword(email: String) {
+    suspend fun resetPassword(email: String, onRetry: ((attempt: Int) -> Unit)? = null) {
         val normalized = email.trim().lowercase()
         ApiClient.post(
             "/api/v1/auth/reset-password",
             mapOf("email" to normalized),
-            retryOnTimeout = true
+            retryOnTimeout = true,
+            onRetry = onRetry
         ).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))
         }

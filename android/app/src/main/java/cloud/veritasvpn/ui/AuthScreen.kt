@@ -40,6 +40,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.ui.theme.*
+import cloud.veritasvpn.R
+import cloud.veritasvpn.api.UserFacingError
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -146,13 +148,13 @@ fun AuthScreen(
                         when {
                             method == AuthMethod.EMAIL && mode == AuthMode.SIGN_IN ->
                                 authRepo.signIn(email, password, turnstileToken, onRetry = { attempt ->
-                                    scope.launch { retryStatus = context.getString(cloud.veritasvpn.R.string.status_retrying) }
+                                    scope.launch { retryStatus = context.getString(R.string.status_retrying) }
                                 })
                             method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP ->
                                 authRepo.signUp(email, password, turnstileToken)
                             method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN ->
                                 authRepo.signInWithAccountId(accountId, turnstileToken, onRetry = { attempt ->
-                                    scope.launch { retryStatus = context.getString(cloud.veritasvpn.R.string.status_retrying) }
+                                    scope.launch { retryStatus = context.getString(R.string.status_retrying) }
                                 })
                             else -> authRepo.registerAnonymous(turnstileToken)
                         }
@@ -164,7 +166,7 @@ fun AuthScreen(
                     onAuthenticated()
                 }
             } catch (e: TimeoutCancellationException) {
-                error = context.getString(cloud.veritasvpn.R.string.error_server_timeout)
+                error = context.getString(R.string.error_server_timeout)
                 if (needsTurnstile) {
                     turnstileToken = ""
                     turnstileReady = false
@@ -180,10 +182,10 @@ fun AuthScreen(
                     error = null
                 } else {
                     verificationResendEmail = e.email
-                    error = context.getString(cloud.veritasvpn.R.string.error_verify_email_first)
+                    error = context.getString(R.string.error_verify_email_first)
                 }
             } catch (e: cloud.veritasvpn.auth.AuthRepository.AccountAlreadyExists) {
-                error = context.getString(cloud.veritasvpn.R.string.error_account_already_exists)
+                error = context.getString(R.string.error_account_already_exists)
                 verificationResendEmail = e.email
             } catch (e: cloud.veritasvpn.auth.AuthRepository.TurnstileRequired) {
                 // A token can be expired or rejected by Turnstile. It is
@@ -198,6 +200,8 @@ fun AuthScreen(
                 error = null
             } catch (e: Exception) {
                 error = NetworkPreflight.classifyFailure(context, e)
+                // The server may have consumed the token even when it could not
+                // complete the request, so start the replacement challenge now.
                 if (needsTurnstile) {
                     turnstileToken = ""
                     turnstileReady = false
@@ -232,7 +236,7 @@ fun AuthScreen(
                     )
             )
             Image(
-                painter = painterResource(cloud.veritasvpn.R.drawable.veritas_mark),
+                painter = painterResource(R.drawable.veritas_mark),
                 contentDescription = "VeritasVPN shield",
                 modifier = Modifier.size(106.dp),
                 contentScale = ContentScale.Fit
@@ -296,13 +300,15 @@ fun AuthScreen(
                             try {
                                 withTimeout(50_000L) {
                                     withContext(Dispatchers.IO) { 
-                                        authRepo.resetPassword(email)
+                                        authRepo.resetPassword(email, onRetry = { attempt ->
+                                            scope.launch { retryStatus = context.getString(R.string.status_retrying) }
+                                        })
                                     }
                                 }
                                 resetSent = true
                                 resetCooldown = 30
                             } catch (e: TimeoutCancellationException) {
-                                error = context.getString(cloud.veritasvpn.R.string.error_server_timeout)
+                                error = context.getString(R.string.error_server_timeout)
                             } catch (e: Exception) {
                                 error = NetworkPreflight.classifyFailure(context, e)
                             } finally {
@@ -370,11 +376,15 @@ fun AuthScreen(
                     scope.launch {
                         try {
                             withTimeout(50_000L) {
-                                withContext(Dispatchers.IO) { authRepo.resendVerification(email) }
+                                withContext(Dispatchers.IO) { 
+                                    authRepo.resendVerification(email, onRetry = { attempt ->
+                                        scope.launch { retryStatus = context.getString(R.string.status_retrying) }
+                                    })
+                                }
                             }
                             notice = "A new verification link was sent to $email."
                         } catch (e: TimeoutCancellationException) {
-                            error = context.getString(cloud.veritasvpn.R.string.error_server_timeout)
+                            error = context.getString(R.string.error_server_timeout)
                         } catch (e: Exception) {
                             error = NetworkPreflight.classifyFailure(context, e)
                         } finally {
@@ -482,28 +492,17 @@ fun AuthScreen(
                             modifier = Modifier.size(22.dp)
                         )
                         Spacer(Modifier.width(10.dp))
-                        Text(
-                            "Save this ID in a password manager or another secure place now. If you lose it, the account and its access cannot be recovered.",
-                            color = PaperMuted,
-                            fontSize = 14.sp,
-                            lineHeight = 20.sp,
-                            modifier = Modifier.weight(1f)
-            )
-        }
+                         Text(
+                             "Save this ID in a password manager or another secure place now. If you lose it, the account and its access cannot be recovered.",
+                             color = PaperMuted,
+                             fontSize = 14.sp,
+                             lineHeight = 20.sp,
+                             modifier = Modifier.weight(1f)
+             )
+         }
 
-        retryStatus?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                it,
-                color = CyanHover,
-                fontSize = 13.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-        }
-
-        Spacer(Modifier.height(16.dp))
-                    Button(
+         Spacer(Modifier.height(16.dp))
+                     Button(
                         onClick = { onAuthenticated() },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(24.dp),
@@ -557,7 +556,7 @@ fun AuthScreen(
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Royal)
                 ) {
-                    Text(context.getString(cloud.veritasvpn.R.string.action_open_vpn_settings), color = Color.White)
+                    Text(context.getString(R.string.action_open_vpn_settings), color = Color.White)
                 }
             }
         }
@@ -578,14 +577,16 @@ fun AuthScreen(
                         try {
                             withTimeout(50_000L) {
                                 withContext(Dispatchers.IO) {
-                                    authRepo.resendVerification(pendingEmail)
+                                    authRepo.resendVerification(pendingEmail, onRetry = { attempt ->
+                                        scope.launch { retryStatus = context.getString(R.string.status_retrying) }
+                                    })
                                 }
                             }
                             error = null
                             verificationResendEmail = null
                             notice = "A new verification link was sent to $pendingEmail."
                         } catch (e: TimeoutCancellationException) {
-                            error = context.getString(cloud.veritasvpn.R.string.error_server_timeout)
+                            error = context.getString(R.string.error_server_timeout)
                         } catch (e: Exception) {
                             error = NetworkPreflight.classifyFailure(context, e)
                         } finally {
@@ -784,6 +785,17 @@ fun AuthScreen(
                 else "Create account",
                 color = Color.White,
                 fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        if (loading && retryStatus != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                retryStatus!!,
+                color = CyanHover,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(bottom = 8.dp)
             )
         }
 

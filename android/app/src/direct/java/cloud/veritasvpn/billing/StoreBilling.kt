@@ -6,6 +6,11 @@ import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.CheckoutResponse
 import cloud.veritasvpn.auth.AuthenticatedApi
 import cloud.veritasvpn.auth.SessionExpiredException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 fun createStoreBilling(context: Context, billing: BillingRepository): StoreBilling =
     DirectStoreBilling(context, billing)
@@ -19,18 +24,24 @@ class DirectStoreBilling(
     private val billing: BillingRepository,
 ) : StoreBilling {
     override val usesPlayBilling: Boolean = false
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun connect() {}
 
-    override fun close() {}
+    override fun close() {
+        scope.cancel()
+    }
 
     override fun purchase(activity: Activity, planId: String, accountId: String, callbacks: StoreBillingCallbacks) {
-        try {
-            callbacks.onCheckoutUrl(billing.createDirectCheckout(planId))
-        } catch (e: SessionExpiredException) {
-            callbacks.onSessionExpired()
-        } catch (e: Exception) {
-            callbacks.onError(e.message ?: "Could not open checkout.")
+        scope.launch {
+            try {
+                val url = billing.createDirectCheckout(planId)
+                callbacks.onCheckoutUrl(url)
+            } catch (e: SessionExpiredException) {
+                callbacks.onSessionExpired()
+            } catch (e: Exception) {
+                callbacks.onError(e.message ?: "Could not open checkout.")
+            }
         }
     }
 
@@ -39,7 +50,7 @@ class DirectStoreBilling(
     override fun manageSubscription(activity: Activity, planId: String?) {}
 }
 
-fun BillingRepository.createDirectCheckout(planId: String): String = AuthenticatedApi.execute(
+suspend fun BillingRepository.createDirectCheckout(planId: String): String = AuthenticatedApi.execute(
     auth,
     { token ->
         ApiClient.post(
