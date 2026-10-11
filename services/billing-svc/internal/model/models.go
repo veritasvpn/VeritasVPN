@@ -88,6 +88,9 @@ type StatusResponse struct {
 	PaymentMessage     string                `json:"payment_message,omitempty"`
 	PollAfterSeconds   int                   `json:"poll_after_seconds,omitempty"`
 	Payments           []PurchaseHistoryItem `json:"payments"`
+	TrialEligible      bool                  `json:"trial_eligible"`
+	TrialDays          *int                  `json:"trial_days,omitempty"`
+	TrialPriceAfter    *string               `json:"trial_price_after,omitempty"`
 }
 
 // PurchaseHistoryItem is one Bitcoin payment already stored for an account.
