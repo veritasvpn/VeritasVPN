@@ -2,6 +2,8 @@ package cloud.veritasvpn.api
 
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -12,6 +14,8 @@ import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 // No certificate pinning here yet. Pinning would stop a user-installed or
 // enterprise MITM CA from reading bearer tokens, but a pin that outlives its
@@ -38,11 +42,12 @@ object ApiClient {
     @PublishedApi
     internal val gson = Gson()
 
-    fun post(
+    suspend fun post(
         path: String,
         body: Map<String, Any>,
         token: String? = null,
-        retryOnTimeout: Boolean = false
+        retryOnTimeout: Boolean = false,
+        onRetry: ((attempt: Int) -> Unit)? = null
     ): Response {
         val b = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").post(b)
@@ -53,7 +58,7 @@ object ApiClient {
         } else {
             client
         }
-        return executeWithRetry(requestFactory = { builder.build() }, httpClient = retryClient, retryOnTimeout = retryOnTimeout)
+        return executeWithRetry(requestFactory = { builder.build() }, httpClient = retryClient, retryOnTimeout = retryOnTimeout, onRetry = onRetry)
     }
 
     /**
@@ -61,7 +66,7 @@ object ApiClient {
      * look like a frozen button, so use one bounded attempt and let the person
      * decide when to retry.
      */
-    fun postFast(
+    suspend fun postFast(
         path: String,
         body: Map<String, Any>,
         token: String? = null,
@@ -76,30 +81,30 @@ object ApiClient {
             .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .build()
-        return fastClient.newCall(builder.build()).execute()
+        return fastClient.newCall(builder.build()).await()
     }
 
-    fun patch(path: String, body: Map<String, Any>, token: String): Response {
+    suspend fun patch(path: String, body: Map<String, Any>, token: String): Response {
         val b = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").patch(b)
             .header("Authorization", "Bearer $token")
         return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = false)
     }
 
-    fun delete(path: String, token: String): Response {
+    suspend fun delete(path: String, token: String): Response {
         val builder = Request.Builder().url("$BASE_URL$path").delete()
             .header("Authorization", "Bearer $token")
         return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = false)
     }
 
-    fun delete(path: String, body: Map<String, Any>, token: String): Response {
+    suspend fun delete(path: String, body: Map<String, Any>, token: String): Response {
         val requestBody = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").delete(requestBody)
             .header("Authorization", "Bearer $token")
         return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = false)
     }
 
-    fun get(path: String, token: String): Response {
+    suspend fun get(path: String, token: String): Response {
         val builder = Request.Builder().url("$BASE_URL$path").get()
             .header("Authorization", "Bearer $token")
         return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = true)
@@ -110,7 +115,7 @@ object ApiClient {
      * the general API retry budget.  Billing status is safe to retry manually,
      * so it gets a small, single-attempt deadline instead.
      */
-    fun getFast(path: String, token: String, timeoutSeconds: Long = 6): Response {
+    suspend fun getFast(path: String, token: String, timeoutSeconds: Long = 6): Response {
         val request = Request.Builder().url("$BASE_URL$path").get()
             .header("Authorization", "Bearer $token")
             .build()
@@ -120,10 +125,10 @@ object ApiClient {
             .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .build()
-        return fastClient.newCall(request).execute()
+        return fastClient.newCall(request).await()
     }
 
-    fun getText(url: String, timeoutSeconds: Long = 5): String {
+    suspend fun getText(url: String, timeoutSeconds: Long = 5): String {
         val request = Request.Builder().url(url).get().build()
         val validationClient = client.newBuilder()
             .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
@@ -139,16 +144,17 @@ object ApiClient {
         }
     }
 
-    private fun executeWithRetry(
+    private suspend fun executeWithRetry(
         requestFactory: () -> Request,
         httpClient: OkHttpClient = client,
-        retryOnTimeout: Boolean = false
+        retryOnTimeout: Boolean = false,
+        onRetry: ((attempt: Int) -> Unit)? = null
     ): Response {
         var lastError: IOException? = null
         val maxRetries = 2
         repeat(maxRetries + 1) { attempt ->
             try {
-                return httpClient.newCall(requestFactory()).execute()
+                return httpClient.newCall(requestFactory()).await()
             } catch (error: IOException) {
                 lastError = error
                 val shouldRetry = when {
@@ -157,17 +163,13 @@ object ApiClient {
                     else -> false
                 }
                 if (!shouldRetry || attempt == maxRetries) throw error
+                onRetry?.invoke(attempt + 1)
                 val backoffMs = when (attempt) {
                     0 -> 1000L
                     1 -> 2000L
                     else -> 2000L
                 }
-                try {
-                    Thread.sleep(backoffMs)
-                } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    throw error
-                }
+                delay(backoffMs)
             }
         }
         throw lastError ?: IOException("Network request failed")
@@ -177,6 +179,30 @@ object ApiClient {
         val body = response.body?.string() ?: return null
         return try { gson.fromJson(body, T::class.java) } catch (_: Exception) { null }
     }
+}
+
+/**
+ * Suspend extension for OkHttp Call that supports cancellation.
+ * When the coroutine is cancelled, the HTTP call is also cancelled.
+ */
+suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
+    cont.invokeOnCancellation {
+        cancel()
+    }
+    enqueue(object : Callback {
+        override fun onResponse(call: Call, response: Response) {
+            if (cont.isCancelled) {
+                response.close()
+                return
+            }
+            cont.resume(response)
+        }
+
+        override fun onFailure(call: Call, e: IOException) {
+            if (cont.isCancelled) return
+            cont.resumeWithException(e)
+        }
+    })
 }
 
 data class AuthResponse(

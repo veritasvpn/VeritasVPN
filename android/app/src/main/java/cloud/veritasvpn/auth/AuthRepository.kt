@@ -46,14 +46,14 @@ class AuthRepository(context: Context) {
     }
 
     /** Returns a non-expired access token, refreshing the session when needed. */
-    fun getValidAccessToken(): String? {
+    suspend fun getValidAccessToken(): String? {
         val existing = getAccessToken()?.takeIf { it.isNotBlank() }
         if (existing != null && !isAccessTokenExpired()) return existing
         if (!refreshSession()) return null
         return getAccessToken()?.takeIf { it.isNotBlank() }
     }
 
-    fun requireAccessToken(): String {
+    suspend fun requireAccessToken(): String {
         return getValidAccessToken() ?: run {
             signOut()
             throw SessionExpiredException()
@@ -61,7 +61,7 @@ class AuthRepository(context: Context) {
     }
 
     /** Returns false when a stored user was signed out because the session is dead. */
-    fun validateSessionOnResume(): Boolean {
+    suspend fun validateSessionOnResume(): Boolean {
         if (getStoredUser() == null) return true
         if (getValidAccessToken() != null) return true
         signOut()
@@ -78,7 +78,12 @@ class AuthRepository(context: Context) {
             .apply()
     }
 
-    fun signIn(email: String, password: String, turnstileToken: String = ""): User {
+    suspend fun signIn(
+        email: String,
+        password: String,
+        turnstileToken: String = "",
+        onRetry: ((attempt: Int) -> Unit)? = null
+    ): User {
         val normalized = email.trim().lowercase()
         val payload = mutableMapOf<String, String>(
             "email" to normalized,
@@ -88,7 +93,8 @@ class AuthRepository(context: Context) {
         val data = ApiClient.post(
             "/api/v1/auth/signin",
             payload,
-            retryOnTimeout = turnstileToken.isBlank()
+            retryOnTimeout = turnstileToken.isBlank(),
+            onRetry = onRetry
         ).use { res ->
             if (!res.isSuccessful) {
                 val message = extractError(res)
@@ -108,7 +114,7 @@ class AuthRepository(context: Context) {
         return user
     }
 
-    fun signUp(email: String, password: String, turnstileToken: String): User {
+    suspend fun signUp(email: String, password: String, turnstileToken: String): User {
         val normalized = email.trim().lowercase()
         val data = ApiClient.postFast(
             "/api/v1/auth/register",
@@ -136,23 +142,29 @@ class AuthRepository(context: Context) {
         return user
     }
 
-    fun resendVerification(email: String) {
+    suspend fun resendVerification(email: String, onRetry: ((attempt: Int) -> Unit)? = null) {
         ApiClient.post(
             "/api/v1/auth/resend-verification",
             mapOf("email" to email.trim().lowercase()),
-            retryOnTimeout = true
+            retryOnTimeout = true,
+            onRetry = onRetry
         ).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))
         }
     }
 
-    fun signInWithAccountId(accountId: String, turnstileToken: String = ""): User {
+    suspend fun signInWithAccountId(
+        accountId: String,
+        turnstileToken: String = "",
+        onRetry: ((attempt: Int) -> Unit)? = null
+    ): User {
         val payload = mutableMapOf("account_id" to accountId.trim())
         if (turnstileToken.isNotBlank()) payload["turnstile_token"] = turnstileToken
         val data = ApiClient.post(
             "/api/v1/auth/signin-account",
             payload,
-            retryOnTimeout = turnstileToken.isBlank()
+            retryOnTimeout = turnstileToken.isBlank(),
+            onRetry = onRetry
         ).use { res ->
             if (!res.isSuccessful) {
                 val message = extractError(res)
@@ -169,7 +181,7 @@ class AuthRepository(context: Context) {
         return user
     }
 
-    fun registerAnonymous(turnstileToken: String): User {
+    suspend fun registerAnonymous(turnstileToken: String): User {
         val data = ApiClient.postFast(
             "/api/v1/auth/register-anonymous",
             mapOf("turnstile_token" to turnstileToken)
@@ -183,18 +195,19 @@ class AuthRepository(context: Context) {
         return user
     }
 
-    fun resetPassword(email: String) {
+    suspend fun resetPassword(email: String, onRetry: ((attempt: Int) -> Unit)? = null) {
         val normalized = email.trim().lowercase()
         ApiClient.post(
             "/api/v1/auth/reset-password",
             mapOf("email" to normalized),
-            retryOnTimeout = true
+            retryOnTimeout = true,
+            onRetry = onRetry
         ).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))
         }
     }
 
-    fun refreshSession(): Boolean {
+    suspend fun refreshSession(): Boolean {
         val rt = getRefreshToken() ?: return false
         val res = try {
             ApiClient.post("/api/v1/auth/refresh", mapOf("refresh_token" to rt))
@@ -217,7 +230,7 @@ class AuthRepository(context: Context) {
      * password. Anonymous accounts must send a Turnstile token when the server
      * requires the security check.
      */
-    fun deleteAccount(password: String, turnstileToken: String) {
+    suspend fun deleteAccount(password: String, turnstileToken: String) {
         val token = getAccessToken() ?: throw Error("Not signed in.")
         val payload = mutableMapOf<String, Any>()
         if (password.isNotBlank()) payload["password"] = password
@@ -227,7 +240,7 @@ class AuthRepository(context: Context) {
         }
     }
 
-    fun logoutAllSessions() {
+    suspend fun logoutAllSessions() {
         val token = getAccessToken() ?: throw Error("Not signed in.")
         ApiClient.post("/api/v1/auth/logout-all", emptyMap(), token, retryOnTimeout = false).use { res ->
             if (!res.isSuccessful) throw Error(extractError(res))

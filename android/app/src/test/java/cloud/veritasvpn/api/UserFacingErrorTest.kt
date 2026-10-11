@@ -1,7 +1,9 @@
 package cloud.veritasvpn.api
 
+import cloud.veritasvpn.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.InterruptedIOException
 import java.net.ConnectException
@@ -12,41 +14,45 @@ import javax.net.ssl.SSLException
 
 class UserFacingErrorTest {
     @Test
-    fun socketTimeoutException_isTransientNetworkError() {
+    fun socketTimeoutException_mapsToTimeoutStringRes() {
         val error = SocketTimeoutException("timeout")
-        assert(error is SocketTimeoutException)
-        assertNotEquals("timeout", error.javaClass.simpleName)
+        assertEquals(R.string.error_server_timeout, UserFacingError.messageRes(error))
     }
 
     @Test
-    fun interruptedIOException_isTransientNetworkError() {
+    fun interruptedIOException_mapsToTimeoutStringRes() {
         val error = InterruptedIOException("timeout")
-        assert(error is InterruptedIOException)
-        assertNotEquals("timeout", error.javaClass.simpleName)
+        assertEquals(R.string.error_server_timeout, UserFacingError.messageRes(error))
     }
 
     @Test
-    fun unknownHostException_isTransientNetworkError() {
+    fun unknownHostException_mapsToCannotReachStringRes() {
         val error = UnknownHostException("Unable to resolve host")
-        assert(error is UnknownHostException)
+        assertEquals(R.string.error_cannot_reach_server, UserFacingError.messageRes(error))
     }
 
     @Test
-    fun connectException_isTransientNetworkError() {
+    fun connectException_mapsToCannotReachStringRes() {
         val error = ConnectException("Connection refused")
-        assert(error is ConnectException)
+        assertEquals(R.string.error_cannot_reach_server, UserFacingError.messageRes(error))
     }
 
     @Test
-    fun noRouteToHostException_isTransientNetworkError() {
+    fun noRouteToHostException_mapsToCannotReachStringRes() {
         val error = NoRouteToHostException("No route to host")
-        assert(error is NoRouteToHostException)
+        assertEquals(R.string.error_cannot_reach_server, UserFacingError.messageRes(error))
     }
 
     @Test
-    fun sslException_isNotTransientButMapped() {
+    fun sslException_mapsToSecureConnectionFailedStringRes() {
         val error = SSLException("SSL handshake failed")
-        assert(error is SSLException)
+        assertEquals(R.string.error_secure_connection_failed, UserFacingError.messageRes(error))
+    }
+
+    @Test
+    fun userVisibleError_returnsNullRes() {
+        val error = cloud.veritasvpn.auth.AuthRepository.Error("Incorrect email or password.")
+        assertNull(UserFacingError.messageRes(error))
     }
 
     @Test
@@ -61,6 +67,12 @@ class UserFacingErrorTest {
         val error = cloud.veritasvpn.billing.BillingRepository.Error("Device limit reached.")
         assert(error is UserVisibleError)
         assertEquals("Device limit reached.", error.userMessage)
+    }
+
+    @Test
+    fun unknownException_mapsToGenericStringRes() {
+        val error = RuntimeException("Some random error")
+        assertEquals(R.string.error_generic, UserFacingError.messageRes(error))
     }
 
     @Test
