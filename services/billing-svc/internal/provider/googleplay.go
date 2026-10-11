@@ -40,11 +40,14 @@ type SubscriptionPurchase struct {
 type PlayLineItem struct {
 	ProductID        string
 	BasePlanID       string
+	OfferID          string
+	OfferTags        []string
 	Expiry           time.Time
 	AutoRenewEnabled bool
 	PriceCents       int64
 	Currency         string
 	HasPrice         bool
+	InTrial          bool
 }
 
 // PlayClient fetches a subscription purchase from the Google Play Developer API.
@@ -263,7 +266,9 @@ func ParseSubscriptionPurchase(body []byte) (*SubscriptionPurchase, error) {
 				} `json:"recurringPrice"`
 			} `json:"autoRenewingPlan"`
 			OfferDetails *struct {
-				BasePlanID string `json:"basePlanId"`
+				BasePlanID string   `json:"basePlanId"`
+				OfferID    string   `json:"offerId"`
+				OfferTags  []string `json:"offerTags"`
 			} `json:"offerDetails"`
 		} `json:"lineItems"`
 	}
@@ -309,6 +314,18 @@ func ParseSubscriptionPurchase(body []byte) (*SubscriptionPurchase, error) {
 		}
 		if item.OfferDetails != nil {
 			line.BasePlanID = item.OfferDetails.BasePlanID
+			line.OfferID = item.OfferDetails.OfferID
+			line.OfferTags = item.OfferDetails.OfferTags
+			// Detect trial: offerId contains "trial" or offerTags contains "trial"
+			for _, tag := range line.OfferTags {
+				if strings.ToLower(tag) == "trial" {
+					line.InTrial = true
+					break
+				}
+			}
+			if !line.InTrial && strings.Contains(strings.ToLower(line.OfferID), "trial") {
+				line.InTrial = true
+			}
 		}
 		out.LineItems = append(out.LineItems, line)
 	}
