@@ -20,23 +20,36 @@ object OnboardingGate {
     }
 
     /**
+     * Should onboarding start? Returns true for new users who haven't completed onboarding
+     * and haven't accepted the disclosure yet.
+     */
+    fun shouldStart(disclosureAccepted: Boolean, onboardingDone: Boolean): Boolean {
+        return !onboardingDone && !disclosureAccepted
+    }
+
+    /**
+     * After accepting the disclosure, what's the next step?
+     * If VPN is already prepared, we're done. Otherwise, show the system dialog.
+     */
+    fun afterAccept(prepared: Boolean): Step {
+        return if (prepared) Step.DONE else Step.SHOW_SYSTEM_DIALOG
+    }
+
+    /**
      * Decide the next onboarding step.
      *
      * @param disclosureAccepted Whether the user accepted the VPN disclosure.
      * @param onboardingDone Whether the onboarding flow completed (accept or decline).
      * @param prepared Whether VpnService.prepare() returned null (already prepared).
-     * @param lockdownOn Whether Always-on + Block connections without VPN is enabled.
      */
     fun next(
         disclosureAccepted: Boolean,
         onboardingDone: Boolean,
-        prepared: Boolean,
-        lockdownOn: Boolean
+        prepared: Boolean
     ): Step {
         if (onboardingDone) return Step.SKIP
         if (!disclosureAccepted) return Step.SHOW_DISCLOSURE
-        // Existing upgraded users: disclosure accepted but onboarding not done yet.
-        // Skip onboarding for them since they already accepted disclosure before.
-        return Step.SKIP
+        // Disclosure accepted but onboarding not done: show system dialog or done
+        return afterAccept(prepared)
     }
 }

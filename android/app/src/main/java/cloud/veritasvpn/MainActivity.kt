@@ -958,15 +958,9 @@ class MainActivity : ComponentActivity() {
                     if (user != null) {
                         val disclosureAccepted = VpnSettings.vpnDisclosureAccepted(context)
                         val onboardingDone = VpnSettings.onboardingVpnDone(context)
-                        val step = OnboardingGate.next(
-                            disclosureAccepted = disclosureAccepted,
-                            onboardingDone = onboardingDone,
-                            prepared = false, // Will be checked in the onboarding LaunchedEffect
-                            lockdownOn = false
-                        )
-                        onboardingStep = step
-                        if (step != OnboardingGate.Step.SKIP) {
+                        if (OnboardingGate.shouldStart(disclosureAccepted, onboardingDone)) {
                             showOnboardingDisclosure = true
+                            onboardingStep = OnboardingGate.Step.SHOW_DISCLOSURE
                         }
                     }
                 }
@@ -980,15 +974,9 @@ class MainActivity : ComponentActivity() {
                         // After sign-in, check if onboarding is needed.
                         val disclosureAccepted = VpnSettings.vpnDisclosureAccepted(context)
                         val onboardingDone = VpnSettings.onboardingVpnDone(context)
-                        val step = OnboardingGate.next(
-                            disclosureAccepted = disclosureAccepted,
-                            onboardingDone = onboardingDone,
-                            prepared = false, // Will be checked in LaunchedEffect
-                            lockdownOn = false
-                        )
-                        onboardingStep = step
-                        if (step != OnboardingGate.Step.SKIP) {
+                        if (OnboardingGate.shouldStart(disclosureAccepted, onboardingDone)) {
                             showOnboardingDisclosure = true
+                            onboardingStep = OnboardingGate.Step.SHOW_DISCLOSURE
                         }
                     })
                 } else if (!BuildConfig.PLAY_BILLING && checkoutUrl != null) {
@@ -1048,13 +1036,7 @@ class MainActivity : ComponentActivity() {
                                         false
                                     }
                                     withContext(Dispatchers.Main) {
-                                        val lockdownOn = VpnKillSwitch.isLockdownEnabled(context, vpnPrepared = prepared)
-                                        onboardingStep = OnboardingGate.next(
-                                            disclosureAccepted = true,
-                                            onboardingDone = false,
-                                            prepared = prepared,
-                                            lockdownOn = lockdownOn
-                                        )
+                                        onboardingStep = OnboardingGate.afterAccept(prepared)
                                     }
                                 }
                             },

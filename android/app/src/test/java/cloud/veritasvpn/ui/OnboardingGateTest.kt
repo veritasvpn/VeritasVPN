@@ -1,16 +1,42 @@
 package cloud.veritasvpn.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OnboardingGateTest {
+    @Test
+    fun newUser_shouldStartOnboarding() {
+        assertTrue(OnboardingGate.shouldStart(disclosureAccepted = false, onboardingDone = false))
+    }
+
+    @Test
+    fun existingUserWithDisclosureAccepted_shouldNotStartOnboarding() {
+        assertFalse(OnboardingGate.shouldStart(disclosureAccepted = true, onboardingDone = false))
+    }
+
+    @Test
+    fun onboardingDone_shouldNotStartOnboarding() {
+        assertFalse(OnboardingGate.shouldStart(disclosureAccepted = false, onboardingDone = true))
+    }
+
+    @Test
+    fun afterAccept_notPrepared_showsSystemDialog() {
+        assertEquals(OnboardingGate.Step.SHOW_SYSTEM_DIALOG, OnboardingGate.afterAccept(prepared = false))
+    }
+
+    @Test
+    fun afterAccept_prepared_isDone() {
+        assertEquals(OnboardingGate.Step.DONE, OnboardingGate.afterAccept(prepared = true))
+    }
+
     @Test
     fun newUser_seesDisclosure() {
         val step = OnboardingGate.next(
             disclosureAccepted = false,
             onboardingDone = false,
-            prepared = false,
-            lockdownOn = false
+            prepared = false
         )
         assertEquals(OnboardingGate.Step.SHOW_DISCLOSURE, step)
     }
@@ -20,8 +46,7 @@ class OnboardingGateTest {
         val step = OnboardingGate.next(
             disclosureAccepted = true,
             onboardingDone = true,
-            prepared = true,
-            lockdownOn = true
+            prepared = true
         )
         assertEquals(OnboardingGate.Step.SKIP, step)
     }
@@ -33,46 +58,39 @@ class OnboardingGateTest {
         val step = OnboardingGate.next(
             disclosureAccepted = false,
             onboardingDone = true,
-            prepared = false,
-            lockdownOn = false
+            prepared = false
         )
         assertEquals(OnboardingGate.Step.SKIP, step)
     }
 
     @Test
-    fun existingUpgradedUser_skipsOnboarding() {
-        // User accepted disclosure before onboarding was added (upgraded from 0.2.91).
-        // disclosureAccepted=true, onboardingDone=false -> SKIP
+    fun acceptedDisclosure_notPrepared_seesSystemDialog() {
         val step = OnboardingGate.next(
             disclosureAccepted = true,
             onboardingDone = false,
-            prepared = false,
-            lockdownOn = false
+            prepared = false
         )
-        assertEquals(OnboardingGate.Step.SKIP, step)
+        assertEquals(OnboardingGate.Step.SHOW_SYSTEM_DIALOG, step)
     }
 
     @Test
-    fun existingUpgradedUser_prepared_skipsOnboarding() {
-        // Same as above but VPN is already prepared.
+    fun acceptedDisclosure_prepared_done() {
         val step = OnboardingGate.next(
             disclosureAccepted = true,
             onboardingDone = false,
-            prepared = true,
-            lockdownOn = false
+            prepared = true
         )
-        assertEquals(OnboardingGate.Step.SKIP, step)
+        assertEquals(OnboardingGate.Step.DONE, step)
     }
 
     @Test
-    fun lockdownOff_stillShowsDisclosureFirst() {
-        // Lockdown state doesn't affect the disclosure step.
+    fun consentRevoked_seesSystemDialog() {
+        // Another VPN app took over, so prepare() returns an intent again.
         val step = OnboardingGate.next(
-            disclosureAccepted = false,
+            disclosureAccepted = true,
             onboardingDone = false,
-            prepared = false,
-            lockdownOn = false
+            prepared = false
         )
-        assertEquals(OnboardingGate.Step.SHOW_DISCLOSURE, step)
+        assertEquals(OnboardingGate.Step.SHOW_SYSTEM_DIALOG, step)
     }
 }
