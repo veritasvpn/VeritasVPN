@@ -136,7 +136,7 @@ func main() {
 		BitcoinReadinessURL:  cfg.BitcoinReadinessURL,
 	})
 	if cfg.GooglePlayEnabled() {
-		playClient, err := provider.NewGooglePlayClient(cfg.GooglePlayPackageName, cfg.GooglePlayServiceAccountFile)
+		playClient, err := provider.NewGooglePlayClient(cfg.GooglePlayPackageName, cfg.GooglePlayServiceAccountFile, cfg.PlayTrialDays)
 		if err != nil {
 			log.Error("Google Play billing disabled because credentials could not be loaded", zap.Error(err))
 		} else {

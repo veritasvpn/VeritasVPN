@@ -34,7 +34,7 @@ func TestParseSubscriptionPurchase(t *testing.T) {
 	    "offerDetails": {"basePlanId": "monthly"}
 	  }]
 	}`)
-	got, err := ParseSubscriptionPurchase(body, time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC))
+	got, err := ParseSubscriptionPurchase(body, time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC), 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestGooglePlayClientUsesMockedGoogle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := newGooglePlayClient("cloud.veritasvpn", raw, apiSrv.URL, tokenSrv.URL)
+	client, err := newGooglePlayClient("cloud.veritasvpn", raw, apiSrv.URL, tokenSrv.URL, 7)
 	if err != nil {
 		t.Fatal(err)
 	}

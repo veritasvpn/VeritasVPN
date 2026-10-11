@@ -33,6 +33,7 @@ type Config struct {
 	GooglePlayServiceAccountFile string
 	GooglePlayRTDNAudience       string
 	GooglePlayRTDNServiceAccount string
+	PlayTrialDays                int
 
 	PremiumPriceUSDCents int64
 	PremiumPeriodDays    int
@@ -89,6 +90,7 @@ func Load() *Config {
 		GooglePlayServiceAccountFile: strings.TrimSpace(os.Getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON")),
 		GooglePlayRTDNAudience:       strings.TrimSpace(os.Getenv("GOOGLE_PLAY_RTDN_AUDIENCE")),
 		GooglePlayRTDNServiceAccount: strings.TrimSpace(os.Getenv("GOOGLE_PLAY_RTDN_PUSH_SERVICE_ACCOUNT")),
+		PlayTrialDays:                intEnvOrDefault("PLAY_TRIAL_DAYS", 7),
 
 		PremiumPriceUSDCents: int64EnvOrDefault("PREMIUM_PRICE_USD_CENTS", 300),
 		PremiumPeriodDays:    intEnvOrDefault("PREMIUM_PERIOD_DAYS", 30),
