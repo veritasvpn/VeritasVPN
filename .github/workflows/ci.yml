@@ -253,6 +253,10 @@ jobs:
       - name: Assemble and test Android app
         working-directory: android
         run: ./gradlew test assemblePlayDebug assembleDirectDebug --no-daemon
+      - name: Check for raw error messages in UI
+        run: |
+          chmod +x scripts/check-raw-error-ui.sh
+          bash scripts/check-raw-error-ui.sh
 
   validate-website-extension:
     name: Validate website and Chrome extension

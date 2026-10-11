@@ -492,17 +492,17 @@ fun AuthScreen(
                             modifier = Modifier.size(22.dp)
                         )
                         Spacer(Modifier.width(10.dp))
-                         Text(
-                             "Save this ID in a password manager or another secure place now. If you lose it, the account and its access cannot be recovered.",
-                             color = PaperMuted,
-                             fontSize = 14.sp,
-                             lineHeight = 20.sp,
-                             modifier = Modifier.weight(1f)
-             )
-         }
+                        Text(
+                            "Save this ID in a password manager or another secure place now. If you lose it, the account and its access cannot be recovered.",
+                            color = PaperMuted,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
 
-         Spacer(Modifier.height(16.dp))
-                     Button(
+                    Spacer(Modifier.height(16.dp))
+                    Button(
                         onClick = { onAuthenticated() },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(24.dp),

@@ -149,6 +149,13 @@ object ApiClient {
         httpClient: OkHttpClient = client,
         retryOnTimeout: Boolean = false,
         onRetry: ((attempt: Int) -> Unit)? = null
+    ): Response = executeWithRetryInternal(requestFactory, httpClient, retryOnTimeout, onRetry)
+
+    internal suspend fun executeWithRetryInternal(
+        requestFactory: () -> Request,
+        httpClient: OkHttpClient,
+        retryOnTimeout: Boolean,
+        onRetry: ((attempt: Int) -> Unit)?
     ): Response {
         var lastError: IOException? = null
         val maxRetries = 2
