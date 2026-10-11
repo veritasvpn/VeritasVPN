@@ -40,37 +40,28 @@ class OnboardingGateTest {
     }
 
     @Test
-    fun acceptedDisclosure_notPrepared_seesSystemDialog() {
+    fun existingUpgradedUser_skipsOnboarding() {
+        // User accepted disclosure before onboarding was added (upgraded from 0.2.91).
+        // disclosureAccepted=true, onboardingDone=false -> SKIP
         val step = OnboardingGate.next(
             disclosureAccepted = true,
             onboardingDone = false,
             prepared = false,
             lockdownOn = false
         )
-        assertEquals(OnboardingGate.Step.SHOW_SYSTEM_DIALOG, step)
+        assertEquals(OnboardingGate.Step.SKIP, step)
     }
 
     @Test
-    fun acceptedDisclosure_prepared_done() {
+    fun existingUpgradedUser_prepared_skipsOnboarding() {
+        // Same as above but VPN is already prepared.
         val step = OnboardingGate.next(
             disclosureAccepted = true,
             onboardingDone = false,
             prepared = true,
             lockdownOn = false
         )
-        assertEquals(OnboardingGate.Step.DONE, step)
-    }
-
-    @Test
-    fun consentRevoked_seesSystemDialog() {
-        // Another VPN app took over, so prepare() returns an intent again.
-        val step = OnboardingGate.next(
-            disclosureAccepted = true,
-            onboardingDone = false,
-            prepared = false,
-            lockdownOn = false
-        )
-        assertEquals(OnboardingGate.Step.SHOW_SYSTEM_DIALOG, step)
+        assertEquals(OnboardingGate.Step.SKIP, step)
     }
 
     @Test

@@ -35,7 +35,8 @@ object OnboardingGate {
     ): Step {
         if (onboardingDone) return Step.SKIP
         if (!disclosureAccepted) return Step.SHOW_DISCLOSURE
-        if (!prepared) return Step.SHOW_SYSTEM_DIALOG
-        return Step.DONE
+        // Existing upgraded users: disclosure accepted but onboarding not done yet.
+        // Skip onboarding for them since they already accepted disclosure before.
+        return Step.SKIP
     }
 }

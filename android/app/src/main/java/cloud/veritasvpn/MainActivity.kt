@@ -46,6 +46,7 @@ import cloud.veritasvpn.ui.ExternalCheckout
 import cloud.veritasvpn.ui.ShieldSettingsScreen
 import cloud.veritasvpn.ui.StealthSettingsScreen
 import cloud.veritasvpn.ui.TunnelSettingsScreen
+import cloud.veritasvpn.ui.OnboardingGate
 import cloud.veritasvpn.ui.theme.VeritasVPNTheme
 import cloud.veritasvpn.vpn.VeritasVpnService
 import cloud.veritasvpn.vpn.VpnKillSwitch
@@ -177,6 +178,7 @@ class MainActivity : ComponentActivity() {
                 var showPlans by remember { mutableStateOf(false) }
                 var showVpnDisclosure by remember { mutableStateOf(false) }
                 var showOnboardingDisclosure by remember { mutableStateOf(false) }
+                var onboardingStep by remember { mutableStateOf(OnboardingGate.Step.SKIP) }
                 var onboardingConsentIntent by remember { mutableStateOf<Intent?>(null) }
                 var deletingAccount by remember { mutableStateOf(false) }
                 var deleteAccountError by remember { mutableStateOf<String?>(null) }
@@ -956,7 +958,14 @@ class MainActivity : ComponentActivity() {
                     if (user != null) {
                         val disclosureAccepted = VpnSettings.vpnDisclosureAccepted(context)
                         val onboardingDone = VpnSettings.onboardingVpnDone(context)
-                        if (!disclosureAccepted && !onboardingDone) {
+                        val step = OnboardingGate.next(
+                            disclosureAccepted = disclosureAccepted,
+                            onboardingDone = onboardingDone,
+                            prepared = false, // Will be checked in the onboarding LaunchedEffect
+                            lockdownOn = false
+                        )
+                        onboardingStep = step
+                        if (step != OnboardingGate.Step.SKIP) {
                             showOnboardingDisclosure = true
                         }
                     }
@@ -969,10 +978,16 @@ class MainActivity : ComponentActivity() {
                         cancellationInProgress = false
                         user = authRepo.getStoredUser()
                         // After sign-in, check if onboarding is needed.
-                        // Show the disclosure if the user hasn't accepted it yet and onboarding isn't done.
                         val disclosureAccepted = VpnSettings.vpnDisclosureAccepted(context)
                         val onboardingDone = VpnSettings.onboardingVpnDone(context)
-                        if (!disclosureAccepted && !onboardingDone) {
+                        val step = OnboardingGate.next(
+                            disclosureAccepted = disclosureAccepted,
+                            onboardingDone = onboardingDone,
+                            prepared = false, // Will be checked in LaunchedEffect
+                            lockdownOn = false
+                        )
+                        onboardingStep = step
+                        if (step != OnboardingGate.Step.SKIP) {
                             showOnboardingDisclosure = true
                         }
                     })
@@ -983,36 +998,63 @@ class MainActivity : ComponentActivity() {
                         onRefreshPlan = { refreshBilling() }
                     )
                 } else if (showOnboardingDisclosure) {
-                    // First-run onboarding: show disclosure, then system consent dialog.
-                    // Don't auto-connect; just get the user to the dashboard.
-                    val disclosureAccepted = VpnSettings.vpnDisclosureAccepted(context)
-                    if (!disclosureAccepted) {
+                    // Drive the onboarding flow with LaunchedEffect to avoid side effects in composable body.
+                    LaunchedEffect(onboardingStep) {
+                        when (onboardingStep) {
+                            OnboardingGate.Step.SHOW_DISCLOSURE -> {
+                                // Stay on disclosure screen, wait for user action.
+                            }
+                            OnboardingGate.Step.SHOW_SYSTEM_DIALOG -> {
+                                // Call prepare() and launch the system dialog.
+                                val consentIntent = try {
+                                    withContext(Dispatchers.IO) {
+                                        VpnService.prepare(context)
+                                    }
+                                } catch (e: Exception) {
+                                    // If prepare() fails, mark onboarding as done and go to dashboard.
+                                    VpnSettings.setOnboardingVpnDone(context, true)
+                                    showOnboardingDisclosure = false
+                                    return@LaunchedEffect
+                                }
+                                if (consentIntent != null) {
+                                    // Show the system dialog.
+                                    onboardingConsentIntent = consentIntent
+                                    awaitingVpnConsent = true
+                                    vpnPermissionLauncher.launch(consentIntent)
+                                } else {
+                                    // Already prepared; onboarding is done.
+                                    VpnSettings.setOnboardingVpnDone(context, true)
+                                    showOnboardingDisclosure = false
+                                }
+                            }
+                            OnboardingGate.Step.DONE, OnboardingGate.Step.SKIP -> {
+                                // Should not reach here, but handle gracefully.
+                                VpnSettings.setOnboardingVpnDone(context, true)
+                                showOnboardingDisclosure = false
+                            }
+                        }
+                    }
+
+                    // Render the disclosure screen if needed.
+                    if (onboardingStep == OnboardingGate.Step.SHOW_DISCLOSURE) {
                         VpnDisclosureScreen(
                             onAccept = {
                                 VpnSettings.setVpnDisclosureAccepted(context, true)
-                                // Now call prepare() to get the system consent intent.
+                                // Move to next step: check if VPN is prepared.
                                 scope.launch(Dispatchers.IO) {
-                                    val consentIntent = try {
-                                        VpnService.prepare(context)
+                                    val prepared = try {
+                                        VpnService.prepare(context) == null
                                     } catch (e: Exception) {
-                                        withContext(Dispatchers.Main) {
-                                            // If prepare() fails, mark onboarding as done and go to dashboard.
-                                            VpnSettings.setOnboardingVpnDone(context, true)
-                                            showOnboardingDisclosure = false
-                                        }
-                                        return@launch
+                                        false
                                     }
                                     withContext(Dispatchers.Main) {
-                                        if (consentIntent != null) {
-                                            // Show the system dialog.
-                                            onboardingConsentIntent = consentIntent
-                                            awaitingVpnConsent = true
-                                            vpnPermissionLauncher.launch(consentIntent)
-                                        } else {
-                                            // Already prepared; onboarding is done.
-                                            VpnSettings.setOnboardingVpnDone(context, true)
-                                            showOnboardingDisclosure = false
-                                        }
+                                        val lockdownOn = VpnKillSwitch.isLockdownEnabled(context, vpnPrepared = prepared)
+                                        onboardingStep = OnboardingGate.next(
+                                            disclosureAccepted = true,
+                                            onboardingDone = false,
+                                            prepared = prepared,
+                                            lockdownOn = lockdownOn
+                                        )
                                     }
                                 }
                             },
@@ -1029,30 +1071,6 @@ class MainActivity : ComponentActivity() {
                             },
                             title = "Before you use VeritasVPN",
                         )
-                    } else {
-                        // Disclosure already accepted (e.g., from a previous session).
-                        // Just call prepare() and show the system dialog.
-                        scope.launch(Dispatchers.IO) {
-                            val consentIntent = try {
-                                VpnService.prepare(context)
-                            } catch (e: Exception) {
-                                withContext(Dispatchers.Main) {
-                                    VpnSettings.setOnboardingVpnDone(context, true)
-                                    showOnboardingDisclosure = false
-                                }
-                                return@launch
-                            }
-                            withContext(Dispatchers.Main) {
-                                if (consentIntent != null) {
-                                    onboardingConsentIntent = consentIntent
-                                    awaitingVpnConsent = true
-                                    vpnPermissionLauncher.launch(consentIntent)
-                                } else {
-                                    VpnSettings.setOnboardingVpnDone(context, true)
-                                    showOnboardingDisclosure = false
-                                }
-                            }
-                        }
                     }
                 } else if (showVpnDisclosure) {
                     VpnDisclosureScreen(
