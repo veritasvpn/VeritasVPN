@@ -244,6 +244,11 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 			currency = line.Currency
 		}
 	}
+	// Trials are free: set amount to 0 and mark as trial
+	isTrial := line.InTrial
+	if isTrial {
+		amount = 0
+	}
 	payment := &model.PaymentRecord{
 		SubscriptionID:        sub.ID,
 		AccountID:             accountID,
@@ -254,6 +259,7 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 		PeriodDays:            product.PeriodDays,
 		Provider:              model.PaymentGooglePlay,
 		Status:                playPaymentStatus(state, forceRevoke, entitled),
+		IsTrial:               isTrial,
 	}
 	if existing != nil {
 		payment.ID = existing.ID
@@ -277,7 +283,7 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 		revokePlaySubscription(sub, now, state, forceRevoke)
 	}
 
-	event := playEvent(before, sub)
+	event := playEvent(before, sub, payment.IsTrial)
 	premium := sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
 	result := PlayVerifyResult{
 		IsPremium:   premium,
@@ -418,7 +424,7 @@ func snapPlay(sub *model.Subscription) playSnap {
 	}
 }
 
-func playEvent(before playSnap, sub *model.Subscription) string {
+func playEvent(before playSnap, sub *model.Subscription, isTrial bool) string {
 	after := snapPlay(sub)
 	if before == after {
 		return "none"
@@ -427,6 +433,19 @@ func playEvent(before playSnap, sub *model.Subscription) string {
 	nowPremium := after.tier == model.TierPremium && after.status == model.StatusActive
 	if wasPremium && !nowPremium {
 		return "subscription.expired"
+	}
+	// Trial started: new premium subscription with is_trial flag
+	if isTrial && nowPremium && !wasPremium {
+		return "subscription.trial_started"
+	}
+	// Trial converted to paid: was in trial period, now in paid period
+	if !isTrial && nowPremium && before.tier == model.TierPremium {
+		// Check if this is a conversion from trial by looking at the payment history
+		// For now, we'll use a simpler heuristic: if we're not in trial but we have premium,
+		// and the period changed, it might be a conversion
+		if !before.end.Equal(after.end) {
+			return "subscription.converted"
+		}
 	}
 	if nowPremium && (!before.end.Equal(after.end) || before.tier != model.TierPremium || before.status != model.StatusActive) {
 		return "subscription.renewed"

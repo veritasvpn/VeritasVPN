@@ -34,7 +34,7 @@ class DirectStoreBilling(
         scope.cancel()
     }
 
-    override fun purchase(activity: Activity, planId: String, accountId: String, callbacks: StoreBillingCallbacks) {
+    override fun purchase(activity: Activity, planId: String, accountId: String, callbacks: StoreBillingCallbacks, trialAllowed: Boolean) {
         scope.launch {
             try {
                 val url = billing.createDirectCheckout(planId)

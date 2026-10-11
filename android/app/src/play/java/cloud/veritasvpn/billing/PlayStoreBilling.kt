@@ -97,7 +97,7 @@ class PlayStoreBilling(
         if (client.isReady) client.endConnection()
     }
 
-    override fun purchase(activity: Activity, planId: String, accountId: String, callbacks: StoreBillingCallbacks) {
+    override fun purchase(activity: Activity, planId: String, accountId: String, callbacks: StoreBillingCallbacks, trialAllowed: Boolean) {
         if (closed.get()) {
             callbacks.onError("Google Play Billing isn't available.")
             return
@@ -133,7 +133,7 @@ class PlayStoreBilling(
                 return@queryProductDetailsAsync
             }
             val details = detailsResult.productDetailsList.firstOrNull { it.productId == entry.productId }
-            val offerChoice = details?.let { offerToken(it, entry.basePlanId) }
+            val offerChoice = details?.let { offerToken(it, entry.basePlanId, trialAllowed) }
             if (details == null || offerChoice == null || offerChoice.offerToken.isBlank()) {
                 main.post {
                     callbacks.onError("This subscription isn't available in Google Play yet.")
@@ -188,6 +188,55 @@ class PlayStoreBilling(
         val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         runCatching { activity.startActivity(intent) }
             .onFailure { appContext.startActivity(intent) }
+    }
+
+    override fun queryTrialOffers(planIds: List<String>, callbacks: StoreBillingCallbacks) {
+        if (!client.isReady || planIds.isEmpty()) {
+            main.post { callbacks.onTrialOffers(emptyMap()) }
+            return
+        }
+        io.execute {
+            if (closed.get()) return@execute
+            val offers = mutableMapOf<String, TrialOffer>()
+            for (planId in planIds) {
+                val entry = PlayCatalog.byPlanId(planId) ?: continue
+                val params = QueryProductDetailsParams.newBuilder()
+                    .setProductList(
+                        listOf(
+                            QueryProductDetailsParams.Product.newBuilder()
+                                .setProductId(entry.productId)
+                                .setProductType(BillingClient.ProductType.SUBS)
+                                .build(),
+                        ),
+                    )
+                    .build()
+                val detailsResult = java.util.concurrent.atomic.AtomicReference<ProductDetails?>()
+                val errorResult = java.util.concurrent.atomic.AtomicReference<String?>()
+                val done = java.util.concurrent.CountDownLatch(1)
+                client.queryProductDetailsAsync(params) { result, detailsResultList ->
+                    if (result.responseCode != BillingClient.BillingResponseCode.OK) {
+                        errorResult.set(billingMessage(result))
+                    } else {
+                        detailsResult.set(detailsResultList.productDetailsList.firstOrNull { it.productId == entry.productId })
+                    }
+                    done.countDown()
+                }
+                done.await(20, java.util.concurrent.TimeUnit.SECONDS)
+                val error = errorResult.get()
+                if (error != null) continue
+                val details = detailsResult.get() ?: continue
+                val offerChoice = offerToken(details, entry.basePlanId, true) ?: continue
+                if (offerChoice.trialDays != null && offerChoice.priceAfterTrial != null && offerChoice.period != null) {
+                    offers[planId] = TrialOffer(
+                        planId = planId,
+                        trialDays = offerChoice.trialDays,
+                        priceAfterTrial = offerChoice.priceAfterTrial,
+                        period = offerChoice.period
+                    )
+                }
+            }
+            main.post { callbacks.onTrialOffers(offers) }
+        }
     }
 
     private fun restoreOwned(callbacks: StoreBillingCallbacks) {
@@ -293,31 +342,33 @@ class PlayStoreBilling(
         val period: String?
     )
 
-    private fun offerToken(details: ProductDetails, basePlanId: String): OfferChoice? {
+    private fun offerToken(details: ProductDetails, basePlanId: String, trialAllowed: Boolean): OfferChoice? {
         val offers = details.subscriptionOfferDetails ?: return null
         val matches = offers.filter { it.basePlanId == basePlanId }
         
-        // Prefer trial offer (offerId contains "trial" or has free phase)
-        val trialOffer = matches.firstOrNull { offer ->
-            offer.offerId?.contains("trial", ignoreCase = true) == true ||
-            offer.pricingPhases?.pricingPhaseList?.any { it.priceAmountMicros == 0L } == true
-        }
-        
-        if (trialOffer != null) {
-            val phases = trialOffer.pricingPhases?.pricingPhaseList ?: emptyList()
-            val freePhase = phases.firstOrNull { it.priceAmountMicros == 0L }
-            val paidPhase = phases.firstOrNull { it.priceAmountMicros > 0L }
-            
-            val trialDays = freePhase?.let { phase ->
-                parseBillingPeriodDays(phase.billingPeriod)
+        // Only prefer trial offer if trialAllowed is true
+        if (trialAllowed) {
+            val trialOffer = matches.firstOrNull { offer ->
+                offer.offerId?.contains("trial", ignoreCase = true) == true ||
+                offer.pricingPhases?.pricingPhaseList?.any { it.priceAmountMicros == 0L } == true
             }
             
-            return OfferChoice(
-                offerToken = trialOffer.offerToken,
-                trialDays = trialDays,
-                priceAfterTrial = paidPhase?.formattedPrice,
-                period = paidPhase?.billingPeriod
-            )
+            if (trialOffer != null) {
+                val phases = trialOffer.pricingPhases?.pricingPhaseList ?: emptyList()
+                val freePhase = phases.firstOrNull { it.priceAmountMicros == 0L }
+                val paidPhase = phases.firstOrNull { it.priceAmountMicros > 0L }
+                
+                val trialDays = freePhase?.let { phase ->
+                    parseBillingPeriodDays(phase.billingPeriod)
+                }
+                
+                return OfferChoice(
+                    offerToken = trialOffer.offerToken,
+                    trialDays = trialDays,
+                    priceAfterTrial = paidPhase?.formattedPrice,
+                    period = paidPhase?.billingPeriod
+                )
+            }
         }
         
         // Fall back to base offer

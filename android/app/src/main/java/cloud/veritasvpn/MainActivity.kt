@@ -222,6 +222,7 @@ class MainActivity : ComponentActivity() {
                 var checkoutUrl by remember { mutableStateOf<String?>(null) }
                 var playPurchasePending by remember { mutableStateOf(false) }
                 var waitingForCheckoutSettlement by remember { mutableStateOf(false) }
+                var trialOffers by remember { mutableStateOf<Map<String, cloud.veritasvpn.billing.TrialOffer>>(emptyMap()) }
                 val observedBillingReturnVersion = billingReturnVersion
 
                 fun disconnectVpnService() {
@@ -389,7 +390,8 @@ class MainActivity : ComponentActivity() {
                     val activity = context as? Activity ?: return
                     checkoutMethod = "store"
                     billingError = null
-                    storeBilling.purchase(activity, planId, accountId, storeCallbacks())
+                    val trialAllowed = billingStatus?.trialEligible == true && trialOffers.containsKey(planId)
+                    storeBilling.purchase(activity, planId, accountId, storeCallbacks(), trialAllowed)
                 }
 
                 LaunchedEffect(user?.accountId) {
@@ -977,6 +979,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Query trial offers when plans screen is shown (Play billing only)
+                LaunchedEffect(showPlans, user?.accountId) {
+                    if (!showPlans || !BuildConfig.PLAY_BILLING || user == null) return@LaunchedEffect
+                    val planIds = listOf("premium_monthly", "premium_annual")
+                    storeBilling.queryTrialOffers(planIds, object : StoreBillingCallbacks {
+                        override fun onTrialOffers(offers: Map<String, cloud.veritasvpn.billing.TrialOffer>) {
+                            trialOffers = offers
+                        }
+                    })
+                }
+
                 if (user == null) {
                     AuthScreen(onAuthenticated = {
                         billingStatus = null
@@ -1197,6 +1210,7 @@ class MainActivity : ComponentActivity() {
                         playPurchasePending = playPurchasePending,
                         deletingAccount = deletingAccount,
                         deleteError = deleteAccountError,
+                        trialOffers = trialOffers,
                         onBack = { showPlans = false },
                         onRefresh = { refreshBilling() },
                         onPurchase = { plan -> startStorePurchase(plan) },
