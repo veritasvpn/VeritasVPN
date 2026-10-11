@@ -50,9 +50,9 @@ class UserFacingErrorTest {
     }
 
     @Test
-    fun userVisibleError_returnsNullRes() {
+    fun userVisibleError_mapsToGenericRes() {
         val error = cloud.veritasvpn.auth.AuthRepository.Error("Incorrect email or password.")
-        assertNull(UserFacingError.messageRes(error))
+        assertEquals(R.string.error_generic, UserFacingError.messageRes(error))
     }
 
     @Test

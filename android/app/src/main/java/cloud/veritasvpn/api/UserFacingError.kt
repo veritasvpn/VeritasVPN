@@ -18,9 +18,8 @@ object UserFacingError {
     private const val TAG = "VeritasVPN.ErrorMapper"
 
     @StringRes
-    fun messageRes(error: Throwable): Int? {
+    fun messageRes(error: Throwable): Int {
         return when (error) {
-            is UserVisibleError -> null
             is SocketTimeoutException,
             is InterruptedIOException -> R.string.error_server_timeout
             is UnknownHostException,
@@ -35,7 +34,6 @@ object UserFacingError {
         if (error is UserVisibleError) {
             return error.userMessage
         }
-        val resId = messageRes(error) ?: return error.message ?: context.getString(R.string.error_generic)
-        return context.getString(resId)
+        return context.getString(messageRes(error))
     }
 }
