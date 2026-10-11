@@ -108,8 +108,8 @@ func (p *Postgres) CancelSubscription(ctx context.Context, accountID string) err
 
 func (p *Postgres) CreatePaymentRecord(ctx context.Context, pr *model.PaymentRecord) error {
 	query := `INSERT INTO payment_records (subscription_id, account_id, amount, currency,
-	           status, provider_transaction_id, plan_id, period_days, created_at, provider)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	           status, provider_transaction_id, plan_id, period_days, created_at, provider, is_trial)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	           ON CONFLICT (provider_transaction_id) DO UPDATE SET
 	               provider_transaction_id = EXCLUDED.provider_transaction_id
 	           RETURNING id, created_at`
@@ -122,19 +122,19 @@ func (p *Postgres) CreatePaymentRecord(ctx context.Context, pr *model.PaymentRec
 
 	return p.pool.QueryRow(ctx, query,
 		pr.SubscriptionID, pr.AccountID, pr.Amount, pr.Currency,
-		pr.Status, pr.ProviderTransactionID, pr.PlanID, pr.PeriodDays, pr.CreatedAt, providerName,
+		pr.Status, pr.ProviderTransactionID, pr.PlanID, pr.PeriodDays, pr.CreatedAt, providerName, pr.IsTrial,
 	).Scan(&pr.ID, &pr.CreatedAt)
 }
 
 func (p *Postgres) GetPaymentByProviderTxn(ctx context.Context, providerTxnID string) (*model.PaymentRecord, error) {
 	query := `SELECT id, subscription_id, COALESCE(account_id, ''), amount, currency, status,
-	           provider_transaction_id, plan_id, period_days, created_at
+	           provider_transaction_id, plan_id, period_days, created_at, COALESCE(is_trial, false)
 	           FROM payment_records WHERE provider_transaction_id = $1`
 
 	pr := &model.PaymentRecord{}
 	err := p.pool.QueryRow(ctx, query, providerTxnID).Scan(
 		&pr.ID, &pr.SubscriptionID, &pr.AccountID, &pr.Amount, &pr.Currency,
-		&pr.Status, &pr.ProviderTransactionID, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt,
+		&pr.Status, &pr.ProviderTransactionID, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt, &pr.IsTrial,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -150,14 +150,14 @@ func (p *Postgres) GetPaymentByProviderTxn(ctx context.Context, providerTxnID st
 // BTCPay, so normal plan reads remain local and fast.
 func (p *Postgres) GetLatestPendingPayment(ctx context.Context, accountID string) (*model.PaymentRecord, error) {
 	query := `SELECT id, subscription_id, COALESCE(account_id, ''), amount, currency, status,
-	          provider_transaction_id, plan_id, period_days, created_at
+	          provider_transaction_id, plan_id, period_days, created_at, COALESCE(is_trial, false)
 	          FROM payment_records
 	          WHERE account_id = $1 AND status = $2
 	          ORDER BY created_at DESC LIMIT 1`
 	pr := &model.PaymentRecord{}
 	err := p.pool.QueryRow(ctx, query, accountID, model.PaymentPending).Scan(
 		&pr.ID, &pr.SubscriptionID, &pr.AccountID, &pr.Amount, &pr.Currency,
-		&pr.Status, &pr.ProviderTransactionID, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt,
+		&pr.Status, &pr.ProviderTransactionID, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt, &pr.IsTrial,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, pgx.ErrNoRows
@@ -174,7 +174,7 @@ const purchaseHistoryLimit = 100
 // newest first. It does not select invoice or transaction identifiers.
 func (p *Postgres) ListAccountPayments(ctx context.Context, accountID string) ([]model.PaymentRecord, error) {
 	query := `SELECT pr.amount, pr.currency, pr.status, COALESCE(pr.plan_id, ''), pr.period_days, pr.created_at,
-	                 COALESCE(pr.provider, 'btcpay')
+	                 COALESCE(pr.provider, 'btcpay'), COALESCE(pr.is_trial, false)
 	          FROM payment_records pr
 	          WHERE pr.account_id = $1
 	             OR (
@@ -192,7 +192,7 @@ func (p *Postgres) ListAccountPayments(ctx context.Context, accountID string) ([
 	out := make([]model.PaymentRecord, 0)
 	for rows.Next() {
 		var pr model.PaymentRecord
-		if err := rows.Scan(&pr.Amount, &pr.Currency, &pr.Status, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt, &pr.Provider); err != nil {
+		if err := rows.Scan(&pr.Amount, &pr.Currency, &pr.Status, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt, &pr.Provider, &pr.IsTrial); err != nil {
 			return nil, fmt.Errorf("scan account payment: %w", err)
 		}
 		out = append(out, pr)
@@ -460,8 +460,8 @@ func (p *Postgres) UpdateGooglePlay(
 	}
 
 	upsert := `INSERT INTO payment_records (subscription_id, account_id, amount, currency,
-	           status, provider_transaction_id, plan_id, period_days, created_at, provider)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	           status, provider_transaction_id, plan_id, period_days, created_at, provider, is_trial)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	           ON CONFLICT (provider_transaction_id) DO UPDATE SET
 	               status = EXCLUDED.status,
 	               amount = EXCLUDED.amount,
@@ -469,6 +469,7 @@ func (p *Postgres) UpdateGooglePlay(
 	               plan_id = EXCLUDED.plan_id,
 	               period_days = EXCLUDED.period_days,
 	               provider = EXCLUDED.provider,
+	               is_trial = EXCLUDED.is_trial,
 	               subscription_id = EXCLUDED.subscription_id,
 	               account_id = EXCLUDED.account_id`
 	createdAt := time.Now().UTC()
@@ -478,7 +479,7 @@ func (p *Postgres) UpdateGooglePlay(
 	if _, err := tx.Exec(ctx, upsert,
 		payment.SubscriptionID, payment.AccountID, payment.Amount, payment.Currency,
 		payment.Status, payment.ProviderTransactionID, payment.PlanID, payment.PeriodDays,
-		createdAt, model.PaymentGooglePlay,
+		createdAt, model.PaymentGooglePlay, payment.IsTrial,
 	); err != nil {
 		return "", fmt.Errorf("upsert google play payment: %w", err)
 	}

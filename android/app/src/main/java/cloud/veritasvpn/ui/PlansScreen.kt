@@ -49,6 +49,7 @@ fun AccountScreen(
     playPurchasePending: Boolean = false,
     deletingAccount: Boolean = false,
     deleteError: String? = null,
+    trialOffers: Map<String, cloud.veritasvpn.billing.TrialOffer> = emptyMap(),
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onPurchase: (String) -> Unit,
@@ -208,8 +209,9 @@ fun AccountScreen(
             emphasized = true
         )
         
-        // Show trial messaging if eligible
-        if (!premium && !paymentPending && billingStatus?.trialEligible == true && billingStatus.trialDays != null) {
+        // Show trial messaging if eligible (only for Play billing)
+        val trialOffer = if (playBilling) trialOffers[selectedPlan] else null
+        if (!premium && !paymentPending && billingStatus?.trialEligible == true && trialOffer != null) {
             Spacer(Modifier.height(12.dp))
             Card(
                 Modifier.fillMaxWidth(),
@@ -219,14 +221,14 @@ fun AccountScreen(
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Text(
-                        "${billingStatus.trialDays} days free",
+                        "${trialOffer.trialDays} days free",
                         color = CyanHover,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Try Premium free for ${billingStatus.trialDays} days, then ${billingStatus.trialPriceAfter ?: if (selectedPlan == "premium_annual") "$30/year" else "$3/month"}. Cancel anytime in Google Play.",
+                        "Try Premium free for ${trialOffer.trialDays} days, then ${trialOffer.priceAfterTrial}/${trialOffer.period}. Cancel anytime in Google Play.",
                         color = PaperMuted,
                         fontSize = 13.sp,
                         lineHeight = 19.sp
@@ -258,7 +260,7 @@ fun AccountScreen(
                 Text(
                     when {
                         checkoutMethod != null -> stringResource(R.string.pay_button_busy)
-                        billingStatus?.trialEligible == true && billingStatus.trialDays != null -> "Start free trial"
+                        playBilling && billingStatus?.trialEligible == true && trialOffers[selectedPlan] != null -> "Start free trial"
                         else -> stringResource(R.string.pay_button_idle)
                     },
                     color = Color.White,

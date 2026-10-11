@@ -24,7 +24,7 @@ class DirectStoreBilling(
 
     override fun close() {}
 
-    override fun purchase(activity: Activity, planId: String, accountId: String, callbacks: StoreBillingCallbacks) {
+    override fun purchase(activity: Activity, planId: String, accountId: String, callbacks: StoreBillingCallbacks, trialAllowed: Boolean) {
         try {
             callbacks.onCheckoutUrl(billing.createDirectCheckout(planId))
         } catch (e: SessionExpiredException) {

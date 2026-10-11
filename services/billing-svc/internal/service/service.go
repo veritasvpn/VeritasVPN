@@ -200,17 +200,6 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 	// Determine trial eligibility: user is eligible if they've never had a trial
 	// and have no payment history (or only failed payments)
 	trialEligible := isTrialEligible(recorded)
-	var trialDays *int
-	var trialPriceAfter *string
-	if trialEligible && sub.PaymentMethod == "google_play" {
-		// Get trial details from Play catalog
-		if plan, ok := model.PlayProductByID(sub.PlanID); ok {
-			days := 7 // Default 7-day trial
-			trialDays = &days
-			priceStr := formatPrice(plan.PriceCents)
-			trialPriceAfter = &priceStr
-		}
-	}
 
 	return &model.StatusResponse{
 		AccountID:          sub.AccountID,
@@ -230,28 +219,17 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		PollAfterSeconds:   paymentStatePollAfter(paymentState),
 		Payments:           model.PurchaseHistoryFrom(recorded),
 		TrialEligible:      trialEligible,
-		TrialDays:          trialDays,
-		TrialPriceAfter:    trialPriceAfter,
 	}, nil
 }
 
 func isTrialEligible(payments []model.PaymentRecord) bool {
 	for _, p := range payments {
 		// If user has any successful trial or payment, they're not eligible
-		if p.Status == "completed" || p.Status == "trial" {
+		if p.Status == "completed" || p.IsTrial {
 			return false
 		}
 	}
 	return true
-}
-
-func formatPrice(cents int64) string {
-	dollars := cents / 100
-	remaining := cents % 100
-	if remaining == 0 {
-		return fmt.Sprintf("$%d", dollars)
-	}
-	return fmt.Sprintf("$%d.%02d", dollars, remaining)
 }
 
 func (s *BillingService) reconcilePendingPayment(ctx context.Context, accountID string) (string, error) {
