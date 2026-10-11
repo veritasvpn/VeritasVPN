@@ -24,6 +24,7 @@ object VpnSettings {
     private const val KEY_SHARE_DIAGNOSTICS = "share_diagnostics"
     private const val KEY_LAST_ERROR = "last_error"
     private const val KEY_VPN_DISCLOSURE_ACCEPTED = "vpn_disclosure_accepted"
+    private const val KEY_ONBOARDING_VPN_DONE = "onboarding_vpn_done"
 
     /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
     val EXCLUDE_LAN_ALLOWED_IPS: List<String> = listOf(
@@ -101,6 +102,14 @@ object VpnSettings {
 
     fun setVpnDisclosureAccepted(context: Context, accepted: Boolean) {
         prefs(context).edit().putBoolean(KEY_VPN_DISCLOSURE_ACCEPTED, accepted).apply()
+    }
+
+    /** True after the first-run onboarding VPN consent step completes (accept or decline). */
+    fun onboardingVpnDone(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_ONBOARDING_VPN_DONE, false)
+
+    fun setOnboardingVpnDone(context: Context, done: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ONBOARDING_VPN_DONE, done).apply()
     }
 
     fun lastError(context: Context): String =
