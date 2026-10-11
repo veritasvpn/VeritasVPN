@@ -17,6 +17,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import cloud.veritasvpn.api.ApiClient
@@ -177,8 +178,8 @@ class MainActivity : ComponentActivity() {
                 }
                 var showPlans by remember { mutableStateOf(false) }
                 var showVpnDisclosure by remember { mutableStateOf(false) }
-                var showOnboardingDisclosure by remember { mutableStateOf(false) }
-                var onboardingStep by remember { mutableStateOf(OnboardingGate.Step.SKIP) }
+                var showOnboardingDisclosure by rememberSaveable { mutableStateOf(false) }
+                var onboardingStep by rememberSaveable { mutableStateOf(OnboardingGate.Step.SKIP) }
                 var onboardingConsentIntent by remember { mutableStateOf<Intent?>(null) }
                 var deletingAccount by remember { mutableStateOf(false) }
                 var deleteAccountError by remember { mutableStateOf<String?>(null) }
@@ -1051,7 +1052,7 @@ class MainActivity : ComponentActivity() {
                                     statusMsg = "Could not open the privacy policy."
                                 }
                             },
-                            title = "Before you use VeritasVPN",
+                            title = context.getString(R.string.onboarding_disclosure_title),
                         )
                     }
                 } else if (showVpnDisclosure) {
