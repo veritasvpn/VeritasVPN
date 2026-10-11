@@ -53,6 +53,48 @@ func TestParseSubscriptionPurchase(t *testing.T) {
 	}
 }
 
+func TestParseSubscriptionPurchase_TrialInsideWindow(t *testing.T) {
+	// Trial started 3 days ago, within 7-day window → InTrial=true
+	body := []byte(`{
+	  "startTime":"2026-09-30T00:00:00Z",
+	  "subscriptionState":"SUBSCRIPTION_STATE_ACTIVE",
+	  "lineItems":[{
+	    "productId":"premium_monthly",
+	    "expiryTime":"2026-11-01T00:00:00Z",
+	    "offerDetails":{"basePlanId":"monthly","offerId":"free-trial-7d","offerTags":["trial"]}
+	  }]
+	}`)
+	now := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC) // 3 days after start
+	got, err := ParseSubscriptionPurchase(body, now, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.LineItems) != 1 || !got.LineItems[0].InTrial {
+		t.Fatalf("expected InTrial=true, got %+v", got.LineItems)
+	}
+}
+
+func TestParseSubscriptionPurchase_TrialOutsideWindow(t *testing.T) {
+	// Trial started 8 days ago, outside 7-day window → InTrial=false
+	body := []byte(`{
+	  "startTime":"2026-09-25T00:00:00Z",
+	  "subscriptionState":"SUBSCRIPTION_STATE_ACTIVE",
+	  "lineItems":[{
+	    "productId":"premium_monthly",
+	    "expiryTime":"2026-11-01T00:00:00Z",
+	    "offerDetails":{"basePlanId":"monthly","offerId":"free-trial-7d","offerTags":["trial"]}
+	  }]
+	}`)
+	now := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC) // 8 days after start
+	got, err := ParseSubscriptionPurchase(body, now, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.LineItems) != 1 || got.LineItems[0].InTrial {
+		t.Fatalf("expected InTrial=false, got %+v", got.LineItems)
+	}
+}
+
 func TestGooglePlayClientUsesMockedGoogle(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

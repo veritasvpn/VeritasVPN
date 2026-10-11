@@ -386,6 +386,151 @@ func TestGooglePlayRTDNRevokeRefunds(t *testing.T) {
 	}
 }
 
+func TestPlayTrialStart(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	expiry := now.Add(7 * 24 * time.Hour)
+	store := newMemPlayStore()
+	purchase := &provider.SubscriptionPurchase{
+		ObfuscatedAccountID: "acc-1",
+		State:               "SUBSCRIPTION_STATE_ACTIVE",
+		LineItems: []provider.PlayLineItem{{
+			ProductID: "premium_monthly",
+			Expiry:    expiry,
+			InTrial:   true,
+		}},
+	}
+	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: purchase}
+	var gotSubject string
+	var gotPayload map[string]interface{}
+	play := NewPlayBilling(testLog(t), store, client, allowPush{}, func(subject string, payload map[string]interface{}) {
+		gotSubject = subject
+		gotPayload = payload
+	})
+	play.now = func() time.Time { return now }
+
+	_, err := play.Verify(context.Background(), "acc-1", "premium_monthly", "token-trial")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotSubject != "subscription.renewed" {
+		t.Fatalf("subject = %q, want subscription.renewed", gotSubject)
+	}
+	if trial, _ := gotPayload["trial"].(bool); !trial {
+		t.Fatalf("trial flag not set in payload: %+v", gotPayload)
+	}
+	if store.pays["token-trial"].Amount != 0 {
+		t.Fatalf("trial amount = %d, want 0", store.pays["token-trial"].Amount)
+	}
+	if !store.pays["token-trial"].IsTrial {
+		t.Fatalf("IsTrial = false, want true")
+	}
+}
+
+func TestPlayTrialConversion(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	expiry := now.Add(30 * 24 * time.Hour)
+	store := newMemPlayStore()
+	// First: trial
+	trialPurchase := &provider.SubscriptionPurchase{
+		ObfuscatedAccountID: "acc-1",
+		State:               "SUBSCRIPTION_STATE_ACTIVE",
+		LineItems: []provider.PlayLineItem{{
+			ProductID: "premium_monthly",
+			Expiry:    now.Add(7 * 24 * time.Hour),
+			InTrial:   true,
+		}},
+	}
+	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: trialPurchase}
+	play := NewPlayBilling(testLog(t), store, client, allowPush{}, func(string, map[string]interface{}) {})
+	play.now = func() time.Time { return now }
+
+	_, err := play.Verify(context.Background(), "acc-1", "premium_monthly", "token-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Then: conversion (paid, no longer in trial)
+	paidPurchase := &provider.SubscriptionPurchase{
+		ObfuscatedAccountID: "acc-1",
+		State:               "SUBSCRIPTION_STATE_ACTIVE",
+		LineItems: []provider.PlayLineItem{{
+			ProductID: "premium_monthly",
+			Expiry:    expiry,
+			InTrial:   false,
+			HasPrice:  true,
+			PriceCents: 300,
+			Currency:  "usd",
+		}},
+	}
+	client.purchase = paidPurchase
+	var gotSubject string
+	var gotPayload map[string]interface{}
+	play.publish = func(subject string, payload map[string]interface{}) {
+		gotSubject = subject
+		gotPayload = payload
+	}
+
+	_, err = play.Verify(context.Background(), "acc-1", "premium_monthly", "token-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotSubject != "subscription.renewed" {
+		t.Fatalf("subject = %q, want subscription.renewed", gotSubject)
+	}
+	if converted, _ := gotPayload["converted"].(bool); !converted {
+		t.Fatalf("converted flag not set in payload: %+v", gotPayload)
+	}
+	if store.pays["token-1"].Amount != 300 {
+		t.Fatalf("paid amount = %d, want 300", store.pays["token-1"].Amount)
+	}
+	if store.pays["token-1"].IsTrial {
+		t.Fatalf("IsTrial = true after conversion, want false")
+	}
+}
+
+func TestPlayPlainRenewal(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	expiry := now.Add(30 * 24 * time.Hour)
+	store := newMemPlayStore()
+	purchase := &provider.SubscriptionPurchase{
+		ObfuscatedAccountID: "acc-1",
+		State:               "SUBSCRIPTION_STATE_ACTIVE",
+		LineItems: []provider.PlayLineItem{{
+			ProductID: "premium_monthly",
+			Expiry:    expiry,
+			InTrial:   false,
+			HasPrice:  true,
+			PriceCents: 300,
+			Currency:  "usd",
+		}},
+	}
+	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: purchase}
+	var gotSubject string
+	var gotPayload map[string]interface{}
+	play := NewPlayBilling(testLog(t), store, client, allowPush{}, func(subject string, payload map[string]interface{}) {
+		gotSubject = subject
+		gotPayload = payload
+	})
+	play.now = func() time.Time { return now }
+
+	_, err := play.Verify(context.Background(), "acc-1", "premium_monthly", "token-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotSubject != "subscription.renewed" {
+		t.Fatalf("subject = %q, want subscription.renewed", gotSubject)
+	}
+	if _, ok := gotPayload["trial"]; ok {
+		t.Fatalf("trial flag should not be set for plain renewal: %+v", gotPayload)
+	}
+	if _, ok := gotPayload["converted"]; ok {
+		t.Fatalf("converted flag should not be set for plain renewal: %+v", gotPayload)
+	}
+}
+
 func pubSubBody(t *testing.T, note map[string]any) []byte {
 	t.Helper()
 	raw, err := json.Marshal(note)
