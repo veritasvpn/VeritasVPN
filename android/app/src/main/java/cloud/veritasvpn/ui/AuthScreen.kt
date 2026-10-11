@@ -45,6 +45,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 
 enum class AuthMode { SIGN_IN, SIGN_UP }
 enum class AuthMethod { EMAIL, ACCOUNT_ID }
@@ -139,21 +141,35 @@ fun AuthScreen(
         retryStatus = null
         scope.launch {
             try {
-                val user = withContext(Dispatchers.IO) {
-                    when {
-                        method == AuthMethod.EMAIL && mode == AuthMode.SIGN_IN ->
-                            authRepo.signIn(email, password, turnstileToken)
-                        method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP ->
-                            authRepo.signUp(email, password, turnstileToken)
-                        method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN ->
-                            authRepo.signInWithAccountId(accountId, turnstileToken)
-                        else -> authRepo.registerAnonymous(turnstileToken)
+                val user = withTimeout(50_000L) {
+                    withContext(Dispatchers.IO) {
+                        when {
+                            method == AuthMethod.EMAIL && mode == AuthMode.SIGN_IN ->
+                                authRepo.signIn(email, password, turnstileToken, onRetry = { attempt ->
+                                    scope.launch { retryStatus = context.getString(cloud.veritasvpn.R.string.status_retrying) }
+                                })
+                            method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP ->
+                                authRepo.signUp(email, password, turnstileToken)
+                            method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_IN ->
+                                authRepo.signInWithAccountId(accountId, turnstileToken, onRetry = { attempt ->
+                                    scope.launch { retryStatus = context.getString(cloud.veritasvpn.R.string.status_retrying) }
+                                })
+                            else -> authRepo.registerAnonymous(turnstileToken)
+                        }
                     }
                 }
                 if (method == AuthMethod.ACCOUNT_ID && mode == AuthMode.SIGN_UP) {
                     newAccountId = user.accountId
                 } else {
                     onAuthenticated()
+                }
+            } catch (e: TimeoutCancellationException) {
+                error = context.getString(cloud.veritasvpn.R.string.error_server_timeout)
+                if (needsTurnstile) {
+                    turnstileToken = ""
+                    turnstileReady = false
+                    turnstileInteractive = false
+                    turnstileResetKey += 1
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -278,9 +294,15 @@ fun AuthScreen(
                         error = null
                         scope.launch {
                             try {
-                                withContext(Dispatchers.IO) { authRepo.resetPassword(email) }
+                                withTimeout(50_000L) {
+                                    withContext(Dispatchers.IO) { 
+                                        authRepo.resetPassword(email)
+                                    }
+                                }
                                 resetSent = true
                                 resetCooldown = 30
+                            } catch (e: TimeoutCancellationException) {
+                                error = context.getString(cloud.veritasvpn.R.string.error_server_timeout)
                             } catch (e: Exception) {
                                 error = NetworkPreflight.classifyFailure(context, e)
                             } finally {
@@ -347,8 +369,12 @@ fun AuthScreen(
                     error = null
                     scope.launch {
                         try {
-                            withContext(Dispatchers.IO) { authRepo.resendVerification(email) }
+                            withTimeout(50_000L) {
+                                withContext(Dispatchers.IO) { authRepo.resendVerification(email) }
+                            }
                             notice = "A new verification link was sent to $email."
+                        } catch (e: TimeoutCancellationException) {
+                            error = context.getString(cloud.veritasvpn.R.string.error_server_timeout)
                         } catch (e: Exception) {
                             error = NetworkPreflight.classifyFailure(context, e)
                         } finally {
@@ -462,9 +488,21 @@ fun AuthScreen(
                             fontSize = 14.sp,
                             lineHeight = 20.sp,
                             modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Spacer(Modifier.height(16.dp))
+            )
+        }
+
+        retryStatus?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                it,
+                color = CyanHover,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
                     Button(
                         onClick = { onAuthenticated() },
                         modifier = Modifier.fillMaxWidth(),
@@ -538,12 +576,16 @@ fun AuthScreen(
                     notice = null
                     scope.launch {
                         try {
-                            withContext(Dispatchers.IO) {
-                                authRepo.resendVerification(pendingEmail)
+                            withTimeout(50_000L) {
+                                withContext(Dispatchers.IO) {
+                                    authRepo.resendVerification(pendingEmail)
+                                }
                             }
                             error = null
                             verificationResendEmail = null
                             notice = "A new verification link was sent to $pendingEmail."
+                        } catch (e: TimeoutCancellationException) {
+                            error = context.getString(cloud.veritasvpn.R.string.error_server_timeout)
                         } catch (e: Exception) {
                             error = NetworkPreflight.classifyFailure(context, e)
                         } finally {

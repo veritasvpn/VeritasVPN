@@ -59,7 +59,7 @@ class StealthTransport(
                 try {
                     runSession()
                 } catch (e: Exception) {
-                    lastError = when (e) {
+                    lastError = (e as? cloud.veritasvpn.api.UserVisibleError)?.userMessage ?: when (e) {
                         is java.net.SocketTimeoutException,
                         is java.io.InterruptedIOException -> "Connection timed out"
                         is java.net.UnknownHostException -> "Could not resolve server address"
@@ -138,7 +138,7 @@ class StealthTransport(
         val socket = context.socketFactory.createSocket() as SSLSocket
         if (!protectSocket(socket)) {
             socket.close()
-            throw IllegalStateException("Could not protect the Stealth socket from the VPN")
+            throw VeritasVpnService.VpnError("Stealth couldn't start. Try again.")
         }
         val params = socket.sslParameters
         params.endpointIdentificationAlgorithm = null
@@ -173,11 +173,11 @@ class StealthTransport(
         }
         val response = readHttpHeaders(input)
         if (!response.startsWith("HTTP/1.1 101") && !response.startsWith("HTTP/1.0 101")) {
-            throw IllegalStateException("Stealth handshake rejected")
+            throw VeritasVpnService.VpnError("Stealth server rejected the connection.")
         }
         val accept = headerValue(response, "sec-websocket-accept")
         if (accept != null && accept != WstunnelProtocol.acceptKey(key)) {
-            throw IllegalStateException("Stealth handshake key mismatch")
+            throw VeritasVpnService.VpnError("Stealth server identity didn't match. Try again or switch server.")
         }
     }
 

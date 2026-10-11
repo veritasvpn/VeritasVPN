@@ -7,7 +7,7 @@ import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.auth.AuthenticatedApi
 
 class BillingRepository(internal val auth: AuthRepository) {
-    fun status(): BillingStatus = AuthenticatedApi.execute(
+    suspend fun status(): BillingStatus = AuthenticatedApi.execute(
         auth,
         { token -> ApiClient.getFast("/api/v1/billing/status", token) }
     ) { response ->
@@ -18,7 +18,7 @@ class BillingRepository(internal val auth: AuthRepository) {
         data ?: throw Error("The server returned an invalid plan response.")
     }
 
-    fun cancel() {
+    suspend fun cancel() {
         AuthenticatedApi.execute(
             auth,
             { token -> ApiClient.post("/api/v1/billing/cancel", emptyMap<String, Any>(), token, retryOnTimeout = false) }
