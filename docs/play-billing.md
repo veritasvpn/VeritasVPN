@@ -59,6 +59,54 @@ For each base plan:
 
 The app sets `obfuscatedAccountId` to the Veritas account id (32 hex characters) when the purchase starts. The server rejects a token that is bound to a different account.
 
+## Free trials
+
+Google Play supports free trial periods for subscriptions. Veritas uses a 7-day free trial offer to attract new subscribers.
+
+### Setting up the trial offer
+
+In Play Console → Monetize → Products → Subscriptions → `premium_monthly` (or `premium_annual`):
+
+1. Create an **offer** with offer ID `free-trial-7d`.
+2. Add a pricing phase:
+   - Duration: 7 days
+   - Price: Free (0)
+   - Type: Free trial
+3. Add the tag `trial` to the offer (used for detection).
+4. Activate the offer.
+
+The app detects the trial by checking for the `trial` tag or the presence of `trial` in the offer ID. Users who haven't previously used a trial on any Veritas subscription are eligible.
+
+### Trial eligibility
+
+- One trial per Google account (enforced by Google Play)
+- One trial per Veritas account (enforced by the server)
+- A user who has already used a trial, even on a different plan, is not eligible again
+
+The server checks eligibility by looking for any `payment_records` row with `is_trial=true` for that account. If found, the app hides the trial offer and shows the regular subscription button.
+
+### Trial lifecycle
+
+1. **Trial start**: User subscribes with the trial offer. Google charges nothing for 7 days. The server receives a subscription update with `InTrial=true`. It creates a `payment_records` row with `amount=0`, `is_trial=true`, and publishes a `subscription.renewed` event with `trial:true` in the payload. The user gets Premium immediately.
+
+2. **Trial conversion**: After 7 days, Google charges the regular subscription price. The server receives an update with `InTrial=false` and `amount>0`. It updates the existing `payment_records` row (same token) to `amount=300` (or 3000 for annual), `is_trial=false`, and publishes `subscription.renewed` with `converted:true` in the payload. The user's Premium extends for the paid period.
+
+3. **Cancellation during trial**: If the user cancels before the trial ends, Google stops the subscription at the trial expiry. The server receives a cancellation notification and sets `cancel_at_period_end=true`. Premium continues until the trial ends, then expires.
+
+4. **Expired trial**: If the user doesn't have a payment method on file when the trial ends, Google revokes the subscription. The server receives an expiration notification and revokes Premium. The payment is marked as failed.
+
+### Configuration
+
+The trial duration is configurable via the `PLAY_TRIAL_DAYS` environment variable (default: 7). This is used to detect whether a subscription is still in the trial phase. For license testers with shortened renewal cycles, set `PLAY_TRIAL_DAYS=1` or less to test conversion without waiting 7 days.
+
+### Telegram notifications
+
+The telegram-notifier service sends different messages based on the payload flags:
+
+- `trial:true` → "Free trial started (Google Play); subscription activated"
+- `converted:true` → "Trial converted to paid (Google Play); subscription activated"
+- Neither flag → "Premium payment received (Google Play); subscription activated"
+
 ## License testers
 
 Play Console → Settings → License testing (or Setup → License testing):
