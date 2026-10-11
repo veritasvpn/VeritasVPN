@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.CheckoutResponse
+import cloud.veritasvpn.api.UserFacingError
 import cloud.veritasvpn.auth.AuthenticatedApi
 import cloud.veritasvpn.auth.SessionExpiredException
 import kotlinx.coroutines.CoroutineScope
@@ -11,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 fun createStoreBilling(context: Context, billing: BillingRepository): StoreBilling =
     DirectStoreBilling(context, billing)
@@ -36,11 +38,18 @@ class DirectStoreBilling(
         scope.launch {
             try {
                 val url = billing.createDirectCheckout(planId)
-                callbacks.onCheckoutUrl(url)
+                withContext(Dispatchers.Main) {
+                    callbacks.onCheckoutUrl(url)
+                }
             } catch (e: SessionExpiredException) {
-                callbacks.onSessionExpired()
+                withContext(Dispatchers.Main) {
+                    callbacks.onSessionExpired()
+                }
             } catch (e: Exception) {
-                callbacks.onError(e.message ?: "Could not open checkout.")
+                val message = UserFacingError.toUserMessage(e, activity.applicationContext)
+                withContext(Dispatchers.Main) {
+                    callbacks.onError(message)
+                }
             }
         }
     }
