@@ -171,8 +171,9 @@ func (p *PlayBilling) apply(ctx context.Context, accountID, requestedProduct, to
 	var planID string
 	var periodDays int
 	var periodEnd time.Time
+	var isTrialStart, isConversion bool
 	event, err := p.store.UpdateGooglePlay(ctx, accountID, token, func(sub *model.Subscription, existing *model.PaymentRecord) (*model.PaymentRecord, string, error) {
-		payment, ev, res, err := decidePlayEntitlement(now, accountID, requestedProduct, token, purchase, sub, existing, forceRevoke)
+		payment, ev, trialStart, conversion, res, err := decidePlayEntitlement(now, accountID, requestedProduct, token, purchase, sub, existing, forceRevoke)
 		if err != nil {
 			return nil, "", err
 		}
@@ -180,6 +181,8 @@ func (p *PlayBilling) apply(ctx context.Context, accountID, requestedProduct, to
 		planID = sub.PlanID
 		periodDays = sub.PeriodDays
 		periodEnd = sub.CurrentPeriodEnd
+		isTrialStart = trialStart
+		isConversion = conversion
 		return payment, ev, nil
 	})
 	if errors.Is(err, repository.ErrPurchaseAccountConflict) {
@@ -188,17 +191,24 @@ func (p *PlayBilling) apply(ctx context.Context, accountID, requestedProduct, to
 	if err != nil {
 		return nil, err
 	}
-	p.emit(event, accountID, planID, periodDays, periodEnd)
+	p.emit(event, accountID, planID, periodDays, periodEnd, isTrialStart, isConversion)
 	return &result, nil
 }
 
-func (p *PlayBilling) emit(event, accountID, planID string, periodDays int, periodEnd time.Time) {
+func (p *PlayBilling) emit(event, accountID, planID string, periodDays int, periodEnd time.Time, isTrialStart, isConversion bool) {
 	if p.publish == nil || event == "" || event == "none" {
 		return
 	}
 	switch event {
 	case "subscription.renewed":
-		p.publish(event, renewedEventPayload(accountID, model.TierPremium, model.PaymentGooglePlay, planID, periodDays, periodEnd))
+		payload := renewedEventPayload(accountID, model.TierPremium, model.PaymentGooglePlay, planID, periodDays, periodEnd)
+		if isTrialStart {
+			payload["trial"] = true
+		}
+		if isConversion {
+			payload["converted"] = true
+		}
+		p.publish(event, payload)
 	case "subscription.expired":
 		p.publish(event, map[string]interface{}{
 			"account_id": accountID,
@@ -212,22 +222,22 @@ func (p *PlayBilling) emit(event, accountID, planID string, periodDays int, peri
 	}
 }
 
-func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token string, purchase *provider.SubscriptionPurchase, sub *model.Subscription, existing *model.PaymentRecord, forceRevoke bool) (*model.PaymentRecord, string, PlayVerifyResult, error) {
+func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token string, purchase *provider.SubscriptionPurchase, sub *model.Subscription, existing *model.PaymentRecord, forceRevoke bool) (*model.PaymentRecord, string, bool, bool, PlayVerifyResult, error) {
 	if purchase.ObfuscatedAccountID != "" && purchase.ObfuscatedAccountID != accountID {
-		return nil, "", PlayVerifyResult{}, ErrPlayAccountMismatch
+		return nil, "", false, false, PlayVerifyResult{}, ErrPlayAccountMismatch
 	}
 	line, err := selectPlayLine(purchase, requestedProduct)
 	if err != nil {
-		return nil, "", PlayVerifyResult{}, err
+		return nil, "", false, false, PlayVerifyResult{}, err
 	}
 	product, ok := model.PlayProductByID(line.ProductID)
 	if !ok {
-		return nil, "", PlayVerifyResult{}, ErrPlayUnknownProduct
+		return nil, "", false, false, PlayVerifyResult{}, ErrPlayUnknownProduct
 	}
 	if requestedProduct != "" {
 		requested, known := model.PlayProductByID(requestedProduct)
 		if !known || requested.ProductID != product.ProductID {
-			return nil, "", PlayVerifyResult{}, ErrPlayUnknownProduct
+			return nil, "", false, false, PlayVerifyResult{}, ErrPlayUnknownProduct
 		}
 	}
 
@@ -283,7 +293,7 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 		revokePlaySubscription(sub, now, state, forceRevoke)
 	}
 
-	event := playEvent(before, sub, payment.IsTrial)
+	event, isTrialStart, isConversion := playEvent(before, sub, payment.IsTrial, existing)
 	premium := sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
 	result := PlayVerifyResult{
 		IsPremium:   premium,
@@ -291,7 +301,7 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 		Pending:     pending,
 		Status:      sub.Status,
 	}
-	return payment, event, result, nil
+	return payment, event, isTrialStart, isConversion, result, nil
 }
 
 func selectPlayLine(purchase *provider.SubscriptionPurchase, requestedProduct string) (provider.PlayLineItem, error) {
@@ -424,42 +434,33 @@ func snapPlay(sub *model.Subscription) playSnap {
 	}
 }
 
-func playEvent(before playSnap, sub *model.Subscription, isTrial bool) string {
+func playEvent(before playSnap, sub *model.Subscription, isTrial bool, existing *model.PaymentRecord) (string, bool, bool) {
 	after := snapPlay(sub)
 	if before == after {
-		return "none"
+		return "none", false, false
 	}
 	wasPremium := before.tier == model.TierPremium && before.status == model.StatusActive
 	nowPremium := after.tier == model.TierPremium && after.status == model.StatusActive
 	if wasPremium && !nowPremium {
-		return "subscription.expired"
+		return "subscription.expired", false, false
 	}
-	// Trial started: new premium subscription with is_trial flag
-	if isTrial && nowPremium && !wasPremium {
-		return "subscription.trial_started"
-	}
-	// Trial converted to paid: was in trial period, now in paid period
-	if !isTrial && nowPremium && before.tier == model.TierPremium {
-		// Check if this is a conversion from trial by looking at the payment history
-		// For now, we'll use a simpler heuristic: if we're not in trial but we have premium,
-		// and the period changed, it might be a conversion
-		if !before.end.Equal(after.end) {
-			return "subscription.converted"
-		}
-	}
+
+	isTrialStart := isTrial && nowPremium && !wasPremium
+	isConversion := !isTrial && nowPremium && existing != nil && existing.IsTrial
+
 	if nowPremium && (!before.end.Equal(after.end) || before.tier != model.TierPremium || before.status != model.StatusActive) {
-		return "subscription.renewed"
+		return "subscription.renewed", isTrialStart, isConversion
 	}
 	if nowPremium && after.cancel && !before.cancel {
-		return "subscription.canceled"
+		return "subscription.canceled", false, false
 	}
 	if wasPremium && !nowPremium {
-		return "subscription.expired"
+		return "subscription.expired", false, false
 	}
 	if before.tier == model.TierPremium && after.status == model.StatusPastDue && before.status != model.StatusPastDue {
-		return "subscription.expired"
+		return "subscription.expired", false, false
 	}
-	return "none"
+	return "none", false, false
 }
 
 type developerNote struct {

@@ -67,26 +67,20 @@ func main() {
 					kind = "unknown"
 				}
 				text = fmt.Sprintf("New %s account registered", kind)
-			case "subscription.trial_started":
-				method, _ := e["payment_method"].(string)
-				if method == "" {
-					method = "Google Play"
-				}
-				plan, _ := e["plan_id"].(string)
-				text = fmt.Sprintf("Free trial started (%s, %s)", method, plan)
-			case "subscription.converted":
-				method, _ := e["payment_method"].(string)
-				if method == "" {
-					method = "Google Play"
-				}
-				plan, _ := e["plan_id"].(string)
-				text = fmt.Sprintf("Trial converted to paid (%s, %s)", method, plan)
 			case "subscription.renewed":
 				method, _ := e["payment_method"].(string)
 				if method == "" {
 					method = "Bitcoin"
 				}
-				text = fmt.Sprintf("Premium payment received (%s); subscription activated", method)
+				isTrial, _ := e["trial"].(bool)
+				isConverted, _ := e["converted"].(bool)
+				if isTrial {
+					text = fmt.Sprintf("Free trial started (%s); subscription activated", method)
+				} else if isConverted {
+					text = fmt.Sprintf("Trial converted to paid (%s); subscription activated", method)
+				} else {
+					text = fmt.Sprintf("Premium payment received (%s); subscription activated", method)
+				}
 			default:
 				return
 			}
@@ -96,12 +90,6 @@ func main() {
 		}
 	}
 	if _, err := nc.Subscribe("account.registered", handler("account.registered")); err != nil {
-		log.Fatal(err)
-	}
-	if _, err := nc.Subscribe("subscription.trial_started", handler("subscription.trial_started")); err != nil {
-		log.Fatal(err)
-	}
-	if _, err := nc.Subscribe("subscription.converted", handler("subscription.converted")); err != nil {
 		log.Fatal(err)
 	}
 	if _, err := nc.Subscribe("subscription.renewed", handler("subscription.renewed")); err != nil {

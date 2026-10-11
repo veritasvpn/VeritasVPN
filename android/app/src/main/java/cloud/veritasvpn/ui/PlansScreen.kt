@@ -221,14 +221,14 @@ fun AccountScreen(
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Text(
-                        "${trialOffer.trialDays} days free",
+                        stringResource(R.string.trial_days_free, trialOffer.trialDays),
                         color = CyanHover,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Try Premium free for ${trialOffer.trialDays} days, then ${trialOffer.priceAfterTrial}/${trialOffer.period}. Cancel anytime in Google Play.",
+                        stringResource(R.string.trial_offer_copy, trialOffer.trialDays, trialOffer.priceAfterTrial, formatPeriod(trialOffer.period)),
                         color = PaperMuted,
                         fontSize = 13.sp,
                         lineHeight = 19.sp
@@ -260,7 +260,7 @@ fun AccountScreen(
                 Text(
                     when {
                         checkoutMethod != null -> stringResource(R.string.pay_button_busy)
-                        playBilling && billingStatus?.trialEligible == true && trialOffers[selectedPlan] != null -> "Start free trial"
+                        playBilling && billingStatus?.trialEligible == true && trialOffers[selectedPlan] != null -> stringResource(R.string.start_free_trial)
                         else -> stringResource(R.string.pay_button_idle)
                     },
                     color = Color.White,
@@ -605,5 +605,15 @@ private fun PlanCard(name: String, price: String, suffix: String, current: Boole
                 }
             }
         }
+    }
+}
+
+private fun formatPeriod(period: String): String {
+    return when (period.uppercase()) {
+        "P1M" -> "month"
+        "P1Y" -> "year"
+        "P1W" -> "week"
+        "P1D" -> "day"
+        else -> period
     }
 }
