@@ -82,6 +82,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var underlayWaitStartedAtMs = 0L
     private var hardLoopStartedAtMs = 0L
     private var stealthReconnectJob: Job? = null
+    private var waitRecheckJob: Job? = null
     private var lastStatsLogAtMs = 0L
     private var healthUnderlayWaitStartedAtMs = 0L
     private val underlayCallback = object : ConnectivityManager.NetworkCallback() {
@@ -163,6 +164,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 hardLoopStartedAtMs = 0L
                 healthUnderlayWaitStartedAtMs = 0L
                 underlayWaitStartedAtMs = 0L
+                waitRecheckJob?.cancel()
+                waitRecheckJob = null
                 activeTransport = if (StealthMode.fromStored(stealthMode) == StealthMode.STEALTH) {
                     "stealth"
                 } else {
@@ -794,10 +797,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             Log.i(TAG, "path-adapt waiting for live underlay, will recheck in ${STALL_UNDERLAY_WAIT_FALLBACK_MS}ms")
             // Schedule a one-shot recheck after the fallback timeout to make it predictable
             // instead of relying solely on the health watch firing.
-            scope.launch {
+            // Use a tracked job to avoid stacking multiple timers (B3).
+            waitRecheckJob?.cancel()
+            waitRecheckJob = scope.launch {
                 delay(STALL_UNDERLAY_WAIT_FALLBACK_MS)
                 if (gen == sessionGeneration && sessionIntended() && disconnectJob?.isActive != true) {
-                    scheduleUnderlayAdapt(forceHard = true)
+                    // Use forceHard=false so the normal WAIT→fallback logic runs
+                    scheduleUnderlayAdapt(forceHard = false)
                 }
             }
             return
@@ -875,13 +881,18 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             while (gen == sessionGeneration && sessionIntended() && disconnectJob?.isActive != true) {
                 if (stealthTransport != null) return
                 val elapsed = System.currentTimeMillis() - hardLoopStartedAtMs
-                val validatedIdentity = liveUnderlay()?.identity
-                val unvalidatedIdentity = bestUnderlaySnap(requireValidated = false)?.identity
+                // Only call bestUnderlaySnap after the fallback timeout (nice-to-have).
+                val validatedSnap = liveUnderlay()
+                val unvalidatedSnap = if (elapsed >= STALL_UNDERLAY_WAIT_FALLBACK_MS) {
+                    bestUnderlaySnap(requireValidated = false)
+                } else {
+                    null
+                }
                 val resolved = RebindDecisions.resolveHardLoopUnderlay(
                     elapsedMs = elapsed,
                     fallbackAfterMs = STALL_UNDERLAY_WAIT_FALLBACK_MS,
-                    validatedUnderlay = validatedIdentity,
-                    unvalidatedUnderlay = unvalidatedIdentity,
+                    validatedUnderlay = validatedSnap?.identity,
+                    unvalidatedUnderlay = unvalidatedSnap?.identity,
                 )
                 if (resolved == null) {
                     delay(pollDelay)
@@ -889,7 +900,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     continue
                 }
                 pollDelay = STALL_UNDERLAY_POLL_MS
-                val currentLive = liveUnderlay() ?: bestUnderlaySnap(requireValidated = false)
+                // Pick the snapshot that matches the resolved identity (nice-to-have).
+                val currentLive = if (resolved == validatedSnap?.identity) validatedSnap else unvalidatedSnap
                 if (currentLive == null) {
                     delay(STALL_UNDERLAY_POLL_MS)
                     continue
@@ -1164,6 +1176,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         stealthSwitching = false
         stealthReconnectJob?.cancel()
         stealthReconnectJob = null
+        waitRecheckJob?.cancel()
+        waitRecheckJob = null
         stopStealthTransport()
     }
 
@@ -1248,13 +1262,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val redialAt = System.currentTimeMillis()
         stealthReconnectJob?.cancel()
         stealthReconnectJob = scope.launch {
+            var succeeded = false
             try {
-                // Use 8-10s per attempt (R3). HANDSHAKE_CONFIRM_MS is 3.5s which is too
-                // short for TLS/websocket redial on mobile data.
+                // Rethrow CancellationException so it propagates correctly (B2).
+                // Use 9s per attempt — HANDSHAKE_CONFIRM_MS (3.5s) is too short
+                // for TLS/websocket redial on mobile data (R3).
                 val stealthTimeout = 9_000L
                 val ok = waitForHandshake(gen, redialAt, stealthTimeout)
                 if (ok) {
                     Log.i(TAG, "path-adapt stealth redial handshake ok")
+                    succeeded = true
                     return@launch
                 }
                 if (gen != sessionGeneration || !sessionIntended()) return@launch
@@ -1264,18 +1281,23 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 val retryOk = waitForHandshake(gen, retryAt, stealthTimeout)
                 if (retryOk) {
                     Log.i(TAG, "path-adapt stealth redial retry handshake ok")
+                    succeeded = true
                     return@launch
                 }
                 // After two failed attempts, keep reconnecting=true and let the stall
-                // detector take over (R3). Don't clear it here.
+                // detector take over with its 30s→2min backoff (R3).
+                // Do NOT self-reschedule — that bypasses the backoff and drains battery.
                 Log.w(TAG, "path-adapt stealth redial failed, stall detector will retry")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "path-adapt stealth redial exception", e)
-            }
-            // Only clear reconnecting if we gave up entirely (not if stall detector will retry)
-            if (gen == sessionGeneration && sessionIntended()) {
-                // Schedule another adapt with forceHard to let stall detector retry
-                scheduleUnderlayAdapt(forceHard = true)
+            } finally {
+                // Clear reconnecting only on success (B1). On failure, leave it set
+                // so the UI shows "Reconnecting…" while the stall detector retries.
+                if (succeeded) {
+                    publishReconnecting(false)
+                }
             }
         }
     }
