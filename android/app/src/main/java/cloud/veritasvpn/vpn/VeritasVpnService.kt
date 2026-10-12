@@ -532,6 +532,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private fun broadcastStats() {
+        // Handshake age climbing toward ~2m is WireGuard's normal rekey window.
+        // Never reconnect / tear down based on handshake age alone — that caused the
+        // classic connect loop (HANDSHAKE_STALE_MS=120s in older builds). The stall
+        // detector deliberately uses 180s together with rx/tx deltas to avoid that loop.
         val stats = runCatching { backend.getStatistics(this) }.getOrElse { e ->
             val now = System.currentTimeMillis()
             if (now - lastStatsLogAtMs >= STATS_LOG_INTERVAL_MS) {
@@ -744,7 +748,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             vpnStatePrefs().getBoolean(KEY_RESUME_STEALTH, false)
         ) {
             if (stealthTransport != null) {
-                adaptWhileStealth(gen)
+                adaptWhileStealth(gen, forceHard)
             } else {
                 val offer = currentOffer()
                 if (offer.usable()) switchToStealth(gen, offer)
@@ -787,7 +791,15 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     }
                 }
             }
-            Log.i(TAG, "path-adapt waiting for live underlay")
+            Log.i(TAG, "path-adapt waiting for live underlay, will recheck in ${STALL_UNDERLAY_WAIT_FALLBACK_MS}ms")
+            // Schedule a one-shot recheck after the fallback timeout to make it predictable
+            // instead of relying solely on the health watch firing.
+            scope.launch {
+                delay(STALL_UNDERLAY_WAIT_FALLBACK_MS)
+                if (gen == sessionGeneration && sessionIntended() && disconnectJob?.isActive != true) {
+                    scheduleUnderlayAdapt(forceHard = true)
+                }
+            }
             return
         }
         underlayWaitStartedAtMs = 0L
@@ -835,7 +847,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 val softHandshakeBaseline = latestHandshakeMs()
                 if (softParsed != null && rebindWithRetry(softParsed, gen, recreateTun = false)) {
                     if (waitForHandshake(gen, attachedAt, SOFT_ATTACH_MS) &&
-                        latestHandshakeMs() > softHandshakeBaseline
+                        RebindDecisions.softRebindSucceeded(latestHandshakeMs(), attachedAt, softHandshakeBaseline)
                     ) {
                         lastUnderlayFingerprint = underlayFingerprint(underlay.network, underlay.link, ipv4s)
                         lastUnderlayIdentity = underlay.identity
@@ -859,19 +871,29 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             hardLoopStartedAtMs = System.currentTimeMillis()
             var round = 0
             var pollDelay = STALL_UNDERLAY_POLL_MS
+            var roundDelay = PROBE_RETRY_DELAY_MS
             while (gen == sessionGeneration && sessionIntended() && disconnectJob?.isActive != true) {
                 if (stealthTransport != null) return
                 val elapsed = System.currentTimeMillis() - hardLoopStartedAtMs
-                var currentLive = liveUnderlay()
-                if (currentLive == null && elapsed >= STALL_UNDERLAY_WAIT_FALLBACK_MS) {
-                    currentLive = bestUnderlaySnap(requireValidated = false)
-                }
-                if (currentLive == null) {
+                val validatedIdentity = liveUnderlay()?.identity
+                val unvalidatedIdentity = bestUnderlaySnap(requireValidated = false)?.identity
+                val resolved = RebindDecisions.resolveHardLoopUnderlay(
+                    elapsedMs = elapsed,
+                    fallbackAfterMs = STALL_UNDERLAY_WAIT_FALLBACK_MS,
+                    validatedUnderlay = validatedIdentity,
+                    unvalidatedUnderlay = unvalidatedIdentity,
+                )
+                if (resolved == null) {
                     delay(pollDelay)
                     pollDelay = (pollDelay * 2).coerceAtMost(STALL_UNDERLAY_MAX_POLL_MS)
                     continue
                 }
                 pollDelay = STALL_UNDERLAY_POLL_MS
+                val currentLive = liveUnderlay() ?: bestUnderlaySnap(requireValidated = false)
+                if (currentLive == null) {
+                    delay(STALL_UNDERLAY_POLL_MS)
+                    continue
+                }
                 val liveIpv4s = ipv4Addresses(currentLive.link)
                 if (liveIpv4s.isEmpty()) {
                     delay(STALL_UNDERLAY_POLL_MS)
@@ -908,7 +930,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     lastRebindAtMs = reboundAt
                     followSystemDefault()
                     startStatsPolling()
-                    Log.i(TAG, "path-adapt rebound endpoint=$endpoint underlay=$liveFp")
+                    Log.i(TAG, "path-adapt rebound endpoint=$endpoint underlay=${currentLive.identity}")
                     if (waitForHandshake(gen, reboundAt, HANDSHAKE_CONFIRM_MS)) {
                         if (stealthTransport != null || vpnStatePrefs().getBoolean(KEY_RESUME_STEALTH, false)) {
                             return
@@ -939,7 +961,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     if (stealthTransport != null) return
                 }
                 round++
-                delay(PROBE_RETRY_DELAY_MS.coerceAtMost(8_000L))
+                delay(roundDelay)
+                roundDelay = (roundDelay * 2).coerceAtMost(30_000L)
             }
         } finally {
             publishReconnecting(false)
@@ -1193,7 +1216,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     /** Redial the protected TLS socket. WireGuard stays pointed at localhost. */
-    private fun adaptWhileStealth(gen: Long) {
+    private fun adaptWhileStealth(gen: Long, forceHard: Boolean = false) {
         if (gen != sessionGeneration || !sessionIntended()) return
         val live = liveUnderlay() ?: bestUnderlaySnap(requireValidated = false)
         if (live == null) {
@@ -1208,10 +1231,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             lastUnderlayFingerprint = fp
             lastUnderlayIdentity = live.identity
             lastChosenEndpoint = stealthTransport?.localEndpoint ?: lastChosenEndpoint
-            Log.i(TAG, "path-adapt stealth record underlay=$fp")
+            Log.i(TAG, "path-adapt stealth record underlay=${live.identity}")
             return
         }
-        if (live.identity == lastUnderlayIdentity && fp == lastUnderlayFingerprint) return
+        // When forceHard is true, skip the identity/fingerprint early-return.
+        // This allows the stall detector to redial a Stealth tunnel that is
+        // stalled on an unchanged network (R1).
+        if (!forceHard && live.identity == lastUnderlayIdentity && fp == lastUnderlayFingerprint) return
         Log.i(TAG, "path-adapt stealth redial ${lastUnderlayIdentity} -> ${live.identity}")
         followSystemDefault()
         publishReconnecting(true)
@@ -1223,21 +1249,33 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         stealthReconnectJob?.cancel()
         stealthReconnectJob = scope.launch {
             try {
-                val ok = waitForHandshake(gen, redialAt, HANDSHAKE_CONFIRM_MS)
+                // Use 8-10s per attempt (R3). HANDSHAKE_CONFIRM_MS is 3.5s which is too
+                // short for TLS/websocket redial on mobile data.
+                val stealthTimeout = 9_000L
+                val ok = waitForHandshake(gen, redialAt, stealthTimeout)
                 if (ok) {
                     Log.i(TAG, "path-adapt stealth redial handshake ok")
                     return@launch
                 }
                 if (gen != sessionGeneration || !sessionIntended()) return@launch
-                Log.w(TAG, "path-adapt stealth redial no handshake, escalating")
+                Log.w(TAG, "path-adapt stealth redial no handshake, retrying")
                 stealthTransport?.reconnect()
                 val retryAt = System.currentTimeMillis()
-                val retryOk = waitForHandshake(gen, retryAt, HANDSHAKE_CONFIRM_MS)
-                if (!retryOk && gen == sessionGeneration && sessionIntended()) {
-                    Log.w(TAG, "path-adapt stealth redial still no handshake")
+                val retryOk = waitForHandshake(gen, retryAt, stealthTimeout)
+                if (retryOk) {
+                    Log.i(TAG, "path-adapt stealth redial retry handshake ok")
+                    return@launch
                 }
-            } finally {
-                publishReconnecting(false)
+                // After two failed attempts, keep reconnecting=true and let the stall
+                // detector take over (R3). Don't clear it here.
+                Log.w(TAG, "path-adapt stealth redial failed, stall detector will retry")
+            } catch (e: Exception) {
+                Log.e(TAG, "path-adapt stealth redial exception", e)
+            }
+            // Only clear reconnecting if we gave up entirely (not if stall detector will retry)
+            if (gen == sessionGeneration && sessionIntended()) {
+                // Schedule another adapt with forceHard to let stall detector retry
+                scheduleUnderlayAdapt(forceHard = true)
             }
         }
     }
@@ -1581,10 +1619,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 )
 
                 if (stalled && now - lastStallRebindAtMs >= stallBackoffMs) {
-                    val backoff = stallBackoffMs
-                    stallBackoffMs = TunnelStall.nextBackoff(stallBackoffMs)
+                    Log.w(TAG, "path-adapt health: stall detected rx=$rxDelta tx=$txDelta handshakeAge=$handshakeAge currentBackoff=${stallBackoffMs}ms")
                     lastStallRebindAtMs = now
-                    Log.w(TAG, "path-adapt health: stall detected rx=$rxDelta tx=$txDelta handshakeAge=$handshakeAge nextBackoff=${stallBackoffMs}ms")
+                    stallBackoffMs = TunnelStall.nextBackoff(stallBackoffMs)
                     scheduleUnderlayAdapt(forceHard = true)
                     lastStallCheckAtMs = now
                     val s2 = readBackendStats()
