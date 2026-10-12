@@ -11,4 +11,5 @@
     <string name="status_retrying">Still connecting…</string>
     <string name="error_verify_email_first">Verify your email before signing in.</string>
     <string name="error_account_already_exists">An account with this email already exists.</string>
+    <string name="onboarding_disclosure_title">Before you use VeritasVPN</string>
 </resources>

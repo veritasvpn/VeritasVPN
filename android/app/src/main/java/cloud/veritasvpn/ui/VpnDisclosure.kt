@@ -34,12 +34,15 @@ import cloud.veritasvpn.ui.theme.glassSurface
 /**
  * Prominent disclosure shown before Android's VPN consent dialog, until the
  * user accepts. Decline does not call VpnService.prepare().
+ *
+ * @param title The header label (e.g., "BEFORE YOU CONNECT" or "Before you use VeritasVPN").
  */
 @Composable
 fun VpnDisclosureScreen(
     onAccept: () -> Unit,
     onDecline: () -> Unit,
     onOpenPrivacy: () -> Unit,
+    title: String = "BEFORE YOU CONNECT",
 ) {
     PremiumBackdrop {
         PremiumEnter {
@@ -50,7 +53,7 @@ fun VpnDisclosureScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
-                Text("BEFORE YOU CONNECT", color = CyanHover, style = MaterialTheme.typography.labelSmall)
+                Text(title, color = CyanHover, style = MaterialTheme.typography.labelSmall)
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "VeritasVPN will route your traffic",
