@@ -22,6 +22,33 @@ func required(name string) string {
 	}
 	return v
 }
+
+func formatMessage(subject string, event map[string]interface{}) string {
+	switch subject {
+	case "account.registered":
+		kind, _ := event["account_type"].(string)
+		if kind == "" {
+			kind = "unknown"
+		}
+		return fmt.Sprintf("New %s account registered", kind)
+	case "subscription.renewed":
+		method, _ := event["payment_method"].(string)
+		if method == "" {
+			method = "Bitcoin"
+		}
+		isTrial, _ := event["trial"].(bool)
+		isConverted, _ := event["converted"].(bool)
+		if isTrial {
+			return fmt.Sprintf("Free trial started (%s); subscription activated", method)
+		} else if isConverted {
+			return fmt.Sprintf("Trial converted to paid (%s); subscription activated", method)
+		}
+		return fmt.Sprintf("Premium payment received (%s); subscription activated", method)
+	default:
+		return ""
+	}
+}
+
 func sendTelegram(client *http.Client, token, chatID, message string) error {
 	form := url.Values{"chat_id": []string{chatID}, "text": []string{message}, "disable_web_page_preview": []string{"true"}}
 	req, err := http.NewRequest(http.MethodPost, "https://api.telegram.org/bot"+token+"/sendMessage", bytes.NewBufferString(form.Encode()))
@@ -59,21 +86,8 @@ func main() {
 				log.Printf("invalid %s event: %v", subject, err)
 				return
 			}
-			var text string
-			switch subject {
-			case "account.registered":
-				kind, _ := e["account_type"].(string)
-				if kind == "" {
-					kind = "unknown"
-				}
-				text = fmt.Sprintf("New %s account registered", kind)
-			case "subscription.renewed":
-				method, _ := e["payment_method"].(string)
-				if method == "" {
-					method = "Bitcoin"
-				}
-				text = fmt.Sprintf("Premium payment received (%s); subscription activated", method)
-			default:
+			text := formatMessage(subject, e)
+			if text == "" {
 				return
 			}
 			if err := sendTelegram(client, token, chatID, text); err != nil {

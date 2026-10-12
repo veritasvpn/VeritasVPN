@@ -49,6 +49,7 @@ fun AccountScreen(
     playPurchasePending: Boolean = false,
     deletingAccount: Boolean = false,
     deleteError: String? = null,
+    trialOffers: Map<String, cloud.veritasvpn.billing.TrialOffer> = emptyMap(),
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onPurchase: (String) -> Unit,
@@ -207,6 +208,35 @@ fun AccountScreen(
             features = listOf("Paraguay WireGuard egress", "Up to 5 VPN devices", checkoutFeature, "Chrome, Android, and Linux access"),
             emphasized = true
         )
+        
+        // Show trial messaging if eligible (only for Play billing)
+        val trialOffer = if (playBilling) trialOffers[selectedPlan] else null
+        if (!premium && !paymentPending && billingStatus?.trialEligible == true && trialOffer != null) {
+            Spacer(Modifier.height(12.dp))
+            Card(
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = Cyan.copy(alpha = .08f)),
+                border = BorderStroke(1.dp, Cyan.copy(alpha = .3f))
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.trial_days_free, trialOffer.trialDays),
+                        color = CyanHover,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.trial_offer_copy, trialOffer.trialDays, trialOffer.priceAfterTrial, formatPeriod(trialOffer.period)),
+                        color = PaperMuted,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp
+                    )
+                }
+            }
+        }
+        
         if (!premium && !paymentPending) {
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -228,7 +258,11 @@ fun AccountScreen(
                 colors = ButtonDefaults.buttonColors(containerColor = Royal)
             ) {
                 Text(
-                    stringResource(if (checkoutMethod != null) R.string.pay_button_busy else R.string.pay_button_idle),
+                    when {
+                        checkoutMethod != null -> stringResource(R.string.pay_button_busy)
+                        playBilling && billingStatus?.trialEligible == true && trialOffers[selectedPlan] != null -> stringResource(R.string.start_free_trial)
+                        else -> stringResource(R.string.pay_button_idle)
+                    },
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
                 )
@@ -571,5 +605,15 @@ private fun PlanCard(name: String, price: String, suffix: String, current: Boole
                 }
             }
         }
+    }
+}
+
+private fun formatPeriod(period: String): String {
+    return when (period.uppercase()) {
+        "P1M" -> "month"
+        "P1Y" -> "year"
+        "P1W" -> "week"
+        "P1D" -> "day"
+        else -> period
     }
 }

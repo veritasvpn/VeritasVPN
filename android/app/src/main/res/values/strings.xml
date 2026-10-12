@@ -12,4 +12,7 @@
     <string name="error_verify_email_first">Verify your email before signing in.</string>
     <string name="error_account_already_exists">An account with this email already exists.</string>
     <string name="onboarding_disclosure_title">Before you use VeritasVPN</string>
+    <string name="trial_days_free">%d days free</string>
+    <string name="trial_offer_copy">Try Premium free for %1$d days, then %2$s/%3$s. Cancel anytime in Google Play.</string>
+    <string name="start_free_trial">Start free trial</string>
 </resources>
