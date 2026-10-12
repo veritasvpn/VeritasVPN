@@ -676,6 +676,8 @@ class MainActivity : ComponentActivity() {
                                     val nowConnected =
                                         intent.getBooleanExtra(VeritasVpnService.EXTRA_CONNECTED, false)
                                     val error = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
+                                    val svcReconnecting =
+                                        intent.getBooleanExtra(VeritasVpnService.EXTRA_RECONNECTING, false)
                                     if (nowConnected) {
                                         if (!userWantsConnected) {
                                             // User already tapped Disconnect; ignore a late
@@ -684,7 +686,9 @@ class MainActivity : ComponentActivity() {
                                         }
                                         connected = true
                                         connecting = false
-                                        reconnecting = false
+                                        // The service's reconnecting flag drives the UI label,
+                                        // but does not cancel the activity's reconnectJob logic.
+                                        reconnecting = svcReconnecting
                                         hardReconnectRequested = false
                                         reconnectAttempt = 0
                                         reconnectJob?.cancel()
@@ -699,7 +703,7 @@ class MainActivity : ComponentActivity() {
                                         appliedStealthMode = stealthMode
                                         intent.getStringExtra(VeritasVpnService.EXTRA_TRANSPORT)
                                             ?.let { transport = it }
-                                        statusMsg = null
+                                        statusMsg = if (svcReconnecting) "Reconnecting…" else null
                                     } else if (error != null && error.contains("revoked", ignoreCase = true)) {
                                         connected = false
                                         connecting = false
@@ -713,9 +717,9 @@ class MainActivity : ComponentActivity() {
                                         // Ignore unintended disconnects — stay connected in UI.
                                         connected = true
                                         connecting = false
-                                        reconnecting = false
+                                        reconnecting = svcReconnecting
                                         hardReconnectRequested = false
-                                        statusMsg = null
+                                        statusMsg = if (svcReconnecting) "Reconnecting…" else null
                                     } else {
                                         connected = false
                                         connecting = false
@@ -736,6 +740,13 @@ class MainActivity : ComponentActivity() {
                                     handshakeMs = intent.getLongExtra(VeritasVpnService.EXTRA_HANDSHAKE_MS, 0L)
                                     if (intent.hasExtra(VeritasVpnService.EXTRA_TRANSPORT)) {
                                         transport = intent.getStringExtra(VeritasVpnService.EXTRA_TRANSPORT).orEmpty()
+                                    }
+                                    if (intent.hasExtra(VeritasVpnService.EXTRA_RECONNECTING)) {
+                                        val svcReconnecting = intent.getBooleanExtra(VeritasVpnService.EXTRA_RECONNECTING, false)
+                                        reconnecting = svcReconnecting
+                                        if (connected) {
+                                            statusMsg = if (svcReconnecting) "Reconnecting…" else null
+                                        }
                                     }
                                 }
                                 VeritasVpnService.ACTION_RECONNECT_NEEDED -> {
