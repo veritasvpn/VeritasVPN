@@ -11,7 +11,7 @@ object AuthenticatedApi {
      * after a successful refresh is returned to the caller (service misconfig,
      * wrong audience, etc.) instead of wiping local credentials.
      */
-    fun withAuth(auth: AuthRepository, request: (String) -> Response): Response {
+    suspend fun withAuth(auth: AuthRepository, request: suspend (String) -> Response): Response {
         var token = auth.requireAccessToken()
         var response = request(token)
         if (response.code == 401) {
@@ -26,7 +26,7 @@ object AuthenticatedApi {
         return response
     }
 
-    inline fun <T> execute(auth: AuthRepository, noinline block: (String) -> Response, parse: (Response) -> T): T {
+    suspend inline fun <T> execute(auth: AuthRepository, noinline block: suspend (String) -> Response, parse: (Response) -> T): T {
         return withAuth(auth, block).use(parse)
     }
 }
