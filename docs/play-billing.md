@@ -93,11 +93,11 @@ The server checks eligibility by looking for any `payment_records` row with `is_
 
 3. **Cancellation during trial**: If the user cancels before the trial ends, Google stops the subscription at the trial expiry. The server receives a cancellation notification and sets `cancel_at_period_end=true`. Premium continues until the trial ends, then expires.
 
-4. **Expired trial**: If the user doesn't have a payment method on file when the trial ends, Google revokes the subscription. The server receives an expiration notification and revokes Premium. The payment is marked as failed.
+4. **Expired trial**: If the user cancels during the trial, or if the payment fails or is declined when the trial ends, Google revokes the subscription. The server receives an expiration notification and revokes Premium. The payment is marked as failed.
 
 ### Configuration
 
-The trial duration is configurable via the `PLAY_TRIAL_DAYS` environment variable (default: 7). This is used to detect whether a subscription is still in the trial phase. For license testers with shortened renewal cycles, set `PLAY_TRIAL_DAYS=1` or less to test conversion without waiting 7 days.
+The trial duration is configurable via the `PLAY_TRIAL_DAYS` environment variable (default: 7). This is used to detect whether a subscription is still in the trial phase. For license testers with shortened renewal cycles, trials last only minutes, and conversion is detected from the next order regardless. Set `PLAY_TRIAL_DAYS=0` to disable trial detection entirely.
 
 ### Telegram notifications
 
