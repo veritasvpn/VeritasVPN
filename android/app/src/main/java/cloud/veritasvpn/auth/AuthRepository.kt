@@ -22,6 +22,19 @@ sealed class ControlAccess {
 
 enum class ControlRefresh { Refreshed, SignedOut, Unavailable }
 
+internal enum class RefreshStatusKind { SignedOut, Success, Transient }
+
+/**
+ * Only a 401 from `/auth/refresh` clears the session. A 403, including one
+ * from a proxy in front of the API, is transient and leaves the stored
+ * credentials in place.
+ */
+internal fun refreshStatusKind(statusCode: Int): RefreshStatusKind = when (statusCode) {
+    401 -> RefreshStatusKind.SignedOut
+    in 200..299 -> RefreshStatusKind.Success
+    else -> RefreshStatusKind.Transient
+}
+
 data class User(
     val email: String? = null,
     val accountId: String,
@@ -263,8 +276,9 @@ class AuthRepository(context: Context) {
 
     /**
      * Refresh used by the peer check and re-provision. [httpClient] null uses
-     * the normal client. A rejected refresh is signed out. A transport failure
-     * is unavailable, so the caller can retry later.
+     * the normal client. A 401 is signed out. Any other HTTP status, including
+     * 403, is unavailable so a transient rejection does not clear the session.
+     * A transport failure is unavailable, so the caller can retry later.
      */
     suspend fun refreshForControl(httpClient: OkHttpClient?, force: Boolean): ControlRefresh {
         val detail = AtomicReference(ControlRefresh.Unavailable)
@@ -303,12 +317,12 @@ class AuthRepository(context: Context) {
             return ControlRefresh.Unavailable
         }
         return response.use { res ->
-            when (res.code) {
-                401, 403 -> {
+            when (refreshStatusKind(res.code)) {
+                RefreshStatusKind.SignedOut -> {
                     signOut()
                     ControlRefresh.SignedOut
                 }
-                in 200..299 -> {
+                RefreshStatusKind.Success -> {
                     val data = ApiClient.parse<AuthResponse>(res)
                     if (data == null || data.accessToken.isBlank() || data.refreshToken.isBlank()) {
                         ControlRefresh.Unavailable
@@ -320,7 +334,7 @@ class AuthRepository(context: Context) {
                         ControlRefresh.Refreshed
                     }
                 }
-                else -> ControlRefresh.Unavailable
+                RefreshStatusKind.Transient -> ControlRefresh.Unavailable
             }
         }
     }

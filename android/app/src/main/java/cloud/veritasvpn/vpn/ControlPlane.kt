@@ -3,6 +3,8 @@ package cloud.veritasvpn.vpn
 import okhttp3.Dns
 import okhttp3.OkHttpClient
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import javax.net.SocketFactory
@@ -49,6 +51,18 @@ object ControlPlane {
     }
 
     /**
+     * [delegate] is the current system-default network's socket factory.
+     * [protect] then [bind] run before the socket connects. protect() can
+     * stamp a stale VPN netId, so [bind] must pin that same system-default
+     * network. No other network is selected here.
+     */
+    fun protectThenBind(
+        delegate: SocketFactory,
+        protect: (Socket) -> Unit,
+        bind: (Socket) -> Unit,
+    ): SocketFactory = ProtectedSocketFactory(delegate, protect, bind)
+
+    /**
      * Dedicated client whose sockets come from the current system-default
      * [socketFactory]. DNS is refused for every host except [API_HOST].
      * Redirects are off so a 3xx cannot carry the call to another host.
@@ -79,5 +93,51 @@ object ControlPlane {
                 chain.proceed(chain.request())
             }
             .build()
+    }
+}
+
+/**
+ * protect() then bind, then connect. OkHttp calls the no-arg factory and
+ * connects afterwards. The host overloads do the same order so none of them
+ * connect first.
+ */
+private class ProtectedSocketFactory(
+    private val delegate: SocketFactory,
+    private val protect: (Socket) -> Unit,
+    private val bind: (Socket) -> Unit,
+) : SocketFactory() {
+    override fun createSocket(): Socket = open(local = null, remote = null)
+
+    override fun createSocket(host: String, port: Int): Socket =
+        open(local = null, remote = InetSocketAddress(host, port))
+
+    override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket =
+        open(local = InetSocketAddress(localHost, localPort), remote = InetSocketAddress(host, port))
+
+    override fun createSocket(host: InetAddress, port: Int): Socket =
+        open(local = null, remote = InetSocketAddress(host, port))
+
+    override fun createSocket(
+        address: InetAddress,
+        port: Int,
+        localAddress: InetAddress,
+        localPort: Int,
+    ): Socket = open(
+        local = InetSocketAddress(localAddress, localPort),
+        remote = InetSocketAddress(address, port),
+    )
+
+    private fun open(local: InetSocketAddress?, remote: InetSocketAddress?): Socket {
+        val socket = delegate.createSocket()
+        try {
+            protect(socket)
+            bind(socket)
+            if (local != null) socket.bind(local)
+            if (remote != null) socket.connect(remote)
+        } catch (e: Exception) {
+            runCatching { socket.close() }
+            throw e
+        }
+        return socket
     }
 }

@@ -103,6 +103,104 @@ class ControlPlaneTest {
         assertFalse(ControlPlane.hostMayLeaveTunnel("example.com"))
         assertFalse(ControlPlane.hostMayLeaveTunnel("203.0.113.10"))
     }
+
+    @Test
+    fun bypassSocketsAreProtectedBeforeTheyBind() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+        server.start()
+        try {
+            val events = mutableListOf<String>()
+            val client = ControlPlane.clientForSystemDefault(
+                ControlPlane.protectThenBind(
+                    delegate = orderRecordingFactory(events),
+                    protect = { events += "protect" },
+                    bind = { events += "bind" },
+                ),
+            ) { listOf(InetAddress.getByName("127.0.0.1")) }
+            val response = client.newCall(
+                Request.Builder()
+                    .url("http://${ControlPlane.API_HOST}:${server.port}/api/v1/wg/peers/peer-1")
+                    .get()
+                    .build(),
+            ).execute()
+            assertEquals(200, response.code)
+            response.close()
+            assertTrue(events.size >= 3)
+            assertEquals(0, events.size % 3)
+            for (index in events.indices step 3) {
+                assertEquals(
+                    listOf("create", "protect", "bind"),
+                    events.subList(index, index + 3),
+                )
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun bindFailureStillHappensAfterProtectAndClosesTheSocket() {
+        val events = mutableListOf<String>()
+        val socket = Socket()
+        val factory = ControlPlane.protectThenBind(
+            delegate = object : SocketFactory() {
+                override fun createSocket(): Socket {
+                    events += "create"
+                    return socket
+                }
+
+                override fun createSocket(host: String, port: Int): Socket = error("connect")
+                override fun createSocket(
+                    host: String,
+                    port: Int,
+                    localHost: InetAddress,
+                    localPort: Int,
+                ): Socket = error("connect")
+                override fun createSocket(host: InetAddress, port: Int): Socket = error("connect")
+                override fun createSocket(
+                    address: InetAddress,
+                    port: Int,
+                    localAddress: InetAddress,
+                    localPort: Int,
+                ): Socket = error("connect")
+            },
+            protect = { events += "protect" },
+            bind = {
+                events += "bind"
+                throw IOException("bind")
+            },
+        )
+        try {
+            factory.createSocket()
+            fail("bind failure must not return a socket")
+        } catch (_: IOException) {
+            // The call fails closed. Nothing is sent on another network.
+        }
+        assertEquals(listOf("create", "protect", "bind"), events)
+        assertTrue(socket.isClosed)
+    }
+}
+
+private fun orderRecordingFactory(events: MutableList<String>): SocketFactory {
+    val inner = SocketFactory.getDefault()
+    return object : SocketFactory() {
+        override fun createSocket(): Socket {
+            events += "create"
+            return inner.createSocket()
+        }
+
+        override fun createSocket(host: String, port: Int): Socket = error("connect")
+        override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket =
+            error("connect")
+        override fun createSocket(host: InetAddress, port: Int): Socket = error("connect")
+        override fun createSocket(
+            address: InetAddress,
+            port: Int,
+            localAddress: InetAddress,
+            localPort: Int,
+        ): Socket = error("connect")
+    }
 }
 
 private class CountingSocketFactory : SocketFactory() {

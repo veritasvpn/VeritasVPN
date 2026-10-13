@@ -232,10 +232,11 @@ fun HeroConnectControl(
     val showNotConnected = phase == HeroPhase.Ready ||
         phase == HeroPhase.Upsell ||
         phase == HeroPhase.Checking
-    val actionName = when (phase) {
-        HeroPhase.Ready -> "Connect"
-        HeroPhase.Upsell -> "Get Premium"
-        HeroPhase.Protected -> "Disconnect"
+    val actionName = when {
+        signInAgain -> "Sign in"
+        phase == HeroPhase.Ready -> "Connect"
+        phase == HeroPhase.Upsell -> "Get Premium"
+        phase == HeroPhase.Protected -> "Disconnect"
         else -> null
     }
     // Remembered across recomposition, including checking → connecting →

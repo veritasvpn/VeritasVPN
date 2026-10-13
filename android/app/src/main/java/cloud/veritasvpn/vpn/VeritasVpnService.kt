@@ -204,6 +204,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 broadcastState(true, null)
                 return START_STICKY
             }
+            ACTION_AUTH_RESTORED -> {
+                if (!sessionIntended()) return START_NOT_STICKY
+                onAuthRestored()
+                if (tunKeeper == null &&
+                    transitionJob?.isActive != true &&
+                    restoreJob?.isActive != true
+                ) {
+                    restoreSavedSessionIfNeeded()
+                }
+                return START_STICKY
+            }
             ACTION_CONNECT -> {
                 val config = intent.getStringExtra(EXTRA_CONFIG) ?: return START_STICKY
                 val endpointLan = intent.getStringExtra(EXTRA_ENDPOINT_LAN).orEmpty()
@@ -438,6 +449,41 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 return START_STICKY
             }
         }
+    }
+
+    /**
+     * A sign-in while the tunnel is still up. Clears the signed-out stop,
+     * forces a peer check, and resumes recovery on the current system default
+     * when the tunnel is not healthy. Does not tear the tun down and does not
+     * switch to Stealth.
+     */
+    private fun onAuthRestored() {
+        val wasSignedOut = controlSignedOut
+        val decision = AuthRestore.afterSignIn(
+            wasSignedOut = wasSignedOut,
+            tunnelHealthy = controlTunnelHealthy(),
+        )
+        controlSignedOut = decision.signedOut
+        synchronized(reprovisionLock) {
+            lastPeerOutcome = AuthRestore.peerOutcomeAfterSignIn(lastPeerOutcome)
+            peerCheckSerial++
+        }
+        Log.i(TAG, "auth restored")
+        if (decision.resumeRecovery) {
+            publishReconnecting(true)
+            scheduleUnderlayAdapt(forceHard = true)
+        } else {
+            if (wasSignedOut) {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    buildNotification("Connected"),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            }
+            broadcastState(true, null)
+        }
+        if (decision.forcePeerCheck) ensurePeerCheck(force = true)
     }
 
     private fun restoreSavedSessionIfNeeded() {
@@ -1420,7 +1466,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (cleared) ensurePeerCheck(force = true)
     }
 
-    private fun recordPeerOutcome(serial: Int, outcome: PeerCheckOutcome.Outcome) {
+    private fun recordPeerOutcome(serial: Int, outcome: PeerCheckOutcome.Outcome): Boolean {
         val recorded = synchronized(reprovisionLock) {
             if (serial != peerCheckSerial) {
                 false
@@ -1435,6 +1481,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         ) {
             recoveryWakes.trySend(Unit)
         }
+        return recorded
     }
 
     private fun logHardProbe(config: String, endpoint: String, snap: UnderlaySnap) {
@@ -2095,13 +2142,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     )
 
     /**
-     * OkHttp client bound to [systemDefaultNetwork]'s socket factory. Null when
-     * that network is gone. Never a client for any other network.
+     * OkHttp client bound to [systemDefaultNetwork]. Null when that network
+     * is gone. Never a client for any other network.
      *
-     * protect() is not applied: on some devices it restamps the socket onto
-     * the VPN underlay netId, which can be stale. The system-default socket
-     * factory is what keeps the control call off the tunnel and off every
-     * other network.
+     * Each socket is protect()'d and then bindSocket()'d to that network
+     * before it connects. protect() alone can stamp a stale VPN netId;
+     * bindSocket pins the system default. Some OEM builds reject a bound
+     * socket that was not protected, so both steps run.
      */
     private fun underlyingControlClient(): OkHttpClient? {
         val network = systemDefaultNetwork() ?: run {
@@ -2113,7 +2160,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             val cached = controlClient
             if (cached != null && controlClientHandle == handle) return cached
             val created = ControlPlane.clientForSystemDefault(
-                socketFactory = network.socketFactory,
+                socketFactory = ControlPlane.protectThenBind(
+                    delegate = network.socketFactory,
+                    protect = { socket -> this@VeritasVpnService.protect(socket) },
+                    bind = { socket -> network.bindSocket(socket) },
+                ),
             ) { host ->
                 if (!ControlPlane.hostMayLeaveTunnel(host)) {
                     throw java.net.UnknownHostException(host)
@@ -2278,7 +2329,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private fun applyPeerPlan(serial: Int, gen: Long, plan: PeerRecovery.Plan) {
-        recordPeerOutcome(serial, plan.outcome)
+        if (!recordPeerOutcome(serial, plan.outcome)) return
         when (plan.next) {
             PeerRecovery.Next.REPROVISION -> {
                 Log.i(TAG, "peer check result=${plan.outcome}, re-provisioning")
@@ -2671,6 +2722,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val NOTIFICATION_ID = 1
         const val ACTION_CONNECT = "cloud.veritasvpn.CONNECT"
         const val ACTION_DISCONNECT = "cloud.veritasvpn.DISCONNECT"
+        const val ACTION_AUTH_RESTORED = "cloud.veritasvpn.AUTH_RESTORED"
         const val ACTION_QUERY_STATE = "cloud.veritasvpn.QUERY_STATE"
         const val ACTION_STATE = "cloud.veritasvpn.STATE"
         const val ACTION_STATS = "cloud.veritasvpn.STATS"

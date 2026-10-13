@@ -55,7 +55,8 @@ enum class AuthMethod { EMAIL, ACCOUNT_ID }
 
 @Composable
 fun AuthScreen(
-    onAuthenticated: () -> Unit
+    onAuthenticated: () -> Unit,
+    onCancel: (() -> Unit)? = null,
 ) {
     var mode by remember { mutableStateOf(AuthMode.SIGN_IN) }
     var method by remember { mutableStateOf(AuthMethod.EMAIL) }
@@ -224,7 +225,19 @@ fun AuthScreen(
             .padding(horizontal = 24.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(36.dp))
+        if (onCancel != null) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+                IconButton(onClick = onCancel) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = "Back",
+                        tint = Paper,
+                    )
+                }
+            }
+        } else {
+            Spacer(Modifier.height(36.dp))
+        }
 
         Box(contentAlignment = Alignment.Center) {
             Box(

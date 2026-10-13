@@ -33,6 +33,7 @@ fun DashboardScreen(
     connecting: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
     onPlans: () -> Unit,
@@ -193,11 +194,20 @@ fun DashboardScreen(
                     isPremium -> HeroPhase.Ready
                     else -> HeroPhase.Upsell
                 },
-                onClick = when {
-                    connecting || !billingReady -> null
-                    connected -> onDisconnect
-                    isPremium -> onConnect
-                    else -> onPlans
+                onClick = when (
+                    heroMainAction(
+                        connecting = connecting,
+                        billingReady = billingReady,
+                        connected = connected,
+                        signInAgain = signInAgain,
+                        isPremium = isPremium,
+                    )
+                ) {
+                    HeroMainAction.None -> null
+                    HeroMainAction.SignIn -> onSignIn
+                    HeroMainAction.Disconnect -> onDisconnect
+                    HeroMainAction.Connect -> onConnect
+                    HeroMainAction.Plans -> onPlans
                 },
                 lockdownEnabled = lockdownEnabled,
                 signInAgain = signInAgain,
