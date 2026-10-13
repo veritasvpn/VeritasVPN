@@ -121,10 +121,14 @@ class StealthProtocolTest {
             InitialTransport.STEALTH_UNAVAILABLE,
             StealthPlanner.initial(StealthMode.STEALTH, offer.copy(available = false)),
         )
-        assertTrue(StealthPlanner.shouldFallback(StealthMode.AUTO, offer, handshakeCompleted = false))
+        assertFalse(StealthPlanner.shouldFallback(StealthMode.AUTO, offer, handshakeCompleted = false))
         assertFalse(StealthPlanner.shouldFallback(StealthMode.AUTO, offer, handshakeCompleted = true))
         assertFalse(StealthPlanner.shouldFallback(StealthMode.UDP, offer, handshakeCompleted = false))
         assertFalse(StealthPlanner.shouldFallback(StealthMode.STEALTH, offer, handshakeCompleted = false))
+        assertFalse(StealthPlanner.switchesToStealthAfterFailedUdp(StealthMode.AUTO, failedUdpRounds = 1))
+        assertFalse(StealthPlanner.switchesToStealthAfterFailedUdp(StealthMode.AUTO, failedUdpRounds = 4))
+        assertFalse(StealthPlanner.switchesToStealthAfterFailedUdp(StealthMode.UDP, failedUdpRounds = 2))
+        assertFalse(StealthPlanner.switchesToStealthAfterFailedUdp(StealthMode.STEALTH, failedUdpRounds = 2))
         assertFalse(StealthPlanner.udpAttemptSucceeded(1_000, baselineMs = 1_000, startedMs = 2_000))
         assertFalse(StealthPlanner.udpAttemptSucceeded(1_500, baselineMs = 1_000, startedMs = 2_000))
         assertTrue(StealthPlanner.udpAttemptSucceeded(2_100, baselineMs = 1_000, startedMs = 2_000))
