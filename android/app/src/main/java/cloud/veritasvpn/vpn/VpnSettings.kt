@@ -25,6 +25,7 @@ object VpnSettings {
     private const val KEY_LAST_ERROR = "last_error"
     private const val KEY_VPN_DISCLOSURE_ACCEPTED = "vpn_disclosure_accepted"
     private const val KEY_ONBOARDING_VPN_DONE = "onboarding_vpn_done"
+    private const val KEY_SESSION_ESTABLISHED_AT = "session_established_at"
 
     /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
     val EXCLUDE_LAN_ALLOWED_IPS: List<String> = listOf(
@@ -160,6 +161,20 @@ object VpnSettings {
         prefs(context).edit().apply {
             if (peerId.isNullOrBlank()) remove(KEY_CURRENT_PEER_ID)
             else putString(KEY_CURRENT_PEER_ID, peerId)
+        }.apply()
+    }
+
+    fun sessionEstablishedAt(context: Context): Long =
+        prefs(context).getLong(KEY_SESSION_ESTABLISHED_AT, 0L)
+
+    fun setSessionEstablishedAt(context: Context, timestampMs: Long) {
+        prefs(context).edit().putLong(KEY_SESSION_ESTABLISHED_AT, timestampMs).apply()
+    }
+
+    fun clearSession(context: Context) {
+        prefs(context).edit().apply {
+            remove(KEY_CURRENT_PEER_ID)
+            remove(KEY_SESSION_ESTABLISHED_AT)
         }.apply()
     }
 

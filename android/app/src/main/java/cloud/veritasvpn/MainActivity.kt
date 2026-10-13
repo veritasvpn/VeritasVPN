@@ -200,6 +200,7 @@ class MainActivity : ComponentActivity() {
                 var rxBytes by remember { mutableStateOf(0L) }
                 var txBytes by remember { mutableStateOf(0L) }
                 var handshakeMs by remember { mutableStateOf(0L) }
+                var handshakeOk by remember { mutableStateOf(false) }
                 var dnsBlockedCount by remember { mutableStateOf<Long?>(null) }
                 var dnsBlockedBaseline by remember { mutableStateOf<Long?>(null) }
                 var dnsGateway by remember { mutableStateOf<String?>(null) }
@@ -251,6 +252,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun deletePeerBestEffort(peerId: String?) {
+                    VpnSettings.clearSession(context)
                     if (peerId.isNullOrBlank()) return
                     // Capture the token before a local sign-out clears secure storage.
                     // Peer revocation is best-effort and must never hold up returning the
@@ -658,11 +660,9 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(connecting, awaitingVpnConsent) {
                     if (connecting && !awaitingVpnConsent) {
-                        // First-connect only. Never timeout-disconnect an established session.
-                        // The system VPN consent dialog is excluded: it can sit open while
-                        // the user reads it, and it is not a tunnel attempt yet.
                         kotlinx.coroutines.delay(25_000)
-                        if (connecting && !hadEstablishedSession && !awaitingVpnConsent) {
+                        val stableEstablished = VpnSettings.sessionEstablishedAt(context) > 0L
+                        if (connecting && !hadEstablishedSession && !stableEstablished && !awaitingVpnConsent) {
                             connecting = false
                             userWantsConnected = false
                             statusMsg = "Connection timed out. Check your network and try again."
@@ -682,10 +682,11 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
-                        } else if (connecting && hadEstablishedSession) {
+                        } else if (connecting && (hadEstablishedSession || stableEstablished)) {
                             connecting = false
                             reconnecting = false
                             connected = true
+                            hadEstablishedSession = true
                             statusMsg = null
                         }
                     }
@@ -693,7 +694,7 @@ class MainActivity : ComponentActivity() {
 
                 DisposableEffect(context) {
                     val receiver = object : BroadcastReceiver() {
-                        override fun onReceive(context: Context?, intent: Intent?) {
+                        override fun onReceive(ctx: Context?, intent: Intent?) {
                             when (intent?.action) {
                                 VeritasVpnService.ACTION_STATE -> {
                                     val nowConnected =
@@ -701,6 +702,8 @@ class MainActivity : ComponentActivity() {
                                     val error = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
                                     val svcReconnecting =
                                         intent.getBooleanExtra(VeritasVpnService.EXTRA_RECONNECTING, false)
+                                    val svcHandshakeOk =
+                                        intent.getBooleanExtra(VeritasVpnService.EXTRA_HANDSHAKE_OK, false)
                                     if (nowConnected) {
                                         if (!userWantsConnected) {
                                             // User already tapped Disconnect; ignore a late
@@ -726,6 +729,7 @@ class MainActivity : ComponentActivity() {
                                         appliedStealthMode = stealthMode
                                         intent.getStringExtra(VeritasVpnService.EXTRA_TRANSPORT)
                                             ?.let { transport = it }
+                                        handshakeOk = svcHandshakeOk
                                         statusMsg = if (svcReconnecting) "Reconnecting…" else null
                                     } else if (error != null && error.contains("revoked", ignoreCase = true)) {
                                         connected = false
@@ -761,6 +765,9 @@ class MainActivity : ComponentActivity() {
                                     rxBytes = intent.getLongExtra(VeritasVpnService.EXTRA_RX_BYTES, 0L)
                                     txBytes = intent.getLongExtra(VeritasVpnService.EXTRA_TX_BYTES, 0L)
                                     handshakeMs = intent.getLongExtra(VeritasVpnService.EXTRA_HANDSHAKE_MS, 0L)
+                                    if (intent.hasExtra(VeritasVpnService.EXTRA_HANDSHAKE_OK)) {
+                                        handshakeOk = intent.getBooleanExtra(VeritasVpnService.EXTRA_HANDSHAKE_OK, false)
+                                    }
                                     if (intent.hasExtra(VeritasVpnService.EXTRA_TRANSPORT)) {
                                         transport = intent.getStringExtra(VeritasVpnService.EXTRA_TRANSPORT).orEmpty()
                                     }
@@ -769,6 +776,13 @@ class MainActivity : ComponentActivity() {
                                         reconnecting = svcReconnecting
                                         if (connected) {
                                             statusMsg = if (svcReconnecting) "Reconnecting…" else null
+                                        }
+                                    }
+                                }
+                                VeritasVpnService.ACTION_PEER_GONE -> {
+                                    if (userWantsConnected && hadEstablishedSession) {
+                                        scope.launch {
+                                            reprovisionPeer(context, scope)
                                         }
                                     }
                                 }
@@ -786,11 +800,12 @@ class MainActivity : ComponentActivity() {
                     ContextCompat.registerReceiver(
                         context,
                         receiver,
-                        IntentFilter().apply {
-                            addAction(VeritasVpnService.ACTION_STATE)
-                            addAction(VeritasVpnService.ACTION_STATS)
-                            addAction(VeritasVpnService.ACTION_RECONNECT_NEEDED)
-                        },
+                    IntentFilter().apply {
+                        addAction(VeritasVpnService.ACTION_STATE)
+                        addAction(VeritasVpnService.ACTION_STATS)
+                        addAction(VeritasVpnService.ACTION_RECONNECT_NEEDED)
+                        addAction(VeritasVpnService.ACTION_PEER_GONE)
+                    },
                         ContextCompat.RECEIVER_NOT_EXPORTED
                     )
                     onDispose { context.unregisterReceiver(receiver) }
@@ -1317,6 +1332,8 @@ class MainActivity : ComponentActivity() {
                         dnsBlockedBaseline = dnsBlockedBaseline,
                         dnsGateway = dnsGateway,
                         transport = transport,
+                        reconnecting = reconnecting,
+                        handshakeOk = handshakeOk,
                     )
                 }
                 if (showReleaseLockdown) {
@@ -1497,6 +1514,34 @@ class MainActivity : ComponentActivity() {
             appendLine("Endpoint = ${peer.serverEndpoint}")
             appendLine("AllowedIPs = $allowed")
             appendLine("PersistentKeepalive = 25")
+        }
+    }
+
+    private suspend fun reprovisionPeer(context: Context, scope: CoroutineScope) {
+        val peerId = currentPeerId ?: VpnSettings.currentPeerId(context) ?: return
+        val accessToken = authRepo.getAccessToken()?.takeIf { it.isNotBlank() } ?: return
+        try {
+            withContext(Dispatchers.IO) {
+                val res = ApiClient.get("/api/v1/wg/peers/$peerId", accessToken)
+                if (res.code == 404 || res.code == 410) {
+                    Log.i("VeritasVPN", "peer check result=${res.code}")
+                    res.close()
+                    ApiClient.delete("/api/v1/wg/peers/$peerId", accessToken).close()
+                    withContext(Dispatchers.Main) {
+                        VpnSettings.clearSession(context)
+                        VpnSettings.setCurrentPeerId(context, null)
+                        currentPeerId = null
+                        context.startService(
+                            Intent(context, VeritasVpnService::class.java).apply {
+                                action = VeritasVpnService.ACTION_DISCONNECT
+                            }
+                        )
+                    }
+                } else {
+                    res.close()
+                }
+            }
+        } catch (_: Exception) {
         }
     }
 

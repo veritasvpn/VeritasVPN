@@ -85,17 +85,29 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var waitRecheckJob: Job? = null
     private var lastStatsLogAtMs = 0L
     private var healthUnderlayWaitStartedAtMs = 0L
+    private var linkAttachedAtMs = 0L
+    private var lastPeerVerifyAtMs = 0L
+    private var underlayLostSeen = false
     private val underlayCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = scheduleUnderlayAdapt()
+        override fun onAvailable(network: Network) {
+            linkAttachedAtMs = System.currentTimeMillis()
+            underlayLostSeen = false
+            scheduleUnderlayAdapt()
+        }
         override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) =
             scheduleUnderlayAdapt()
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
             scheduleUnderlayAdapt()
-        override fun onLost(network: Network) = scheduleUnderlayAdapt()
+        override fun onLost(network: Network) {
+            underlayLostSeen = true
+            scheduleUnderlayAdapt()
+        }
     }
     private val bestMatchingCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             bestMatchingNetwork = network
+            linkAttachedAtMs = System.currentTimeMillis()
+            underlayLostSeen = false
             scheduleUnderlayAdapt()
         }
         override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) {
@@ -164,6 +176,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 hardLoopStartedAtMs = 0L
                 healthUnderlayWaitStartedAtMs = 0L
                 underlayWaitStartedAtMs = 0L
+                linkAttachedAtMs = System.currentTimeMillis()
+                lastPeerVerifyAtMs = 0L
+                underlayLostSeen = false
                 waitRecheckJob?.cancel()
                 waitRecheckJob = null
                 activeTransport = if (StealthMode.fromStored(stealthMode) == StealthMode.STEALTH) {
@@ -229,6 +244,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         broadcastState(true, null)
                         startStatsPolling()
                         startBackgroundEgressValidation()
+                        VpnSettings.setSessionEstablishedAt(this@VeritasVpnService, System.currentTimeMillis())
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -302,6 +318,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         .remove(KEY_RESUME_STEALTH)
                         .apply()
                 }
+                VpnSettings.clearSession(this)
                 cancelStealthWork()
                 activeTransport = ""
                 unregisterUnderlayWatch()
@@ -353,6 +370,22 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun restoreSavedSessionIfNeeded() {
         if (vpnStatePrefs().getString(KEY_CONFIG, null) == null) return
+        if (VpnSettings.currentPeerId(this) == null) {
+            synchronized(tunnelOpLock) {
+                vpnStatePrefs().edit()
+                    .remove(KEY_CONFIG)
+                    .remove(KEY_UDP_CONFIG)
+                    .remove(KEY_ENDPOINT_LAN)
+                    .remove(KEY_ENDPOINT_WAN)
+                    .remove(KEY_STEALTH_ENDPOINT)
+                    .remove(KEY_STEALTH_PREFIX)
+                    .remove(KEY_STEALTH_MODE)
+                    .remove(KEY_STEALTH_AVAILABLE)
+                    .remove(KEY_RESUME_STEALTH)
+                    .apply()
+            }
+            return
+        }
         if (restoreJob?.isActive == true || disconnectJob?.isActive == true) return
         val restoreGen = sessionGeneration
         startForeground(NOTIFICATION_ID, buildNotification("Restoring secure tunnel…"))
@@ -561,6 +594,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 .putExtra(EXTRA_HANDSHAKE_MS, handshakeMs)
                 .putExtra(EXTRA_TRANSPORT, activeTransport)
                 .putExtra(EXTRA_RECONNECTING, isReconnecting)
+                .putExtra(EXTRA_HANDSHAKE_OK, handshakeOk())
         )
     }
 
@@ -652,7 +686,15 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (egressIp != null) intent.putExtra(EXTRA_EGRESS_IP, egressIp)
         if (activeTransport.isNotEmpty()) intent.putExtra(EXTRA_TRANSPORT, activeTransport)
         intent.putExtra(EXTRA_RECONNECTING, isReconnecting)
+        intent.putExtra(EXTRA_HANDSHAKE_OK, handshakeOk())
         sendBroadcast(intent)
+    }
+
+    private fun handshakeOk(): Boolean {
+        val hs = latestHandshakeMs()
+        if (hs <= 0L) return false
+        val age = System.currentTimeMillis() - hs
+        return age < HANDSHAKE_OK_AGE_MS
     }
 
     private fun buildNotification(text: String): Notification {
@@ -1251,7 +1293,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         // When forceHard is true, skip the identity/fingerprint early-return.
         // This allows the stall detector to redial a Stealth tunnel that is
         // stalled on an unchanged network (R1).
-        if (!forceHard && live.identity == lastUnderlayIdentity && fp == lastUnderlayFingerprint) return
+        // Also redial when reconnecting, when underlay was lost, or when the
+        // handshake predates the current link (no working handshake on this link).
+        val hs = latestHandshakeMs()
+        val handshakeStaleForLink = linkAttachedAtMs > 0L && (hs <= 0L || hs <= linkAttachedAtMs)
+        if (!forceHard && !isReconnecting && !underlayLostSeen && !handshakeStaleForLink &&
+            live.identity == lastUnderlayIdentity && fp == lastUnderlayFingerprint
+        ) return
         Log.i(TAG, "path-adapt stealth redial ${lastUnderlayIdentity} -> ${live.identity}")
         followSystemDefault()
         publishReconnecting(true)
@@ -1260,41 +1308,46 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         lastUnderlayIdentity = live.identity
         lastChosenEndpoint = stealthTransport?.localEndpoint ?: lastChosenEndpoint
         val redialAt = System.currentTimeMillis()
+        linkAttachedAtMs = redialAt
+        underlayLostSeen = false
         stealthReconnectJob?.cancel()
         stealthReconnectJob = scope.launch {
             var succeeded = false
             try {
-                // Rethrow CancellationException so it propagates correctly (B2).
-                // Use 9s per attempt — HANDSHAKE_CONFIRM_MS (3.5s) is too short
-                // for TLS/websocket redial on mobile data (R3).
                 val stealthTimeout = 9_000L
-                val ok = waitForHandshake(gen, redialAt, stealthTimeout)
-                if (ok) {
-                    Log.i(TAG, "path-adapt stealth redial handshake ok")
-                    succeeded = true
-                    return@launch
+                val backoff = StealthBackoff.sequence().iterator()
+                var attempt = 0
+                while (gen == sessionGeneration && sessionIntended() && disconnectJob?.isActive != true) {
+                    attempt++
+                    val ok = waitForHandshake(gen, redialAt, stealthTimeout)
+                    if (ok) {
+                        Log.i(TAG, "stealth redial n=$attempt handshake ok")
+                        succeeded = true
+                        return@launch
+                    }
+                    if (gen != sessionGeneration || !sessionIntended()) return@launch
+                    val live = liveUnderlay()
+                    if (live == null) {
+                        Log.i(TAG, "stealth redial n=$attempt no underlay, pausing")
+                        while (gen == sessionGeneration && sessionIntended() && liveUnderlay() == null) {
+                            delay(1_000)
+                        }
+                        if (gen != sessionGeneration || !sessionIntended()) return@launch
+                        Log.i(TAG, "stealth redial underlay back, resuming")
+                        linkAttachedAtMs = System.currentTimeMillis()
+                        continue
+                    }
+                    val delayMs = if (backoff.hasNext()) backoff.next() else StealthBackoff.MAX_MS
+                    val jitter = (Math.random() * StealthBackoff.JITTER_MS).toLong()
+                    Log.w(TAG, "stealth redial n=$attempt no handshake, backoff=${delayMs}ms")
+                    delay(delayMs + jitter)
+                    stealthTransport?.reconnect()
                 }
-                if (gen != sessionGeneration || !sessionIntended()) return@launch
-                Log.w(TAG, "path-adapt stealth redial no handshake, retrying")
-                stealthTransport?.reconnect()
-                val retryAt = System.currentTimeMillis()
-                val retryOk = waitForHandshake(gen, retryAt, stealthTimeout)
-                if (retryOk) {
-                    Log.i(TAG, "path-adapt stealth redial retry handshake ok")
-                    succeeded = true
-                    return@launch
-                }
-                // After two failed attempts, keep reconnecting=true and let the stall
-                // detector take over with its 30s→2min backoff (R3).
-                // Do NOT self-reschedule — that bypasses the backoff and drains battery.
-                Log.w(TAG, "path-adapt stealth redial failed, stall detector will retry")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "path-adapt stealth redial exception", e)
+                Log.e(TAG, "stealth redial exception", e)
             } finally {
-                // Clear reconnecting only on success (B1). On failure, leave it set
-                // so the UI shows "Reconnecting…" while the stall detector retries.
                 if (succeeded) {
                     publishReconnecting(false)
                 }
@@ -1584,10 +1637,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         lastKnownTx = initial.second
         lastStallCheckAtMs = System.currentTimeMillis()
         healthUnderlayWaitStartedAtMs = 0L
+        linkAttachedAtMs = System.currentTimeMillis()
         healthJob = scope.launch {
             while (sessionIntended()) {
                 delay(HEALTH_WATCH_MS)
-                if (!sessionIntended() || lastUnderlayIdentity == null) continue
+                if (!sessionIntended()) continue
                 if (disconnectJob?.isActive == true || adaptJob?.isActive == true) {
                     healthUnderlayWaitStartedAtMs = 0L
                     continue
@@ -1596,9 +1650,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 val live = liveUnderlay()
                 val now = System.currentTimeMillis()
 
-                if (live != null && live.identity != lastUnderlayIdentity) {
+                if (live != null && lastUnderlayIdentity != null && live.identity != lastUnderlayIdentity) {
                     Log.w(TAG, "path-adapt health: underlay moved $lastUnderlayIdentity -> ${live.identity}")
                     healthUnderlayWaitStartedAtMs = 0L
+                    linkAttachedAtMs = now
+                    underlayLostSeen = false
                     scheduleUnderlayAdapt()
                     lastStallCheckAtMs = now
                     val s = readBackendStats()
@@ -1608,12 +1664,15 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
 
                 if (live == null) {
+                    if (lastUnderlayIdentity != null) underlayLostSeen = true
                     if (healthUnderlayWaitStartedAtMs == 0L) healthUnderlayWaitStartedAtMs = now
                     if (now - healthUnderlayWaitStartedAtMs > STALL_UNDERLAY_WAIT_FALLBACK_MS) {
                         val fallback = bestUnderlaySnap(requireValidated = false)
                         if (fallback != null) {
                             Log.w(TAG, "path-adapt health: underlay absent ${now - healthUnderlayWaitStartedAtMs}ms, scheduling adapt")
                             healthUnderlayWaitStartedAtMs = 0L
+                            linkAttachedAtMs = now
+                            underlayLostSeen = false
                             scheduleUnderlayAdapt()
                             lastStallCheckAtMs = now
                             val s = readBackendStats()
@@ -1639,6 +1698,26 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     txDelta = txDelta,
                     handshakeAgeMs = handshakeAge,
                 )
+
+                val peerDecision = if (lastUnderlayIdentity != null) {
+                    PeerHealth.decide(
+                        handshakeMs = handshakeMs,
+                        linkAttachedAtMs = linkAttachedAtMs,
+                        nowMs = now,
+                        networkUsable = true,
+                        lastVerifyAtMs = lastPeerVerifyAtMs,
+                    )
+                } else {
+                    PeerHealth.Decision.OK
+                }
+
+                if (peerDecision == PeerHealth.Decision.VERIFY_PEER) {
+                    lastPeerVerifyAtMs = now
+                    Log.i(TAG, "peer check trigger")
+                    sendBroadcast(
+                        Intent(ACTION_PEER_GONE).setPackage(packageName)
+                    )
+                }
 
                 if (stalled && now - lastStallRebindAtMs >= stallBackoffMs) {
                     Log.w(TAG, "path-adapt health: stall detected rx=$rxDelta tx=$txDelta handshakeAge=$handshakeAge currentBackoff=${stallBackoffMs}ms")
@@ -1707,6 +1786,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val ACTION_STATE = "cloud.veritasvpn.STATE"
         const val ACTION_STATS = "cloud.veritasvpn.STATS"
         const val ACTION_RECONNECT_NEEDED = "cloud.veritasvpn.RECONNECT_NEEDED"
+        const val ACTION_PEER_GONE = "cloud.veritasvpn.PEER_GONE"
         const val EXTRA_CONFIG = "config"
         const val EXTRA_ENDPOINT_LAN = "endpoint_lan"
         const val EXTRA_ENDPOINT_WAN = "endpoint_wan"
@@ -1722,6 +1802,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val EXTRA_TX_BYTES = "tx_bytes"
         const val EXTRA_HANDSHAKE_MS = "handshake_ms"
         const val EXTRA_RECONNECTING = "reconnecting"
+        const val EXTRA_HANDSHAKE_OK = "handshake_ok"
         const val PREFS_NAME = "veritas_vpn_state"
         const val KEY_CONFIG = "last_approved_config"
         const val KEY_UDP_CONFIG = "udp_config"
@@ -1739,15 +1820,18 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
          * Activity, so the UI must not default to an unrelated "disconnected"
          * state while the foreground VPN service is still running.
          */
-        fun hasSavedSession(context: Context): Boolean =
-            SecurePrefs.open(context.applicationContext, PREFS_NAME)
-                .getString(KEY_CONFIG, null) != null
+        fun hasSavedSession(context: Context): Boolean {
+            val prefs = SecurePrefs.open(context.applicationContext, PREFS_NAME)
+            if (prefs.getString(KEY_CONFIG, null) == null) return false
+            return VpnSettings.currentPeerId(context) != null
+        }
         private const val UDP_ATTEMPT_MS = 6_000L
         private const val UNDERLAY_ADAPT_DEBOUNCE_MS = 400L
         private const val SOFT_ATTACH_MS = 6_000L
         private const val HANDSHAKE_CONFIRM_MS = 3_500L
         private const val PROBE_RETRY_DELAY_MS = 1_200L
         private const val HEALTH_WATCH_MS = 2_000L
+        private const val HANDSHAKE_OK_AGE_MS = 180_000L
         private const val STALL_DETECT_WINDOW_MS = TunnelStall.DETECT_WINDOW_MS
         private const val STALL_UNDERLAY_POLL_MS = 1_500L
         private const val STALL_UNDERLAY_MAX_POLL_MS = 10_000L

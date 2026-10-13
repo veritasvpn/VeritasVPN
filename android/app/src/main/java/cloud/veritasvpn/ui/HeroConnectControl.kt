@@ -60,6 +60,7 @@ import cloud.veritasvpn.ui.theme.Ink
 import cloud.veritasvpn.ui.theme.Ink2
 import cloud.veritasvpn.ui.theme.PaperDim
 import cloud.veritasvpn.ui.theme.RoyalHover
+import cloud.veritasvpn.ui.theme.WarningOrange
 import cloud.veritasvpn.ui.theme.rememberMotionEnabled
 import android.os.SystemClock
 import kotlinx.coroutines.isActive
@@ -70,6 +71,7 @@ enum class HeroPhase {
     Checking,
     Connecting,
     Protected,
+    Reconnecting,
 }
 
 /** Desktop MARK_DIM / MARK_FULL. Dim is disconnected; full is protected. */
@@ -90,7 +92,7 @@ internal data class HeroMarkLook(
 )
 
 internal fun heroMarkLive(phase: HeroPhase): Boolean {
-    return phase == HeroPhase.Checking || phase == HeroPhase.Connecting
+    return phase == HeroPhase.Checking || phase == HeroPhase.Connecting || phase == HeroPhase.Reconnecting
 }
 
 /**
@@ -102,7 +104,7 @@ internal fun heroMarkLive(phase: HeroPhase): Boolean {
  */
 internal fun nextHeroMarkLiveStartMs(previousStartMs: Long, phase: HeroPhase, nowMs: Long): Long {
     return when (phase) {
-        HeroPhase.Checking, HeroPhase.Connecting ->
+        HeroPhase.Checking, HeroPhase.Connecting, HeroPhase.Reconnecting ->
             if (previousStartMs < 0L) nowMs else previousStartMs
         HeroPhase.Protected -> previousStartMs
         else -> -1L
@@ -215,6 +217,7 @@ fun HeroConnectControl(
     val secured = phase == HeroPhase.Protected
     val edge = when (phase) {
         HeroPhase.Protected -> Cyan
+        HeroPhase.Reconnecting -> WarningOrange
         HeroPhase.Upsell -> RoyalHover
         else -> CyanHover
     }
@@ -341,10 +344,12 @@ fun HeroConnectControl(
                 HeroPhase.Checking -> "Checking plan…"
                 HeroPhase.Connecting -> "Connecting…"
                 HeroPhase.Protected -> "Protected"
+                HeroPhase.Reconnecting -> "Reconnecting…"
                 else -> null
             }
             val captionColor = when (current) {
                 HeroPhase.Protected -> Cyan
+                HeroPhase.Reconnecting -> WarningOrange
                 HeroPhase.Connecting, HeroPhase.Checking -> CyanHover
                 else -> PaperDim
             }
@@ -365,6 +370,15 @@ fun HeroConnectControl(
                             text = "Your connection is encrypted",
                             style = MaterialTheme.typography.bodySmall,
                             color = PaperDim,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                    if (current == HeroPhase.Reconnecting) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "Not protected",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = WarningOrange,
                             textAlign = TextAlign.Center,
                         )
                     }
