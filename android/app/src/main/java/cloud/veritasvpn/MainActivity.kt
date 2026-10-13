@@ -49,9 +49,11 @@ import cloud.veritasvpn.ui.StealthSettingsScreen
 import cloud.veritasvpn.ui.TunnelSettingsScreen
 import cloud.veritasvpn.ui.OnboardingGate
 import cloud.veritasvpn.ui.theme.VeritasVPNTheme
+import cloud.veritasvpn.vpn.ReconnectDecisions
 import cloud.veritasvpn.vpn.VeritasVpnService
 import cloud.veritasvpn.vpn.VpnKillSwitch
 import cloud.veritasvpn.vpn.VpnSettings
+import cloud.veritasvpn.vpn.WireGuardSession
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -980,12 +982,16 @@ class MainActivity : ComponentActivity() {
                             if (user != null) ensureSessionFresh()
                             // Update lockdown status for UI
                             lockdownEnabled = VpnKillSwitch.isLockdownEnabled(context)
-                            val peerGoneAt = VpnSettings.peerGoneAt(context)
-                            val reprovisionBusy = VpnSettings.reprovisionInProgressAt(context) > 0L &&
-                                System.currentTimeMillis() - VpnSettings.reprovisionInProgressAt(context) < 60_000L
-                            if (userWantsConnected && !connected && !connecting &&
-                                peerGoneAt > 0L && !reprovisionBusy &&
-                                !VeritasVpnService.hasSavedSession(context) && user != null) {
+                            if (user != null && ReconnectDecisions.shouldActivityReconnect(
+                                    userWantsConnected = userWantsConnected,
+                                    connected = connected,
+                                    connecting = connecting,
+                                    peerGoneAt = VpnSettings.peerGoneAt(context),
+                                    reprovisionInProgressAt = VpnSettings.reprovisionInProgressAt(context),
+                                    nowMs = System.currentTimeMillis(),
+                                    hasSavedSession = VeritasVpnService.hasSavedSession(context),
+                                )
+                            ) {
                                 Log.i("VeritasVPN", "resume: peer gone, service not re-provisioning, reconnecting")
                                 currentPeerId = null
                                 VpnSettings.setCurrentPeerId(context, null)
@@ -1401,30 +1407,6 @@ class MainActivity : ComponentActivity() {
 
     private var currentPeerId: String? = null
 
-    // Display-only metadata for the account dashboard. Do not add hardware
-    // identifiers (IMEI, Android ID, serial, MAC), account data or location.
-    // A user-selected dashboard name stays server-side and is never overwritten.
-    private fun deviceMetadata(): Map<String, String> {
-        val manufacturer = Build.MANUFACTURER.orEmpty().trim()
-        val model = Build.MODEL.orEmpty().trim()
-        val deviceModel = listOf(manufacturer, model)
-            .filter { it.isNotBlank() }
-            .distinctBy { it.lowercase() }
-            .joinToString(" ")
-            .take(100)
-        val appVersion = try {
-            packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
-        } catch (_: Exception) {
-            ""
-        }
-        return mapOf(
-            "device_platform" to "Android",
-            "device_model" to deviceModel,
-            "device_os_version" to "Android ${Build.VERSION.RELEASE.orEmpty()}".trim(),
-            "client_version" to appVersion,
-        )
-    }
-
     private fun peerIdForDisconnect(): String? {
         val id = currentPeerId ?: VpnSettings.currentPeerId(this)
         currentPeerId = null
@@ -1462,7 +1444,7 @@ class MainActivity : ComponentActivity() {
                         mapOf<String, Any>(
                             "public_key" to keyPair.publicKey.toBase64(),
                             "device_id" to deviceId,
-                        ) + deviceMetadata() + VpnSettings.shieldPolicy(context).wireBody(),
+                        ) + WireGuardSession.deviceMetadata(context) + VpnSettings.shieldPolicy(context).wireBody(),
                         token
                     )
                 }) { res ->
@@ -1474,7 +1456,7 @@ class MainActivity : ComponentActivity() {
                         ?: throw PeerError("Invalid VPN server response")
                 }
                 if (!shouldContinue()) return@launch
-                val config = buildWireGuardConfig(context, peer, keyPair)
+                val config = WireGuardSession.buildConfig(context, peer, keyPair)
                 val intent = Intent(context, VeritasVpnService::class.java).apply {
                     action = VeritasVpnService.ACTION_CONNECT
                     putExtra(VeritasVpnService.EXTRA_CONFIG, config)
@@ -1522,37 +1504,6 @@ class MainActivity : ComponentActivity() {
                     onFailure?.invoke()
                 }
             }
-        }
-    }
-
-    private fun buildWireGuardConfig(context: Context, peer: PeerResponse, keyPair: KeyPair): String {
-        val dns = peer.dnsServer?.trim().orEmpty()
-        require(dns.isNotEmpty()) {
-            "Server did not provide a DNS gateway; connect aborted to avoid unfiltered public DNS."
-        }
-        val serverAllowed = peer.clientAllowedIps ?: peer.allowedIps ?: listOf("0.0.0.0/0", "::/0")
-        val allowed = VpnSettings.resolveAllowedIps(context, serverAllowed).joinToString(",")
-        val bypassApps = VpnSettings.bypassApps(context)
-        return buildString {
-            appendLine("[Interface]")
-            appendLine("PrivateKey = ${keyPair.privateKey.toBase64()}")
-            appendLine("Address = ${peer.assignedIp}")
-            appendLine("DNS = $dns")
-            // Product default MTU 1280 (reliability on mobile/hostile paths); see docs/MTU_STRATEGY.md
-            appendLine("MTU = 1280")
-            if (bypassApps.isNotEmpty()) {
-                // GoBackend maps ExcludedApplications → VpnService.Builder.addDisallowedApplication
-                appendLine("ExcludedApplications = ${bypassApps.joinToString(", ")}")
-            }
-            appendLine()
-            appendLine("[Peer]")
-            appendLine("PublicKey = ${peer.serverPublicKey}")
-            if (!peer.presharedKey.isNullOrEmpty()) {
-                appendLine("PresharedKey = ${peer.presharedKey}")
-            }
-            appendLine("Endpoint = ${peer.serverEndpoint}")
-            appendLine("AllowedIPs = $allowed")
-            appendLine("PersistentKeepalive = 25")
         }
     }
 

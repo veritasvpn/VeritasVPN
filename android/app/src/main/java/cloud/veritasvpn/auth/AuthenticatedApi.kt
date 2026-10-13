@@ -16,11 +16,16 @@ object AuthenticatedApi {
         var response = request(token)
         if (response.code == 401) {
             response.close()
-            if (!auth.refreshSession()) {
+            // Force the rotation. The rejected token may still be unexpired locally,
+            // and a second caller waits on the same lock and reuses the new token.
+            if (!auth.refreshSession(force = true)) {
                 auth.signOut()
                 throw SessionExpiredException()
             }
-            token = auth.requireAccessToken()
+            token = auth.getAccessToken()?.takeIf { it.isNotBlank() } ?: run {
+                auth.signOut()
+                throw SessionExpiredException()
+            }
             response = request(token)
         }
         return response

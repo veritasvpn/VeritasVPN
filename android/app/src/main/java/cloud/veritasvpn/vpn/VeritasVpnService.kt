@@ -32,6 +32,7 @@ import cloud.veritasvpn.api.UserFacingError
 import cloud.veritasvpn.api.PeerResponse
 import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.secure.SecurePrefs
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -89,6 +91,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var stealthReconnectJob: Job? = null
     private var waitRecheckJob: Job? = null
     private var peerCheckJob: Job? = null
+    private var reprovisionJob: Job? = null
+    private var reprovisionBackoffMs = ReprovisionBackoff.INITIAL_MS
+    private val reprovisionLock = Any()
     private var lastStatsLogAtMs = 0L
     private var healthUnderlayWaitStartedAtMs = 0L
     private var linkAttachedAtMs = 0L
@@ -171,6 +176,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 val stealthMode = intent.getStringExtra(EXTRA_STEALTH_MODE).orEmpty()
                 val stealthAvailable = intent.getBooleanExtra(EXTRA_STEALTH_AVAILABLE, false)
                 val connectGen = ++sessionGeneration
+                cancelPeerRecovery()
                 VpnSettings.clearPeerGoneAt(this)
                 VpnSettings.clearReprovisionInProgressAt(this)
                 lastUnderlayFingerprint = null
@@ -345,6 +351,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 lastStatsLogAtMs = 0L
                 adaptJob?.cancel()
                 healthJob?.cancel()
+                cancelPeerRecovery()
                 restoreJob?.cancel()
                 transitionJob?.cancel()
                 disconnectJob?.cancel()
@@ -441,6 +448,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     override fun onRevoke() {
         sessionGeneration++
         adaptJob?.cancel()
+        cancelPeerRecovery()
         unregisterUnderlayWatch()
         lastUnderlayFingerprint = null
         lastUnderlayIdentity = null
@@ -489,6 +497,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     override fun onDestroy() {
         adaptJob?.cancel()
+        cancelPeerRecovery()
         unregisterUnderlayWatch()
         stopStatsPolling()
         cancelStealthWork()
@@ -586,7 +595,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             val now = System.currentTimeMillis()
             if (now - lastStatsLogAtMs >= STATS_LOG_INTERVAL_MS) {
                 lastStatsLogAtMs = now
-                Log.w(TAG, "stats read failed: ${e.javaClass.simpleName}: ${e.message}")
+                Log.w(TAG, "stats read failed: ${e.javaClass.simpleName}")
             }
             return
         }
@@ -631,7 +640,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         repeat(3) { attempt ->
             val egressIp = raceEgressEndpoints()
             if (egressIp != null) {
-                if (sessionIntended()) {
+                if (sessionIntended() && !isReconnecting) {
                     ServiceCompat.startForeground(
                         this,
                         NOTIFICATION_ID,
@@ -709,7 +718,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun buildNotification(text: String): Notification {
         lastNotificationText = text
-        val shown = transportSuffix(text)
+        // A failed re-provision keeps isReconnecting set. Later status updates
+        // must not paint "Connected" over Reconnecting while the peer is gone.
+        val shown = transportSuffix(if (isReconnecting) "Reconnecting…" else text)
         val openIntent = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -1375,7 +1386,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "stealth redial exception: ${e.javaClass.simpleName}: ${e.message}")
+                Log.e(TAG, "stealth redial exception: ${e.javaClass.simpleName}")
             } finally {
                 if (succeeded) {
                     publishReconnecting(false)
@@ -1659,16 +1670,31 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         cellular = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
     )
 
+    private fun cancelPeerRecovery() {
+        peerCheckJob?.cancel()
+        peerCheckJob = null
+        synchronized(reprovisionLock) {
+            reprovisionJob?.cancel()
+            reprovisionJob = null
+        }
+        reprovisionBackoffMs = ReprovisionBackoff.INITIAL_MS
+    }
+
     private fun schedulePeerCheck() {
         peerCheckJob?.cancel()
+        // Captured before the peer request so a disconnect during the call is visible.
+        val gen = sessionGeneration
         peerCheckJob = scope.launch {
+            if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
+                return@launch
+            }
             val peerId = VpnSettings.currentPeerId(this@VeritasVpnService) ?: return@launch
-            val prefs = SecurePrefs.open(this@VeritasVpnService, "veritas_auth")
 
             val token = try {
                 authRepo.getValidAccessToken()
-            } catch (_: Exception) { null }
-            ?: return@launch
+            } catch (_: Exception) {
+                null
+            } ?: return@launch
 
             try {
                 val res = ApiClient.get("/api/v1/wg/peers/$peerId", token)
@@ -1680,7 +1706,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     PeerCheckOutcome.Outcome.REFRESH_AND_RETRY -> {
                         res.close()
                         Log.i(TAG, "peer check result=401, refreshing token")
-                        val refreshed = authRepo.getValidAccessToken()
+                        if (gen != sessionGeneration || !sessionIntended()) return@launch
+                        // A 401 means the server rejected the token. Refresh even when it
+                        // has not expired locally, then retry the peer check once.
+                        val refreshed = if (authRepo.refreshSession(force = true)) {
+                            authRepo.getAccessToken()?.takeIf { it.isNotBlank() }
+                        } else {
+                            null
+                        }
                         if (refreshed == null) {
                             Log.w(TAG, "peer check: token refresh failed")
                             return@launch
@@ -1689,38 +1722,67 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         val retryOutcome = PeerCheckOutcome.map(retry.code)
                         retry.close()
                         if (retryOutcome == PeerCheckOutcome.Outcome.PEER_GONE) {
-                            handlePeerGone()
+                            requestReprovision(gen)
                         }
                     }
                     PeerCheckOutcome.Outcome.PEER_GONE -> {
                         res.close()
                         Log.i(TAG, "peer check result=${PeerCheckOutcome.Outcome.PEER_GONE}, re-provisioning")
-                        handlePeerGone()
+                        requestReprovision(gen)
                     }
                     PeerCheckOutcome.Outcome.NETWORK_ERROR -> {
                         res.close()
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "peer check failed: ${e.javaClass.simpleName}: ${e.message}")
+                Log.w(TAG, "peer check failed: ${e.javaClass.simpleName}")
             }
         }
     }
 
-    private suspend fun handlePeerGone() {
-        val gen = sessionGeneration
-        if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) return
-
-        val now = System.currentTimeMillis()
-        val reprovisioning = VpnSettings.reprovisionInProgressAt(this)
-        if (reprovisioning > 0L && now - reprovisioning < REPROVISION_SINGLE_FLIGHT_MS) {
-            Log.i(TAG, "peer gone: re-provision already in progress, skipping")
-            return
+    private fun requestReprovision(gen: Long) {
+        synchronized(reprovisionLock) {
+            if (reprovisionJob?.isActive == true) {
+                Log.i(TAG, "peer gone: re-provision already in progress, skipping")
+                return
+            }
+            reprovisionJob = scope.launch { handlePeerGone(gen) }
         }
-        VpnSettings.setReprovisionInProgressAt(this, now)
-        VpnSettings.setPeerGoneAt(this, now)
+    }
 
+    private fun scheduleReprovisionRetry(gen: Long) {
+        val waitMs = reprovisionBackoffMs
+        reprovisionBackoffMs = ReprovisionBackoff.next(reprovisionBackoffMs)
+        synchronized(reprovisionLock) {
+            reprovisionJob = scope.launch {
+                if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
+                    return@launch
+                }
+                delay(waitMs)
+                if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
+                    return@launch
+                }
+                handlePeerGone(gen)
+            }
+        }
+    }
+
+    private suspend fun handlePeerGone(gen: Long) {
+        var attempted = false
+        var succeeded = false
         try {
+            if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) return
+
+            val now = System.currentTimeMillis()
+            val reprovisioning = VpnSettings.reprovisionInProgressAt(this)
+            if (reprovisioning > 0L && now - reprovisioning < REPROVISION_SINGLE_FLIGHT_MS) {
+                Log.i(TAG, "peer gone: re-provision already in progress, skipping")
+                return
+            }
+            attempted = true
+            VpnSettings.setReprovisionInProgressAt(this, now)
+            VpnSettings.setPeerGoneAt(this, now)
+
             publishReconnecting(true)
             ServiceCompat.startForeground(
                 this@VeritasVpnService,
@@ -1732,7 +1794,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             val keyPair = KeyPair()
             val deviceId = VpnSettings.deviceId(this)
             val shieldBody = VpnSettings.shieldPolicy(this).wireBody()
-            val metadata = deviceMetadata()
+            val metadata = WireGuardSession.deviceMetadata(this)
 
             val token = authRepo.getValidAccessToken() ?: run {
                 Log.w(TAG, "peer gone: no valid token for re-provision")
@@ -1759,7 +1821,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
             if (gen != sessionGeneration || !sessionIntended()) return
 
-            val config = buildServiceWireGuardConfig(peer, keyPair)
+            val config = WireGuardSession.buildConfig(this, peer, keyPair)
             val endpointLan = peer.serverEndpointLan?.trim().orEmpty()
             val endpointWan = peer.serverEndpointWan?.trim().orEmpty()
             val stealthEndpoint = peer.stealthEndpoint?.trim().orEmpty()
@@ -1792,6 +1854,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 Log.w(TAG, "peer gone: establish tunnel failed, state=$state")
                 return
             }
+            succeeded = true
+            VpnSettings.clearPeerGoneAt(this)
+            reprovisionBackoffMs = ReprovisionBackoff.INITIAL_MS
             runCatching { setUnderlyingNetworks(null) }
             registerUnderlayWatch()
             ServiceCompat.startForeground(
@@ -1800,6 +1865,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 buildNotification("Connected · checking route…"),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             )
+            // Drop Reconnecting before the egress probe so a fast result can
+            // publish "Connected" instead of being held back as Not protected.
+            publishReconnecting(false)
             broadcastState(true, null)
             startStatsPolling()
             startBackgroundEgressValidation()
@@ -1808,61 +1876,27 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "peer gone: re-provision failed: ${e.javaClass.simpleName}: ${e.message}")
+            Log.w(TAG, "peer gone: re-provision failed: ${e.javaClass.simpleName}")
         } finally {
-            publishReconnecting(false)
-            VpnSettings.clearReprovisionInProgressAt(this)
-        }
-    }
-
-    private fun buildServiceWireGuardConfig(peer: PeerResponse, keyPair: KeyPair): String {
-        val dns = peer.dnsServer?.trim().orEmpty()
-        require(dns.isNotEmpty()) {
-            "Server did not provide a DNS gateway; re-provision aborted."
-        }
-        val serverAllowed = peer.clientAllowedIps ?: peer.allowedIps ?: listOf("0.0.0.0/0", "::/0")
-        val allowed = VpnSettings.resolveAllowedIps(this, serverAllowed).joinToString(",")
-        val bypassApps = VpnSettings.bypassApps(this)
-        return buildString {
-            appendLine("[Interface]")
-            appendLine("PrivateKey = ${keyPair.privateKey.toBase64()}")
-            appendLine("Address = ${peer.assignedIp}")
-            appendLine("DNS = $dns")
-            appendLine("MTU = 1280")
-            if (bypassApps.isNotEmpty()) {
-                appendLine("ExcludedApplications = ${bypassApps.joinToString(", ")}")
+            if (attempted) {
+                VpnSettings.clearReprovisionInProgressAt(this)
+                val retry = coroutineContext.isActive && ReprovisionBackoff.shouldScheduleRetry(
+                    succeeded = succeeded,
+                    generationMatches = gen == sessionGeneration,
+                    sessionIntended = sessionIntended(),
+                    disconnectInProgress = disconnectJob?.isActive == true,
+                )
+                if (succeeded) {
+                    publishReconnecting(false)
+                } else if (retry) {
+                    // Stay on Reconnecting / Not protected. The old peer is gone.
+                    publishReconnecting(true)
+                    scheduleReprovisionRetry(gen)
+                } else if (!sessionIntended() || gen != sessionGeneration) {
+                    isReconnecting = false
+                }
             }
-            appendLine()
-            appendLine("[Peer]")
-            appendLine("PublicKey = ${peer.serverPublicKey}")
-            if (!peer.presharedKey.isNullOrEmpty()) {
-                appendLine("PresharedKey = ${peer.presharedKey}")
-            }
-            appendLine("Endpoint = ${peer.serverEndpoint}")
-            appendLine("AllowedIPs = $allowed")
-            appendLine("PersistentKeepalive = 25")
         }
-    }
-
-    private fun deviceMetadata(): Map<String, String> {
-        val manufacturer = Build.MANUFACTURER.orEmpty().trim()
-        val model = Build.MODEL.orEmpty().trim()
-        val deviceModel = listOf(manufacturer, model)
-            .filter { it.isNotBlank() }
-            .distinctBy { it.lowercase() }
-            .joinToString(" ")
-            .take(100)
-        val appVersion = try {
-            packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
-        } catch (_: Exception) {
-            ""
-        }
-        return mapOf(
-            "device_platform" to "Android",
-            "device_model" to deviceModel,
-            "device_os_version" to "Android ${Build.VERSION.RELEASE.orEmpty()}".trim(),
-            "client_version" to appVersion,
-        )
     }
 
     private fun startHealthWatch() {
