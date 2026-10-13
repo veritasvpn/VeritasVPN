@@ -25,6 +25,9 @@ object VpnSettings {
     private const val KEY_LAST_ERROR = "last_error"
     private const val KEY_VPN_DISCLOSURE_ACCEPTED = "vpn_disclosure_accepted"
     private const val KEY_ONBOARDING_VPN_DONE = "onboarding_vpn_done"
+    private const val KEY_SESSION_ESTABLISHED_AT = "session_established_at"
+    private const val KEY_PEER_GONE_AT = "peer_gone_at"
+    private const val KEY_REPROVISION_IN_PROGRESS_AT = "reprovision_in_progress_at"
 
     /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
     val EXCLUDE_LAN_ALLOWED_IPS: List<String> = listOf(
@@ -161,6 +164,46 @@ object VpnSettings {
             if (peerId.isNullOrBlank()) remove(KEY_CURRENT_PEER_ID)
             else putString(KEY_CURRENT_PEER_ID, peerId)
         }.apply()
+    }
+
+    /**
+     * Timestamp when the tunnel interface was established (not when the first handshake completed).
+     * Used as a stable marker to prevent the first-connect timeout from deleting an established peer
+     * after Activity recreation. This is a "don't delete" marker, not a measure of connection health.
+     */
+    fun sessionEstablishedAt(context: Context): Long =
+        prefs(context).getLong(KEY_SESSION_ESTABLISHED_AT, 0L)
+
+    fun setSessionEstablishedAt(context: Context, timestampMs: Long) {
+        prefs(context).edit().putLong(KEY_SESSION_ESTABLISHED_AT, timestampMs).apply()
+    }
+
+    fun clearSession(context: Context) {
+        prefs(context).edit().apply {
+            remove(KEY_SESSION_ESTABLISHED_AT)
+        }.apply()
+    }
+
+    fun peerGoneAt(context: Context): Long =
+        prefs(context).getLong(KEY_PEER_GONE_AT, 0L)
+
+    fun setPeerGoneAt(context: Context, timestampMs: Long) {
+        prefs(context).edit().putLong(KEY_PEER_GONE_AT, timestampMs).apply()
+    }
+
+    fun clearPeerGoneAt(context: Context) {
+        prefs(context).edit().remove(KEY_PEER_GONE_AT).apply()
+    }
+
+    fun reprovisionInProgressAt(context: Context): Long =
+        prefs(context).getLong(KEY_REPROVISION_IN_PROGRESS_AT, 0L)
+
+    fun setReprovisionInProgressAt(context: Context, timestampMs: Long) {
+        prefs(context).edit().putLong(KEY_REPROVISION_IN_PROGRESS_AT, timestampMs).apply()
+    }
+
+    fun clearReprovisionInProgressAt(context: Context) {
+        prefs(context).edit().remove(KEY_REPROVISION_IN_PROGRESS_AT).apply()
     }
 
     /** Stable install UUID used as WireGuard peer device_id (multi-device Premium). */

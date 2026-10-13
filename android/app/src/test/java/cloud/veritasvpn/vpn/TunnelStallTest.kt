@@ -122,4 +122,28 @@ class TunnelStallTest {
             ),
         )
     }
+
+    @Test
+    fun stalledWhenNoHandshakeAfterDetectWindow() {
+        assertTrue(
+            TunnelStall.isStalled(
+                elapsedMs = 25_000,
+                rxDelta = 0,
+                txDelta = 0,
+                handshakeAgeMs = Long.MAX_VALUE,
+            ),
+        )
+    }
+
+    @Test
+    fun notStalledWhenNoHandshakeButUnderDetectWindow() {
+        assertFalse(
+            TunnelStall.isStalled(
+                elapsedMs = 10_000,
+                rxDelta = 0,
+                txDelta = 0,
+                handshakeAgeMs = Long.MAX_VALUE,
+            ),
+        )
+    }
 }

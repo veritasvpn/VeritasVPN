@@ -52,6 +52,9 @@ fun DashboardScreen(
     dnsBlockedBaseline: Long? = null,
     dnsGateway: String? = null,
     transport: String = "",
+    reconnecting: Boolean = false,
+    handshakeOk: Boolean = false,
+    lockdownEnabled: Boolean = false,
 ) {
     var showSignOutConfirmation by remember { mutableStateOf(false) }
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
@@ -177,7 +180,12 @@ fun DashboardScreen(
 
             HeroConnectControl(
                 phase = when {
-                    connected -> HeroPhase.Protected
+                    connected || reconnecting -> HeroPhaseMapper.decide(
+                        connected = connected,
+                        connecting = connecting,
+                        reconnecting = reconnecting,
+                        handshakeOk = handshakeOk,
+                    )
                     connecting -> HeroPhase.Connecting
                     !billingReady -> HeroPhase.Checking
                     isPremium -> HeroPhase.Ready
@@ -189,6 +197,7 @@ fun DashboardScreen(
                     isPremium -> onConnect
                     else -> onPlans
                 },
+                lockdownEnabled = lockdownEnabled,
             )
 
             AnimatedVisibility(

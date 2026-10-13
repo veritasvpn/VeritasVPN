@@ -6,6 +6,8 @@ import android.util.Base64
 import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.AuthResponse
 import cloud.veritasvpn.secure.SecurePrefs
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 
 data class User(
@@ -207,11 +209,31 @@ class AuthRepository(context: Context) {
         }
     }
 
-    suspend fun refreshSession(): Boolean {
+    /**
+     * Rotates the refresh token. Refresh tokens are single-use on the server, so
+     * every caller in this process shares one lock. Inside the lock, a caller
+     * that finds the access token already replaced, or still unexpired when
+     * [force] is false, reuses it instead of calling `/auth/refresh`.
+     *
+     * Pass [force] after a server 401. A token the server rejected can still
+     * look unexpired locally, and skipping the call would retry the same token.
+     */
+    suspend fun refreshSession(force: Boolean = false): Boolean {
+        return singleFlightRefresh(
+            force = force,
+            accessToken = { getAccessToken() },
+            expired = { isAccessTokenExpired() },
+            refresh = { exchangeRefreshToken() },
+        )
+    }
+
+    private suspend fun exchangeRefreshToken(): Boolean {
         val rt = getRefreshToken() ?: return false
         val res = try {
             ApiClient.post("/api/v1/auth/refresh", mapOf("refresh_token" to rt))
-        } catch (_: Exception) { return false }
+        } catch (_: Exception) {
+            return false
+        }
         val data = res.use {
             if (!it.isSuccessful) return false
             ApiClient.parse<AuthResponse>(it) ?: return false
@@ -219,6 +241,33 @@ class AuthRepository(context: Context) {
         prefs.edit().putString("access_token", data.accessToken)
             .putString("refresh_token", data.refreshToken).apply()
         return true
+    }
+
+    companion object {
+        private val refreshMutex = Mutex()
+
+        /**
+         * Process-wide single-flight refresh. [onReady] runs after the caller
+         * has snapshotted the current access token and before it waits for the
+         * lock, so tests can prove two callers overlap.
+         */
+        internal suspend fun singleFlightRefresh(
+            force: Boolean,
+            accessToken: () -> String?,
+            expired: () -> Boolean,
+            refresh: suspend () -> Boolean,
+            onReady: (() -> Unit)? = null,
+        ): Boolean {
+            val before = accessToken()
+            onReady?.invoke()
+            return refreshMutex.withLock {
+                val now = accessToken()
+                val replacedWhileWaiting = !now.isNullOrBlank() && now != before && !expired()
+                if (replacedWhileWaiting) return@withLock true
+                if (!force && !expired()) return@withLock !now.isNullOrBlank()
+                refresh()
+            }
+        }
     }
 
     fun signOut() {
