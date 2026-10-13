@@ -3,8 +3,9 @@ package cloud.veritasvpn.vpn
 /**
  * How Android chooses the WireGuard transport.
  *
- * Auto matches the product default: try plain UDP, then the same TLS/WebSocket
- * Stealth endpoint the Linux client uses if that handshake does not complete.
+ * Auto and UDP start on UDP and stay there. The app never switches itself to
+ * Stealth after a failed handshake or a recovery round. Stealth runs only when
+ * the user picked it, or when a session that is already on Stealth is resumed.
  * UDP and Stealth never fall back the other way.
  */
 enum class StealthMode {
@@ -41,7 +42,7 @@ data class StealthOffer(
 }
 
 enum class InitialTransport {
-    /** Bring WireGuard up on the UDP endpoint. Auto may fall back later. */
+    /** Bring WireGuard up on the UDP endpoint. Recovery stays on UDP. */
     UDP,
 
     /** Bring WireGuard up pointed at the local Stealth listener. */
@@ -74,14 +75,32 @@ object StealthPlanner {
     }
 
     /**
-     * Auto falls back only after the UDP attempt produced no handshake.
-     * A completed handshake stays on UDP. UDP-only and Stealth-always do not switch.
+     * Failed UDP rounds never switch to Stealth, in Auto or any other mode.
+     * [failedUdpRounds] is part of the decision so callers cannot treat "still
+     * no handshake" as a reason to change transport.
+     */
+    fun switchesToStealthAfterFailedUdp(
+        mode: StealthMode,
+        failedUdpRounds: Int,
+    ): Boolean {
+        if (failedUdpRounds < 0) return false
+        return when (mode) {
+            StealthMode.AUTO, StealthMode.UDP, StealthMode.STEALTH -> false
+        }
+    }
+
+    /**
+     * Recovery and the initial UDP attempt never auto-switch to Stealth.
+     * User-selected Stealth and a resumed Stealth session use [initial].
      */
     fun shouldFallback(
         mode: StealthMode,
         offer: StealthOffer,
         handshakeCompleted: Boolean,
-    ): Boolean = mode == StealthMode.AUTO && !handshakeCompleted && offer.usable()
+    ): Boolean {
+        if (!offer.usable() || handshakeCompleted) return false
+        return switchesToStealthAfterFailedUdp(mode, failedUdpRounds = 1)
+    }
 
     /** A handshake from an earlier tunnel must not count as this UDP attempt. */
     fun udpAttemptSucceeded(handshakeMs: Long, baselineMs: Long, startedMs: Long): Boolean =
