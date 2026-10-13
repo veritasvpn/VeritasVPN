@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.ui.theme.*
+import cloud.veritasvpn.vpn.ControlPlane
 
 @Composable
 fun DashboardScreen(
@@ -32,6 +33,7 @@ fun DashboardScreen(
     connecting: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onSignOutEverywhere: () -> Unit,
     onPlans: () -> Unit,
@@ -55,6 +57,7 @@ fun DashboardScreen(
     reconnecting: Boolean = false,
     handshakeOk: Boolean = false,
     lockdownEnabled: Boolean = false,
+    signInAgain: Boolean = false,
 ) {
     var showSignOutConfirmation by remember { mutableStateOf(false) }
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
@@ -191,13 +194,23 @@ fun DashboardScreen(
                     isPremium -> HeroPhase.Ready
                     else -> HeroPhase.Upsell
                 },
-                onClick = when {
-                    connecting || !billingReady -> null
-                    connected -> onDisconnect
-                    isPremium -> onConnect
-                    else -> onPlans
+                onClick = when (
+                    heroMainAction(
+                        connecting = connecting,
+                        billingReady = billingReady,
+                        connected = connected,
+                        signInAgain = signInAgain,
+                        isPremium = isPremium,
+                    )
+                ) {
+                    HeroMainAction.None -> null
+                    HeroMainAction.SignIn -> onSignIn
+                    HeroMainAction.Disconnect -> onDisconnect
+                    HeroMainAction.Connect -> onConnect
+                    HeroMainAction.Plans -> onPlans
                 },
                 lockdownEnabled = lockdownEnabled,
+                signInAgain = signInAgain,
             )
 
             AnimatedVisibility(
@@ -232,7 +245,12 @@ fun DashboardScreen(
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = msg,
-                    color = when { connected -> SuccessGreen; connecting -> CyanHover; else -> WarningOrange },
+                    color = when {
+                        msg == ControlPlane.SIGN_IN_AGAIN -> WarningOrange
+                        connected -> SuccessGreen
+                        connecting -> CyanHover
+                        else -> WarningOrange
+                    },
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center
                 )

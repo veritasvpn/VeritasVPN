@@ -62,6 +62,7 @@ import cloud.veritasvpn.ui.theme.PaperDim
 import cloud.veritasvpn.ui.theme.RoyalHover
 import cloud.veritasvpn.ui.theme.WarningOrange
 import cloud.veritasvpn.ui.theme.rememberMotionEnabled
+import cloud.veritasvpn.vpn.ControlPlane
 import android.os.SystemClock
 import kotlinx.coroutines.isActive
 
@@ -177,6 +178,7 @@ fun HeroConnectControl(
     onClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
     lockdownEnabled: Boolean = false,
+    signInAgain: Boolean = false,
 ) {
     val motion = rememberMotionEnabled()
     // Wall clock, not connection progress. Recomposition while the tunnel waits
@@ -230,10 +232,11 @@ fun HeroConnectControl(
     val showNotConnected = phase == HeroPhase.Ready ||
         phase == HeroPhase.Upsell ||
         phase == HeroPhase.Checking
-    val actionName = when (phase) {
-        HeroPhase.Ready -> "Connect"
-        HeroPhase.Upsell -> "Get Premium"
-        HeroPhase.Protected -> "Disconnect"
+    val actionName = when {
+        signInAgain -> "Sign in"
+        phase == HeroPhase.Ready -> "Connect"
+        phase == HeroPhase.Upsell -> "Get Premium"
+        phase == HeroPhase.Protected -> "Disconnect"
         else -> null
     }
     // Remembered across recomposition, including checking → connecting →
@@ -341,18 +344,24 @@ fun HeroConnectControl(
             },
             label = "hero-caption",
         ) { current ->
-            val caption = when (current) {
-                HeroPhase.Checking -> "Checking plan…"
-                HeroPhase.Connecting -> "Connecting…"
-                HeroPhase.Protected -> "Protected"
-                HeroPhase.Reconnecting -> "Reconnecting…"
-                else -> null
+            val caption = when {
+                signInAgain -> ControlPlane.SIGN_IN_AGAIN
+                else -> when (current) {
+                    HeroPhase.Checking -> "Checking plan…"
+                    HeroPhase.Connecting -> "Connecting…"
+                    HeroPhase.Protected -> "Protected"
+                    HeroPhase.Reconnecting -> "Reconnecting…"
+                    else -> null
+                }
             }
-            val captionColor = when (current) {
-                HeroPhase.Protected -> Cyan
-                HeroPhase.Reconnecting -> WarningOrange
-                HeroPhase.Connecting, HeroPhase.Checking -> CyanHover
-                else -> PaperDim
+            val captionColor = when {
+                signInAgain -> WarningOrange
+                else -> when (current) {
+                    HeroPhase.Protected -> Cyan
+                    HeroPhase.Reconnecting -> WarningOrange
+                    HeroPhase.Connecting, HeroPhase.Checking -> CyanHover
+                    else -> PaperDim
+                }
             }
             if (caption != null || current == HeroPhase.Upsell) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -374,7 +383,15 @@ fun HeroConnectControl(
                             textAlign = TextAlign.Center,
                         )
                     }
-                    if (current == HeroPhase.Reconnecting) {
+                    if (signInAgain) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "Your session ended. Other apps stay blocked.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = WarningOrange,
+                            textAlign = TextAlign.Center,
+                        )
+                    } else if (current == HeroPhase.Reconnecting) {
                         Spacer(Modifier.height(2.dp))
                         Text(
                             text = if (lockdownEnabled) "Traffic is blocked until the tunnel is back" else "Not protected",

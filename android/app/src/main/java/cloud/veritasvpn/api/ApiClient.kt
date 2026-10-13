@@ -39,6 +39,9 @@ object ApiClient {
             chain.proceed(req)
         }
         .build()
+
+    /** The process-wide client. Tunnel control calls may pass a different one. */
+    fun sharedClient(): OkHttpClient = client
     @PublishedApi
     internal val gson = Gson()
 
@@ -47,16 +50,20 @@ object ApiClient {
         body: Map<String, Any>,
         token: String? = null,
         retryOnTimeout: Boolean = false,
-        onRetry: ((attempt: Int) -> Unit)? = null
+        onRetry: ((attempt: Int) -> Unit)? = null,
+        httpClient: OkHttpClient? = null,
     ): Response {
         val b = gson.toJson(body).toRequestBody(JSON)
         val builder = Request.Builder().url("$BASE_URL$path").post(b)
+            .header("Content-Type", "application/json")
+            .header("X-Veritas-Client", "android")
         token?.let { builder.header("Authorization", "Bearer $it") }
+        val base = httpClient ?: client
         val callTimeout = if (retryOnTimeout) 15L else 20L
         val retryClient = if (retryOnTimeout) {
-            client.newBuilder().callTimeout(callTimeout, TimeUnit.SECONDS).build()
+            base.newBuilder().callTimeout(callTimeout, TimeUnit.SECONDS).build()
         } else {
-            client
+            base
         }
         return executeWithRetry(requestFactory = { builder.build() }, httpClient = retryClient, retryOnTimeout = retryOnTimeout, onRetry = onRetry)
     }
@@ -104,10 +111,16 @@ object ApiClient {
         return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = false)
     }
 
-    suspend fun get(path: String, token: String): Response {
+    suspend fun get(path: String, token: String, httpClient: OkHttpClient = client): Response {
         val builder = Request.Builder().url("$BASE_URL$path").get()
             .header("Authorization", "Bearer $token")
-        return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = true)
+            .header("Content-Type", "application/json")
+            .header("X-Veritas-Client", "android")
+        return executeWithRetry(
+            requestFactory = { builder.build() },
+            httpClient = httpClient,
+            retryOnTimeout = true,
+        )
     }
 
     /**

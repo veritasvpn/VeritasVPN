@@ -2,7 +2,7 @@ package cloud.veritasvpn.vpn
 
 object PeerCheckOutcome {
 
-    enum class Outcome { PEER_ALIVE, REFRESH_AND_RETRY, PEER_GONE, NETWORK_ERROR }
+    enum class Outcome { PEER_ALIVE, REFRESH_AND_RETRY, PEER_GONE, NETWORK_ERROR, SIGNED_OUT }
 
     fun map(statusCode: Int, networkError: Boolean = false): Outcome = when {
         statusCode == 200 -> Outcome.PEER_ALIVE

@@ -37,6 +37,8 @@ import cloud.veritasvpn.support.SupportLinks
 import cloud.veritasvpn.support.isRecordableError
 import cloud.veritasvpn.support.sanitizeError
 import cloud.veritasvpn.ui.AuthScreen
+import cloud.veritasvpn.ui.SignInAgainSignal
+import cloud.veritasvpn.vpn.ControlPlane
 import cloud.veritasvpn.ui.VpnDisclosureScreen
 import cloud.veritasvpn.ui.DashboardScreen
 import cloud.veritasvpn.ui.DiagnosticsScreen
@@ -204,6 +206,9 @@ class MainActivity : ComponentActivity() {
                 var txBytes by remember { mutableStateOf(0L) }
                 var handshakeMs by remember { mutableStateOf(0L) }
                 var handshakeOk by remember { mutableStateOf(false) }
+                var signInAgain by remember { mutableStateOf(false) }
+                var reauthenticate by remember { mutableStateOf(false) }
+                var awaitingAuthClear by remember { mutableStateOf(false) }
                 var dnsBlockedCount by remember { mutableStateOf<Long?>(null) }
                 var dnsBlockedBaseline by remember { mutableStateOf<Long?>(null) }
                 var dnsGateway by remember { mutableStateOf<String?>(null) }
@@ -710,6 +715,8 @@ class MainActivity : ComponentActivity() {
                                         intent.getBooleanExtra(VeritasVpnService.EXTRA_RECONNECTING, false)
                                     val svcHandshakeOk =
                                         intent.getBooleanExtra(VeritasVpnService.EXTRA_HANDSHAKE_OK, false)
+                                    val svcSignInAgain =
+                                        intent.getBooleanExtra(VeritasVpnService.EXTRA_SIGN_IN_AGAIN, false)
                                     if (nowConnected) {
                                         if (!userWantsConnected) {
                                             // User already tapped Disconnect; ignore a late
@@ -720,7 +727,14 @@ class MainActivity : ComponentActivity() {
                                         connecting = false
                                         // The service's reconnecting flag drives the UI label,
                                         // but does not cancel the activity's reconnectJob logic.
-                                        reconnecting = svcReconnecting
+                                        val signInView = SignInAgainSignal.merge(
+                                            showing = signInAgain,
+                                            awaitingClear = awaitingAuthClear,
+                                            broadcast = svcSignInAgain,
+                                        )
+                                        signInAgain = signInView.showing
+                                        awaitingAuthClear = signInView.awaitingClear
+                                        reconnecting = svcReconnecting && !signInAgain
                                         hardReconnectRequested = false
                                         reconnectAttempt = 0
                                         reconnectJob?.cancel()
@@ -736,11 +750,17 @@ class MainActivity : ComponentActivity() {
                                         intent.getStringExtra(VeritasVpnService.EXTRA_TRANSPORT)
                                             ?.let { transport = it }
                                         handshakeOk = svcHandshakeOk
-                                        statusMsg = if (svcReconnecting) "Reconnecting…" else null
+                                        statusMsg = when {
+                                            signInAgain -> ControlPlane.SIGN_IN_AGAIN
+                                            svcReconnecting -> "Reconnecting…"
+                                            else -> null
+                                        }
                                     } else if (error != null && error.contains("revoked", ignoreCase = true)) {
                                         connected = false
                                         connecting = false
                                         reconnecting = false
+                                        signInAgain = false
+                                        awaitingAuthClear = false
                                         userWantsConnected = false
                                         hadEstablishedSession = false
                                         transport = ""
@@ -764,6 +784,8 @@ class MainActivity : ComponentActivity() {
                                         dnsBlockedBaseline = null
                                         dnsGateway = null
                                         transport = ""
+                                        signInAgain = false
+                                        awaitingAuthClear = false
                                         statusMsg = error
                                     }
                                 }
@@ -777,7 +799,25 @@ class MainActivity : ComponentActivity() {
                                     if (intent.hasExtra(VeritasVpnService.EXTRA_TRANSPORT)) {
                                         transport = intent.getStringExtra(VeritasVpnService.EXTRA_TRANSPORT).orEmpty()
                                     }
-                                    if (intent.hasExtra(VeritasVpnService.EXTRA_RECONNECTING)) {
+                                    if (intent.hasExtra(VeritasVpnService.EXTRA_SIGN_IN_AGAIN)) {
+                                        val signInView = SignInAgainSignal.merge(
+                                            showing = signInAgain,
+                                            awaitingClear = awaitingAuthClear,
+                                            broadcast = intent.getBooleanExtra(
+                                                VeritasVpnService.EXTRA_SIGN_IN_AGAIN,
+                                                false,
+                                            ),
+                                        )
+                                        signInAgain = signInView.showing
+                                        awaitingAuthClear = signInView.awaitingClear
+                                        if (signInAgain) {
+                                            reconnecting = false
+                                            if (connected) statusMsg = ControlPlane.SIGN_IN_AGAIN
+                                        } else if (statusMsg == ControlPlane.SIGN_IN_AGAIN) {
+                                            statusMsg = null
+                                        }
+                                    }
+                                    if (!signInAgain && intent.hasExtra(VeritasVpnService.EXTRA_RECONNECTING)) {
                                         val svcReconnecting = intent.getBooleanExtra(VeritasVpnService.EXTRA_RECONNECTING, false)
                                         reconnecting = svcReconnecting
                                         if (connected) {
@@ -1049,20 +1089,43 @@ class MainActivity : ComponentActivity() {
                     })
                 }
 
-                if (user == null) {
-                    AuthScreen(onAuthenticated = {
+                fun finishAuthentication() {
+                    val fromReauth = reauthenticate
+                    reauthenticate = false
+                    val cleared = SignInAgainSignal.afterLocalSignIn()
+                    signInAgain = cleared.showing
+                    awaitingAuthClear = cleared.awaitingClear
+                    if (statusMsg == ControlPlane.SIGN_IN_AGAIN) statusMsg = null
+                    if (!fromReauth) {
                         billingStatus = null
                         billingRefreshing = false
                         cancellationInProgress = false
-                        user = authRepo.getStoredUser()
-                        // After sign-in, check if onboarding is needed.
-                        val disclosureAccepted = VpnSettings.vpnDisclosureAccepted(context)
-                        val onboardingDone = VpnSettings.onboardingVpnDone(context)
-                        if (OnboardingGate.shouldStart(disclosureAccepted, onboardingDone)) {
-                            showOnboardingDisclosure = true
-                            onboardingStep = OnboardingGate.Step.SHOW_DISCLOSURE
-                        }
-                    })
+                    }
+                    user = authRepo.getStoredUser()
+                    if (connected || hadEstablishedSession || restoringSavedVpnSession) {
+                        context.startService(
+                            Intent(context, VeritasVpnService::class.java).apply {
+                                action = VeritasVpnService.ACTION_AUTH_RESTORED
+                            }
+                        )
+                    }
+                    val disclosureAccepted = VpnSettings.vpnDisclosureAccepted(context)
+                    val onboardingDone = VpnSettings.onboardingVpnDone(context)
+                    if (OnboardingGate.shouldStart(disclosureAccepted, onboardingDone)) {
+                        showOnboardingDisclosure = true
+                        onboardingStep = OnboardingGate.Step.SHOW_DISCLOSURE
+                    }
+                }
+
+                if (user == null || reauthenticate) {
+                    AuthScreen(
+                        onAuthenticated = { finishAuthentication() },
+                        onCancel = if (user != null) {
+                            { reauthenticate = false }
+                        } else {
+                            null
+                        },
+                    )
                 } else if (!BuildConfig.PLAY_BILLING && checkoutUrl != null) {
                     ExternalCheckout(
                         checkoutUrl = checkoutUrl!!,
@@ -1315,12 +1378,16 @@ class MainActivity : ComponentActivity() {
                             userWantsConnected = false
                             hadEstablishedSession = false
                             cancelReconnect()
+                            signInAgain = false
+                            awaitingAuthClear = false
+                            reauthenticate = false
                             statusMsg = null
                             val disconnectedPeerId = peerIdForDisconnect()
                             disconnectVpnService()
                             deletePeerBestEffort(disconnectedPeerId)
                             noteIntentionalDisconnect()
                         },
+                        onSignIn = { reauthenticate = true },
                         onSignOut = { performLocalSignOut() },
                         onSignOutEverywhere = {
                             val accessToken = authRepo.getAccessToken()?.takeIf { it.isNotBlank() }
@@ -1379,6 +1446,7 @@ class MainActivity : ComponentActivity() {
                         reconnecting = reconnecting,
                         handshakeOk = handshakeOk,
                         lockdownEnabled = lockdownEnabled,
+                        signInAgain = signInAgain,
                     )
                 }
                 if (showReleaseLockdown) {

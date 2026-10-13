@@ -31,7 +31,10 @@ import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.UserFacingError
 import cloud.veritasvpn.api.PeerResponse
 import cloud.veritasvpn.auth.AuthRepository
+import cloud.veritasvpn.auth.ControlAccess
+import cloud.veritasvpn.auth.ControlRefresh
 import cloud.veritasvpn.secure.SecurePrefs
+import okhttp3.OkHttpClient
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -110,6 +113,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     @Volatile private var rebuildDefaultHandle: Long = Long.MIN_VALUE
     /** Wakes the rebuild backoff when the default network or the peer result changes. */
     private val recoveryWakes = Channel<Unit>(Channel.CONFLATED)
+    /**
+     * Network callbacks only enqueue this. The pin itself runs on [scope] so a
+     * rebuild holding [tunnelOpLock] cannot stall the callback thread.
+     */
+    private val defaultNetworkSignals = Channel<Unit>(Channel.CONFLATED)
+    /** Signed-out control calls stop. The tunnel interface stays up. */
+    @Volatile private var controlSignedOut = false
+    /** OkHttp client bound to the current system-default network, if any. */
+    @Volatile private var controlClient: OkHttpClient? = null
+    @Volatile private var controlClientHandle: Long = Long.MIN_VALUE
+    private val controlClientLock = Any()
     private val underlayCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             underlayLostSeen = false
@@ -150,6 +164,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        scope.launch {
+            while (isActive) {
+                defaultNetworkSignals.receive()
+                if (!sessionIntended()) continue
+                try {
+                    noteDefaultNetworkForRecovery()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "default network pin failed: ${e.javaClass.simpleName}")
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -175,6 +202,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     restoreSavedSessionIfNeeded()
                 }
                 broadcastState(true, null)
+                return START_STICKY
+            }
+            ACTION_AUTH_RESTORED -> {
+                if (!sessionIntended()) return START_NOT_STICKY
+                onAuthRestored()
+                if (tunKeeper == null &&
+                    transitionJob?.isActive != true &&
+                    restoreJob?.isActive != true
+                ) {
+                    restoreSavedSessionIfNeeded()
+                }
                 return START_STICKY
             }
             ACTION_CONNECT -> {
@@ -210,6 +248,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 lastPeerCheckAtMs = 0L
                 rebuildInProgress = false
                 rebuildDefaultHandle = Long.MIN_VALUE
+                controlSignedOut = false
+                dropUnderlyingControlClient()
                 waitRecheckJob?.cancel()
                 waitRecheckJob = null
                 activeTransport = if (StealthMode.fromStored(stealthMode) == StealthMode.STEALTH) {
@@ -373,6 +413,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 lastPeerCheckAtMs = 0L
                 rebuildInProgress = false
                 rebuildDefaultHandle = Long.MIN_VALUE
+                controlSignedOut = false
+                dropUnderlyingControlClient()
                 adaptJob?.cancel()
                 healthJob?.cancel()
                 cancelPeerRecovery()
@@ -407,6 +449,41 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 return START_STICKY
             }
         }
+    }
+
+    /**
+     * A sign-in while the tunnel is still up. Clears the signed-out stop,
+     * forces a peer check, and resumes recovery on the current system default
+     * when the tunnel is not healthy. Does not tear the tun down and does not
+     * switch to Stealth.
+     */
+    private fun onAuthRestored() {
+        val wasSignedOut = controlSignedOut
+        val decision = AuthRestore.afterSignIn(
+            wasSignedOut = wasSignedOut,
+            tunnelHealthy = controlTunnelHealthy(),
+        )
+        controlSignedOut = decision.signedOut
+        synchronized(reprovisionLock) {
+            lastPeerOutcome = AuthRestore.peerOutcomeAfterSignIn(lastPeerOutcome)
+            peerCheckSerial++
+        }
+        Log.i(TAG, "auth restored")
+        if (decision.resumeRecovery) {
+            publishReconnecting(true)
+            scheduleUnderlayAdapt(forceHard = true)
+        } else {
+            if (wasSignedOut) {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    buildNotification("Connected"),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            }
+            broadcastState(true, null)
+        }
+        if (decision.forcePeerCheck) ensurePeerCheck(force = true)
     }
 
     private fun restoreSavedSessionIfNeeded() {
@@ -495,6 +572,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         lastPeerCheckAtMs = 0L
         rebuildInProgress = false
         rebuildDefaultHandle = Long.MIN_VALUE
+        controlSignedOut = false
+        dropUnderlyingControlClient()
         transitionJob?.cancel()
         restoreJob?.cancel()
         validationGeneration++
@@ -558,20 +637,23 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 // Closing first drops the interface and, without lockdown, lets
                 // app traffic out in the clear for the whole rebuild.
                 var established: ParcelFileDescriptor? = null
-                TunnelRebuild.replaceWhileHeld(
+                val duplicate = TunnelRebuild.replaceWhileHeld(
                     establishNew = {
                         val pfd = super.establish() ?: return@replaceWhileHeld null
                         established = pfd
                         runCatching { pfd.dup() }.getOrNull()
                     },
-                    closePrevious = { newKeeper ->
-                        synchronized(tunnelOpLock) {
-                            val old = tunKeeper
-                            tunKeeper = newKeeper
-                            runCatching { old?.close() }
-                        }
-                    },
+                    closePrevious = { newKeeper -> swapTunKeeper(newKeeper) },
                 )
+                if (TunnelRebuild.shouldClosePreviousKeeper(
+                        newTunEstablished = established != null,
+                        duplicateSucceeded = duplicate != null,
+                    )
+                ) {
+                    // The new tun is already live. Drop the previous keeper so
+                    // its fd does not stay open after the duplicate failed.
+                    swapTunKeeper(null)
+                }
                 return established
             }
         }
@@ -654,6 +736,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 .putExtra(EXTRA_TRANSPORT, activeTransport)
                 .putExtra(EXTRA_RECONNECTING, isReconnecting)
                 .putExtra(EXTRA_HANDSHAKE_OK, handshakeOk())
+                .putExtra(EXTRA_SIGN_IN_AGAIN, controlSignedOut)
         )
     }
 
@@ -742,6 +825,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val intent = Intent(ACTION_STATE).setPackage(packageName)
             .putExtra(EXTRA_CONNECTED, connected)
         if (error != null) intent.putExtra(EXTRA_ERROR, error)
+        intent.putExtra(EXTRA_SIGN_IN_AGAIN, controlSignedOut)
         if (egressIp != null) intent.putExtra(EXTRA_EGRESS_IP, egressIp)
         if (activeTransport.isNotEmpty()) intent.putExtra(EXTRA_TRANSPORT, activeTransport)
         intent.putExtra(EXTRA_RECONNECTING, isReconnecting)
@@ -760,7 +844,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         lastNotificationText = text
         // A failed re-provision keeps isReconnecting set. Later status updates
         // must not paint "Connected" over Reconnecting while the peer is gone.
-        val shown = transportSuffix(if (isReconnecting) "Reconnecting…" else text)
+        // Signed out is its own state: not a raw error and not "Reconnecting…".
+        val shown = if (controlSignedOut) {
+            ControlPlane.SIGN_IN_AGAIN
+        } else {
+            transportSuffix(if (isReconnecting) "Reconnecting…" else text)
+        }
         val openIntent = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -830,8 +919,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private fun scheduleUnderlayAdapt(forceHard: Boolean = false) {
-        if (sessionIntended()) noteDefaultNetworkForRecovery()
-        if (!sessionIntended()) return
+        // The callback thread must not take tunnelOpLock. A rebuild holds that
+        // lock across wgTurnOn / establish. The pin runs on the service scope.
+        if (sessionIntended()) defaultNetworkSignals.trySend(Unit)
+        if (!sessionIntended() || controlSignedOut) return
         val gen = sessionGeneration
         if (rebuildInProgress) {
             // Same-network callbacks must not cancel the rebuild. A new default
@@ -855,7 +946,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private suspend fun adaptUnderlay(gen: Long, forceHard: Boolean = false) {
-        if (gen != sessionGeneration || !sessionIntended()) return
+        if (controlSignedOut || gen != sessionGeneration || !sessionIntended()) return
         if (stealthTransport != null || sessionMode() == StealthMode.STEALTH ||
             vpnStatePrefs().getBoolean(KEY_RESUME_STEALTH, false)
         ) {
@@ -994,6 +1085,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             var pollDelay = STALL_UNDERLAY_POLL_MS
             var roundDelay = PROBE_RETRY_DELAY_MS
             while (gen == sessionGeneration && sessionIntended() && disconnectJob?.isActive != true) {
+                if (controlSignedOut) return
                 if (stealthTransport != null) return
                 when (recoveryStep(probeRoundsCompleted >= 1, rebuilding = false)) {
                     TunnelRebuild.RecoveryStep.REBUILD -> {
@@ -1053,7 +1145,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 )
                 val liveFp = underlayFingerprint(currentLive.network, currentLive.link, liveIpv4s)
                 for (endpoint in liveProbes) {
-                    if (gen != sessionGeneration || !sessionIntended() || stealthTransport != null) return
+                    if (controlSignedOut || gen != sessionGeneration || !sessionIntended() || stealthTransport != null) return
                     val baseConfig = vpnStatePrefs().getString(KEY_UDP_CONFIG, null)
                         ?: vpnStatePrefs().getString(KEY_CONFIG, null)
                         ?: config
@@ -1148,6 +1240,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         rebuildInProgress = true
         try {
             while (true) {
+                if (controlSignedOut) return false
                 ensurePeerCheck()
                 val handle = systemDefaultNetwork()?.networkHandle
                 val step = TunnelRebuild.decide(
@@ -1239,7 +1332,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         )
                         when (after) {
                             TunnelRebuild.RecoveryStep.STOP -> {
-                                if (!handshake) return false
+                                if (controlSignedOut || !handshake) return false
                                 synchronized(tunnelOpLock) {
                                     if (!sessionStillActive(gen)) return false
                                     val prefs = vpnStatePrefs()
@@ -1337,7 +1430,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val next = systemDefaultNetwork()?.networkHandle
         val previous = pinnedHandle
         val changed = previous != Long.MIN_VALUE && next != previous
-        if (changed) clearStaleAlivePeerOutcome()
+        if (controlClient != null && (next == null || next != controlClientHandle)) {
+            dropUnderlyingControlClient()
+        }
+        if (changed) {
+            clearStaleAlivePeerOutcome()
+            // A check already in flight is bound to the previous default.
+            if (peerCheckJob?.isActive == true) ensurePeerCheck(force = true)
+        }
         if (next == null) {
             if (previous != Long.MIN_VALUE) pinUnderlyingToSystemDefault()
         } else if (next != previous) {
@@ -1366,7 +1466,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (cleared) ensurePeerCheck(force = true)
     }
 
-    private fun recordPeerOutcome(serial: Int, outcome: PeerCheckOutcome.Outcome) {
+    private fun recordPeerOutcome(serial: Int, outcome: PeerCheckOutcome.Outcome): Boolean {
         val recorded = synchronized(reprovisionLock) {
             if (serial != peerCheckSerial) {
                 false
@@ -1375,9 +1475,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 true
             }
         }
-        if (recorded && outcome == PeerCheckOutcome.Outcome.PEER_GONE) {
+        if (recorded &&
+            (outcome == PeerCheckOutcome.Outcome.PEER_GONE ||
+                outcome == PeerCheckOutcome.Outcome.SIGNED_OUT)
+        ) {
             recoveryWakes.trySend(Unit)
         }
+        return recorded
     }
 
     private fun logHardProbe(config: String, endpoint: String, snap: UnderlaySnap) {
@@ -1569,6 +1673,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private fun publishReconnecting(reconnecting: Boolean) {
+        if (controlSignedOut) return
         isReconnecting = reconnecting
         if (!sessionIntended()) return
         val text = if (reconnecting) "Reconnecting…" else lastNotificationText
@@ -1751,9 +1856,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private fun closeTunKeeper() {
+        swapTunKeeper(null)
+    }
+
+    private fun swapTunKeeper(newKeeper: ParcelFileDescriptor?) {
         synchronized(tunnelOpLock) {
             val old = tunKeeper
-            tunKeeper = null
+            tunKeeper = newKeeper
             runCatching { old?.close() }
         }
     }
@@ -2025,6 +2134,66 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     /** Unvalidated is still this same network — never the other transport. */
     private fun systemDefaultSnap(): UnderlaySnap? = snapshotUnderlay(systemDefaultNetwork())
 
+    private fun controlTunnelHealthy(): Boolean = ControlPlane.tunnelHealthy(
+        reconnecting = isReconnecting,
+        rebuilding = rebuildInProgress,
+        adapting = adaptJob?.isActive == true,
+        handshakeFresh = handshakeOk(),
+    )
+
+    /**
+     * OkHttp client bound to [systemDefaultNetwork]. Null when that network
+     * is gone. Never a client for any other network.
+     *
+     * Each socket is protect()'d and then bindSocket()'d to that network
+     * before it connects. protect() alone can stamp a stale VPN netId;
+     * bindSocket pins the system default. Some OEM builds reject a bound
+     * socket that was not protected, so both steps run.
+     */
+    private fun underlyingControlClient(): OkHttpClient? {
+        val network = systemDefaultNetwork() ?: run {
+            dropUnderlyingControlClient()
+            return null
+        }
+        val handle = TunnelRebuild.pinHandle(network.networkHandle) ?: return null
+        synchronized(controlClientLock) {
+            val cached = controlClient
+            if (cached != null && controlClientHandle == handle) return cached
+            val created = ControlPlane.clientForSystemDefault(
+                socketFactory = ControlPlane.protectThenBind(
+                    delegate = network.socketFactory,
+                    protect = { socket -> this@VeritasVpnService.protect(socket) },
+                    bind = { socket -> network.bindSocket(socket) },
+                ),
+            ) { host ->
+                if (!ControlPlane.hostMayLeaveTunnel(host)) {
+                    throw java.net.UnknownHostException(host)
+                }
+                network.getAllByName(host).toList()
+            }
+            if (systemDefaultNetwork()?.networkHandle != handle) {
+                created.connectionPool.evictAll()
+                return null
+            }
+            val previous = controlClient
+            controlClient = created
+            controlClientHandle = handle
+            if (previous != null && previous !== created) {
+                previous.connectionPool.evictAll()
+            }
+            return created
+        }
+    }
+
+    private fun dropUnderlyingControlClient() {
+        synchronized(controlClientLock) {
+            val previous = controlClient
+            controlClient = null
+            controlClientHandle = Long.MIN_VALUE
+            previous?.connectionPool?.evictAll()
+        }
+    }
+
     private fun isUsableUnderlay(caps: NetworkCapabilities): Boolean =
         caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
             caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
@@ -2048,7 +2217,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private fun ensurePeerCheck(force: Boolean = false) {
-        if (!sessionIntended() || disconnectJob?.isActive == true) return
+        if (controlSignedOut || !sessionIntended() || disconnectJob?.isActive == true) return
         val now = System.currentTimeMillis()
         if (!force) {
             if (peerCheckJob?.isActive == true) return
@@ -2062,13 +2231,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private fun schedulePeerCheck() {
+        if (controlSignedOut) return
         val serial = synchronized(reprovisionLock) { ++peerCheckSerial }
         lastPeerCheckAtMs = System.currentTimeMillis()
         peerCheckJob?.cancel()
         // Captured before the peer request so a disconnect during the call is visible.
         val gen = sessionGeneration
         peerCheckJob = scope.launch {
-            fun stillCurrent() = serial == peerCheckSerial && sessionStillActive(gen)
+            fun stillCurrent() = serial == peerCheckSerial && sessionStillActive(gen) && !controlSignedOut
             if (!stillCurrent()) return@launch
             val peerId = VpnSettings.currentPeerId(this@VeritasVpnService)
             if (peerId == null) {
@@ -2076,74 +2246,126 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 return@launch
             }
 
-            val token = try {
-                authRepo.getValidAccessToken()
+            val healthy = controlTunnelHealthy()
+            val underlying = if (healthy) null else underlyingControlClient()
+            val http = ControlPlane.selectClient(
+                tunnelHealthy = healthy,
+                underlying = underlying,
+                normal = ApiClient.sharedClient(),
+            )
+            val access = try {
+                authRepo.accessForControl(underlying, tunnelHealthy = healthy)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                null
+                ControlAccess.Unavailable
             }
-            if (token == null) {
-                if (stillCurrent()) recordPeerOutcome(serial, PeerCheckOutcome.Outcome.NETWORK_ERROR)
+            val early = PeerRecovery.planForAccess(
+                signedOut = access is ControlAccess.SignedOut,
+                unavailable = access is ControlAccess.Unavailable,
+            )
+            if (early != null) {
+                if (stillCurrent()) applyPeerPlan(serial, gen, early)
                 return@launch
             }
+            val token = (access as ControlAccess.Ready).token
 
             try {
-                val res = ApiClient.get("/api/v1/wg/peers/$peerId", token)
+                val res = ApiClient.get("/api/v1/wg/peers/$peerId", token, httpClient = http)
                 val outcome = PeerCheckOutcome.map(res.code)
                 when (outcome) {
                     PeerCheckOutcome.Outcome.PEER_ALIVE -> {
                         res.close()
-                        recordPeerOutcome(serial, PeerCheckOutcome.Outcome.PEER_ALIVE)
+                        if (stillCurrent()) applyPeerPlan(serial, gen, PeerRecovery.plan(outcome))
                     }
                     PeerCheckOutcome.Outcome.REFRESH_AND_RETRY -> {
                         res.close()
                         Log.i(TAG, "peer check result=401, refreshing token")
                         if (!stillCurrent()) return@launch
-                        // A 401 means the server rejected the token. Refresh even when it
-                        // has not expired locally, then retry the peer check once.
-                        val refreshed = if (authRepo.refreshSession(force = true)) {
-                            authRepo.getAccessToken()?.takeIf { it.isNotBlank() }
-                        } else {
-                            null
-                        }
-                        if (refreshed == null) {
-                            Log.w(TAG, "peer check: token refresh failed")
-                            if (stillCurrent()) {
-                                recordPeerOutcome(serial, PeerCheckOutcome.Outcome.NETWORK_ERROR)
+                        // A 401 means the server rejected the token. Refresh on the
+                        // same client as the check, then retry the peer check once.
+                        when (val refreshed = authRepo.refreshForControl(http, force = true)) {
+                            ControlRefresh.Refreshed -> {
+                                val nextToken = authRepo.getAccessToken()?.takeIf { it.isNotBlank() }
+                                if (nextToken == null) {
+                                    if (stillCurrent()) {
+                                        applyPeerPlan(serial, gen, PeerRecovery.plan(PeerCheckOutcome.Outcome.SIGNED_OUT))
+                                    }
+                                    return@launch
+                                }
+                                val retry = ApiClient.get("/api/v1/wg/peers/$peerId", nextToken, httpClient = http)
+                                val retryOutcome = PeerCheckOutcome.map(retry.code)
+                                retry.close()
+                                if (!stillCurrent()) return@launch
+                                applyPeerPlan(serial, gen, PeerRecovery.plan(retryOutcome))
                             }
-                            return@launch
-                        }
-                        val retry = ApiClient.get("/api/v1/wg/peers/$peerId", refreshed)
-                        val retryOutcome = PeerCheckOutcome.map(retry.code)
-                        retry.close()
-                        if (!stillCurrent()) return@launch
-                        recordPeerOutcome(serial, retryOutcome)
-                        if (retryOutcome == PeerCheckOutcome.Outcome.PEER_GONE) {
-                            requestReprovision(gen)
+                            ControlRefresh.SignedOut -> {
+                                if (stillCurrent()) {
+                                    applyPeerPlan(serial, gen, PeerRecovery.plan(PeerCheckOutcome.Outcome.SIGNED_OUT))
+                                }
+                            }
+                            ControlRefresh.Unavailable -> {
+                                Log.w(TAG, "peer check: token refresh failed")
+                                if (stillCurrent()) {
+                                    applyPeerPlan(serial, gen, PeerRecovery.plan(PeerCheckOutcome.Outcome.NETWORK_ERROR))
+                                }
+                            }
                         }
                     }
-                    PeerCheckOutcome.Outcome.PEER_GONE -> {
+                    PeerCheckOutcome.Outcome.PEER_GONE,
+                    PeerCheckOutcome.Outcome.NETWORK_ERROR,
+                    PeerCheckOutcome.Outcome.SIGNED_OUT -> {
                         res.close()
-                        recordPeerOutcome(serial, PeerCheckOutcome.Outcome.PEER_GONE)
-                        Log.i(TAG, "peer check result=${PeerCheckOutcome.Outcome.PEER_GONE}, re-provisioning")
-                        if (serial == peerCheckSerial) requestReprovision(gen)
-                    }
-                    PeerCheckOutcome.Outcome.NETWORK_ERROR -> {
-                        res.close()
-                        recordPeerOutcome(serial, PeerCheckOutcome.Outcome.NETWORK_ERROR)
+                        if (stillCurrent()) applyPeerPlan(serial, gen, PeerRecovery.plan(outcome))
                     }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.w(TAG, "peer check failed: ${e.javaClass.simpleName}")
-                if (stillCurrent()) recordPeerOutcome(serial, PeerCheckOutcome.Outcome.NETWORK_ERROR)
+                if (stillCurrent()) applyPeerPlan(serial, gen, PeerRecovery.plan(PeerCheckOutcome.Outcome.NETWORK_ERROR))
             }
         }
     }
 
+    private fun applyPeerPlan(serial: Int, gen: Long, plan: PeerRecovery.Plan) {
+        if (!recordPeerOutcome(serial, plan.outcome)) return
+        when (plan.next) {
+            PeerRecovery.Next.REPROVISION -> {
+                Log.i(TAG, "peer check result=${plan.outcome}, re-provisioning")
+                if (serial == peerCheckSerial && !controlSignedOut) requestReprovision(gen)
+            }
+            PeerRecovery.Next.STOP -> stopForSignedOut()
+            PeerRecovery.Next.CONTINUE -> Unit
+        }
+    }
+
+    /**
+     * Stop peer checks, rebuilds, and re-provision retries. The VPN interface
+     * stays up so lockdown remains fail-closed. The UI is told to sign in
+     * again, with no exception text.
+     */
+    private fun stopForSignedOut() {
+        controlSignedOut = true
+        isReconnecting = false
+        synchronized(reprovisionLock) {
+            reprovisionJob?.cancel()
+            reprovisionJob = null
+        }
+        reprovisionBackoffMs = ReprovisionBackoff.INITIAL_MS
+        recoveryWakes.trySend(Unit)
+        if (!sessionIntended()) return
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(ControlPlane.SIGN_IN_AGAIN),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+        )
+        broadcastState(true, ControlPlane.SIGN_IN_AGAIN)
+    }
+
     private fun requestReprovision(gen: Long) {
+        if (controlSignedOut) return
         synchronized(reprovisionLock) {
             if (reprovisionJob?.isActive == true) {
                 Log.i(TAG, "peer gone: re-provision already in progress, skipping")
@@ -2154,15 +2376,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private fun scheduleReprovisionRetry(gen: Long) {
+        if (controlSignedOut) return
         val waitMs = reprovisionBackoffMs
         reprovisionBackoffMs = ReprovisionBackoff.next(reprovisionBackoffMs)
         synchronized(reprovisionLock) {
             reprovisionJob = scope.launch {
-                if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
+                if (controlSignedOut || gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
                     return@launch
                 }
                 delay(waitMs)
-                if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
+                if (controlSignedOut || gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
                     return@launch
                 }
                 handlePeerGone(gen)
@@ -2173,8 +2396,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private suspend fun handlePeerGone(gen: Long) {
         var attempted = false
         var succeeded = false
+        var signedOut = controlSignedOut
         try {
             if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) return
+            if (controlSignedOut) {
+                signedOut = true
+                return
+            }
 
             val now = System.currentTimeMillis()
             val reprovisioning = VpnSettings.reprovisionInProgressAt(this)
@@ -2182,6 +2410,39 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 Log.i(TAG, "peer gone: re-provision already in progress, skipping")
                 return
             }
+
+            val healthy = controlTunnelHealthy()
+            val underlying = if (healthy) null else underlyingControlClient()
+            val http = ControlPlane.selectClient(
+                tunnelHealthy = healthy,
+                underlying = underlying,
+                normal = ApiClient.sharedClient(),
+            )
+            val access = try {
+                authRepo.accessForControl(underlying, tunnelHealthy = healthy)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                ControlAccess.Unavailable
+            }
+            val early = PeerRecovery.planForAccess(
+                signedOut = access is ControlAccess.SignedOut,
+                unavailable = access is ControlAccess.Unavailable,
+            )
+            if (early?.stopRetries == true) {
+                signedOut = true
+                stopForSignedOut()
+                return
+            }
+            if (access !is ControlAccess.Ready) {
+                // Transport failure, not signed out. Count an attempt so the
+                // backoff retry still runs.
+                Log.w(TAG, "peer gone: no token for re-provision")
+                attempted = true
+                return
+            }
+            val token = access.token
+
             attempted = true
             VpnSettings.setReprovisionInProgressAt(this, now)
             VpnSettings.setPeerGoneAt(this, now)
@@ -2199,18 +2460,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             val shieldBody = VpnSettings.shieldPolicy(this).wireBody()
             val metadata = WireGuardSession.deviceMetadata(this)
 
-            val token = authRepo.getValidAccessToken() ?: run {
-                Log.w(TAG, "peer gone: no valid token for re-provision")
-                return
-            }
-
             val peer = ApiClient.post(
                 "/api/v1/wg/peers",
                 mapOf<String, Any>(
                     "public_key" to keyPair.publicKey.toBase64(),
                     "device_id" to deviceId,
                 ) + metadata + shieldBody,
-                token
+                token,
+                httpClient = http,
             ).use { res ->
                 if (!res.isSuccessful) {
                     Log.w(TAG, "peer gone: create peer failed ${res.code}")
@@ -2284,11 +2541,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         } finally {
             if (attempted) {
                 VpnSettings.clearReprovisionInProgressAt(this)
-                val retry = coroutineContext.isActive && ReprovisionBackoff.shouldScheduleRetry(
+                val retry = coroutineContext.isActive && PeerRecovery.shouldScheduleRetry(
                     succeeded = succeeded,
                     generationMatches = gen == sessionGeneration,
                     sessionIntended = sessionIntended(),
                     disconnectInProgress = disconnectJob?.isActive == true,
+                    signedOut = signedOut || controlSignedOut,
                 )
                 if (succeeded) {
                     publishReconnecting(false)
@@ -2315,6 +2573,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             while (sessionIntended()) {
                 delay(HEALTH_WATCH_MS)
                 if (!sessionIntended()) continue
+                if (controlSignedOut) continue
                 if (disconnectJob?.isActive == true) {
                     healthUnderlayWaitStartedAtMs = 0L
                     continue
@@ -2463,6 +2722,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val NOTIFICATION_ID = 1
         const val ACTION_CONNECT = "cloud.veritasvpn.CONNECT"
         const val ACTION_DISCONNECT = "cloud.veritasvpn.DISCONNECT"
+        const val ACTION_AUTH_RESTORED = "cloud.veritasvpn.AUTH_RESTORED"
         const val ACTION_QUERY_STATE = "cloud.veritasvpn.QUERY_STATE"
         const val ACTION_STATE = "cloud.veritasvpn.STATE"
         const val ACTION_STATS = "cloud.veritasvpn.STATS"
@@ -2478,6 +2738,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val EXTRA_TRANSPORT = "transport"
         const val EXTRA_CONNECTED = "connected"
         const val EXTRA_ERROR = "error"
+        const val EXTRA_SIGN_IN_AGAIN = "sign_in_again"
         const val EXTRA_EGRESS_IP = "egress_ip"
         const val EXTRA_RX_BYTES = "rx_bytes"
         const val EXTRA_TX_BYTES = "tx_bytes"

@@ -6,9 +6,34 @@ import android.util.Base64
 import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.AuthResponse
 import cloud.veritasvpn.secure.SecurePrefs
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import okhttp3.OkHttpClient
 import org.json.JSONObject
+
+/** A control-plane call can present a token, or it has to stop and ask the user to sign in. */
+sealed class ControlAccess {
+    data class Ready(val token: String) : ControlAccess()
+    data object SignedOut : ControlAccess()
+    data object Unavailable : ControlAccess()
+}
+
+enum class ControlRefresh { Refreshed, SignedOut, Unavailable }
+
+internal enum class RefreshStatusKind { SignedOut, Success, Transient }
+
+/**
+ * Only a 401 from `/auth/refresh` clears the session. A 403, including one
+ * from a proxy in front of the API, is transient and leaves the stored
+ * credentials in place.
+ */
+internal fun refreshStatusKind(statusCode: Int): RefreshStatusKind = when (statusCode) {
+    401 -> RefreshStatusKind.SignedOut
+    in 200..299 -> RefreshStatusKind.Success
+    else -> RefreshStatusKind.Transient
+}
 
 data class User(
     val email: String? = null,
@@ -227,20 +252,91 @@ class AuthRepository(context: Context) {
         )
     }
 
-    private suspend fun exchangeRefreshToken(): Boolean {
-        val rt = getRefreshToken() ?: return false
-        val res = try {
-            ApiClient.post("/api/v1/auth/refresh", mapOf("refresh_token" to rt))
+    /**
+     * Token for a VPN-service control call. [underlying] is the client bound
+     * to the current system-default network. When the tunnel is healthy the
+     * caller passes null and the refresh uses the normal client. When the
+     * tunnel is broken and [underlying] is null, the system default is gone:
+     * this does not refresh through the tunnel or through any other network.
+     */
+    suspend fun accessForControl(underlying: OkHttpClient?, tunnelHealthy: Boolean): ControlAccess {
+        val existing = getAccessToken()?.takeIf { it.isNotBlank() }
+        if (existing != null && !isAccessTokenExpired()) return ControlAccess.Ready(existing)
+        if (getRefreshToken().isNullOrBlank()) return ControlAccess.SignedOut
+        if (!tunnelHealthy && underlying == null) return ControlAccess.Unavailable
+        return when (refreshForControl(underlying, force = false)) {
+            ControlRefresh.Refreshed -> {
+                val token = getAccessToken()?.takeIf { it.isNotBlank() }
+                if (token == null) ControlAccess.SignedOut else ControlAccess.Ready(token)
+            }
+            ControlRefresh.SignedOut -> ControlAccess.SignedOut
+            ControlRefresh.Unavailable -> ControlAccess.Unavailable
+        }
+    }
+
+    /**
+     * Refresh used by the peer check and re-provision. [httpClient] null uses
+     * the normal client. A 401 is signed out. Any other HTTP status, including
+     * 403, is unavailable so a transient rejection does not clear the session.
+     * A transport failure is unavailable, so the caller can retry later.
+     */
+    suspend fun refreshForControl(httpClient: OkHttpClient?, force: Boolean): ControlRefresh {
+        val detail = AtomicReference(ControlRefresh.Unavailable)
+        val ok = singleFlightRefresh(
+            force = force,
+            accessToken = { getAccessToken() },
+            expired = { isAccessTokenExpired() },
+            refresh = {
+                val result = exchangeWith(httpClient)
+                detail.set(result)
+                result == ControlRefresh.Refreshed
+            },
+        )
+        if (ok) return ControlRefresh.Refreshed
+        return detail.get()
+    }
+
+    private suspend fun exchangeRefreshToken(): Boolean =
+        exchangeWith(null) == ControlRefresh.Refreshed
+
+    private suspend fun exchangeWith(httpClient: OkHttpClient?): ControlRefresh {
+        val rt = getRefreshToken()
+        if (rt.isNullOrBlank()) {
+            if (!getAccessToken().isNullOrBlank()) signOut()
+            return ControlRefresh.SignedOut
+        }
+        val response = try {
+            ApiClient.post(
+                "/api/v1/auth/refresh",
+                mapOf("refresh_token" to rt),
+                httpClient = httpClient,
+            )
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
-            return false
+            return ControlRefresh.Unavailable
         }
-        val data = res.use {
-            if (!it.isSuccessful) return false
-            ApiClient.parse<AuthResponse>(it) ?: return false
+        return response.use { res ->
+            when (refreshStatusKind(res.code)) {
+                RefreshStatusKind.SignedOut -> {
+                    signOut()
+                    ControlRefresh.SignedOut
+                }
+                RefreshStatusKind.Success -> {
+                    val data = ApiClient.parse<AuthResponse>(res)
+                    if (data == null || data.accessToken.isBlank() || data.refreshToken.isBlank()) {
+                        ControlRefresh.Unavailable
+                    } else {
+                        prefs.edit()
+                            .putString("access_token", data.accessToken)
+                            .putString("refresh_token", data.refreshToken)
+                            .apply()
+                        ControlRefresh.Refreshed
+                    }
+                }
+                RefreshStatusKind.Transient -> ControlRefresh.Unavailable
+            }
         }
-        prefs.edit().putString("access_token", data.accessToken)
-            .putString("refresh_token", data.refreshToken).apply()
-        return true
     }
 
     companion object {

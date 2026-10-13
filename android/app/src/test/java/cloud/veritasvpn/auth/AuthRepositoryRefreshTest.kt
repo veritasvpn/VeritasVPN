@@ -136,4 +136,14 @@ class AuthRepositoryRefreshTest {
         assertEquals(2, calls.get())
         assertEquals("fresh", access.get())
     }
+
+    @Test
+    fun only401FromTheRefreshEndpointSignsOut() {
+        assertEquals(RefreshStatusKind.SignedOut, refreshStatusKind(401))
+        assertEquals(RefreshStatusKind.Transient, refreshStatusKind(403))
+        assertEquals(RefreshStatusKind.Transient, refreshStatusKind(429))
+        assertEquals(RefreshStatusKind.Transient, refreshStatusKind(500))
+        assertEquals(RefreshStatusKind.Success, refreshStatusKind(200))
+        assertEquals(RefreshStatusKind.Success, refreshStatusKind(204))
+    }
 }
