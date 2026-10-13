@@ -54,6 +54,7 @@ fun DashboardScreen(
     transport: String = "",
     reconnecting: Boolean = false,
     handshakeOk: Boolean = false,
+    lockdownEnabled: Boolean = false,
 ) {
     var showSignOutConfirmation by remember { mutableStateOf(false) }
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
@@ -196,6 +197,7 @@ fun DashboardScreen(
                     isPremium -> onConnect
                     else -> onPlans
                 },
+                lockdownEnabled = lockdownEnabled,
             )
 
             AnimatedVisibility(

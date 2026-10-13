@@ -195,6 +195,7 @@ class MainActivity : ComponentActivity() {
                 var showReleaseLockdown by remember { mutableStateOf(false) }
                 var awaitingLockdownRelease by remember { mutableStateOf(false) }
                 var releaseLockdownError by remember { mutableStateOf<String?>(null) }
+                var lockdownEnabled by remember { mutableStateOf(false) }
                 val killSwitchRecheckGeneration = remember { intArrayOf(0) }
                 var awaitingVpnConsent by remember { mutableStateOf(false) }
                 var rxBytes by remember { mutableStateOf(0L) }
@@ -660,6 +661,9 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(connecting, awaitingVpnConsent) {
                     if (connecting && !awaitingVpnConsent) {
+                        // First-connect only. Never timeout-disconnect an established session.
+                        // The system VPN consent dialog is excluded: it can sit open while
+                        // the user reads it, and it is not a tunnel attempt yet.
                         kotlinx.coroutines.delay(25_000)
                         val stableEstablished = VpnSettings.sessionEstablishedAt(context) > 0L
                         if (connecting && !hadEstablishedSession && !stableEstablished && !awaitingVpnConsent) {
@@ -779,10 +783,21 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
-                                VeritasVpnService.ACTION_PEER_GONE -> {
-                                    if (userWantsConnected && hadEstablishedSession) {
+                                VeritasVpnService.ACTION_PEER_CHECK -> {
+                                    val needsReconnect = intent.getBooleanExtra("needs_reconnect", false)
+                                    if (needsReconnect && userWantsConnected && user != null) {
+                                        Log.i("VeritasVPN", "peer check: needs reconnect, starting fresh connection")
+                                        currentPeerId = null
+                                        VpnSettings.setCurrentPeerId(context, null)
                                         scope.launch {
-                                            reprovisionPeer(context, scope)
+                                            startConnection(
+                                                context, scope,
+                                                setStatus = { msg -> statusMsg = msg },
+                                                setConnecting = { connecting = it },
+                                                isReconnect = true,
+                                                onSessionExpired = { handleSessionExpired() },
+                                                shouldContinue = { userWantsConnected },
+                                            )
                                         }
                                     }
                                 }
@@ -804,7 +819,7 @@ class MainActivity : ComponentActivity() {
                         addAction(VeritasVpnService.ACTION_STATE)
                         addAction(VeritasVpnService.ACTION_STATS)
                         addAction(VeritasVpnService.ACTION_RECONNECT_NEEDED)
-                        addAction(VeritasVpnService.ACTION_PEER_GONE)
+                        addAction(VeritasVpnService.ACTION_PEER_CHECK)
                     },
                         ContextCompat.RECEIVER_NOT_EXPORTED
                     )
@@ -963,6 +978,26 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             if (user != null) ensureSessionFresh()
+                            // Update lockdown status for UI
+                            lockdownEnabled = VpnKillSwitch.isLockdownEnabled(context)
+                            // If the user wanted to be connected but the session was cleared
+                            // (e.g., peer gone detection), trigger a fresh connect
+                            if (userWantsConnected && !connected && !connecting &&
+                                !VeritasVpnService.hasSavedSession(context) && user != null) {
+                                Log.i("VeritasVPN", "resume: userWantsConnected but no session, reconnecting")
+                                currentPeerId = null
+                                VpnSettings.setCurrentPeerId(context, null)
+                                scope.launch {
+                                    startConnection(
+                                        context, scope,
+                                        setStatus = { msg -> statusMsg = msg },
+                                        setConnecting = { connecting = it },
+                                        isReconnect = true,
+                                        onSessionExpired = { handleSessionExpired() },
+                                        shouldContinue = { userWantsConnected },
+                                    )
+                                }
+                            }
                         }
                     }
                     lifecycleOwner.lifecycle.addObserver(observer)
@@ -1334,6 +1369,7 @@ class MainActivity : ComponentActivity() {
                         transport = transport,
                         reconnecting = reconnecting,
                         handshakeOk = handshakeOk,
+                        lockdownEnabled = lockdownEnabled,
                     )
                 }
                 if (showReleaseLockdown) {
@@ -1514,34 +1550,6 @@ class MainActivity : ComponentActivity() {
             appendLine("Endpoint = ${peer.serverEndpoint}")
             appendLine("AllowedIPs = $allowed")
             appendLine("PersistentKeepalive = 25")
-        }
-    }
-
-    private suspend fun reprovisionPeer(context: Context, scope: CoroutineScope) {
-        val peerId = currentPeerId ?: VpnSettings.currentPeerId(context) ?: return
-        val accessToken = authRepo.getAccessToken()?.takeIf { it.isNotBlank() } ?: return
-        try {
-            withContext(Dispatchers.IO) {
-                val res = ApiClient.get("/api/v1/wg/peers/$peerId", accessToken)
-                if (res.code == 404 || res.code == 410) {
-                    Log.i("VeritasVPN", "peer check result=${res.code}")
-                    res.close()
-                    ApiClient.delete("/api/v1/wg/peers/$peerId", accessToken).close()
-                    withContext(Dispatchers.Main) {
-                        VpnSettings.clearSession(context)
-                        VpnSettings.setCurrentPeerId(context, null)
-                        currentPeerId = null
-                        context.startService(
-                            Intent(context, VeritasVpnService::class.java).apply {
-                                action = VeritasVpnService.ACTION_DISCONNECT
-                            }
-                        )
-                    }
-                } else {
-                    res.close()
-                }
-            }
-        } catch (_: Exception) {
         }
     }
 

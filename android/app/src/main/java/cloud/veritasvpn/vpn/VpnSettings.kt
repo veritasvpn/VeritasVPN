@@ -164,6 +164,11 @@ object VpnSettings {
         }.apply()
     }
 
+    /**
+     * Timestamp when the tunnel interface was established (not when the first handshake completed).
+     * Used as a stable marker to prevent the first-connect timeout from deleting an established peer
+     * after Activity recreation. This is a "don't delete" marker, not a measure of connection health.
+     */
     fun sessionEstablishedAt(context: Context): Long =
         prefs(context).getLong(KEY_SESSION_ESTABLISHED_AT, 0L)
 

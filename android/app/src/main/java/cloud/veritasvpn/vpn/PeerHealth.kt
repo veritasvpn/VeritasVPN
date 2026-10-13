@@ -13,10 +13,12 @@ object PeerHealth {
         nowMs: Long,
         networkUsable: Boolean,
         lastVerifyAtMs: Long,
+        rxDeltaSinceAttach: Long = 0,
     ): Decision {
         if (!networkUsable) return Decision.OK
         val hasHandshake = handshakeMs > 0L && handshakeMs > linkAttachedAtMs
         if (hasHandshake) return Decision.OK
+        if (rxDeltaSinceAttach > 0) return Decision.REDIAL
         val noHandshakeFor = nowMs - linkAttachedAtMs
         if (noHandshakeFor < NO_HANDSHAKE_TIMEOUT_MS) return Decision.REDIAL
         if (lastVerifyAtMs > 0L && nowMs - lastVerifyAtMs < VERIFY_COOLDOWN_MS) return Decision.REDIAL

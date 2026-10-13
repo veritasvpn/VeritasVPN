@@ -88,4 +88,34 @@ class PeerHealthTest {
             ),
         )
     }
+
+    @Test
+    fun redialWhenRxDeltaPositiveEvenWithoutHandshake() {
+        assertEquals(
+            PeerHealth.Decision.REDIAL,
+            PeerHealth.decide(
+                handshakeMs = 0L,
+                linkAttachedAtMs = 1_000L,
+                nowMs = 50_000L,
+                networkUsable = true,
+                lastVerifyAtMs = 0L,
+                rxDeltaSinceAttach = 100L,
+            ),
+        )
+    }
+
+    @Test
+    fun verifyPeerWhenNoHandshakeAndNoRx() {
+        assertEquals(
+            PeerHealth.Decision.VERIFY_PEER,
+            PeerHealth.decide(
+                handshakeMs = 0L,
+                linkAttachedAtMs = 1_000L,
+                nowMs = 50_000L,
+                networkUsable = true,
+                lastVerifyAtMs = 0L,
+                rxDeltaSinceAttach = 0L,
+            ),
+        )
+    }
 }

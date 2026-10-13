@@ -176,6 +176,7 @@ fun HeroConnectControl(
     phase: HeroPhase,
     onClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    lockdownEnabled: Boolean = false,
 ) {
     val motion = rememberMotionEnabled()
     // Wall clock, not connection progress. Recomposition while the tunnel waits
@@ -376,7 +377,7 @@ fun HeroConnectControl(
                     if (current == HeroPhase.Reconnecting) {
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = "Not protected",
+                            text = if (lockdownEnabled) "Traffic is blocked until the tunnel is back" else "Not protected",
                             style = MaterialTheme.typography.bodySmall,
                             color = WarningOrange,
                             textAlign = TextAlign.Center,
