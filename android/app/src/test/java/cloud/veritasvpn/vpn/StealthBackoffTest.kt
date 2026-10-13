@@ -23,4 +23,12 @@ class StealthBackoffTest {
         assertTrue(values.all { it <= StealthBackoff.MAX_MS })
         assertTrue(values.drop(4).all { it == StealthBackoff.MAX_MS })
     }
+
+    @Test
+    fun newSequenceStartsFromInitial() {
+        val first = StealthBackoff.sequence().take(3).toList()
+        val second = StealthBackoff.sequence().take(3).toList()
+        assertEquals(first, second)
+        assertEquals(StealthBackoff.INITIAL_MS, first[0])
+    }
 }

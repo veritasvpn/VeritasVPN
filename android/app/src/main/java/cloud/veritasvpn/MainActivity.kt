@@ -980,13 +980,16 @@ class MainActivity : ComponentActivity() {
                             if (user != null) ensureSessionFresh()
                             // Update lockdown status for UI
                             lockdownEnabled = VpnKillSwitch.isLockdownEnabled(context)
-                            // If the user wanted to be connected but the session was cleared
-                            // (e.g., peer gone detection), trigger a fresh connect
+                            val peerGoneAt = VpnSettings.peerGoneAt(context)
+                            val reprovisionBusy = VpnSettings.reprovisionInProgressAt(context) > 0L &&
+                                System.currentTimeMillis() - VpnSettings.reprovisionInProgressAt(context) < 60_000L
                             if (userWantsConnected && !connected && !connecting &&
+                                peerGoneAt > 0L && !reprovisionBusy &&
                                 !VeritasVpnService.hasSavedSession(context) && user != null) {
-                                Log.i("VeritasVPN", "resume: userWantsConnected but no session, reconnecting")
+                                Log.i("VeritasVPN", "resume: peer gone, service not re-provisioning, reconnecting")
                                 currentPeerId = null
                                 VpnSettings.setCurrentPeerId(context, null)
+                                VpnSettings.clearPeerGoneAt(context)
                                 scope.launch {
                                     startConnection(
                                         context, scope,

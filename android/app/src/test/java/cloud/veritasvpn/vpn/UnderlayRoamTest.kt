@@ -54,4 +54,24 @@ class UnderlayRoamTest {
         )
         assertEquals(UnderlayRoam.Action.ROAM, action)
     }
+
+    @Test
+    fun underlayLostAndBackOnSameNetworkSkips() {
+        val action = UnderlayRoam.action(
+            liveIdentity = "wifi",
+            liveReady = true,
+            lastIdentity = "wifi",
+        )
+        assertEquals(UnderlayRoam.Action.SKIP, action)
+    }
+
+    @Test
+    fun underlayLostThenReturnsAsUnvalidatedWaits() {
+        val action = UnderlayRoam.action(
+            liveIdentity = "wifi",
+            liveReady = false,
+            lastIdentity = "wifi",
+        )
+        assertEquals(UnderlayRoam.Action.WAIT, action)
+    }
 }
