@@ -233,6 +233,49 @@ class TunnelRebuildTest {
     }
 
     @Test
+    fun signedOutStopsInsteadOfRebuilding() {
+        assertEquals(
+            TunnelRebuild.RecoveryStep.STOP,
+            decide(
+                peer = PeerCheckOutcome.Outcome.SIGNED_OUT,
+                handshakeCompleted = false,
+                probeRoundCompleted = true,
+                rebuilding = true,
+                waiting = false,
+            ),
+        )
+        assertFalse(
+            TunnelRebuild.shouldRebuild(
+                PeerCheckOutcome.Outcome.SIGNED_OUT,
+                handshakeCompleted = false,
+                probeRoundCompleted = true,
+            ),
+        )
+    }
+
+    @Test
+    fun failedDupClosesThePreviousKeeper() {
+        assertTrue(
+            TunnelRebuild.shouldClosePreviousKeeper(
+                newTunEstablished = true,
+                duplicateSucceeded = false,
+            ),
+        )
+        assertFalse(
+            TunnelRebuild.shouldClosePreviousKeeper(
+                newTunEstablished = false,
+                duplicateSucceeded = false,
+            ),
+        )
+        assertFalse(
+            TunnelRebuild.shouldClosePreviousKeeper(
+                newTunEstablished = true,
+                duplicateSucceeded = true,
+            ),
+        )
+    }
+
+    @Test
     fun backoffCapsAtSixtySeconds() {
         var wait = TunnelRebuild.MIN_BACKOFF_MS
         assertEquals(5_000L, wait)

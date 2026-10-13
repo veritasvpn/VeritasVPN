@@ -62,6 +62,8 @@ object TunnelRebuild {
         trackedHandle: Long?,
     ): RecoveryStep {
         if (!sessionActive) return RecoveryStep.STOP
+        // Signed out is terminal. Treating it as a network error rebuilds forever.
+        if (peer == PeerCheckOutcome.Outcome.SIGNED_OUT) return RecoveryStep.STOP
         if (peer == PeerCheckOutcome.Outcome.PEER_GONE) return RecoveryStep.REPROVISION
         if (handshakeCompleted) return RecoveryStep.STOP
         val networkChanged = rebuilding &&
@@ -90,6 +92,14 @@ object TunnelRebuild {
         closePrevious(created)
         return created
     }
+
+    /**
+     * The new tun is already in use, but duplicating it failed. The previous
+     * keeper must be closed so that extra fd does not stay open. A failed
+     * establish (no new tun) leaves the previous keeper alone.
+     */
+    fun shouldClosePreviousKeeper(newTunEstablished: Boolean, duplicateSucceeded: Boolean): Boolean =
+        newTunEstablished && !duplicateSucceeded
 
     /** True when the UDP socket is not bound to the current system default. */
     fun socketNeedsRebind(boundHandle: Long?, systemDefaultHandle: Long?): Boolean {

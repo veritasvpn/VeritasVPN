@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.ui.theme.*
+import cloud.veritasvpn.vpn.ControlPlane
 
 @Composable
 fun DashboardScreen(
@@ -55,6 +56,7 @@ fun DashboardScreen(
     reconnecting: Boolean = false,
     handshakeOk: Boolean = false,
     lockdownEnabled: Boolean = false,
+    signInAgain: Boolean = false,
 ) {
     var showSignOutConfirmation by remember { mutableStateOf(false) }
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
@@ -198,6 +200,7 @@ fun DashboardScreen(
                     else -> onPlans
                 },
                 lockdownEnabled = lockdownEnabled,
+                signInAgain = signInAgain,
             )
 
             AnimatedVisibility(
@@ -232,7 +235,12 @@ fun DashboardScreen(
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = msg,
-                    color = when { connected -> SuccessGreen; connecting -> CyanHover; else -> WarningOrange },
+                    color = when {
+                        msg == ControlPlane.SIGN_IN_AGAIN -> WarningOrange
+                        connected -> SuccessGreen
+                        connecting -> CyanHover
+                        else -> WarningOrange
+                    },
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center
                 )
