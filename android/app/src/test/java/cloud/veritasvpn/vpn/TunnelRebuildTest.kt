@@ -292,6 +292,80 @@ class TunnelRebuildTest {
     }
 
     @Test
+    fun defaultNetworkChangeDropsNetworkErrorAndKeepsSignedOut() {
+        assertTrue(TunnelRebuild.shouldClearCachedPeerOutcome(PeerCheckOutcome.Outcome.NETWORK_ERROR))
+        assertTrue(TunnelRebuild.shouldClearCachedPeerOutcome(PeerCheckOutcome.Outcome.REFRESH_AND_RETRY))
+        assertTrue(TunnelRebuild.shouldClearCachedPeerOutcome(PeerCheckOutcome.Outcome.PEER_GONE))
+        assertTrue(TunnelRebuild.shouldClearCachedPeerOutcome(PeerCheckOutcome.Outcome.PEER_ALIVE))
+        assertFalse(TunnelRebuild.shouldClearCachedPeerOutcome(PeerCheckOutcome.Outcome.SIGNED_OUT))
+        assertFalse(TunnelRebuild.shouldClearCachedPeerOutcome(null))
+    }
+
+    @Test
+    fun failedRebuildBypassesThePeerCheckRateLimit() {
+        assertTrue(TunnelRebuild.bypassPeerCheckRateLimit(failedRebuildRound = true))
+        assertFalse(TunnelRebuild.bypassPeerCheckRateLimit(failedRebuildRound = false))
+    }
+
+    @Test
+    fun threeRebuildsOnTheSameDefaultForceAnUnderlyingCheck() {
+        var streak = TunnelRebuild.RebuildStreak(handle = null, count = 0)
+        repeat(2) {
+            streak = TunnelRebuild.noteFailedRebuild(streak, 42L)
+            assertFalse(TunnelRebuild.shouldForceUnderlyingPeerCheck(streak.count))
+        }
+        streak = TunnelRebuild.noteFailedRebuild(streak, 42L)
+        assertEquals(3, streak.count)
+        assertEquals(42L, streak.handle)
+        assertTrue(TunnelRebuild.shouldForceUnderlyingPeerCheck(streak.count))
+        assertEquals(TunnelRebuild.REBUILDS_BEFORE_UNDERLYING_CHECK, 3)
+
+        val moved = TunnelRebuild.noteFailedRebuild(streak, 99L)
+        assertEquals(99L, moved.handle)
+        assertEquals(1, moved.count)
+        assertFalse(TunnelRebuild.shouldForceUnderlyingPeerCheck(moved.count))
+
+        val gone = TunnelRebuild.noteFailedRebuild(moved, null)
+        assertNull(gone.handle)
+        assertEquals(1, gone.count)
+        assertFalse(TunnelRebuild.shouldForceUnderlyingPeerCheck(gone.count))
+    }
+
+    @Test
+    fun forcedCheckStillReprovisionsOnlyWhenThePeerIsGone() {
+        assertEquals(
+            TunnelRebuild.RecoveryStep.REBUILD,
+            decide(
+                peer = PeerCheckOutcome.Outcome.NETWORK_ERROR,
+                handshakeCompleted = false,
+                probeRoundCompleted = true,
+                rebuilding = true,
+                waiting = false,
+                defaultHandle = 42L,
+                trackedHandle = 42L,
+            ),
+        )
+        assertEquals(
+            TunnelRebuild.RecoveryStep.REPROVISION,
+            decide(
+                peer = PeerCheckOutcome.Outcome.PEER_GONE,
+                handshakeCompleted = false,
+                probeRoundCompleted = true,
+                rebuilding = true,
+                waiting = true,
+                defaultHandle = 42L,
+                trackedHandle = 42L,
+            ),
+        )
+        assertFalse(
+            PeerRecovery.plan(PeerCheckOutcome.Outcome.NETWORK_ERROR).reprovision,
+        )
+        assertTrue(
+            PeerRecovery.plan(PeerCheckOutcome.Outcome.PEER_GONE).reprovision,
+        )
+    }
+
+    @Test
     fun backoffResetsOnHandshakeOrSystemDefaultChange() {
         val capped = 60_000L
         assertEquals(

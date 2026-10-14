@@ -70,6 +70,10 @@ type Service struct {
 	stealthAvailable  bool
 	tierCache         *entitlement.TierCache
 	log               *logging.Logger
+	// Serializes CreatePeer for one account device so two re-provisions
+	// cannot delete each other's row. A pointer so copying a Service value
+	// does not copy the gate lock.
+	createGate *deviceCreateGate
 }
 
 func New(
@@ -91,6 +95,7 @@ func New(
 		authToken:    authToken,
 		tierCache:    tierCache,
 		log:          log,
+		createGate:   &deviceCreateGate{},
 	}
 }
 
@@ -456,6 +461,11 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 			return nil, err
 		}
 		deviceID = anon
+	}
+
+	if requestedDeviceID != "" {
+		unlock := s.createGate.hold(accountID, requestedDeviceID)
+		defer unlock()
 	}
 
 	existing, err := s.postgres.ListPeersByAccount(ctx, accountID)
@@ -861,6 +871,30 @@ func (s *Service) ExpirePeer(ctx context.Context, serverID, peerID string) error
 		})
 	}
 	return nil
+}
+
+// ReadPeerForCheck is the GET /api/v1/wg/peers/{id} lookup. A missing peer
+// is 404. A removed, expired, or otherwise non-live peer is 410. Both are
+// "peer gone" for the app. A database failure is 500 so the app does not
+// re-provision on a blip.
+func (s *Service) ReadPeerForCheck(ctx context.Context, peerID, accountID string) (*model.Peer, *model.Server, int, error) {
+	peer, err := s.postgres.GetPeerAnyStatus(ctx, peerID, accountID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, PeerCheckNotFound, nil
+		}
+		return nil, nil, PeerCheckFailed, err
+	}
+	code := PeerCheckHTTPStatus(true, peer.Status, false)
+	if code != PeerCheckOK {
+		return peer, nil, code, nil
+	}
+	srv, err := s.postgres.GetServer(ctx, peer.ServerID)
+	if err != nil {
+		s.log.Warn("could not get server for peer", "server_id", peer.ServerID, "error", err)
+		return peer, nil, PeerCheckOK, nil
+	}
+	return peer, srv, PeerCheckOK, nil
 }
 
 func (s *Service) GetPeer(ctx context.Context, peerID, accountID string) (*model.Peer, *model.Server, error) {

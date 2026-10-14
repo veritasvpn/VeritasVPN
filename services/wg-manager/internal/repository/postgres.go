@@ -366,6 +366,19 @@ func (p *Postgres) UpdatePeerShieldPolicy(ctx context.Context, peerID, accountID
 	return peer, nil
 }
 
+// GetPeerAnyStatus returns the row even when it was removed or expired.
+// The peer-check endpoint uses that to answer 410 instead of pretending
+// the peer is still live.
+func (p *Postgres) GetPeerAnyStatus(ctx context.Context, peerID, accountID string) (*model.Peer, error) {
+	query := `SELECT ` + peerColumns + ` FROM peers WHERE id = $1 AND account_id = $2`
+	peer := &model.Peer{}
+	err := p.pool.QueryRow(ctx, query, peerID, accountID).Scan(scanPeerArgs(peer)...)
+	if err != nil {
+		return nil, fmt.Errorf("get peer: %w", err)
+	}
+	return peer, nil
+}
+
 func (p *Postgres) GetPeer(ctx context.Context, peerID, accountID string) (*model.Peer, error) {
 	query := `SELECT ` + peerColumns + ` FROM peers WHERE id = $1 AND account_id = $2 AND status != 'removed'`
 

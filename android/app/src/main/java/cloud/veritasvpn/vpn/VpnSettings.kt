@@ -28,6 +28,12 @@ object VpnSettings {
     private const val KEY_SESSION_ESTABLISHED_AT = "session_established_at"
     private const val KEY_PEER_GONE_AT = "peer_gone_at"
     private const val KEY_REPROVISION_IN_PROGRESS_AT = "reprovision_in_progress_at"
+    private const val KEY_PEER_CHECK_OUTCOME = "peer_check_outcome"
+    private const val KEY_PEER_CHECK_CODE = "peer_check_code"
+    private const val KEY_PEER_CHECK_VIA = "peer_check_via"
+    private const val KEY_REPROVISION_ATTEMPTS = "reprovision_attempts"
+    private const val KEY_REPROVISION_OUTCOME = "reprovision_outcome"
+    private const val KEY_REPROVISION_CODE = "reprovision_code"
 
     /** Practical AllowedIPs covering the public internet while excluding RFC1918. */
     val EXCLUDE_LAN_ALLOWED_IPS: List<String> = listOf(
@@ -199,11 +205,62 @@ object VpnSettings {
         prefs(context).getLong(KEY_REPROVISION_IN_PROGRESS_AT, 0L)
 
     fun setReprovisionInProgressAt(context: Context, timestampMs: Long) {
-        prefs(context).edit().putLong(KEY_REPROVISION_IN_PROGRESS_AT, timestampMs).apply()
+        // commit so a second provisioner in this process sees the claim
+        // before it starts its own peer create.
+        prefs(context).edit().putLong(KEY_REPROVISION_IN_PROGRESS_AT, timestampMs).commit()
     }
 
     fun clearReprovisionInProgressAt(context: Context) {
-        prefs(context).edit().remove(KEY_REPROVISION_IN_PROGRESS_AT).apply()
+        prefs(context).edit().remove(KEY_REPROVISION_IN_PROGRESS_AT).commit()
+    }
+
+    data class RecoveryDiagnostics(
+        val peerCheckOutcome: String,
+        val peerCheckCode: Int,
+        val peerCheckVia: String,
+        val peerGoneAtMs: Long,
+        val reprovisionAttempts: Int,
+        val reprovisionOutcome: String,
+        val reprovisionCode: Int,
+    )
+
+    fun recoveryDiagnostics(context: Context): RecoveryDiagnostics {
+        val store = prefs(context)
+        return RecoveryDiagnostics(
+            peerCheckOutcome = store.getString(KEY_PEER_CHECK_OUTCOME, null).orEmpty(),
+            peerCheckCode = store.getInt(KEY_PEER_CHECK_CODE, -1),
+            peerCheckVia = store.getString(KEY_PEER_CHECK_VIA, null).orEmpty(),
+            peerGoneAtMs = store.getLong(KEY_PEER_GONE_AT, 0L),
+            reprovisionAttempts = store.getInt(KEY_REPROVISION_ATTEMPTS, 0),
+            reprovisionOutcome = store.getString(KEY_REPROVISION_OUTCOME, null).orEmpty(),
+            reprovisionCode = store.getInt(KEY_REPROVISION_CODE, -1),
+        )
+    }
+
+    fun notePeerCheck(context: Context, outcome: String, code: Int, via: String) {
+        val safeOutcome = PeerCheckLog.sanitizeOutcome(outcome)
+        val safeVia = PeerCheckLog.sanitizeVia(via)
+        if (safeOutcome.isEmpty() || safeVia.isEmpty()) return
+        prefs(context).edit()
+            .putString(KEY_PEER_CHECK_OUTCOME, safeOutcome)
+            .putInt(KEY_PEER_CHECK_CODE, code.coerceIn(0, 599))
+            .putString(KEY_PEER_CHECK_VIA, safeVia)
+            .apply()
+    }
+
+    /** Counts a re-provision attempt. A skip is recorded but not counted. */
+    fun noteReprovision(context: Context, outcome: String, code: Int) {
+        val safeOutcome = PeerCheckLog.sanitizeAttempt(outcome)
+        if (safeOutcome.isEmpty()) return
+        val store = prefs(context)
+        val editor = store.edit()
+            .putString(KEY_REPROVISION_OUTCOME, safeOutcome)
+            .putInt(KEY_REPROVISION_CODE, code.coerceIn(0, 599))
+        if (PeerCheckLog.countsAttempt(safeOutcome)) {
+            val attempts = store.getInt(KEY_REPROVISION_ATTEMPTS, 0).coerceAtLeast(0)
+            editor.putInt(KEY_REPROVISION_ATTEMPTS, attempts + 1)
+        }
+        editor.apply()
     }
 
     /** Stable install UUID used as WireGuard peer device_id (multi-device Premium). */

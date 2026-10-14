@@ -4,7 +4,9 @@ import android.content.Context
 import android.os.Build
 import cloud.veritasvpn.secure.SecurePrefs
 import cloud.veritasvpn.vpn.EndpointSelector
+import cloud.veritasvpn.vpn.PeerCheckLog
 import cloud.veritasvpn.vpn.VeritasVpnService
+import cloud.veritasvpn.vpn.VpnSettings
 
 /**
  * Reads connection facts for the support report.
@@ -68,6 +70,7 @@ object DiagnosticSnapshot {
     ): DiagnosticReport {
         val endpoints = endpoints(context)
         val identity = identity(context)
+        val recovery = runCatching { VpnSettings.recoveryDiagnostics(context) }.getOrNull()
         return buildDiagnosticReport(
             versionName = identity.versionName,
             versionCode = identity.versionCode,
@@ -82,6 +85,17 @@ object DiagnosticSnapshot {
             activeEndpoint = endpoints.active,
             wanEndpoint = endpoints.wan,
             stealthEndpoint = endpoints.stealth,
+            peerCheck = PeerCheckLog.summary(
+                recovery?.peerCheckOutcome.orEmpty(),
+                recovery?.peerCheckCode ?: -1,
+                recovery?.peerCheckVia.orEmpty(),
+            ),
+            peerGoneAt = formatHandshakeAge(recovery?.peerGoneAtMs ?: 0L, nowMs),
+            reprovision = PeerCheckLog.reprovisionSummary(
+                recovery?.reprovisionAttempts ?: 0,
+                recovery?.reprovisionOutcome.orEmpty(),
+                recovery?.reprovisionCode ?: -1,
+            ),
         )
     }
 }

@@ -700,9 +700,21 @@ func (h *HTTPHandler) handlePeerByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, peerResponse(peer))
 	case http.MethodGet:
-		peer, srv, err := h.svc.GetPeer(r.Context(), peerID, accountID)
-		if err != nil {
-			h.writeError(w, http.StatusNotFound, "peer not found", err, "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
+		peer, srv, code, err := h.svc.ReadPeerForCheck(r.Context(), peerID, accountID)
+		switch code {
+		case service.PeerCheckNotFound:
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+			return
+		case service.PeerCheckGone:
+			writeJSON(w, http.StatusGone, map[string]string{"error": "peer gone"})
+			return
+		case service.PeerCheckOK:
+			if peer == nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+				return
+			}
+		default:
+			h.writeError(w, http.StatusInternalServerError, "peer check failed", err, "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
 			return
 		}
 		clientIP := clientIPFromRequest(r)
