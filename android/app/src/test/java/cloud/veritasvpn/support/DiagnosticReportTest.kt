@@ -26,6 +26,35 @@ class DiagnosticReportTest {
     }
 
     @Test
+    fun reportIncludesPeerCheckAndReprovisionFacts() {
+        val report = sample(
+            peerCheck = "PEER_GONE code=410 via=underlying",
+            peerGoneAt = "2h ago",
+            reprovision = "attempts=1 last=failed code=0",
+        )
+        val text = report.text()
+        assertTrue(text.contains("Peer check: PEER_GONE code=410 via=underlying"))
+        assertTrue(text.contains("Peer gone at: 2h ago"))
+        assertTrue(text.contains("Re-provision: attempts=1 last=failed code=0"))
+        assertFalse(text.contains(privateKey))
+    }
+
+    @Test
+    fun recoveryFactsWithSecretsAreRedacted() {
+        val text = sample(
+            peerCheck = "PrivateKey=$privateKey",
+            peerGoneAt = "Bearer abcdef.token",
+            reprovision = "preshared_key=$preshared",
+        ).text()
+        assertFalse(text.contains(privateKey))
+        assertFalse(text.contains(preshared))
+        assertFalse(text.contains("abcdef.token"))
+        assertTrue(text.contains("Peer check: —"))
+        assertTrue(text.contains("Peer gone at: —"))
+        assertTrue(text.contains("Re-provision: attempts=0"))
+    }
+
+    @Test
     fun errorKeysAndTokensAreRedacted() {
         val report = sample(
             lastError = "handshake failed PrivateKey=$privateKey Bearer abcdef.token preshared_key=$preshared",
@@ -141,6 +170,9 @@ class DiagnosticReportTest {
         lastError: String? = null,
         transport: String = "udp",
         active: String = "203.0.113.8:443",
+        peerCheck: String = "—",
+        peerGoneAt: String = "—",
+        reprovision: String = "attempts=0",
     ) = buildDiagnosticReport(
         versionName = "0.2.88",
         versionCode = "72",
@@ -155,5 +187,8 @@ class DiagnosticReportTest {
         activeEndpoint = active,
         wanEndpoint = "203.0.113.8:443",
         stealthEndpoint = "203.0.113.9:443",
+        peerCheck = peerCheck,
+        peerGoneAt = peerGoneAt,
+        reprovision = reprovision,
     )
 }

@@ -34,6 +34,9 @@ import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.support.DiagnosticSnapshot
 import cloud.veritasvpn.support.SupportLinks
 import cloud.veritasvpn.support.buildDiagnosticReport
+import cloud.veritasvpn.support.formatHandshakeAge
+import cloud.veritasvpn.vpn.PeerCheckLog
+import cloud.veritasvpn.vpn.VpnSettings
 import cloud.veritasvpn.ui.theme.Cyan
 import cloud.veritasvpn.ui.theme.CyanHover
 import cloud.veritasvpn.ui.theme.Paper
@@ -79,6 +82,9 @@ fun DiagnosticsScreen(
         lastError,
         nowMs,
     ) {
+        val recovery = runCatching { VpnSettings.recoveryDiagnostics(context) }.getOrElse {
+            VpnSettings.RecoveryDiagnostics("", -1, "", 0L, 0, "", -1)
+        }
         buildDiagnosticReport(
             versionName = identity.versionName,
             versionCode = identity.versionCode,
@@ -93,6 +99,17 @@ fun DiagnosticsScreen(
             activeEndpoint = endpoints.active,
             wanEndpoint = endpoints.wan,
             stealthEndpoint = endpoints.stealth,
+            peerCheck = PeerCheckLog.summary(
+                recovery.peerCheckOutcome,
+                recovery.peerCheckCode,
+                recovery.peerCheckVia,
+            ),
+            peerGoneAt = formatHandshakeAge(recovery.peerGoneAtMs, nowMs),
+            reprovision = PeerCheckLog.reprovisionSummary(
+                recovery.reprovisionAttempts,
+                recovery.reprovisionOutcome,
+                recovery.reprovisionCode,
+            ),
         ).text()
     }
 

@@ -13,6 +13,9 @@ object TunnelRebuild {
     const val MAX_BACKOFF_MS = 60_000L
     const val PEER_CHECK_INTERVAL_MS = 60_000L
 
+    /** Full rebuilds on one default network with no handshake before a forced check. */
+    const val REBUILDS_BEFORE_UNDERLYING_CHECK = 3
+
     enum class RecoveryStep {
         /** Create a new tunnel on the current system default. */
         REBUILD,
@@ -124,4 +127,33 @@ object TunnelRebuild {
         if (handshakeSucceeded || defaultNetworkChanged) return MIN_BACKOFF_MS
         return nextBackoff(currentMs)
     }
+
+    /**
+     * Cached outcomes from the previous default network. A signed-out result
+     * stays, because it is not a property of the network. Every other result,
+     * including a network error, is dropped so the next check is a real answer.
+     */
+    fun shouldClearCachedPeerOutcome(outcome: PeerCheckOutcome.Outcome?): Boolean = when (outcome) {
+        null, PeerCheckOutcome.Outcome.SIGNED_OUT -> false
+        else -> true
+    }
+
+    /** A finished rebuild that did not handshake may check again immediately. */
+    fun bypassPeerCheckRateLimit(failedRebuildRound: Boolean): Boolean = failedRebuildRound
+
+    data class RebuildStreak(val handle: Long?, val count: Int)
+
+    /** Count consecutive no-handshake rebuilds on one system-default handle. */
+    fun noteFailedRebuild(previous: RebuildStreak, handle: Long?): RebuildStreak {
+        if (handle == null || previous.handle != handle) return RebuildStreak(handle, 1)
+        return RebuildStreak(handle, previous.count + 1)
+    }
+
+    /**
+     * After [REBUILDS_BEFORE_UNDERLYING_CHECK] rebuilds on the same default
+     * network, the next peer check uses the protected client bound to that
+     * network. The result is not guessed: only a 404 or 410 re-provisions.
+     */
+    fun shouldForceUnderlyingPeerCheck(rebuildsOnSameDefault: Int): Boolean =
+        rebuildsOnSameDefault >= REBUILDS_BEFORE_UNDERLYING_CHECK
 }

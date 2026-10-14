@@ -14,6 +14,9 @@ data class DiagnosticReport(
     val handshakeAge: String,
     val endpoint: String,
     val lastError: String,
+    val peerCheck: String = "—",
+    val peerGoneAt: String = "—",
+    val reprovision: String = "attempts=0",
 ) {
     fun versionLabel(): String =
         if (versionCode.isBlank()) "v$versionName" else "v$versionName ($versionCode)"
@@ -156,6 +159,9 @@ fun buildDiagnosticReport(
     activeEndpoint: String,
     wanEndpoint: String,
     stealthEndpoint: String,
+    peerCheck: String = "—",
+    peerGoneAt: String = "—",
+    reprovision: String = "attempts=0",
 ): DiagnosticReport {
     val safeError = sanitizeError(lastError)
     return DiagnosticReport(
@@ -168,7 +174,20 @@ fun buildDiagnosticReport(
         handshakeAge = formatHandshakeAge(handshakeEpochMs, nowMs),
         endpoint = choosePublicEndpoint(activeEndpoint, wanEndpoint, stealthEndpoint, transport),
         lastError = safeError,
+        peerCheck = sanitizeStatusFact(peerCheck, "—"),
+        peerGoneAt = sanitizeStatusFact(peerGoneAt, "—"),
+        reprovision = sanitizeStatusFact(reprovision, "attempts=0"),
     )
+}
+
+/** A diagnostic fact that is only a status word, a code, or an age. */
+fun sanitizeStatusFact(raw: String?, fallback: String): String {
+    val trimmed = raw?.trim().orEmpty()
+    if (trimmed.isEmpty()) return fallback
+    val text = sanitizePlainField(trimmed, 120)
+    if (text.isEmpty() || text.any { it.isWhitespace() && it != ' ' }) return fallback
+    if (SECRET_MARKER.containsMatchIn(text) || WG_KEY.containsMatchIn(text)) return fallback
+    return text
 }
 
 fun formatDiagnosticReport(report: DiagnosticReport): String = buildString {
@@ -196,7 +215,13 @@ fun formatDiagnosticReport(report: DiagnosticReport): String = buildString {
     append("Endpoint: ")
     appendLine(report.endpoint)
     append("Last error: ")
-    append(report.lastError)
+    appendLine(report.lastError)
+    append("Peer check: ")
+    appendLine(report.peerCheck)
+    append("Peer gone at: ")
+    appendLine(report.peerGoneAt)
+    append("Re-provision: ")
+    append(report.reprovision)
 }.let { text ->
     if (SECRET_MARKER.containsMatchIn(text) || WG_KEY.containsMatchIn(text) || text.contains("[Interface]")) {
         "VeritasVPN diagnostic report\nLast error: details redacted"

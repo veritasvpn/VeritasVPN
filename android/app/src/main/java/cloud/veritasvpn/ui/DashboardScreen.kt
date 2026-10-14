@@ -230,7 +230,8 @@ fun DashboardScreen(
                         dnsBlockedThisSession = if (dnsBlockedCount != null && dnsBlockedBaseline != null) {
                             (dnsBlockedCount - dnsBlockedBaseline).coerceAtLeast(0)
                         } else null,
-                        dnsGateway = dnsGateway
+                        dnsGateway = dnsGateway,
+                        reconnecting = reconnecting,
                     )
                 }
             }
@@ -283,19 +284,29 @@ private fun LiveTransferStats(
     txBytes: Long,
     handshakeMs: Long,
     dnsBlockedThisSession: Long?,
-    dnsGateway: String?
+    dnsGateway: String?,
+    reconnecting: Boolean,
 ) {
+    val countersLive = transferCountersAreLive(reconnecting)
     Column(
         Modifier
             .fillMaxWidth()
             .glassSurface(RoundedCornerShape(20.dp))
             .padding(16.dp)
     ) {
-        Text("LIVE STATS", style = MaterialTheme.typography.labelSmall, color = PaperDim)
+        Text(liveStatsTitle(reconnecting), style = MaterialTheme.typography.labelSmall, color = PaperDim)
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            StatCell(label = "Download", value = formatBytes(rxBytes))
-            StatCell(label = "Upload", value = formatBytes(txBytes))
+            StatCell(
+                label = "Download",
+                value = presentedTransferBytes(rxBytes, reconnecting),
+                dimmed = !countersLive,
+            )
+            StatCell(
+                label = "Upload",
+                value = presentedTransferBytes(txBytes, reconnecting),
+                dimmed = !countersLive,
+            )
             StatCell(label = "Handshake", value = formatHandshakeAge(handshakeMs))
         }
         if (dnsBlockedThisSession != null) {
@@ -334,21 +345,12 @@ private fun LiveTransferStats(
 }
 
 @Composable
-private fun StatCell(label: String, value: String) {
+private fun StatCell(label: String, value: String, dimmed: Boolean = false) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, color = Paper, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Text(value, color = if (dimmed) PaperDim else Paper, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(2.dp))
         Text(label, color = PaperDim, fontSize = 11.sp)
     }
-}
-
-private fun formatBytes(bytes: Long): String {
-    if (bytes < 1024) return "$bytes B"
-    val kb = bytes / 1024.0
-    if (kb < 1024) return String.format("%.1f KB", kb)
-    val mb = kb / 1024.0
-    if (mb < 1024) return String.format("%.1f MB", mb)
-    return String.format("%.2f GB", mb / 1024.0)
 }
 
 private fun formatHandshakeAge(handshakeMs: Long): String {

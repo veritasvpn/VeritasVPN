@@ -39,6 +39,8 @@ import cloud.veritasvpn.support.sanitizeError
 import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.SignInAgainSignal
 import cloud.veritasvpn.vpn.ControlPlane
+import cloud.veritasvpn.vpn.PeerCheckLog
+import cloud.veritasvpn.vpn.ReprovisionFlight
 import cloud.veritasvpn.ui.VpnDisclosureScreen
 import cloud.veritasvpn.ui.DashboardScreen
 import cloud.veritasvpn.ui.DiagnosticsScreen
@@ -1494,11 +1496,36 @@ class MainActivity : ComponentActivity() {
         shouldContinue: () -> Boolean = { true },
     ) {
         if (currentPeerId != null) return
+        if (isReconnect && ReprovisionFlight.blocksActivity(
+                VpnSettings.reprovisionInProgressAt(context),
+                System.currentTimeMillis(),
+            )
+        ) {
+            Log.i("VeritasVPN", PeerCheckLog.reprovision("skipped", 0))
+            VpnSettings.noteReprovision(context, "skipped", 0)
+            return
+        }
         setStatus(if (isReconnect) "Reconnecting…" else "Connecting...")
         // Key generation, the peer request, and config assembly stay off the
         // UI thread. Compose only hears the small state hop afterwards, so the
         // hero clock is not paused or restarted by this work.
         scope.launch(Dispatchers.IO) {
+            val flight = if (isReconnect) {
+                ReprovisionFlight.tryClaim(
+                    persistedAtMs = VpnSettings.reprovisionInProgressAt(context),
+                    nowMs = System.currentTimeMillis(),
+                    replaceWaiting = false,
+                ) { claimedAt ->
+                    VpnSettings.setReprovisionInProgressAt(context, claimedAt)
+                }
+            } else {
+                null
+            }
+            if (isReconnect && flight == null) {
+                Log.i("VeritasVPN", PeerCheckLog.reprovision("skipped", 0))
+                VpnSettings.noteReprovision(context, "skipped", 0)
+                return@launch
+            }
             try {
                 // Wait for prior DELETE so we do not race ourselves; server upserts
                 // by (account_id, device_id) so other installs stay untouched.
@@ -1570,6 +1597,12 @@ class MainActivity : ComponentActivity() {
                     setConnecting(false)
                     setStatus(cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context))
                     onFailure?.invoke()
+                }
+            } finally {
+                if (flight != null) {
+                    ReprovisionFlight.release(flight) {
+                        VpnSettings.clearReprovisionInProgressAt(context)
+                    }
                 }
             }
         }
