@@ -102,10 +102,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var lastPeerVerifyAtMs = 0L
     private var underlayLostSeen = false
     private var rxAtLinkAttach = 0L
-    /** NetId the UDP sockets were last bound to. Unset until a bind succeeds. */
-    @Volatile private var socketsBoundHandle: Long = Long.MIN_VALUE
-    /** NetId currently passed to setUnderlyingNetworks. Unset after an unpin. */
-    @Volatile private var pinnedHandle: Long = Long.MIN_VALUE
+    /**
+     * Last system-default handle this session has reacted to. Not a socket pin:
+     * data-plane sockets are never bindSocket'd, and a repeated handle still
+     * re-protects them.
+     */
+    @Volatile private var watchedDefault: TunnelRebuild.DefaultWatch = TunnelRebuild.DefaultWatch()
     @Volatile private var lastPeerOutcome: PeerCheckOutcome.Outcome? = null
     @Volatile private var peerCheckSerial = 0
     private var lastPeerCheckAtMs = 0L
@@ -117,8 +119,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     /** Wakes the rebuild backoff when the default network or the peer result changes. */
     private val recoveryWakes = Channel<Unit>(Channel.CONFLATED)
     /**
-     * Network callbacks only enqueue this. The pin itself runs on [scope] so a
-     * rebuild holding [tunnelOpLock] cannot stall the callback thread.
+     * Network callbacks only enqueue this. Following the system default runs
+     * on [scope] so a rebuild holding [tunnelOpLock] cannot stall the callback thread.
      */
     private val defaultNetworkSignals = Channel<Unit>(Channel.CONFLATED)
     /** Signed-out control calls stop. The tunnel interface stays up. */
@@ -176,7 +178,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    Log.w(TAG, "default network pin failed: ${e.javaClass.simpleName}")
+                    Log.w(TAG, "default network follow failed: ${e.javaClass.simpleName}")
                 }
             }
         }
@@ -244,8 +246,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 lastPeerVerifyAtMs = 0L
                 underlayLostSeen = false
                 rxAtLinkAttach = 0L
-                socketsBoundHandle = Long.MIN_VALUE
-                pinnedHandle = Long.MIN_VALUE
+                watchedDefault = TunnelRebuild.DefaultWatch()
                 lastPeerOutcome = null
                 peerCheckSerial++
                 lastPeerCheckAtMs = 0L
@@ -312,7 +313,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                             buildNotification("Connected · checking route…"),
                             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                         )
-                        // Bind protected sockets to the current system default only.
+                        // Protect the WireGuard sockets and leave them on the system default.
                         registerUnderlayWatch()
                         followSystemDefault()
                         broadcastState(true, null)
@@ -409,8 +410,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 hardLoopStartedAtMs = 0L
                 healthUnderlayWaitStartedAtMs = 0L
                 lastStatsLogAtMs = 0L
-                socketsBoundHandle = Long.MIN_VALUE
-                pinnedHandle = Long.MIN_VALUE
+                watchedDefault = TunnelRebuild.DefaultWatch()
                 lastPeerOutcome = null
                 peerCheckSerial++
                 lastPeerCheckAtMs = 0L
@@ -568,8 +568,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         hardLoopStartedAtMs = 0L
         healthUnderlayWaitStartedAtMs = 0L
         lastStatsLogAtMs = 0L
-        socketsBoundHandle = Long.MIN_VALUE
-        pinnedHandle = Long.MIN_VALUE
+        watchedDefault = TunnelRebuild.DefaultWatch()
         lastPeerOutcome = null
         peerCheckSerial++
         lastPeerCheckAtMs = 0L
@@ -923,13 +922,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun scheduleUnderlayAdapt(forceHard: Boolean = false) {
         // The callback thread must not take tunnelOpLock. A rebuild holds that
-        // lock across wgTurnOn / establish. The pin runs on the service scope.
+        // lock across wgTurnOn / establish. Following the default runs on the service scope.
         if (sessionIntended()) defaultNetworkSignals.trySend(Unit)
         if (!sessionIntended() || controlSignedOut) return
         val gen = sessionGeneration
         if (rebuildInProgress) {
             // Same-network callbacks must not cancel the rebuild. A new default
-            // wakes the loop so it can unpin, reset, and pin the new one.
+            // wakes the loop so it can reset and rebuild on that default.
             return
         }
         adaptJob?.cancel()
@@ -1284,7 +1283,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         if (snap == null || ipv4Addresses(snap.link).isEmpty() ||
                             snap.network.networkHandle != handle
                         ) {
-                            if (handle == null) pinUnderlyingToSystemDefault()
+                            if (handle == null) followSystemDefault()
                             waiting = true
                             continue
                         }
@@ -1422,7 +1421,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         resetRebuildStreak()
         clearCachedPeerOutcome()
         ensurePeerCheck(force = true)
-        if (handle == null) pinUnderlyingToSystemDefault() else followSystemDefault()
+        followSystemDefault()
     }
 
     private fun resetRebuildStreak() {
@@ -1447,29 +1446,28 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     /**
-     * Unpin when the phone has no system default, and pin again when a new
-     * one appears. A handle change drops a stale "alive" peer result so a
-     * deleted peer can still be re-provisioned.
+     * A new system default, or the loss of one, drops cached peer results and
+     * wakes recovery. Data-plane sockets are re-protected on every observation,
+     * including a repeat of the same handle. Nothing here bindSocket's them.
      */
     private fun noteDefaultNetworkForRecovery() {
         val next = systemDefaultNetwork()?.networkHandle
-        val previous = pinnedHandle
-        val changed = previous != Long.MIN_VALUE && next != previous
-        if (controlClient != null && (next == null || next != controlClientHandle)) {
-            dropUnderlyingControlClient()
-        }
-        if (changed) {
+        val reaction = TunnelRebuild.onSystemDefault(
+            watch = watchedDefault,
+            nextHandle = next,
+            controlClientOpen = controlClient != null,
+            controlClientHandle = controlClientHandle.takeIf { it != Long.MIN_VALUE },
+        )
+        if (reaction.dropControlClient) dropUnderlyingControlClient()
+        if (reaction.clearCachedPeerOutcome) {
             // Drop a sticky network error (and any other non-alive result) and
             // check again on this default network. Do not keep the old answer.
             clearCachedPeerOutcome()
             ensurePeerCheck(force = true)
         }
-        if (next == null) {
-            if (previous != Long.MIN_VALUE) pinUnderlyingToSystemDefault()
-        } else if (next != previous) {
-            followSystemDefault()
-        }
-        recoveryWakes.trySend(Unit)
+        if (reaction.followDataPlane) followSystemDefault()
+        watchedDefault = reaction.next
+        if (reaction.wakeRecovery) recoveryWakes.trySend(Unit)
     }
 
     /**
@@ -1515,7 +1513,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 ),
                 networkType = networkType(snap.caps),
                 handle = snap.network.networkHandle,
-                socketBound = socketsBoundHandle == snap.network.networkHandle,
+                // Data-plane sockets are protect()'d and unbound.
+                socketBound = false,
             ),
         )
     }
@@ -1894,10 +1893,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun rebindLiveTunnel(parsed: Config, gen: Long, recreateTun: Boolean = false): Boolean {
         synchronized(tunnelOpLock) {
             if (gen != sessionGeneration || !sessionIntended()) return false
-            // Drop the stale netId before the new sockets exist. protect() on
-            // HyperOS binds to whatever underlying network is set right now.
-            socketsBoundHandle = Long.MIN_VALUE
-            pinUnderlyingToSystemDefault()
+            // New UDP sockets must be created unbound. protect() on HyperOS
+            // stamps whatever underlying network is set right now, so clear
+            // any pin before they exist. Do not bindSocket these fds.
+            releaseUnderlyingPin()
             try {
                 val handleField = goField("currentTunnelHandle")
                 val tunnelField = goField("currentTunnel")
@@ -1936,7 +1935,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     handleField.setInt(backend, newHandle)
                     tunnelField.set(backend, this)
                     configField.set(backend, parsed)
-                    bindBackendSocketsToSystemDefault()
+                    protectBackendSockets()
                     return true
                 }
                 if (recreateTun) {
@@ -1952,7 +1951,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 )
                 setStateInternal.isAccessible = true
                 setStateInternal.invoke(backend, this, parsed, Tunnel.State.UP)
-                bindBackendSocketsToSystemDefault()
+                protectBackendSockets()
                 return true
             } catch (e: java.lang.reflect.InvocationTargetException) {
                 val cause = e.targetException ?: e.cause ?: e
@@ -1965,13 +1964,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     /**
      * Full tunnel rebuild on the current system-default network. Userspace is
      * stopped first, but the existing tun stays open until [getBuilder]
-     * establish() has created the replacement. The new sockets are then bound
-     * to that same default and to no other network.
+     * establish() has created the replacement. The new sockets are protected
+     * and left unbound, so they follow that default and no other network.
      */
     private fun rebuildTunnelInterface(parsed: Config, gen: Long): Boolean {
         synchronized(tunnelOpLock) {
             if (gen != sessionGeneration || !sessionIntended()) return false
-            socketsBoundHandle = Long.MIN_VALUE
+            releaseUnderlyingPin()
             try {
                 val handleField = goField("currentTunnelHandle")
                 val handle = handleField.getInt(backend)
@@ -2017,80 +2016,46 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         GoBackend::class.java.getDeclaredMethod(name, *types).apply { isAccessible = true }
 
     /**
-     * Keep protected UDP sockets on the phone's current system-default network.
+     * Keep the WireGuard UDP sockets on whatever network the system is using.
      *
-     * HyperOS lockdown `protect()` binds a socket to the VPN underlying netId
-     * and does not move that binding when the netId goes stale.
-     * `setUnderlyingNetworks(null)` leaves the previous binding in place, so
-     * handshake packets stay on the network the phone already left.
+     * Never `setUnderlyingNetworks(arrayOf(...))` and never `Network.bindSocket`
+     * on these fds. Both pin the session to one Network object, so the next
+     * switch leaves the sockets on the network the phone already left. A
+     * protected, unbound socket re-resolves its route per packet.
      *
-     * Point the underlying network at the current system default only — never
-     * a different transport — and bind the sockets to that same network. When
-     * the default handle changes, callers create a new socket and bind again.
+     * bindSocket stays on the protected control client, which is created again
+     * for the current system-default network. There is no pin-success gate
+     * here: every call clears the underlying network and protect()'s both fds.
      */
     private fun followSystemDefault() {
-        pinUnderlyingToSystemDefault()
-        bindBackendSocketsToSystemDefault()
+        releaseUnderlyingPin()
+        protectBackendSockets()
     }
 
-    private fun pinUnderlyingToSystemDefault() {
-        synchronized(tunnelOpLock) {
-            val network = systemDefaultNetwork()
-            val handle = TunnelRebuild.pinHandle(network?.networkHandle)
-            if (network == null || handle == null) {
-                runCatching { setUnderlyingNetworks(null) }
-                socketsBoundHandle = Long.MIN_VALUE
-                pinnedHandle = Long.MIN_VALUE
-                return
-            }
-            runCatching { setUnderlyingNetworks(arrayOf(network)) }.onSuccess {
-                pinnedHandle = handle
-            }
-        }
-    }
-
-    private fun bindBackendSocketsToSystemDefault() {
-        val network = systemDefaultNetwork()
-        val handle = TunnelRebuild.pinHandle(network?.networkHandle)
-        if (network == null || handle == null) {
-            socketsBoundHandle = Long.MIN_VALUE
-            return
-        }
-        runCatching {
-            val tunnelHandle = goField("currentTunnelHandle").getInt(backend)
-            if (tunnelHandle < 0) {
-                socketsBoundHandle = Long.MIN_VALUE
-                return
-            }
-            val v4 = goNative("wgGetSocketV4", Integer.TYPE).invoke(null, tunnelHandle) as Int
-            val v6 = goNative("wgGetSocketV6", Integer.TYPE).invoke(null, tunnelHandle) as Int
-            val boundV4 = bindFdToNetwork(network, v4)
-            val boundV6 = bindFdToNetwork(network, v6)
-            socketsBoundHandle = if (boundV4 || boundV6) handle else Long.MIN_VALUE
-        }.onFailure { error ->
-            socketsBoundHandle = Long.MIN_VALUE
-            Log.w(TAG, "Could not bind WireGuard sockets: ${error.javaClass.simpleName}")
-        }
+    private fun releaseUnderlyingPin() {
+        runCatching { setUnderlyingNetworks(null) }
     }
 
     /**
-     * protect() then bindSocket, in that order. protect() can stamp the old
-     * netId; bindSocket forces the fd onto [network]. adopt/detach so the
-     * WireGuard fd stays open.
+     * protect() only. A missing fd is skipped. Neither socket is bound.
+     * The lock keeps this off an fd that [rebindLiveTunnel] is replacing.
      */
-    private fun bindFdToNetwork(network: Network, fd: Int): Boolean {
-        if (fd < 0) return false
-        protect(fd)
-        val adopted = ParcelFileDescriptor.adoptFd(fd)
-        return try {
-            network.bindSocket(adopted.fileDescriptor)
-            true
-        } catch (e: Exception) {
-            Log.w(TAG, "socket bind failed: ${e.javaClass.simpleName}")
-            false
-        } finally {
-            runCatching { adopted.detachFd() }
+    private fun protectBackendSockets() {
+        synchronized(tunnelOpLock) {
+            runCatching {
+                val handle = goField("currentTunnelHandle").getInt(backend)
+                if (handle < 0) return
+                protectSocket(goNative("wgGetSocketV4", Integer.TYPE).invoke(null, handle) as Int)
+                protectSocket(goNative("wgGetSocketV6", Integer.TYPE).invoke(null, handle) as Int)
+            }.onFailure { error ->
+                Log.w(TAG, "Could not reprotect WireGuard sockets: ${error.javaClass.simpleName}")
+            }
         }
+    }
+
+    private fun protectSocket(fd: Int) {
+        if (fd < 0) return
+        protect(fd)
     }
 
     private data class UnderlaySnap(

@@ -193,19 +193,22 @@ class TunnelRebuildTest {
     }
 
     @Test
-    fun onlyTheSystemDefaultIsPinnedOrBound() {
+    fun controlClientMayBindOnlyTheCurrentSystemDefault() {
         val systemDefault = 20L
-        val cellular = 99L
+        val other = 99L
         val pinned = TunnelRebuild.pinHandle(systemDefault)
-        val bound = TunnelRebuild.pinHandle(systemDefault)
         assertEquals(systemDefault, pinned)
-        assertEquals(bound, pinned)
-        assertFalse(pinned == cellular)
+        assertFalse(pinned == other)
         assertNull(TunnelRebuild.pinHandle(null))
-        assertFalse(TunnelRebuild.socketNeedsRebind(boundHandle = systemDefault, systemDefaultHandle = systemDefault))
-        assertTrue(TunnelRebuild.socketNeedsRebind(boundHandle = cellular, systemDefaultHandle = systemDefault))
-        assertTrue(TunnelRebuild.socketNeedsRebind(boundHandle = null, systemDefaultHandle = systemDefault))
-        assertFalse(TunnelRebuild.socketNeedsRebind(boundHandle = cellular, systemDefaultHandle = null))
+        val reaction = TunnelRebuild.onSystemDefault(
+            watch = TunnelRebuild.DefaultWatch(seen = true, handle = other),
+            nextHandle = systemDefault,
+            controlClientOpen = true,
+            controlClientHandle = other,
+        )
+        assertFalse(reaction.dataPlaneBindSocket)
+        assertEquals(TunnelRebuild.DataPlaneAction.PROTECT_UNBOUND, reaction.dataPlane)
+        assertEquals(systemDefault, TunnelRebuild.pinHandle(systemDefault))
     }
 
     @Test

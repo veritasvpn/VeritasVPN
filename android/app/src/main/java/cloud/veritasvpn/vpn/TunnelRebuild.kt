@@ -7,6 +7,10 @@ package cloud.veritasvpn.vpn
  * transport is never selected, and Stealth is not a substitute for a new socket.
  * A peer-check network error does not block a rebuild. A deleted peer is
  * re-provision's job.
+ *
+ * WireGuard data-plane sockets stay unbound. They are protect()'d and the
+ * underlying network is cleared, so each packet follows the system default.
+ * bindSocket is only for the control client, and only on that same default.
  */
 object TunnelRebuild {
     const val MIN_BACKOFF_MS = 5_000L
@@ -81,10 +85,76 @@ object TunnelRebuild {
     }
 
     /**
-     * The only handle that may be passed to setUnderlyingNetworks or
-     * bindSocket. Null means the default network is gone and the pin is dropped.
+     * The only handle the protected control client may pass to bindSocket.
+     * Null means the system default is gone and that client is dropped.
+     * WireGuard data-plane sockets do not use this. They stay unbound.
      */
     fun pinHandle(systemDefaultHandle: Long?): Long? = systemDefaultHandle
+
+    /** protect() both UDP fds and setUnderlyingNetworks(null). Never bindSocket. */
+    enum class DataPlaneAction {
+        PROTECT_UNBOUND,
+    }
+
+    /**
+     * Last system-default handle this session has reacted to.
+     * [seen] is false until the first observation, so "never seen" is not
+     * the same as "seen, and the default is gone".
+     */
+    data class DefaultWatch(
+        val seen: Boolean = false,
+        val handle: Long? = null,
+    )
+
+    /**
+     * What to do when the system default is observed again.
+     *
+     * [followDataPlane] is always true. A failed or skipped protect must not
+     * record a pin that suppresses the next callback, and a v4-only or v6-only
+     * result is not a success. [dataPlaneBindSocket] is always false.
+     * [clearCachedPeerOutcome] and [wakeRecovery] still run on a real handle
+     * change, including Wi-Fi to lost and lost to cellular.
+     */
+    data class DefaultReaction(
+        val clearCachedPeerOutcome: Boolean,
+        val dropControlClient: Boolean,
+        val wakeRecovery: Boolean,
+        val followDataPlane: Boolean,
+        val dataPlaneBindSocket: Boolean,
+        val dataPlane: DataPlaneAction,
+        val next: DefaultWatch,
+    )
+
+    fun onSystemDefault(
+        watch: DefaultWatch,
+        nextHandle: Long?,
+        controlClientOpen: Boolean,
+        controlClientHandle: Long?,
+    ): DefaultReaction {
+        val changed = watch.seen && watch.handle != nextHandle
+        val dropControl = controlClientOpen &&
+            (nextHandle == null || nextHandle != controlClientHandle)
+        return DefaultReaction(
+            clearCachedPeerOutcome = changed,
+            dropControlClient = dropControl,
+            wakeRecovery = true,
+            followDataPlane = true,
+            dataPlaneBindSocket = false,
+            dataPlane = DataPlaneAction.PROTECT_UNBOUND,
+            next = DefaultWatch(seen = true, handle = nextHandle),
+        )
+    }
+
+    /**
+     * A partial bind used to count as success (`boundV4 || boundV6`) and then
+     * the v4 socket, which carries an IPv4 endpoint, stayed on the old network.
+     * The data plane does not bind, so neither flag can arm that gate.
+     */
+    fun dataPlaneTreatsPartialBindAsSuccess(boundV4: Boolean, boundV6: Boolean): Boolean = when {
+        boundV4 && boundV6 -> false
+        boundV4 || boundV6 -> false
+        else -> false
+    }
 
     /**
      * Install [establishNew] and only then close the previous tun. A failed
@@ -103,12 +173,6 @@ object TunnelRebuild {
      */
     fun shouldClosePreviousKeeper(newTunEstablished: Boolean, duplicateSucceeded: Boolean): Boolean =
         newTunEstablished && !duplicateSucceeded
-
-    /** True when the UDP socket is not bound to the current system default. */
-    fun socketNeedsRebind(boundHandle: Long?, systemDefaultHandle: Long?): Boolean {
-        if (systemDefaultHandle == null) return false
-        return boundHandle == null || boundHandle != systemDefaultHandle
-    }
 
     fun nextBackoff(currentMs: Long): Long {
         val base = if (currentMs < MIN_BACKOFF_MS) MIN_BACKOFF_MS else currentMs
