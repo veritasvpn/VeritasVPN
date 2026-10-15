@@ -255,6 +255,16 @@ class EndpointRefreshTest {
         assertEquals(lan, stillHome?.udpEndpoint)
         assertEquals("LAN", stillHome?.kind)
 
+        assertFalse(
+            EndpointRefresh.endpointFitsUnderlay(
+                installed = wan,
+                advertised = null,
+                lan = lan,
+                wan = wan,
+                underlayIpv4s = listOf("192.168.0.10"),
+            ),
+        )
+
         val stealth = EndpointRefresh.chooseForUnderlay(
             advertised = lan,
             lan = lan,
@@ -266,6 +276,78 @@ class EndpointRefreshTest {
         assertEquals(wan, stealth?.udpEndpoint)
         assertEquals("203.0.113.10:8443", stealth?.stealthEndpoint)
         assertEquals("stealth", stealth?.kind)
+    }
+
+    @Test
+    fun cellularToHomeLanWifiChoosesTheLanEndpoint() {
+        val lan = "192.168.0.6:51820"
+        val wan = "203.0.113.10:443"
+        val home = listOf("192.168.0.10")
+
+        // Stored public choice from cellular, and the peer read may still
+        // advertise that public endpoint. The home /24 installs the LAN one.
+        val stored = EndpointRefresh.chooseForUnderlay(
+            advertised = wan,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = home,
+        )
+        assertEquals(lan, stored?.udpEndpoint)
+        assertEquals("LAN", stored?.kind)
+
+        // The peer read on the home LAN returns a private server_endpoint,
+        // even when the stored LAN field was blank.
+        val fromPeer = EndpointRefresh.chooseForUnderlay(
+            advertised = lan,
+            lan = null,
+            wan = wan,
+            underlayIpv4s = home,
+        )
+        assertEquals(lan, fromPeer?.udpEndpoint)
+        assertEquals("LAN", fromPeer?.kind)
+
+        // A blank advertisement must not hide the LAN endpoint saved at connect.
+        assertEquals(lan, EndpointRefresh.storedOrFresh(fresh = "", stored = lan))
+        assertEquals(lan, EndpointRefresh.storedOrFresh(fresh = "192.168.0.6:51820", stored = wan))
+
+        assertFalse(
+            EndpointRefresh.endpointFitsUnderlay(
+                installed = wan,
+                advertised = lan,
+                lan = null,
+                wan = wan,
+                underlayIpv4s = home,
+            ),
+        )
+        assertTrue(
+            EndpointRefresh.endpointFitsUnderlay(
+                installed = lan,
+                advertised = wan,
+                lan = lan,
+                wan = wan,
+                underlayIpv4s = home,
+            ),
+        )
+        // Cellular is not that /24, so the public endpoint stays.
+        assertTrue(
+            EndpointRefresh.endpointFitsUnderlay(
+                installed = wan,
+                advertised = null,
+                lan = lan,
+                wan = wan,
+                underlayIpv4s = listOf("10.64.1.8"),
+            ),
+        )
+        // A different private /24 is not the node LAN.
+        assertEquals(
+            wan,
+            EndpointRefresh.chooseForUnderlay(
+                advertised = lan,
+                lan = lan,
+                wan = wan,
+                underlayIpv4s = listOf("192.168.1.20"),
+            )?.udpEndpoint,
+        )
     }
 
     @Test
@@ -287,6 +369,10 @@ class EndpointRefreshTest {
         assertTrue(source.contains("rebuildKeepingKillSwitch"))
         assertTrue(source.contains("dropUnderlyingControlClient"))
         assertTrue(source.contains("chooseForUnderlay"))
+        assertTrue(source.contains("endpointFitsUnderlay"))
+        assertTrue(source.contains("storedOrFresh"))
+        assertTrue(source.contains("DefaultUnderlay.select"))
+        assertTrue(source.contains("CoroutineExceptionHandler"))
         assertTrue(source.contains("RoamLog.record"))
         assertTrue(source.contains("markSessionEnded"))
         assertTrue(source.contains("async { fetchFreshEndpoint"))
@@ -299,7 +385,16 @@ class EndpointRefreshTest {
         val rebuildStart = source.indexOf("fun rebuildKeepingKillSwitch")
         val rebuildEnd = source.indexOf("private fun rebindLiveTunnel", rebuildStart)
         assertTrue(rebuildStart >= 0 && rebuildEnd > rebuildStart)
-        assertFalse(source.substring(rebuildStart, rebuildEnd).contains("DOWN"))
+        val rebuild = source.substring(rebuildStart, rebuildEnd)
+        assertFalse(rebuild.contains("DOWN"))
+        assertFalse(rebuild.contains("setStateInternal"))
+        assertFalse(rebuild.contains("prepare"))
+        val defaults = source.substring(
+            source.indexOf("fun systemDefaultNetwork"),
+            source.indexOf("fun addressedUnderlay"),
+        )
+        assertFalse(defaults.contains("bestMatchingNetwork = null"))
+        assertTrue(defaults.contains("DefaultUnderlay.select"))
     }
 
     private fun serviceSource(): String {

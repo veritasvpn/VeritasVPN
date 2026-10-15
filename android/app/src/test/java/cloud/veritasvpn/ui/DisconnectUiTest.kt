@@ -70,6 +70,13 @@ class DisconnectUiTest {
     }
 
     @Test
+    fun circleTapRevokeDoesNotStopTheService() {
+        assertFalse(DisconnectUi.stopService(userEndedSession = true, systemRevoke = true))
+        assertFalse(DisconnectUi.stopService(userEndedSession = true, systemRevoke = false))
+        assertFalse(DisconnectUi.stopService(userEndedSession = false, systemRevoke = true))
+    }
+
+    @Test
     fun disconnectPathDoesNotLeaveTheApp() {
         val activity = kotlinSource("MainActivity.kt")
         val disconnect = slice(activity, "fun disconnectVpnService()", "fun cancelReconnect()")
@@ -116,6 +123,21 @@ class DisconnectUiTest {
 
         assertFalse(service.contains("System.exit"))
         assertFalse(service.contains("killProcess"))
+        assertFalse(service.contains("stopSelf("))
+        assertFalse(service.contains("super.onRevoke"))
+        assertFalse(service.contains("setStateInternal"))
+
+        val revoke = slice(service, "fun onRevoke()", "fun onDestroy()")
+        assertTrue(revoke.contains("sessionEndedByUser"))
+        assertFalse(revoke.contains("stopSelf("))
+        assertFalse(revoke.contains("super.onRevoke"))
+        assertFalse(revoke.contains("startActivity"))
+        assertFalse(revoke.contains("VpnService.prepare"))
+        assertTrue(revoke.contains("runCatching { stopForeground"))
+
+        val connectGiveUp = slice(service, "Connect retry failed", "ACTION_DISCONNECT")
+        assertFalse(connectGiveUp.contains("stopSelf("))
+        assertTrue(connectGiveUp.contains("runCatching { stopForeground"))
 
         val killSwitch = kotlinSource("VpnKillSwitch.kt")
         val guard = killSwitch.indexOf("if (!allowPrepare) return false")

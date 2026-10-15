@@ -25,4 +25,14 @@ object DisconnectUi {
     /** Connected and Reconnecting both land on the offline home. Nothing else opens. */
     fun showsOfflineHome(connected: Boolean, connecting: Boolean, reconnecting: Boolean): Boolean =
         !connected && !connecting && !reconnecting
+
+    /**
+     * Always false. Stopping the VPN service restarts an Always-on VPN and
+     * takes the task off screen, including when the platform revokes the
+     * tunnel because the circle tap closed it.
+     */
+    fun stopService(
+        @Suppress("UNUSED_PARAMETER") userEndedSession: Boolean,
+        @Suppress("UNUSED_PARAMETER") systemRevoke: Boolean,
+    ): Boolean = false
 }

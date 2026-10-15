@@ -43,6 +43,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Response
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -64,7 +65,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private val backend by lazy { GoBackend(applicationContext) }
     private val authRepo by lazy { AuthRepository(applicationContext) }
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
+            Log.w(TAG, "vpn scope: ${error.javaClass.simpleName}")
+        },
+    )
     private var transitionJob: Job? = null
     private var disconnectJob: Job? = null
     private var validationJob: Job? = null
@@ -392,9 +397,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                                 }
                             }
                         } else {
-                            broadcastState(false, friendlyError(e))
-                            stopForeground(STOP_FOREGROUND_REMOVE)
-                            stopSelf()
+                            // The circle tap, or a newer connect, owns the
+                            // session. Stopping the service here restarts an
+                            // Always-on VPN and takes the task off screen.
+                            broadcastState(false, if (sessionEndedByUser) null else friendlyError(e))
+                            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
                         }
                     }
                 }
@@ -581,6 +588,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     override fun onRevoke() {
+        // Closing the tun on the circle tap makes the platform revoke the
+        // VPN. VpnService.onRevoke() stops this service. Always-on restarts
+        // it and the task leaves the screen, so this override never calls
+        // super and never stops itself. The user stays on the offline home.
+        if (sessionEndedByUser) {
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            return
+        }
         sessionGeneration++
         adaptJob?.cancel()
         cancelPeerRecovery()
@@ -634,9 +649,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             false,
             "VPN permission was revoked. Tap Connect now to reconnect."
         )
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-        super.onRevoke()
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
     }
 
     override fun onDestroy() {
@@ -971,17 +984,23 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         }
         adaptJob?.cancel()
         adaptJob = scope.launch {
-            delay(UNDERLAY_ADAPT_DEBOUNCE_MS)
-            if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
-                return@launch
+            try {
+                delay(UNDERLAY_ADAPT_DEBOUNCE_MS)
+                if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
+                    return@launch
+                }
+                // Wait for any active transition (connect/disconnect) to finish
+                // before touching the tunnel.
+                transitionJob?.takeIf { it.isActive && it !== adaptJob }?.join()
+                if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
+                    return@launch
+                }
+                adaptUnderlay(gen, forceHard = forceHard)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "path-adapt failed: ${e.javaClass.simpleName}")
             }
-            // Wait for any active transition (connect/disconnect) to finish
-            // before touching the tunnel.
-            transitionJob?.takeIf { it.isActive && it !== adaptJob }?.join()
-            if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
-                return@launch
-            }
-            adaptUnderlay(gen, forceHard = forceHard)
         }
     }
 
@@ -1185,7 +1204,18 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 failedSocketSwaps = watched.failedSocketSwaps
                 rebuildTried = watched.rebuildTried
                 when (watched.outcome) {
-                    InstallOutcome.HANDSHOOK,
+                    InstallOutcome.HANDSHOOK -> {
+                        // A handshake on the public endpoint does not finish
+                        // the roam when this underlay can reach the LAN one.
+                        if (endpointAcceptable(snap)) {
+                            return@coroutineScope RoamRound(
+                                InstallOutcome.HANDSHOOK,
+                                failedSocketSwaps,
+                                armedAt,
+                                rebuildTried,
+                            )
+                        }
+                    }
                     InstallOutcome.STOPPED ->
                         return@coroutineScope RoamRound(watched.outcome, failedSocketSwaps, armedAt, rebuildTried)
                     InstallOutcome.STALE ->
@@ -1359,14 +1389,26 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return InstallWatch(InstallOutcome.FAILED, 0, armedAt)
     }
 
-    /** A private endpoint stays only when this underlay is that LAN. */
+    /**
+     * A private endpoint stays only on its LAN. A public endpoint does not
+     * stay when this underlay can reach the known LAN endpoint.
+     */
     private fun endpointAcceptable(snap: UnderlaySnap): Boolean {
+        val prefs = vpnStatePrefs()
         val endpoint = if (usesStealth()) {
-            vpnStatePrefs().getString(KEY_STEALTH_ENDPOINT, null)
+            prefs.getString(KEY_STEALTH_ENDPOINT, null)
         } else {
             currentUdpEndpoint()
         }
-        return EndpointRefresh.keepsPrivateEndpoint(endpoint, ipv4Addresses(snap.link))
+        return EndpointRefresh.endpointFitsUnderlay(
+            installed = endpoint,
+            advertised = null,
+            lan = prefs.getString(KEY_ENDPOINT_LAN, null),
+            wan = prefs.getString(KEY_ENDPOINT_WAN, null),
+            underlayIpv4s = ipv4Addresses(snap.link),
+            stealth = usesStealth(),
+            stealthEndpoint = prefs.getString(KEY_STEALTH_ENDPOINT, null),
+        )
     }
 
     /**
@@ -1378,16 +1420,31 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val prefs = vpnStatePrefs()
         val choice = EndpointRefresh.chooseForUnderlay(
             advertised = advertised?.serverEndpoint,
-            lan = advertised?.serverEndpointLan ?: prefs.getString(KEY_ENDPOINT_LAN, null),
-            wan = advertised?.serverEndpointWan ?: prefs.getString(KEY_ENDPOINT_WAN, null),
+            lan = EndpointRefresh.storedOrFresh(
+                advertised?.serverEndpointLan,
+                prefs.getString(KEY_ENDPOINT_LAN, null),
+            ),
+            wan = EndpointRefresh.storedOrFresh(
+                advertised?.serverEndpointWan,
+                prefs.getString(KEY_ENDPOINT_WAN, null),
+            ),
             underlayIpv4s = ipv4Addresses(snap.link),
             stealth = usesStealth(),
-            stealthEndpoint = advertised?.stealthEndpoint ?: prefs.getString(KEY_STEALTH_ENDPOINT, null),
+            stealthEndpoint = EndpointRefresh.storedOrFresh(
+                advertised?.stealthEndpoint,
+                prefs.getString(KEY_STEALTH_ENDPOINT, null),
+            ),
         ) ?: return null
         val offer = EndpointRefresh.offer(
             serverEndpoint = choice.udpEndpoint,
-            lan = advertised?.serverEndpointLan ?: prefs.getString(KEY_ENDPOINT_LAN, null),
-            wan = advertised?.serverEndpointWan ?: prefs.getString(KEY_ENDPOINT_WAN, null),
+            lan = EndpointRefresh.storedOrFresh(
+                advertised?.serverEndpointLan,
+                prefs.getString(KEY_ENDPOINT_LAN, null),
+            ),
+            wan = EndpointRefresh.storedOrFresh(
+                advertised?.serverEndpointWan,
+                prefs.getString(KEY_ENDPOINT_WAN, null),
+            ),
             stealthEndpoint = if (usesStealth()) {
                 choice.stealthEndpoint
             } else {
@@ -2410,45 +2467,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (rebuildTun) rebuildKeepingKillSwitch(parsed, gen) else rebindWithRetry(parsed, gen)
 
     /**
-     * Same install a fresh connect uses, without turning the tunnel down first.
-     * establish() replaces the interface only after the new one is created, and
-     * the new sockets are protect()'d. A failed socket swap calls this once.
+     * New protected sockets on the tun that is already up. Does not call
+     * setState, so the library does not run its consent check or stop the
+     * service. A failed socket swap calls this once.
      */
     private fun rebuildKeepingKillSwitch(parsed: Config, gen: Long): Boolean {
-        synchronized(tunnelOpLock) {
-            if (gen != sessionGeneration || !sessionIntended()) return false
-            releaseUnderlyingPin()
-            try {
-                val handleField = goField("currentTunnelHandle")
-                val handle = handleField.getInt(backend)
-                if (handle >= 0) {
-                    goNative("wgTurnOff", Integer.TYPE).invoke(null, handle)
-                    handleField.setInt(backend, -1)
-                }
-                goField("currentTunnel").set(backend, null)
-                goField("currentConfig").set(backend, null)
-                if (gen != sessionGeneration || !sessionIntended()) return false
-                val setStateInternal = GoBackend::class.java.getDeclaredMethod(
-                    "setStateInternal",
-                    Tunnel::class.java,
-                    Config::class.java,
-                    Tunnel.State::class.java,
-                )
-                setStateInternal.isAccessible = true
-                userspaceInstalling = true
-                try {
-                    setStateInternal.invoke(backend, this, configWithoutKeepalive(parsed), Tunnel.State.UP)
-                } finally {
-                    userspaceInstalling = false
-                }
-                protectBackendSockets()
-                kickHandshakeAfterProtect()
-                return true
-            } catch (e: java.lang.reflect.InvocationTargetException) {
-                val cause = e.targetException ?: e.cause ?: e
-                if (cause is Exception) throw cause
-                throw e
-            }
+        return try {
+            rebindLiveTunnel(parsed, gen)
+        } catch (e: Exception) {
+            Log.w(TAG, "path-adapt rebuild failed: ${e.javaClass.simpleName}")
+            false
         }
     }
 
@@ -2534,14 +2562,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
         }
         return HandshakeKick.withoutKeepalive(parsed.toWgUserspaceString())
-    }
-
-    /** Drop keepalive so wgTurnOn does not handshake before protect(). */
-    private fun configWithoutKeepalive(parsed: Config): Config {
-        val stripped = HandshakeKick.withoutKeepalive(parsed.toWgQuickString())
-        return runCatching {
-            Config.parse(ByteArrayInputStream(stripped.toByteArray(Charsets.UTF_8)))
-        }.getOrElse { parsed }
     }
 
     /**
@@ -2654,34 +2674,34 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     /**
      * The phone's system-default underlay. On Android 12+ that is the
-     * best-matching NOT_VPN network. Older releases have no such callback:
-     * the active non-VPN network is used, or the only non-VPN network when
-     * there is just one. Two transports are never ranked against each other.
+     * best-matching NOT_VPN network, and a snapshot miss does not forget it.
+     * With no best-match, the only addressed network is used, or the single
+     * network that shares a /24 with the known LAN endpoint. Two unrelated
+     * transports are not ranked.
      */
     @Suppress("DEPRECATION")
     private fun systemDefaultNetwork(): Network? {
         val pinned = bestMatchingNetwork
         if (pinned != null && snapshotUnderlay(pinned) != null) return pinned
-        if (pinned != null) bestMatchingNetwork = null
-        return soleAddressedUnderlay()
+        val addressed = connectivityManager().allNetworks.mapNotNull { network ->
+            val snap = addressedUnderlay(network) ?: return@mapNotNull null
+            DefaultUnderlay.Candidate(
+                id = network.networkHandle.toString(),
+                ipv4s = ipv4Addresses(snap.link),
+            ) to network
+        }
+        val chosen = DefaultUnderlay.select(
+            bestMatchId = null,
+            candidates = addressed.map { it.first },
+            lanEndpoint = vpnStatePrefs().getString(KEY_ENDPOINT_LAN, null),
+        ) ?: return null
+        return addressed.firstOrNull { it.first.id == chosen }?.second
     }
 
     private fun addressedUnderlay(network: Network): UnderlaySnap? {
         val snap = snapshotUnderlay(network) ?: return null
         if (ipv4Addresses(snap.link).isEmpty()) return null
         return snap
-    }
-
-    /** The only non-VPN network that has an address. Two live transports are not ranked. */
-    @Suppress("DEPRECATION")
-    private fun soleAddressedUnderlay(): Network? {
-        var only: Network? = null
-        for (network in connectivityManager().allNetworks) {
-            if (addressedUnderlay(network) == null) continue
-            if (only != null) return null
-            only = network
-        }
-        return only
     }
 
     private fun isNonVpnInternet(network: Network): Boolean {

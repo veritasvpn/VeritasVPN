@@ -98,20 +98,63 @@ object EndpointRefresh {
         stealthEndpoint: String? = null,
     ): UnderlayChoice? {
         val advertisedEp = blankToNull(advertised)
-        val lanEp = blankToNull(lan) ?: advertisedEp?.takeIf { isPrivateEndpoint(it) }
+        val storedLan = blankToNull(lan)
+        // Known LAN first, then a private server_endpoint from this network's
+        // peer read. The first one this underlay can reach wins. A public
+        // address is not a fallback while that LAN endpoint is reachable.
+        val privateCandidates = LinkedHashSet<String>()
+        storedLan?.takeIf { isPrivateEndpoint(it) }?.let { privateCandidates.add(it) }
+        advertisedEp?.takeIf { isPrivateEndpoint(it) }?.let { privateCandidates.add(it) }
+        val matchingLan = privateCandidates.firstOrNull { ep ->
+            val host = EndpointSelector.host(ep)
+            underlayIpv4s.any { EndpointSelector.sameIpv4Slash24(it, host) }
+        }
         val wanEp = blankToNull(wan)?.takeUnless { isPrivateEndpoint(it) }
             ?: advertisedEp?.takeUnless { isPrivateEndpoint(it) }
-        val onLan = lanEp != null &&
-            isPrivateEndpoint(lanEp) &&
-            underlayIpv4s.any { EndpointSelector.sameIpv4Slash24(it, EndpointSelector.host(lanEp)) }
-        val udp = if (onLan) lanEp else wanEp
+        val nodeLan = storedLan?.takeIf { isPrivateEndpoint(it) }
+            ?: advertisedEp?.takeIf { isPrivateEndpoint(it) }
+        val onLan = matchingLan != null
+        val udp = matchingLan ?: wanEp
         if (udp == null) return null
         if (!stealth) {
             val kind = if (isPrivateEndpoint(udp)) "LAN" else "public"
             return UnderlayChoice(udp, null, kind)
         }
-        val chosenStealth = chooseStealth(blankToNull(stealthEndpoint), lanEp, wanEp, onLan) ?: return null
+        val chosenStealth = chooseStealth(blankToNull(stealthEndpoint), nodeLan, wanEp, onLan) ?: return null
         return UnderlayChoice(udp, chosenStealth, "stealth")
+    }
+
+    /**
+     * A blank advertisement must not hide the endpoint saved at connect time.
+     */
+    fun storedOrFresh(fresh: String?, stored: String?): String? =
+        blankToNull(fresh) ?: blankToNull(stored)
+
+    /**
+     * The installed endpoint may stay only when it is the one [chooseForUnderlay]
+     * would install. A public endpoint is not acceptable on the node LAN.
+     */
+    fun endpointFitsUnderlay(
+        installed: String?,
+        advertised: String?,
+        lan: String?,
+        wan: String?,
+        underlayIpv4s: List<String>,
+        stealth: Boolean = false,
+        stealthEndpoint: String? = null,
+    ): Boolean {
+        if (!keepsPrivateEndpoint(installed, underlayIpv4s)) return false
+        val choice = chooseForUnderlay(
+            advertised = advertised,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = underlayIpv4s,
+            stealth = stealth,
+            stealthEndpoint = stealthEndpoint,
+        ) ?: return true
+        val wanted = if (stealth) choice.stealthEndpoint else choice.udpEndpoint
+        if (wanted.isNullOrBlank() || !isPrivateEndpoint(wanted)) return true
+        return !endpointChanged(installed, wanted)
     }
 
     /**
