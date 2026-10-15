@@ -39,6 +39,7 @@ import cloud.veritasvpn.support.sanitizeError
 import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.SignInAgainSignal
 import cloud.veritasvpn.vpn.ControlPlane
+import cloud.veritasvpn.vpn.EndpointRefresh
 import cloud.veritasvpn.vpn.PeerCheckLog
 import cloud.veritasvpn.vpn.ReprovisionFlight
 import cloud.veritasvpn.ui.VpnDisclosureScreen
@@ -244,6 +245,7 @@ class MainActivity : ComponentActivity() {
                     )
                     connected = false
                     connecting = false
+                    reconnecting = false
                     rxBytes = 0
                     txBytes = 0
                     handshakeMs = 0
@@ -256,6 +258,8 @@ class MainActivity : ComponentActivity() {
                 fun cancelReconnect() {
                     reconnectJob?.cancel()
                     reconnectJob = null
+                    connectJob?.cancel()
+                    connectJob = null
                     reconnecting = false
                     hardReconnectRequested = false
                     reconnectAttempt = 0
@@ -754,7 +758,7 @@ class MainActivity : ComponentActivity() {
                                         handshakeOk = svcHandshakeOk
                                         statusMsg = when {
                                             signInAgain -> ControlPlane.SIGN_IN_AGAIN
-                                            svcReconnecting -> "Reconnecting…"
+                                            svcReconnecting -> EndpointRefresh.statusWhileReconnecting(error)
                                             else -> null
                                         }
                                     } else if (error != null && error.contains("revoked", ignoreCase = true)) {
@@ -774,7 +778,11 @@ class MainActivity : ComponentActivity() {
                                         connecting = false
                                         reconnecting = svcReconnecting
                                         hardReconnectRequested = false
-                                        statusMsg = if (svcReconnecting) "Reconnecting…" else null
+                                        statusMsg = if (svcReconnecting) {
+                                            EndpointRefresh.statusWhileReconnecting(error)
+                                        } else {
+                                            null
+                                        }
                                     } else {
                                         connected = false
                                         connecting = false
@@ -823,7 +831,12 @@ class MainActivity : ComponentActivity() {
                                         val svcReconnecting = intent.getBooleanExtra(VeritasVpnService.EXTRA_RECONNECTING, false)
                                         reconnecting = svcReconnecting
                                         if (connected) {
-                                            statusMsg = if (svcReconnecting) "Reconnecting…" else null
+                                            val notice = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
+                                            statusMsg = if (svcReconnecting) {
+                                                EndpointRefresh.statusWhileReconnecting(notice)
+                                            } else {
+                                                null
+                                            }
                                         }
                                     }
                                 }
@@ -1476,6 +1489,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private var currentPeerId: String? = null
+    private var connectJob: Job? = null
 
     private fun peerIdForDisconnect(): String? {
         val id = currentPeerId ?: VpnSettings.currentPeerId(this)
@@ -1509,7 +1523,8 @@ class MainActivity : ComponentActivity() {
         // Key generation, the peer request, and config assembly stay off the
         // UI thread. Compose only hears the small state hop afterwards, so the
         // hero clock is not paused or restarted by this work.
-        scope.launch(Dispatchers.IO) {
+        connectJob?.cancel()
+        connectJob = scope.launch(Dispatchers.IO) {
             val flight = if (isReconnect) {
                 ReprovisionFlight.tryClaim(
                     persistedAtMs = VpnSettings.reprovisionInProgressAt(context),

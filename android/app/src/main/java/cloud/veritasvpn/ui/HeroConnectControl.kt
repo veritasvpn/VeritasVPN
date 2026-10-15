@@ -232,13 +232,7 @@ fun HeroConnectControl(
     val showNotConnected = phase == HeroPhase.Ready ||
         phase == HeroPhase.Upsell ||
         phase == HeroPhase.Checking
-    val actionName = when {
-        signInAgain -> "Sign in"
-        phase == HeroPhase.Ready -> "Connect"
-        phase == HeroPhase.Upsell -> "Get Premium"
-        phase == HeroPhase.Protected -> "Disconnect"
-        else -> null
-    }
+    val actionName = heroActionName(phase, signInAgain)
     // Remembered across recomposition, including checking → connecting →
     // protected, so a stalled handshake cannot restart the ramp or drop the
     // mark back to dim. Not Compose state: the frame clock above already

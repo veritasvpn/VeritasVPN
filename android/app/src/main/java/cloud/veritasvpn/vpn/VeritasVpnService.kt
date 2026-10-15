@@ -29,12 +29,15 @@ import cloud.veritasvpn.MainActivity
 import cloud.veritasvpn.R
 import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.UserFacingError
+import cloud.veritasvpn.api.PeerEndpointView
 import cloud.veritasvpn.api.PeerResponse
 import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.auth.ControlAccess
 import cloud.veritasvpn.auth.ControlRefresh
 import cloud.veritasvpn.secure.SecurePrefs
+import okhttp3.Call
 import okhttp3.OkHttpClient
+import okhttp3.Response
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -83,6 +86,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     @Volatile private var bestMatchingWatchRegistered = false
     private val underlayHandler = Handler(Looper.getMainLooper())
     @Volatile private var isReconnecting = false
+    /** In-flight provisioning read. A newer default network supersedes it. */
+    @Volatile private var endpointFlight: EndpointRefresh.Flight? = null
+    @Volatile private var endpointCall: Call? = null
+    @Volatile private var reconnectNotice: String? = null
+    private val endpointCallLock = Any()
     private var lastStallRebindAtMs = 0L
     private var stallBackoffMs = TunnelStall.MIN_REBIND_INTERVAL_MS
     private var lastKnownRx = 0L
@@ -404,6 +412,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 lastChosenEndpoint = null
                 lastRebindAtMs = 0L
                 isReconnecting = false
+                cancelEndpointFetch()
                 lastStallRebindAtMs = 0L
                 stallBackoffMs = TunnelStall.MIN_REBIND_INTERVAL_MS
                 underlayWaitStartedAtMs = 0L
@@ -559,6 +568,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         lastChosenEndpoint = null
         lastRebindAtMs = 0L
         isReconnecting = false
+        cancelEndpointFetch()
         lastStallRebindAtMs = 0L
         stallBackoffMs = TunnelStall.MIN_REBIND_INTERVAL_MS
         lastKnownRx = 0L
@@ -739,6 +749,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 .putExtra(EXTRA_RECONNECTING, isReconnecting)
                 .putExtra(EXTRA_HANDSHAKE_OK, handshakeOk())
                 .putExtra(EXTRA_SIGN_IN_AGAIN, controlSignedOut)
+                .apply {
+                    if (isReconnecting) putExtra(EXTRA_ERROR, reconnectNotice.orEmpty())
+                }
         )
     }
 
@@ -826,7 +839,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (connected && !sessionIntended()) return
         val intent = Intent(ACTION_STATE).setPackage(packageName)
             .putExtra(EXTRA_CONNECTED, connected)
-        if (error != null) intent.putExtra(EXTRA_ERROR, error)
+        val shownError = EndpointRefresh.displayStatus(error)
+            ?: if (isReconnecting) reconnectNotice else null
+        if (shownError != null) intent.putExtra(EXTRA_ERROR, shownError)
         intent.putExtra(EXTRA_SIGN_IN_AGAIN, controlSignedOut)
         if (egressIp != null) intent.putExtra(EXTRA_EGRESS_IP, egressIp)
         if (activeTransport.isNotEmpty()) intent.putExtra(EXTRA_TRANSPORT, activeTransport)
@@ -949,15 +964,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private suspend fun adaptUnderlay(gen: Long, forceHard: Boolean = false) {
         if (controlSignedOut || gen != sessionGeneration || !sessionIntended()) return
-        if (stealthTransport != null || sessionMode() == StealthMode.STEALTH ||
-            vpnStatePrefs().getBoolean(KEY_RESUME_STEALTH, false)
-        ) {
-            if (stealthTransport != null) {
-                adaptWhileStealth(gen, forceHard)
-            } else {
-                val offer = currentOffer()
-                if (offer.usable()) switchToStealth(gen, offer)
-            }
+        if (usesStealth()) {
+            adaptWhileStealth(gen, forceHard)
             return
         }
         val config = vpnStatePrefs().getString(KEY_CONFIG, null) ?: return
@@ -1039,61 +1047,44 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         config: String,
         forceHard: Boolean,
     ) {
+        Log.i(
+            TAG,
+            "path-adapt re-resolve handle=${underlay.network.networkHandle} " +
+                "addrs=${ipv4s.size} forceHard=$forceHard saved=${config.isNotEmpty()}",
+        )
+        recoverWithFreshEndpoint(gen, underlay.network.networkHandle)
+    }
+
+    private sealed class EndpointFetch {
+        data class Ready(
+            val offer: EndpointRefresh.Offer,
+            val flight: EndpointRefresh.Flight,
+        ) : EndpointFetch()
+        object Stale : EndpointFetch()
+        object Failed : EndpointFetch()
+        object Stop : EndpointFetch()
+    }
+
+    private data class Installed(val liveConfig: String, val endpoint: String)
+
+    /**
+     * Re-read the peer on the current system-default network and install that
+     * endpoint. The endpoint from the previous network is not tried first, and
+     * a handshake wait starts only after the fresh one is installed.
+     */
+    private suspend fun recoverWithFreshEndpoint(gen: Long, initialHandle: Long?) {
         var handshakeRecovered = false
+        var failures = 0
+        var tracked = initialHandle
+        stealthReconnectJob?.cancel()
+        stealthReconnectJob = null
         try {
             publishReconnecting(true)
-            broadcastState(true, null)
-            Log.i(
-                TAG,
-                "path-adapt roam handle=${underlay.network.networkHandle} forceHard=$forceHard",
-            )
             followSystemDefault()
-
-            if (!forceHard) {
-                val attachedAt = System.currentTimeMillis()
-                val softConfig = vpnStatePrefs().getString(KEY_UDP_CONFIG, null)
-                    ?: vpnStatePrefs().getString(KEY_CONFIG, null)
-                    ?: config
-                val softParsed = runCatching {
-                    Config.parse(ByteArrayInputStream(softConfig.toByteArray(Charsets.UTF_8)))
-                }.getOrNull()
-                val softHandshakeBaseline = latestHandshakeMs()
-                if (softParsed != null && rebindWithRetry(softParsed, gen, recreateTun = false)) {
-                    if (waitForHandshake(gen, attachedAt, SOFT_ATTACH_MS) &&
-                        RebindDecisions.softRebindSucceeded(latestHandshakeMs(), attachedAt, softHandshakeBaseline)
-                    ) {
-                        lastUnderlayFingerprint = underlayFingerprint(underlay.network, underlay.link, ipv4s)
-                        lastUnderlayIdentity = underlay.identity
-                        startStatsPolling()
-                        Log.i(TAG, "path-adapt soft rebind ok handle=${underlay.network.networkHandle}")
-                        handshakeRecovered = true
-                        return
-                    }
-                }
-                if (gen != sessionGeneration || !sessionIntended()) return
-                Log.i(TAG, "path-adapt soft rebind no handshake -> hard")
-            }
-
-            val probes = EndpointSelector.probeOrder(
-                current = EndpointSelector.endpointFromConfig(config),
-                lan = vpnStatePrefs().getString(KEY_ENDPOINT_LAN, null),
-                wan = vpnStatePrefs().getString(KEY_ENDPOINT_WAN, null),
-                underlayIpv4s = ipv4s,
-            )
-            if (probes.isEmpty()) return
-            hardLoopStartedAtMs = System.currentTimeMillis()
-            var round = 0
-            var probeRoundsCompleted = 0
-            var pollDelay = STALL_UNDERLAY_POLL_MS
-            var roundDelay = PROBE_RETRY_DELAY_MS
-            while (gen == sessionGeneration && sessionIntended() && disconnectJob?.isActive != true) {
+            while (sessionStillActive(gen)) {
                 if (controlSignedOut) return
-                if (stealthTransport != null) return
-                when (recoveryStep(probeRoundsCompleted >= 1, rebuilding = false)) {
+                when (recoveryStep(probeRoundCompleted = failures > 0, rebuilding = false)) {
                     TunnelRebuild.RecoveryStep.REBUILD -> {
-                        // Another probe would reuse the stuck socket. Rebuild on
-                        // the current system default, then back off. A peer-check
-                        // network error takes this path too. A deleted peer does not.
                         handshakeRecovered = rebuildUntilHandshake(gen)
                         return
                     }
@@ -1102,132 +1093,382 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     TunnelRebuild.RecoveryStep.WAIT,
                     TunnelRebuild.RecoveryStep.RESET -> Unit
                 }
-                val elapsed = System.currentTimeMillis() - hardLoopStartedAtMs
-                val defaultSnap = systemDefaultSnap()
-                val validatedSnap = defaultSnap?.takeIf {
-                    it.validated && ipv4Addresses(it.link).isNotEmpty()
+                val snap = systemDefaultSnap()
+                val handle = snap?.network?.networkHandle
+                if (handle != tracked) {
+                    failures = 0
+                    reconnectNotice = null
+                    tracked = handle
                 }
-                val unvalidatedSnap = if (elapsed >= STALL_UNDERLAY_WAIT_FALLBACK_MS && validatedSnap == null) {
-                    defaultSnap?.takeIf { ipv4Addresses(it.link).isNotEmpty() }
-                } else {
-                    null
-                }
-                val resolved = RebindDecisions.resolveHardLoopUnderlay(
-                    elapsedMs = elapsed,
-                    fallbackAfterMs = STALL_UNDERLAY_WAIT_FALLBACK_MS,
-                    validatedUnderlay = validatedSnap?.identity,
-                    unvalidatedUnderlay = unvalidatedSnap?.identity,
-                )
-                if (resolved == null) {
-                    delay(pollDelay)
-                    pollDelay = (pollDelay * 2).coerceAtMost(STALL_UNDERLAY_MAX_POLL_MS)
-                    continue
-                }
-                pollDelay = STALL_UNDERLAY_POLL_MS
-                val currentLive = if (resolved == validatedSnap?.identity) validatedSnap else unvalidatedSnap
-                if (currentLive == null || currentLive.network != systemDefaultNetwork()) {
-                    delay(STALL_UNDERLAY_POLL_MS)
-                    continue
-                }
-                val liveIpv4s = ipv4Addresses(currentLive.link)
-                if (liveIpv4s.isEmpty()) {
-                    delay(STALL_UNDERLAY_POLL_MS)
+                if (snap == null || !snap.validated || ipv4Addresses(snap.link).isEmpty() ||
+                    snap.network != systemDefaultNetwork()
+                ) {
+                    delay(EndpointRefresh.RETRY_DELAY_MS)
                     continue
                 }
                 followSystemDefault()
-                val liveProbes = if (round == 0) probes else EndpointSelector.probeOrder(
-                    current = EndpointSelector.endpointFromConfig(
-                        vpnStatePrefs().getString(KEY_UDP_CONFIG, null)
-                            ?: vpnStatePrefs().getString(KEY_CONFIG, null)
-                            ?: config
-                    ),
-                    lan = vpnStatePrefs().getString(KEY_ENDPOINT_LAN, null),
-                    wan = vpnStatePrefs().getString(KEY_ENDPOINT_WAN, null),
-                    underlayIpv4s = liveIpv4s,
-                )
-                val liveFp = underlayFingerprint(currentLive.network, currentLive.link, liveIpv4s)
-                for (endpoint in liveProbes) {
-                    if (controlSignedOut || gen != sessionGeneration || !sessionIntended() || stealthTransport != null) return
-                    val baseConfig = vpnStatePrefs().getString(KEY_UDP_CONFIG, null)
-                        ?: vpnStatePrefs().getString(KEY_CONFIG, null)
-                        ?: config
-                    val liveConfig = EndpointSelector.replaceEndpoint(baseConfig, endpoint)
-                    val parsed = runCatching {
-                        Config.parse(ByteArrayInputStream(liveConfig.toByteArray(Charsets.UTF_8)))
-                    }.getOrNull()
-                    if (parsed == null) {
-                        logHardProbe(baseConfig, endpoint, currentLive)
-                        Log.e(TAG, "path-adapt config parse failed")
+                when (val fresh = fetchFreshEndpoint(handle)) {
+                    is EndpointFetch.Stop -> return
+                    is EndpointFetch.Stale -> {
+                        failures = 0
                         continue
                     }
-                    val reboundAt = System.currentTimeMillis()
-                    val recreateTun = round >= 1
-                    val rebound = rebindWithRetry(parsed, gen, recreateTun)
-                    lastRebindAtMs = reboundAt
-                    logHardProbe(baseConfig, endpoint, currentLive)
-                    if (!rebound) continue
-                    startStatsPolling()
-                    if (waitForHandshake(gen, reboundAt, HANDSHAKE_CONFIRM_MS)) {
-                        if (stealthTransport != null || vpnStatePrefs().getBoolean(KEY_RESUME_STEALTH, false)) {
+                    is EndpointFetch.Failed -> {
+                        failures++
+                        noteResolveFailure(failures)
+                        delay(EndpointRefresh.RETRY_DELAY_MS)
+                    }
+                    is EndpointFetch.Ready -> {
+                        if (!EndpointRefresh.stillCurrent(fresh.flight, endpointFlight) ||
+                            systemDefaultNetwork()?.networkHandle != handle
+                        ) {
+                            failures = 0
+                            continue
+                        }
+                        val started = System.currentTimeMillis()
+                        val installed = applyResolved(gen, fresh.offer, recreateTun = failures > 0)
+                        if (installed == null) {
+                            failures++
+                            noteResolveFailure(failures)
+                            delay(EndpointRefresh.RETRY_DELAY_MS)
+                            continue
+                        }
+                        logHardProbe(installed.liveConfig, installed.endpoint, snap)
+                        val handshake = waitForHandshake(
+                            gen,
+                            started,
+                            EndpointRefresh.HANDSHAKE_WAIT_MS,
+                            handle,
+                        ) && sessionStillActive(gen)
+                        if (handshake) {
+                            commitUnderlay(snap)
+                            publishReconnecting(false)
+                            Log.i(TAG, "path-adapt handshake ok handle=$handle")
+                            handshakeRecovered = true
                             return
                         }
-                        synchronized(tunnelOpLock) {
-                            if (gen != sessionGeneration || !sessionIntended()) return
-                            val prefs = vpnStatePrefs()
-                            prefs.edit()
-                                .putString(
-                                    KEY_CONFIG,
-                                    SavedPeerConfig.coalesce(prefs.getString(KEY_CONFIG, null), liveConfig),
-                                )
-                                .putString(
-                                    KEY_UDP_CONFIG,
-                                    SavedPeerConfig.coalesce(prefs.getString(KEY_UDP_CONFIG, null), liveConfig),
-                                )
-                                .putBoolean(KEY_RESUME_STEALTH, false)
-                                .apply()
-                            lastUnderlayFingerprint = liveFp
-                            lastUnderlayIdentity = currentLive.identity
-                            lastChosenEndpoint = endpoint
+                        if (!sessionStillActive(gen) || controlSignedOut) return
+                        if (systemDefaultNetwork()?.networkHandle != handle) {
+                            failures = 0
+                            continue
                         }
-                        publishTransport("udp")
-                        followSystemDefault()
-                        startBackgroundEgressValidation()
-                        Log.i(TAG, "path-adapt handshake ok")
-                        handshakeRecovered = true
-                        return
+                        Log.w(TAG, "path-adapt no handshake")
+                        failures++
+                        noteResolveFailure(failures)
+                        delay(EndpointRefresh.RETRY_DELAY_MS)
                     }
-                    Log.w(TAG, "path-adapt no handshake")
                 }
-                if (stealthTransport != null) return
-                probeRoundsCompleted++
-                if (lastPeerOutcome == null) ensurePeerCheck()
-                when (recoveryStep(probeRoundCompleted = true, rebuilding = false)) {
-                    TunnelRebuild.RecoveryStep.REBUILD -> continue
-                    TunnelRebuild.RecoveryStep.REPROVISION,
-                    TunnelRebuild.RecoveryStep.STOP -> return
-                    TunnelRebuild.RecoveryStep.WAIT,
-                    TunnelRebuild.RecoveryStep.RESET -> Unit
-                }
-                // Failed UDP rounds stay on UDP. Stealth is only a user choice
-                // or a resumed Stealth session, never a recovery step.
-                round++
-                delay(roundDelay)
-                roundDelay = (roundDelay * 2).coerceAtMost(30_000L)
             }
         } finally {
-            if (handshakeRecovered ||
-                gen != sessionGeneration ||
-                !sessionIntended() ||
-                disconnectJob?.isActive == true
-            ) {
+            if (handshakeRecovered || !sessionStillActive(gen)) {
                 publishReconnecting(false)
             }
         }
     }
 
+    private fun noteResolveFailure(failures: Int) {
+        EndpointRefresh.noticeAfter(failures)?.let { showReconnectNotice(it) }
+        if (lastPeerOutcome == null) ensurePeerCheck(force = true, forceUnderlying = true)
+    }
+
+    private fun showReconnectNotice(message: String) {
+        val shown = EndpointRefresh.displayStatus(message) ?: return
+        if (shown == reconnectNotice) return
+        reconnectNotice = shown
+        if (isReconnecting) broadcastState(true, shown)
+    }
+
+    private fun usesStealth(): Boolean = EndpointRefresh.selectedTransport(
+        modeStored = vpnStatePrefs().getString(KEY_STEALTH_MODE, null),
+        resumeStealth = vpnStatePrefs().getBoolean(KEY_RESUME_STEALTH, false),
+        transportRunning = stealthTransport != null,
+    ) == EndpointRefresh.Transport.STEALTH
+
+    private fun applyResolved(gen: Long, offer: EndpointRefresh.Offer, recreateTun: Boolean): Installed? {
+        if (!sessionStillActive(gen)) return null
+        rememberFreshAdvertisement(offer)
+        val template = vpnStatePrefs().getString(KEY_UDP_CONFIG, null)
+            ?: vpnStatePrefs().getString(KEY_CONFIG, null)
+            ?: return null
+        return if (usesStealth()) {
+            applyStealthResolved(gen, offer, template, recreateTun)
+        } else {
+            applyUdpResolved(gen, offer, template, recreateTun)
+        }
+    }
+
+    private fun applyUdpResolved(
+        gen: Long,
+        offer: EndpointRefresh.Offer,
+        template: String,
+        recreateTun: Boolean,
+    ): Installed? {
+        val liveConfig = EndpointSelector.replaceEndpoint(template, offer.serverEndpoint)
+        if (EndpointSelector.endpointFromConfig(liveConfig) != offer.serverEndpoint) return null
+        val parsed = runCatching {
+            Config.parse(ByteArrayInputStream(liveConfig.toByteArray(Charsets.UTF_8)))
+        }.getOrNull() ?: return null
+        followSystemDefault()
+        val rebound = rebindWithRetry(parsed, gen, recreateTun) ||
+            (!recreateTun && rebindWithRetry(parsed, gen, recreateTun = true))
+        if (!rebound || !sessionStillActive(gen)) return null
+        synchronized(tunnelOpLock) {
+            if (!sessionStillActive(gen)) return null
+            val prefs = vpnStatePrefs()
+            prefs.edit()
+                .putString(KEY_CONFIG, SavedPeerConfig.coalesce(prefs.getString(KEY_CONFIG, null), liveConfig))
+                .putString(KEY_UDP_CONFIG, SavedPeerConfig.coalesce(prefs.getString(KEY_UDP_CONFIG, null), liveConfig))
+                .apply()
+            lastChosenEndpoint = offer.serverEndpoint
+        }
+        publishTransport("udp")
+        lastRebindAtMs = System.currentTimeMillis()
+        return Installed(liveConfig, offer.serverEndpoint)
+    }
+
+    private fun applyStealthResolved(
+        gen: Long,
+        offer: EndpointRefresh.Offer,
+        template: String,
+        recreateTun: Boolean,
+    ): Installed? {
+        val stealthEp = EndpointRefresh.freshEndpoint(offer.stealthEndpoint) ?: return null
+        val parsedEp = WstunnelProtocol.parseEndpoint(stealthEp) ?: return null
+        val prefix = offer.stealthPrefix
+            ?: vpnStatePrefs().getString(KEY_STEALTH_PREFIX, null)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return null
+        val stealthOffer = StealthOffer(endpoint = stealthEp, pathPrefix = prefix, available = true)
+        if (!stealthOffer.usable()) return null
+        val transport = stealthTransport
+        val local = if (transport != null && transport.targets(parsedEp.host, parsedEp.port, prefix)) {
+            followSystemDefault()
+            transport.reconnect()
+            transport.localEndpoint
+        } else {
+            try {
+                startStealth(stealthOffer)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "stealth retarget failed: ${e.javaClass.simpleName}")
+                return null
+            }
+        }
+        val liveConfig = EndpointSelector.replaceEndpoint(template, local)
+        val udpConfig = EndpointSelector.replaceEndpoint(template, offer.serverEndpoint)
+        val parsed = runCatching {
+            Config.parse(ByteArrayInputStream(liveConfig.toByteArray(Charsets.UTF_8)))
+        }.getOrNull() ?: return null
+        followSystemDefault()
+        val rebound = rebindWithRetry(parsed, gen, recreateTun) ||
+            (!recreateTun && rebindWithRetry(parsed, gen, recreateTun = true))
+        if (!rebound || !sessionStillActive(gen)) return null
+        synchronized(tunnelOpLock) {
+            if (!sessionStillActive(gen)) return null
+            val prefs = vpnStatePrefs()
+            prefs.edit()
+                .putString(KEY_CONFIG, SavedPeerConfig.coalesce(prefs.getString(KEY_CONFIG, null), liveConfig))
+                .putString(KEY_UDP_CONFIG, SavedPeerConfig.coalesce(prefs.getString(KEY_UDP_CONFIG, null), udpConfig))
+                .putString(KEY_STEALTH_ENDPOINT, stealthEp)
+                .putString(KEY_STEALTH_PREFIX, prefix)
+                .apply()
+            lastChosenEndpoint = local
+        }
+        publishTransport("stealth")
+        lastRebindAtMs = System.currentTimeMillis()
+        return Installed(liveConfig, local)
+    }
+
+    private fun rememberFreshAdvertisement(offer: EndpointRefresh.Offer) {
+        val edit = vpnStatePrefs().edit()
+        offer.lan?.let { edit.putString(KEY_ENDPOINT_LAN, it) }
+        offer.wan?.let { edit.putString(KEY_ENDPOINT_WAN, it) }
+        offer.stealthEndpoint?.let { edit.putString(KEY_STEALTH_ENDPOINT, it) }
+        offer.stealthPrefix?.let { edit.putString(KEY_STEALTH_PREFIX, it) }
+        offer.stealthAvailable?.let { edit.putBoolean(KEY_STEALTH_AVAILABLE, it) }
+        edit.apply()
+    }
+
+    private fun commitUnderlay(snap: UnderlaySnap) {
+        val ipv4s = ipv4Addresses(snap.link)
+        lastUnderlayFingerprint = underlayFingerprint(snap.network, snap.link, ipv4s)
+        lastUnderlayIdentity = snap.identity
+        linkAttachedAtMs = System.currentTimeMillis()
+        underlayLostSeen = false
+        rxAtLinkAttach = readBackendStats().first
+        startStatsPolling()
+        followSystemDefault()
+        startBackgroundEgressValidation()
+    }
+
+    private fun beginEndpointFlight(handle: Long?): EndpointRefresh.Flight {
+        val next = EndpointRefresh.sameNetwork(endpointFlight, handle)
+        if (endpointFlight?.handle != handle) reconnectNotice = null
+        endpointFlight = next
+        return next
+    }
+
+    private fun noteEndpointNetwork(handle: Long?) {
+        val latest = endpointFlight
+        if (latest != null && latest.handle == handle) return
+        endpointFlight = EndpointRefresh.supersede(latest, handle)
+        reconnectNotice = null
+        cancelEndpointCall()
+    }
+
+    private fun cancelEndpointCall() {
+        val call = synchronized(endpointCallLock) {
+            val current = endpointCall
+            endpointCall = null
+            current
+        }
+        call?.cancel()
+    }
+
+    private fun cancelEndpointFetch() {
+        endpointFlight = EndpointRefresh.supersede(endpointFlight, null)
+        reconnectNotice = null
+        cancelEndpointCall()
+    }
+
+    private fun endpointAttemptCurrent(flight: EndpointRefresh.Flight, expectedHandle: Long?): Boolean =
+        EndpointRefresh.stillCurrent(flight, endpointFlight) &&
+            systemDefaultNetwork()?.networkHandle == expectedHandle &&
+            sessionIntended() &&
+            disconnectJob?.isActive != true &&
+            !controlSignedOut
+
+    private fun staleOrFailed(flight: EndpointRefresh.Flight, expectedHandle: Long?): EndpointFetch =
+        if (endpointAttemptCurrent(flight, expectedHandle)) EndpointFetch.Failed else EndpointFetch.Stale
+
     /**
-     * Tear userspace WireGuard down and bring a new tun up from the saved
-     * config on the current system-default network, before the old tun is closed.
+     * GET the existing peer on the protected client bound to the current
+     * system default, outside the tunnel. The server picks the endpoint from
+     * that source address, the same way a fresh connect does.
+     */
+    private suspend fun fetchFreshEndpoint(expectedHandle: Long?): EndpointFetch {
+        if (controlSignedOut || !sessionIntended() || disconnectJob?.isActive == true) {
+            return EndpointFetch.Stop
+        }
+        val flight = beginEndpointFlight(expectedHandle)
+        if (!endpointAttemptCurrent(flight, expectedHandle)) return EndpointFetch.Stale
+        val peerId = VpnSettings.currentPeerId(this)
+        if (peerId.isNullOrBlank()) return EndpointFetch.Failed
+        val http = underlyingControlClient() ?: return EndpointFetch.Failed
+        if (!endpointAttemptCurrent(flight, expectedHandle)) return EndpointFetch.Stale
+        val access = try {
+            authRepo.accessForControl(http, tunnelHealthy = false)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "endpoint refresh failed: ${e.javaClass.simpleName}")
+            return staleOrFailed(flight, expectedHandle)
+        }
+        when (access) {
+            is ControlAccess.SignedOut -> {
+                stopForSignedOut()
+                return EndpointFetch.Stop
+            }
+            is ControlAccess.Unavailable -> return EndpointFetch.Failed
+            is ControlAccess.Ready -> Unit
+        }
+        var token = (access as ControlAccess.Ready).token
+        val first = try {
+            getPeerOnce(http, token, peerId, flight)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "endpoint refresh failed: ${e.javaClass.simpleName}")
+            return staleOrFailed(flight, expectedHandle)
+        }
+        val response = if (first.code == 401) {
+            first.close()
+            if (!endpointAttemptCurrent(flight, expectedHandle)) return EndpointFetch.Stale
+            when (val refreshed = authRepo.refreshForControl(http, force = true)) {
+                ControlRefresh.SignedOut -> {
+                    stopForSignedOut()
+                    return EndpointFetch.Stop
+                }
+                ControlRefresh.Unavailable -> return EndpointFetch.Failed
+                ControlRefresh.Refreshed -> {
+                    token = authRepo.getAccessToken()?.takeIf { it.isNotBlank() } ?: run {
+                        stopForSignedOut()
+                        return EndpointFetch.Stop
+                    }
+                    try {
+                        getPeerOnce(http, token, peerId, flight)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "endpoint refresh failed: ${e.javaClass.simpleName}")
+                        return staleOrFailed(flight, expectedHandle)
+                    }
+                }
+            }
+        } else {
+            first
+        }
+        try {
+            if (!endpointAttemptCurrent(flight, expectedHandle)) return EndpointFetch.Stale
+            when (response.code) {
+                404, 410 -> {
+                    ensurePeerCheck(force = true, forceUnderlying = true)
+                    return EndpointFetch.Stop
+                }
+            }
+            if (response.code !in 200..299) return EndpointFetch.Failed
+            val view = ApiClient.parse<PeerEndpointView>(response)
+            val offer = EndpointRefresh.offer(
+                serverEndpoint = view?.serverEndpoint,
+                lan = view?.serverEndpointLan,
+                wan = view?.serverEndpointWan,
+                stealthEndpoint = view?.stealthEndpoint,
+                stealthAvailable = view?.stealthAvailable,
+                stealthPrefix = view?.stealthPathPrefix,
+                ignoredPrevious = null,
+            ) ?: return EndpointFetch.Failed
+            if (!endpointAttemptCurrent(flight, expectedHandle)) return EndpointFetch.Stale
+            return EndpointFetch.Ready(offer, flight)
+        } finally {
+            response.close()
+        }
+    }
+
+    private suspend fun getPeerOnce(
+        http: OkHttpClient,
+        token: String,
+        peerId: String,
+        flight: EndpointRefresh.Flight,
+    ): Response {
+        var mine: Call? = null
+        return try {
+            ApiClient.getOnce(
+                path = "/api/v1/wg/peers/$peerId",
+                token = token,
+                httpClient = http,
+                timeoutSeconds = 4,
+                onCall = { call ->
+                    mine = call
+                    synchronized(endpointCallLock) {
+                        if (!EndpointRefresh.stillCurrent(flight, endpointFlight)) {
+                            call.cancel()
+                        } else {
+                            endpointCall = call
+                        }
+                    }
+                },
+            )
+        } finally {
+            synchronized(endpointCallLock) {
+                if (endpointCall === mine) endpointCall = null
+            }
+        }
+    }
+
+
+    /**
+     * Tear userspace WireGuard down and bring a new tun up on the current
+     * system-default network. The endpoint is re-read for that network first.
      *
      * Lockdown stays fail-closed: this never calls setState(DOWN) (that
      * stops the service) and never allows bypass. Repeats one at a time with
@@ -1239,6 +1480,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         var backoff = TunnelRebuild.MIN_BACKOFF_MS
         var waiting = false
         var trackedHandle: Long? = null
+        var resolveFailures = 0
         rebuildInProgress = true
         try {
             while (true) {
@@ -1266,6 +1508,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         backoff = TunnelRebuild.MIN_BACKOFF_MS
                         waiting = false
                         trackedHandle = handle
+                        resolveFailures = 0
                         continue
                     }
                     TunnelRebuild.RecoveryStep.WAIT -> {
@@ -1290,38 +1533,47 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         trackedHandle = snap.network.networkHandle
                         rebuildDefaultHandle = trackedHandle ?: Long.MIN_VALUE
                         publishReconnecting(true)
-                        broadcastState(true, null)
-                        val saved = vpnStatePrefs().getString(KEY_UDP_CONFIG, null)
-                            ?: vpnStatePrefs().getString(KEY_CONFIG, null)
-                            ?: return false
-                        val parsed = runCatching {
-                            Config.parse(ByteArrayInputStream(saved.toByteArray(Charsets.UTF_8)))
-                        }.getOrNull()
-                        if (parsed == null) {
-                            Log.w(TAG, "path-adapt full rebuild config unreadable")
-                            waiting = true
+                        val fresh = fetchFreshEndpoint(snap.network.networkHandle)
+                        val offer = when (fresh) {
+                            is EndpointFetch.Stop -> return false
+                            is EndpointFetch.Stale -> {
+                                waiting = false
+                                continue
+                            }
+                            is EndpointFetch.Failed -> {
+                                resolveFailures++
+                                noteResolveFailure(resolveFailures)
+                                delay(EndpointRefresh.RETRY_DELAY_MS)
+                                waiting = false
+                                continue
+                            }
+                            is EndpointFetch.Ready -> fresh.offer
+                        }
+                        if (systemDefaultNetwork()?.networkHandle != snap.network.networkHandle) {
+                            waiting = false
                             continue
                         }
                         val started = System.currentTimeMillis()
-                        val rebuilt = try {
-                            rebuildTunnelInterface(parsed, gen)
+                        val installed = try {
+                            applyResolved(gen, offer, recreateTun = true)
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
                             Log.w(TAG, "path-adapt full rebuild failed: ${e.javaClass.simpleName}")
-                            false
+                            null
                         }
-                        logHardProbe(saved, EndpointSelector.endpointFromConfig(saved), snap)
-                        if (stealthTransport != null ||
-                            vpnStatePrefs().getBoolean(KEY_RESUME_STEALTH, false)
-                        ) {
-                            return false
+                        if (installed != null) {
+                            logHardProbe(installed.liveConfig, installed.endpoint, snap)
+                        } else {
+                            Log.w(TAG, "path-adapt full rebuild did not install")
                         }
-                        val handshake = rebuilt && waitForHandshake(gen, started, HANDSHAKE_CONFIRM_MS)
-                        if (rebuilt) {
-                            lastRebindAtMs = started
-                            startStatsPolling()
-                        }
+                        val handshake = installed != null &&
+                            waitForHandshake(
+                                gen,
+                                started,
+                                EndpointRefresh.HANDSHAKE_WAIT_MS,
+                                snap.network.networkHandle,
+                            )
                         val after = TunnelRebuild.decide(
                             sessionActive = sessionStillActive(gen),
                             peer = lastPeerOutcome,
@@ -1335,29 +1587,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         when (after) {
                             TunnelRebuild.RecoveryStep.STOP -> {
                                 if (controlSignedOut || !handshake) return false
-                                synchronized(tunnelOpLock) {
-                                    if (!sessionStillActive(gen)) return false
-                                    val prefs = vpnStatePrefs()
-                                    prefs.edit()
-                                        .putString(
-                                            KEY_CONFIG,
-                                            SavedPeerConfig.coalesce(prefs.getString(KEY_CONFIG, null), saved),
-                                        )
-                                        .putString(
-                                            KEY_UDP_CONFIG,
-                                            SavedPeerConfig.coalesce(prefs.getString(KEY_UDP_CONFIG, null), saved),
-                                        )
-                                        .putBoolean(KEY_RESUME_STEALTH, false)
-                                        .apply()
-                                    val fresh = ipv4Addresses(snap.link)
-                                    lastUnderlayFingerprint = underlayFingerprint(snap.network, snap.link, fresh)
-                                    lastUnderlayIdentity = snap.identity
-                                    lastChosenEndpoint = EndpointSelector.endpointFromConfig(saved)
-                                }
-                                publishTransport("udp")
-                                followSystemDefault()
-                                startBackgroundEgressValidation()
+                                if (!sessionStillActive(gen)) return false
+                                commitUnderlay(snap)
                                 resetRebuildStreak()
+                                resolveFailures = 0
                                 Log.i(TAG, "path-adapt full rebuild handshake ok")
                                 return true
                             }
@@ -1371,6 +1604,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                                 backoff = TunnelRebuild.MIN_BACKOFF_MS
                                 waiting = false
                                 trackedHandle = now
+                                resolveFailures = 0
                                 continue
                             }
                             TunnelRebuild.RecoveryStep.WAIT,
@@ -1452,6 +1686,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      */
     private fun noteDefaultNetworkForRecovery() {
         val next = systemDefaultNetwork()?.networkHandle
+        noteEndpointNetwork(next)
         val reaction = TunnelRebuild.onSystemDefault(
             watch = watchedDefault,
             nextHandle = next,
@@ -1692,6 +1927,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun publishReconnecting(reconnecting: Boolean) {
         if (controlSignedOut) return
         isReconnecting = reconnecting
+        if (!reconnecting) reconnectNotice = null
         if (!sessionIntended()) return
         val text = if (reconnecting) "Reconnecting…" else lastNotificationText
         ServiceCompat.startForeground(
@@ -1726,8 +1962,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         )
     }
 
-    /** Redial the protected TLS socket. WireGuard stays pointed at localhost. */
-    private fun adaptWhileStealth(gen: Long, forceHard: Boolean = false) {
+    /** Re-resolve Stealth on the current default network. The stored host is not redialed first. */
+    private suspend fun adaptWhileStealth(gen: Long, forceHard: Boolean = false) {
         if (gen != sessionGeneration || !sessionIntended()) return
         val live = liveUnderlay() ?: systemDefaultSnap()
         if (live == null) {
@@ -1755,78 +1991,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (!forceHard && !isReconnecting && !underlayLostSeen && !handshakeStaleForLink &&
             live.identity == lastUnderlayIdentity && fp == lastUnderlayFingerprint
         ) return
-        Log.i(TAG, "path-adapt stealth redial ${lastUnderlayIdentity} -> ${live.identity}")
-        followSystemDefault()
-        publishReconnecting(true)
-        stealthTransport?.reconnect()
-        lastUnderlayFingerprint = fp
-        lastUnderlayIdentity = live.identity
-        lastChosenEndpoint = stealthTransport?.localEndpoint ?: lastChosenEndpoint
-        val redialAt = System.currentTimeMillis()
-        linkAttachedAtMs = redialAt
-        underlayLostSeen = false
-        stealthReconnectJob?.cancel()
-        stealthReconnectJob = scope.launch {
-            var succeeded = false
-            try {
-                val stealthTimeout = 9_000L
-                val backoff = StealthBackoff.sequence().iterator()
-                var attempt = 0
-                while (gen == sessionGeneration && sessionIntended() && disconnectJob?.isActive != true) {
-                    attempt++
-                    val ok = waitForHandshake(gen, redialAt, stealthTimeout)
-                    if (ok) {
-                        Log.i(TAG, "stealth redial n=$attempt handshake ok")
-                        succeeded = true
-                        return@launch
-                    }
-                    if (gen != sessionGeneration || !sessionIntended()) return@launch
-                    val live = liveUnderlay()
-                    if (live == null) {
-                        Log.i(TAG, "stealth redial n=$attempt no underlay, waiting with fallback")
-                        val waitStartedAt = System.currentTimeMillis()
-                        var fallbackUsed = false
-                        while (gen == sessionGeneration && sessionIntended()) {
-                            val validated = liveUnderlay()
-                            if (validated != null) break
-                            val elapsed = System.currentTimeMillis() - waitStartedAt
-                            if (!fallbackUsed && elapsed >= STALL_UNDERLAY_WAIT_FALLBACK_MS) {
-                                val fallback = systemDefaultSnap()
-                                if (fallback != null) {
-                                    Log.i(TAG, "stealth redial using unvalidated fallback after ${elapsed}ms")
-                                    fallbackUsed = true
-                                    break
-                                }
-                            }
-                            if (elapsed >= 30_000L) {
-                                Log.w(TAG, "stealth redial underlay timeout 30s, continuing anyway")
-                                break
-                            }
-                            delay(1_000)
-                        }
-                        if (gen != sessionGeneration || !sessionIntended()) return@launch
-                        Log.i(TAG, "stealth redial underlay back, resuming")
-                        linkAttachedAtMs = System.currentTimeMillis()
-                        val s0 = readBackendStats()
-                        rxAtLinkAttach = s0.first
-                        continue
-                    }
-                    val delayMs = if (backoff.hasNext()) backoff.next() else StealthBackoff.MAX_MS
-                    val jitter = (Math.random() * StealthBackoff.JITTER_MS).toLong()
-                    Log.w(TAG, "stealth redial n=$attempt no handshake, backoff=${delayMs}ms")
-                    delay(delayMs + jitter)
-                    stealthTransport?.reconnect()
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "stealth redial exception: ${e.javaClass.simpleName}")
-            } finally {
-                if (succeeded) {
-                    publishReconnecting(false)
-                }
-            }
-        }
+        Log.i(TAG, "path-adapt stealth re-resolve handle=${live.network.networkHandle}")
+        recoverWithFreshEndpoint(gen, live.network.networkHandle)
     }
 
     private fun rebindWithRetry(parsed: Config, gen: Long, recreateTun: Boolean = false): Boolean {
@@ -1844,13 +2010,20 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         }
     }
 
-    private suspend fun waitForHandshake(gen: Long, afterMs: Long, timeoutMs: Long): Boolean {
+    private suspend fun waitForHandshake(
+        gen: Long,
+        afterMs: Long,
+        timeoutMs: Long,
+        handle: Long? = null,
+    ): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (gen != sessionGeneration || !sessionIntended()) return false
+            if (handle != null && systemDefaultNetwork()?.networkHandle != handle) return false
             if (latestHandshakeMs() > afterMs) return true
             delay(400)
         }
+        if (handle != null && systemDefaultNetwork()?.networkHandle != handle) return false
         return gen == sessionGeneration && sessionIntended() && latestHandshakeMs() > afterMs
     }
 
@@ -2818,10 +2991,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             if (prefs.getString(KEY_CONFIG, null) == null) return false
             return VpnSettings.currentPeerId(context) != null
         }
-        private const val UNDERLAY_ADAPT_DEBOUNCE_MS = 400L
-        private const val SOFT_ATTACH_MS = 6_000L
-        private const val HANDSHAKE_CONFIRM_MS = 3_500L
-        private const val PROBE_RETRY_DELAY_MS = 1_200L
+        private const val UNDERLAY_ADAPT_DEBOUNCE_MS = EndpointRefresh.DEBOUNCE_MS
         private const val HEALTH_WATCH_MS = 2_000L
         private const val HANDSHAKE_OK_AGE_MS = 200_000L
         private const val STALL_DETECT_WINDOW_MS = TunnelStall.DETECT_WINDOW_MS

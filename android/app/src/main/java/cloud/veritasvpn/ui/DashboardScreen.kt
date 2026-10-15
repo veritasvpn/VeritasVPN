@@ -201,6 +201,7 @@ fun DashboardScreen(
                         connected = connected,
                         signInAgain = signInAgain,
                         isPremium = isPremium,
+                        reconnecting = reconnecting,
                     )
                 ) {
                     HeroMainAction.None -> null

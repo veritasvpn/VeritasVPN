@@ -124,6 +124,35 @@ object ApiClient {
     }
 
     /**
+     * One short read on [httpClient]. Reconnect uses this so a network change
+     * does not sit through the general retry budget before it can install the
+     * endpoint for the network the phone is on now. [onCall] runs before the
+     * call is awaited so a newer network can cancel it.
+     */
+    suspend fun getOnce(
+        path: String,
+        token: String,
+        httpClient: OkHttpClient,
+        timeoutSeconds: Long = 4,
+        onCall: ((Call) -> Unit)? = null,
+    ): Response {
+        val request = Request.Builder().url("$BASE_URL$path").get()
+            .header("Authorization", "Bearer $token")
+            .header("Content-Type", "application/json")
+            .header("X-Veritas-Client", "android")
+            .build()
+        val fast = httpClient.newBuilder()
+            .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .build()
+        val call = fast.newCall(request)
+        onCall?.invoke(call)
+        return call.await()
+    }
+
+    /**
      * Read-only UI updates must never keep the screen in a loading state behind
      * the general API retry budget.  Billing status is safe to retry manually,
      * so it gets a small, single-attempt deadline instead.
@@ -287,6 +316,16 @@ data class PeerResponse(
     @SerializedName("client_allowed_ips") val clientAllowedIps: List<String>?,
     @SerializedName("allowed_ips") val allowedIps: List<String>?,
     val error: String? = null
+)
+
+/** GET /api/v1/wg/peers/{id}: the endpoint fields for the caller’s current address. */
+data class PeerEndpointView(
+    @SerializedName("server_endpoint") val serverEndpoint: String? = null,
+    @SerializedName("server_endpoint_lan") val serverEndpointLan: String? = null,
+    @SerializedName("server_endpoint_wan") val serverEndpointWan: String? = null,
+    @SerializedName("stealth_endpoint") val stealthEndpoint: String? = null,
+    @SerializedName("stealth_available") val stealthAvailable: Boolean? = null,
+    @SerializedName("stealth_path_prefix") val stealthPathPrefix: String? = null,
 )
 
 data class PeerListResponse(
