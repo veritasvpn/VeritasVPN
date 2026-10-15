@@ -200,6 +200,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     override fun onCreate() {
         super.onCreate()
+        active = this
         createNotificationChannel()
         scope.launch {
             while (isActive) {
@@ -515,6 +516,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         broadcastState(false, null)
                         if (keepInterface) {
                             DiagnosticLog.record("disconnect interface=kept")
+                            // Lockdown still blackholes unprotected sockets.
+                            // Keep the system-default callback so a reconnect
+                            // can protect and bind its peer request.
+                            keepBestMatchingWatch()
                             enterForeground("Disconnected")
                         } else {
                             DiagnosticLog.record("disconnect interface=closed")
@@ -711,6 +716,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     override fun onDestroy() {
+        if (active === this) active = null
         adaptJob?.cancel()
         cancelPeerRecovery()
         unregisterUnderlayWatch()
@@ -1030,12 +1036,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val cm = connectivityManager()
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                cm.registerBestMatchingNetworkCallback(
-                    request,
-                    bestMatchingCallback,
-                    underlayHandler,
-                )
-                bestMatchingWatchRegistered = true
+                synchronized(controlClientLock) {
+                    if (!bestMatchingWatchRegistered) {
+                        cm.registerBestMatchingNetworkCallback(
+                            request,
+                            bestMatchingCallback,
+                            underlayHandler,
+                        )
+                        bestMatchingWatchRegistered = true
+                    }
+                }
             }
             cm.registerNetworkCallback(request, underlayCallback)
             underlayWatchRegistered = true
@@ -1045,12 +1055,41 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         }
     }
 
+    /**
+     * Best-matching NOT_VPN network only. The full underlay watch also starts
+     * health checks and roam rebuilds, which must stay off after disconnect.
+     * Callbacks still update [bestMatchingNetwork]; [scheduleUnderlayAdapt]
+     * returns while the session is ended.
+     */
+    private fun keepBestMatchingWatch() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        synchronized(controlClientLock) {
+            if (bestMatchingWatchRegistered) return
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                .build()
+            runCatching {
+                connectivityManager().registerBestMatchingNetworkCallback(
+                    request,
+                    bestMatchingCallback,
+                    underlayHandler,
+                )
+                bestMatchingWatchRegistered = true
+            }.onFailure { error ->
+                Log.w(TAG, "provision watch: ${error.javaClass.simpleName}")
+            }
+        }
+    }
+
     private fun unregisterUnderlayWatch() {
         val cm = connectivityManager()
-        if (bestMatchingWatchRegistered) {
-            runCatching { cm.unregisterNetworkCallback(bestMatchingCallback) }
-            bestMatchingWatchRegistered = false
-            bestMatchingNetwork = null
+        synchronized(controlClientLock) {
+            if (bestMatchingWatchRegistered) {
+                runCatching { cm.unregisterNetworkCallback(bestMatchingCallback) }
+                bestMatchingWatchRegistered = false
+                bestMatchingNetwork = null
+            }
         }
         if (underlayWatchRegistered) {
             runCatching { cm.unregisterNetworkCallback(underlayCallback) }
@@ -3508,6 +3547,37 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     ).joinToString("|")
 
     companion object {
+        @Volatile
+        private var active: VeritasVpnService? = null
+
+        /** True while this process still holds the VPN interface. */
+        fun interfaceHeld(): Boolean = active?.tunKeeper != null
+
+        /**
+         * Protected client for a peer request while the interface is held.
+         * Null when the interface is closed, so the caller uses the normal
+         * client. Null when the interface is held but the system default is
+         * gone: the normal client cannot leave a lockdown interface.
+         */
+        fun provisioningClient(): OkHttpClient? {
+            val service = active ?: return null
+            if (service.tunKeeper == null) return null
+            service.keepBestMatchingWatch()
+            repeat(8) { attempt ->
+                if (service.tunKeeper == null) return null
+                val client = runCatching { service.underlyingControlClient() }.getOrNull()
+                if (client != null) return client
+                if (attempt == 7) return null
+                try {
+                    Thread.sleep(50)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return null
+                }
+            }
+            return null
+        }
+
         const val TUNNEL_NAME = "veritas"
         const val CHANNEL_ID = "veritas_vpn"
         const val NOTIFICATION_ID = 1

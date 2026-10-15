@@ -27,6 +27,8 @@ import cloud.veritasvpn.api.PeerListResponse
 import cloud.veritasvpn.api.PeerResponse
 import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.auth.AuthenticatedApi
+import cloud.veritasvpn.auth.ControlAccess
+import cloud.veritasvpn.auth.ControlRefresh
 import cloud.veritasvpn.auth.SessionExpiredException
 import cloud.veritasvpn.BuildConfig
 import cloud.veritasvpn.billing.BillingRepository
@@ -34,6 +36,7 @@ import cloud.veritasvpn.billing.PlanEntitlement
 import cloud.veritasvpn.billing.StoreBillingCallbacks
 import cloud.veritasvpn.billing.createStoreBilling
 import java.io.IOException
+import cloud.veritasvpn.support.DiagnosticLog
 import cloud.veritasvpn.support.SupportLinks
 import cloud.veritasvpn.support.isRecordableError
 import cloud.veritasvpn.support.sanitizeError
@@ -41,6 +44,7 @@ import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.CircleDisconnect
 import cloud.veritasvpn.ui.SignInAgainSignal
 import cloud.veritasvpn.vpn.ControlPlane
+import cloud.veritasvpn.vpn.ProvisionRoute
 import cloud.veritasvpn.vpn.EndpointRefresh
 import cloud.veritasvpn.vpn.PeerCheckLog
 import cloud.veritasvpn.vpn.ReprovisionFlight
@@ -1536,6 +1540,79 @@ class MainActivity : ComponentActivity() {
         return id
     }
 
+    /**
+     * Peer create for a circle-tap reconnect. Lockdown keeps the interface up
+     * after disconnect, and the normal client is blackholed. That path uses
+     * the protected system-default client. With the interface closed the
+     * normal client is used, including its token refresh.
+     */
+    private suspend fun createPeer(
+        context: Context,
+        keyPair: KeyPair,
+        deviceId: String,
+    ): PeerResponse {
+        val body = mapOf<String, Any>(
+            "public_key" to keyPair.publicKey.toBase64(),
+            "device_id" to deviceId,
+        ) + WireGuardSession.deviceMetadata(context) + VpnSettings.shieldPolicy(context).wireBody()
+        val protected = VeritasVpnService.provisioningClient()
+        val route = ProvisionRoute.choose(
+            interfaceHeld = VeritasVpnService.interfaceHeld(),
+            protectedAvailable = protected != null,
+        )
+        DiagnosticLog.record("provision route=${ProvisionRoute.logName(route)}")
+        return when (route) {
+            ProvisionRoute.Route.NORMAL ->
+                AuthenticatedApi.execute(authRepo, { token ->
+                    ApiClient.post("/api/v1/wg/peers", body, token)
+                }, ::parseCreatedPeer)
+            ProvisionRoute.Route.PROTECTED ->
+                postPeerOutsideTunnel(body, requireNotNull(protected))
+            ProvisionRoute.Route.BLOCKED ->
+                throw java.net.ConnectException("api")
+        }
+    }
+
+    private suspend fun postPeerOutsideTunnel(
+        body: Map<String, Any>,
+        client: okhttp3.OkHttpClient,
+    ): PeerResponse {
+        val access = authRepo.accessForControl(client, tunnelHealthy = false)
+        val token = when (access) {
+            is ControlAccess.Ready -> access.token
+            is ControlAccess.SignedOut -> throw SessionExpiredException()
+            is ControlAccess.Unavailable -> throw java.net.ConnectException("api")
+        }
+        var response = ApiClient.post("/api/v1/wg/peers", body, token, httpClient = client)
+        if (response.code == 401) {
+            response.close()
+            when (authRepo.refreshForControl(client, force = true)) {
+                ControlRefresh.SignedOut -> throw SessionExpiredException()
+                ControlRefresh.Unavailable -> throw java.net.ConnectException("api")
+                ControlRefresh.Refreshed -> {
+                    val refreshed = authRepo.getAccessToken()?.takeIf { it.isNotBlank() }
+                        ?: throw SessionExpiredException()
+                    response = ApiClient.post(
+                        "/api/v1/wg/peers",
+                        body,
+                        refreshed,
+                        httpClient = client,
+                    )
+                }
+            }
+        }
+        return response.use(::parseCreatedPeer)
+    }
+
+    private fun parseCreatedPeer(res: okhttp3.Response): PeerResponse {
+        if (!res.isSuccessful) {
+            val err = ApiClient.parse<PeerResponse>(res)?.error
+            throw PeerError(err ?: "Failed to create peer")
+        }
+        return ApiClient.parse<PeerResponse>(res)
+            ?: throw PeerError("Invalid VPN server response")
+    }
+
     private fun startConnection(
         context: Context,
         scope: CoroutineScope,
@@ -1586,23 +1663,7 @@ class MainActivity : ComponentActivity() {
                 if (!shouldContinue()) return@launch
                 val keyPair = KeyPair()
                 val deviceId = VpnSettings.deviceId(context)
-                val peer = AuthenticatedApi.execute(authRepo, { token ->
-                    ApiClient.post(
-                        "/api/v1/wg/peers",
-                        mapOf<String, Any>(
-                            "public_key" to keyPair.publicKey.toBase64(),
-                            "device_id" to deviceId,
-                        ) + WireGuardSession.deviceMetadata(context) + VpnSettings.shieldPolicy(context).wireBody(),
-                        token
-                    )
-                }) { res ->
-                    if (!res.isSuccessful) {
-                        val err = ApiClient.parse<PeerResponse>(res)?.error
-                        throw PeerError(err ?: "Failed to create peer")
-                    }
-                    ApiClient.parse<PeerResponse>(res)
-                        ?: throw PeerError("Invalid VPN server response")
-                }
+                val peer = createPeer(context, keyPair, deviceId)
                 if (!shouldContinue()) return@launch
                 val config = WireGuardSession.buildConfig(context, peer, keyPair)
                 val intent = Intent(context, VeritasVpnService::class.java).apply {
