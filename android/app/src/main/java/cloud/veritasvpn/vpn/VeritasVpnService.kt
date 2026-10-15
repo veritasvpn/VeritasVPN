@@ -217,9 +217,22 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // API 36 kills the process if a foreground start does not call
+        // startForeground promptly, including a null-intent Always-on restart
+        // and the circle-tap disconnect. The type has to match the manifest.
+        enterForeground(
+            when (intent?.action) {
+                ACTION_DISCONNECT -> "Disconnected"
+                ACTION_CONNECT -> "Connecting…"
+                else -> lastNotificationText.ifBlank { "VeritasVPN" }
+            },
+        )
         // Completes the shared VpnService future used by GoBackend so the backend
         // reuses THIS instance instead of starting the library's base service.
-        super.onStartCommand(intent, flags, startId)
+        runCatching { super.onStartCommand(intent, flags, startId) }.onFailure { error ->
+            DiagnosticLog.recordCrash(error)
+            Log.w(TAG, "onStartCommand super: ${error.javaClass.simpleName}")
+        }
 
         when (intent?.action) {
             ACTION_QUERY_STATE -> {
@@ -299,7 +312,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 } else {
                     "udp"
                 }
-                startForeground(NOTIFICATION_ID, buildNotification("Connecting…"))
+                enterForeground("Connecting…")
                 validationJob?.cancel()
                 val pendingDisconnect = disconnectJob?.takeIf { it.isActive }
                 if (transitionJob?.isActive == true && transitionJob !== pendingDisconnect) {
@@ -406,7 +419,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                             // session. Stopping the service here restarts an
                             // Always-on VPN and takes the task off screen.
                             broadcastState(false, if (sessionEndedByUser) null else friendlyError(e))
-                            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                            leaveForeground()
                         }
                     }
                 }
@@ -416,38 +429,46 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 // Leave the process and the activity up. stopSelf while Always-on
                 // is set restarts this service and, on some builds, takes the
                 // task off screen. The tunnel and the notification still go away.
+                // enterForeground already ran. Framework calls here must not
+                // escape onto the main thread.
                 val disconnectGen = ++sessionGeneration
                 // Snapshot before any cancel nulls the job fields. wgTurnOff
                 // while a roam rebuild is inside wgTurnOn kills the process.
                 val pendingTunnelJobs = tunnelJobs()
-                markSessionEnded()
-                VpnSettings.clearSession(this)
-                VpnSettings.clearPeerGoneAt(this)
-                VpnSettings.clearReprovisionInProgressAt(this)
-                cancelStealthWork()
-                activeTransport = ""
-                unregisterUnderlayWatch()
-                lastUnderlayFingerprint = null
-                lastUnderlayIdentity = null
-                lastChosenEndpoint = null
-                lastRebindAtMs = 0L
-                isReconnecting = false
-                cancelEndpointFetch()
-                lastStallRebindAtMs = 0L
-                stallBackoffMs = TunnelStall.MIN_REBIND_INTERVAL_MS
-                underlayWaitStartedAtMs = 0L
-                hardLoopStartedAtMs = 0L
-                healthUnderlayWaitStartedAtMs = 0L
-                lastStatsLogAtMs = 0L
-                watchedDefault = TunnelRebuild.DefaultWatch()
-                lastPeerOutcome = null
-                peerCheckSerial++
-                lastPeerCheckAtMs = 0L
-                rebuildInProgress = false
-                rebuildDefaultHandle = Long.MIN_VALUE
-                controlSignedOut = false
-                dropUnderlyingControlClient()
-                cancelTunnelJobs()
+                runCatching {
+                    markSessionEnded()
+                    VpnSettings.clearSession(this)
+                    VpnSettings.clearPeerGoneAt(this)
+                    VpnSettings.clearReprovisionInProgressAt(this)
+                    cancelStealthWork()
+                    activeTransport = ""
+                    unregisterUnderlayWatch()
+                    lastUnderlayFingerprint = null
+                    lastUnderlayIdentity = null
+                    lastChosenEndpoint = null
+                    lastRebindAtMs = 0L
+                    isReconnecting = false
+                    cancelEndpointFetch()
+                    lastStallRebindAtMs = 0L
+                    stallBackoffMs = TunnelStall.MIN_REBIND_INTERVAL_MS
+                    underlayWaitStartedAtMs = 0L
+                    hardLoopStartedAtMs = 0L
+                    healthUnderlayWaitStartedAtMs = 0L
+                    lastStatsLogAtMs = 0L
+                    watchedDefault = TunnelRebuild.DefaultWatch()
+                    lastPeerOutcome = null
+                    peerCheckSerial++
+                    lastPeerCheckAtMs = 0L
+                    rebuildInProgress = false
+                    rebuildDefaultHandle = Long.MIN_VALUE
+                    controlSignedOut = false
+                    dropUnderlyingControlClient()
+                    cancelTunnelJobs()
+                }.onFailure { error ->
+                    if (error is CancellationException) return@onFailure
+                    DiagnosticLog.recordCrash(error)
+                    Log.w(TAG, "disconnect start: ${error.javaClass.simpleName}")
+                }
                 disconnectJob = scope.launch {
                     var keepInterface = true
                     try {
@@ -494,17 +515,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         broadcastState(false, null)
                         if (keepInterface) {
                             DiagnosticLog.record("disconnect interface=kept")
-                            runCatching {
-                                ServiceCompat.startForeground(
-                                    this@VeritasVpnService,
-                                    NOTIFICATION_ID,
-                                    buildNotification("Disconnected"),
-                                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-                                )
-                            }
+                            enterForeground("Disconnected")
                         } else {
                             DiagnosticLog.record("disconnect interface=closed")
-                            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                            leaveForeground()
                         }
                     } catch (e: CancellationException) {
                         // The click path and this scope must not surface
@@ -513,7 +527,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     } catch (e: Exception) {
                         DiagnosticLog.recordCrash(e)
                         Log.w(TAG, "disconnect teardown: ${e.javaClass.simpleName}")
-                        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                        leaveForeground()
                     } finally {
                         if (disconnectGen == sessionGeneration && !tunnelReleased) {
                             DiagnosticLog.record("disconnect turn-off")
@@ -528,7 +542,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             else -> {
                 // Android may restart an Always-on VPN service without the original Intent.
-                // Keep the last approved configuration so the tunnel can be restored.
+                // enterForeground already ran, so this restart is not killed for
+                // missing startForeground. Keep the last approved configuration.
                 if (!sessionIntended()) {
                     return START_NOT_STICKY
                 }
@@ -593,7 +608,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         }
         if (restoreJob?.isActive == true || disconnectJob?.isActive == true) return
         val restoreGen = sessionGeneration
-        startForeground(NOTIFICATION_ID, buildNotification("Restoring secure tunnel…"))
+        enterForeground("Restoring secure tunnel…")
         restoreJob = scope.launch {
             while (restoreGen == sessionGeneration &&
                 sessionIntended() &&
@@ -692,7 +707,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             false,
             "VPN permission was revoked. Tap Connect now to reconnect."
         )
-        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        leaveForeground()
     }
 
     override fun onDestroy() {
@@ -755,7 +770,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 if (!sessionIntended()) {
                     // setState(DOWN) would stopSelf() and take the task off screen.
                     runCatching { turnUserspaceOff() }
-                    runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                    leaveForeground()
                     return
                 }
                 startStatsPolling()
@@ -777,7 +792,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     return
                 }
                 stopStatsPolling()
-                runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                leaveForeground()
                 broadcastState(false, null)
             }
         }
@@ -934,6 +949,37 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (hs <= 0L) return false
         val age = System.currentTimeMillis() - hs
         return age < HANDSHAKE_OK_AGE_MS
+    }
+
+    /**
+     * Promote this service before any other start work. The type matches the
+     * manifest. A thrown framework exception is recorded and does not escape.
+     */
+    private fun enterForeground(text: String) {
+        try {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildNotification(text),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (error: Exception) {
+            DiagnosticLog.recordCrash(error)
+            Log.w(TAG, "startForeground: ${error.javaClass.simpleName}")
+        }
+    }
+
+    private fun leaveForeground() {
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (error: Exception) {
+            DiagnosticLog.recordCrash(error)
+            Log.w(TAG, "stopForeground: ${error.javaClass.simpleName}")
+        }
     }
 
     private fun buildNotification(text: String): Notification {

@@ -37,22 +37,45 @@ class ProcessExitLogTest {
     }
 
     @Test
-    fun crashLinesKeepOurFramesOnly() {
-        val frames = listOf(
-            ProcessExitLog.frame("cloud.veritasvpn.MainActivity", "onCreate", "MainActivity.kt", 155),
-            ProcessExitLog.frame("android.app.Activity", "performCreate", "Activity.java", 10),
-            ProcessExitLog.frame("cloud.veritasvpn.vpn.VeritasVpnService", "onRevoke", "VeritasVpnService.kt", 590),
+    fun crashLinesKeepFrameworkFramesAndCauses() {
+        val framework = ProcessExitLog.frame(
+            "android.app.ActivityThread",
+            "throwRemoteServiceException",
+            "ActivityThread.java",
+            2140,
         )
-        val lines = ProcessExitLog.crashLines("java.lang.IllegalStateException", frames.filterNotNull())
-        assertEquals("crash java.lang.IllegalStateException", lines[0])
-        assertEquals("frame cloud.veritasvpn.MainActivity.onCreate MainActivity.kt:155", lines[1])
+        val ours = ProcessExitLog.frame(
+            "cloud.veritasvpn.vpn.VeritasVpnService",
+            "onStartCommand",
+            "VeritasVpnService.kt",
+            220,
+        )
         assertEquals(
-            "frame cloud.veritasvpn.vpn.VeritasVpnService.onRevoke VeritasVpnService.kt:590",
-            lines[2],
+            "android.app.ActivityThread.throwRemoteServiceException ActivityThread.java:2140",
+            framework,
         )
-        assertEquals(3, lines.size)
+        val lines = ProcessExitLog.crashLines(
+            "java.lang.RuntimeException",
+            listOfNotNull(framework, ours),
+            causes = listOf(
+                "android.app.RemoteServiceException\$ForegroundServiceDidNotStartInTimeException",
+            ),
+        )
+        assertEquals("crash java.lang.RuntimeException", lines[0])
+        assertEquals(
+            "frame android.app.ActivityThread.throwRemoteServiceException ActivityThread.java:2140",
+            lines[1],
+        )
+        assertTrue(lines.any { it.startsWith("frame cloud.veritasvpn.vpn.VeritasVpnService.onStartCommand") })
+        assertTrue(
+            lines.any {
+                it == "cause android.app.RemoteServiceException\$ForegroundServiceDidNotStartInTimeException"
+            },
+        )
         assertFalse(lines.any { it.contains("203.0.113") })
-        assertNull(ProcessExitLog.frame("android.app.Activity", "performCreate", "Activity.java", 10))
+        val crashed = RuntimeException()
+        crashed.initCause(IllegalStateException())
+        assertEquals(listOf("java.lang.IllegalStateException"), ProcessExitLog.causeNames(crashed))
     }
 
     @Test

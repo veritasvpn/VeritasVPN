@@ -150,7 +150,7 @@ class DisconnectUiTest {
         assertFalse(stateChange.contains("setState"))
         assertFalse(stateChange.contains("applyBackendState"))
         assertTrue(stateChange.contains("turnUserspaceOff"))
-        assertTrue(stateChange.contains("runCatching { stopForeground"))
+        assertTrue(stateChange.contains("leaveForeground"))
 
         assertFalse(service.contains("System.exit"))
         assertFalse(service.contains("killProcess"))
@@ -170,7 +170,18 @@ class DisconnectUiTest {
 
         val connectGiveUp = slice(service, "Connect retry failed", "ACTION_DISCONNECT")
         assertFalse(connectGiveUp.contains("stopSelf("))
-        assertTrue(connectGiveUp.contains("runCatching { stopForeground"))
+        assertTrue(connectGiveUp.contains("leaveForeground"))
+
+        val started = slice(service, "fun onStartCommand", "ACTION_QUERY_STATE")
+        assertTrue(started.contains("enterForeground"))
+        assertTrue(started.indexOf("enterForeground") < started.indexOf("super.onStartCommand"))
+        val promote = slice(service, "fun enterForeground", "fun leaveForeground")
+        assertTrue(promote.contains("FOREGROUND_SERVICE_TYPE_SPECIAL_USE"))
+        assertFalse(service.contains("startForeground(NOTIFICATION_ID"))
+
+        val activityDisconnect = slice(activity, "fun disconnectVpnService()", "fun cancelReconnect()")
+        assertTrue(activityDisconnect.contains("startService("))
+        assertFalse(activityDisconnect.contains("startForegroundService"))
 
         val killSwitch = kotlinSource("VpnKillSwitch.kt")
         val guard = killSwitch.indexOf("if (!allowPrepare) return false")

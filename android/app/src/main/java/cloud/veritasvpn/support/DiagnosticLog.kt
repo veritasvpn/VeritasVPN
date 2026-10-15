@@ -92,7 +92,11 @@ object DiagnosticLog {
                 line = element.lineNumber,
             )
         }
-        for (line in ProcessExitLog.crashLines(error.javaClass.name, frames)) {
+        for (line in ProcessExitLog.crashLines(
+            className = error.javaClass.name,
+            frames = frames,
+            causes = ProcessExitLog.causeNames(error),
+        )) {
             record(line)
         }
     }

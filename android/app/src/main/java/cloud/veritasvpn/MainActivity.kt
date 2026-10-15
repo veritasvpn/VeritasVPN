@@ -242,14 +242,17 @@ class MainActivity : ComponentActivity() {
                 val observedBillingReturnVersion = billingReturnVersion
 
                 fun disconnectVpnService() {
-                    // Same-process activity recreate must see an ended session
-                    // before prefs flush, and must not start a system screen.
+                    // startService, not startForegroundService. A foreground
+                    // start that does not call startForeground in time is a
+                    // process-killing RuntimeException on API 36.
                     VeritasVpnService.markSessionEnded()
-                    context.startService(
-                        Intent(context, VeritasVpnService::class.java).apply {
-                            action = VeritasVpnService.ACTION_DISCONNECT
-                        }
-                    )
+                    runCatching {
+                        context.startService(
+                            Intent(context, VeritasVpnService::class.java).apply {
+                                action = VeritasVpnService.ACTION_DISCONNECT
+                            },
+                        )
+                    }
                     connected = false
                     connecting = false
                     reconnecting = false
