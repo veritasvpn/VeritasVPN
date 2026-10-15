@@ -30,6 +30,7 @@ import cloud.veritasvpn.auth.AuthenticatedApi
 import cloud.veritasvpn.auth.SessionExpiredException
 import cloud.veritasvpn.BuildConfig
 import cloud.veritasvpn.billing.BillingRepository
+import cloud.veritasvpn.billing.PlanEntitlement
 import cloud.veritasvpn.billing.StoreBillingCallbacks
 import cloud.veritasvpn.billing.createStoreBilling
 import java.io.IOException
@@ -228,6 +229,7 @@ class MainActivity : ComponentActivity() {
                 var appliedStealthMode by remember { mutableStateOf(VpnSettings.stealthMode(context)) }
                 var transport by remember { mutableStateOf("") }
                 var billingStatus by remember { mutableStateOf<BillingStatus?>(null) }
+                var billingSettled by remember { mutableStateOf(false) }
                 var billingRefreshing by remember { mutableStateOf(false) }
                 var cancellationInProgress by remember { mutableStateOf(false) }
                 var billingError by remember { mutableStateOf<String?>(null) }
@@ -288,6 +290,7 @@ class MainActivity : ComponentActivity() {
                 fun clearLocalSessionUi() {
                     authRepo.signOut()
                     billingStatus = null
+                    billingSettled = false
                     checkoutUrl = null
                     billingError = null
                     purchaseHistoryFailed = false
@@ -351,6 +354,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             billingStatus = status
+                            billingSettled = true
                             writeCachedBillingStatus(context, user!!.accountId, status)
                             billingError = null
                             purchaseHistoryFailed = false
@@ -359,15 +363,11 @@ class MainActivity : ComponentActivity() {
                                 handleSessionExpired()
                                 return@launch
                             }
-                            // Preserve the last verified plan during a transient
-                            // network failure. It is safer and clearer than
-                            // replacing an active cached plan with an error state.
-                            val hadCachedStatus = billingStatus != null
-                            if (!hadCachedStatus) billingStatus = BillingStatus()
-                            billingError = if (!hadCachedStatus) {
-                                cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
-                            } else {
-                                null
+                            // A failed read is not a free plan. Installing the
+                            // default status makes the home say Premium required
+                            // before the account endpoint has answered.
+                            if (billingStatus == null) {
+                                billingError = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                             }
                             if (billingStatus?.payments == null) purchaseHistoryFailed = true
                         } finally {
@@ -419,10 +419,12 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(user?.accountId) {
                     if (user != null) {
-                        // Use the last verified plan for this account immediately,
-                        // then refresh it in the background without blocking the
-                        // dashboard or the Connect button.
-                        billingStatus = readCachedBillingStatus(context, user!!.accountId)
+                        // A cached free plan must not become "Premium required"
+                        // before this sign-in's status read. A cached Premium
+                        // plan can show immediately, then the read confirms it.
+                        val cached = readCachedBillingStatus(context, user!!.accountId)
+                        billingSettled = false
+                        billingStatus = cached?.takeIf { PlanEntitlement.grantsPremium(it) }
                         billingRefreshing = false
                         refreshBilling()
                         if (BuildConfig.PLAY_BILLING) {
@@ -476,6 +478,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             billingStatus = status
+                            billingSettled = true
                             writeCachedBillingStatus(context, user!!.accountId, status)
                             purchaseHistoryFailed = false
                             if (status.isPremium) {
@@ -940,7 +943,7 @@ class MainActivity : ComponentActivity() {
 
                 fun requestConnect() {
                     if (connecting || connected || reconnecting) return
-                    if (billingStatus?.isPremium != true) {
+                    if (!PlanEntitlement.grantsPremium(billingStatus)) {
                         statusMsg = "An active subscription is required. Open Plans to subscribe."
                         return
                     }
@@ -1057,7 +1060,10 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
-                            if (user != null) ensureSessionFresh()
+                            if (user != null) {
+                                ensureSessionFresh()
+                                refreshBilling()
+                            }
                             // Update lockdown status for UI without VpnService.prepare.
                             lockdownEnabled = VpnKillSwitch.isLockdownEnabled(
                                 context,
@@ -1139,6 +1145,7 @@ class MainActivity : ComponentActivity() {
                     if (statusMsg == ControlPlane.SIGN_IN_AGAIN) statusMsg = null
                     if (!fromReauth) {
                         billingStatus = null
+                        billingSettled = false
                         billingRefreshing = false
                         cancellationInProgress = false
                     }
@@ -1259,7 +1266,7 @@ class MainActivity : ComponentActivity() {
                 } else if (showShieldSettings) {
                     ShieldSettingsScreen(
                         policy = shieldPolicy,
-                        isPremium = billingStatus?.isPremium == true,
+                        isPremium = PlanEntitlement.grantsPremium(billingStatus),
                         connected = connected,
                         error = shieldError,
                         onPolicyChange = { next ->
@@ -1476,8 +1483,8 @@ class MainActivity : ComponentActivity() {
                             connecting = false
                             reconnecting = false
                         },
-                        isPremium = billingStatus?.isPremium == true,
-                        billingReady = billingStatus != null,
+                        isPremium = PlanEntitlement.grantsPremium(billingStatus),
+                        billingReady = PlanEntitlement.homeBillingReady(billingStatus, billingSettled),
                         statusMsg = statusMsg,
                         rxBytes = rxBytes,
                         txBytes = txBytes,

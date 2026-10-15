@@ -278,8 +278,8 @@ data class PurchaseHistoryItem(
 )
 
 data class BillingStatus(
-    val tier: String = "free",
-    val status: String = "active",
+    @SerializedName("tier") val tier: String = "free",
+    @SerializedName("status") val status: String = "active",
     @SerializedName("payment_method") val paymentMethod: String = "none",
     @SerializedName("plan_id") val planId: String? = null,
     @SerializedName("current_period_end") val currentPeriodEnd: String? = null,
