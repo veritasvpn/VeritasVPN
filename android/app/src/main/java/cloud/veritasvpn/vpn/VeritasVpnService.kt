@@ -72,6 +72,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             Log.w(TAG, "vpn scope: ${error.javaClass.simpleName}")
         },
     )
+    /**
+     * TLS close and OkHttp pool eviction. Not [scope]: cancelling that scope
+     * must not drop the close, and the close must never run on the main thread.
+     * A close on the main thread throws NetworkOnMainThreadException and kills
+     * the process.
+     */
+    private val socketCloseScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, error ->
+            Log.w(TAG, "socket close: ${error.javaClass.simpleName}")
+        },
+    )
     private var transitionJob: Job? = null
     private var disconnectJob: Job? = null
     private var validationJob: Job? = null
@@ -692,9 +703,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         validationJob?.cancel()
         stopStatsPolling()
         cancelStealthWork()
-        runCatching { turnUserspaceOff() }
-        closeTunKeeper()
-        runCatching { setUnderlyingNetworks(null) }
+        // wgTurnOff and the tun close stay off this thread. Socket close is
+        // network I/O, and this callback runs on the main thread.
+        socketCloseScope.launch(Dispatchers.IO) {
+            runCatching { turnUserspaceOff() }
+            closeTunKeeper()
+            runCatching { setUnderlyingNetworks(null) }
+        }
         synchronized(tunnelOpLock) {
             vpnStatePrefs().edit()
                 .remove(KEY_CONFIG)
@@ -722,13 +737,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         unregisterUnderlayWatch()
         stopStatsPolling()
         cancelStealthWork()
+        dropUnderlyingControlClient()
         // Do not turn the tunnel DOWN here when a session is still intended —
         // START_STICKY / Always-on will restart and restore from KEY_CONFIG.
+        // The close runs on [socketCloseScope], not the main thread, and not
+        // on [scope], which this method cancels next.
         if (!sessionIntended() && !holdInterface) {
-            // Main-thread teardown must not throw: an exception here kills the
-            // process and the activity disappears with it.
-            runCatching { releaseTunnelOnce(sessionGeneration) }
-            cancelStealthWork()
+            val gen = sessionGeneration
+            socketCloseScope.launch(Dispatchers.IO) {
+                runCatching { releaseTunnelOnce(gen) }
+            }
         }
         scope.cancel()
         super.onDestroy()
@@ -1757,8 +1775,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             val current = endpointCall
             endpointCall = null
             current
+        } ?: return
+        // Call.cancel closes the socket. That write crashes the process on
+        // the main thread, and onStartCommand / network callbacks run there.
+        socketCloseScope.launch(Dispatchers.IO) {
+            runCatching { call.cancel() }
         }
-        call?.cancel()
     }
 
     private fun cancelEndpointFetch() {
@@ -2356,7 +2378,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun stopStealthTransport() {
         val transport = stealthTransport
         stealthTransport = null
-        transport?.stop()
+        if (transport == null) return
+        // stop() closes the TLS socket and joins the reader. Callers include
+        // onStartCommand, so the close cannot run on this thread.
+        socketCloseScope.launch(Dispatchers.IO) {
+            runCatching { transport.stop() }
+        }
     }
 
     private fun cancelStealthWork() {
@@ -2894,26 +2921,41 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 network.getAllByName(host).toList()
             }
             if (systemDefaultNetwork()?.networkHandle != handle) {
-                created.connectionPool.evictAll()
+                retireControlClient(created)
                 return null
             }
             val previous = controlClient
             controlClient = created
             controlClientHandle = handle
             if (previous != null && previous !== created) {
-                previous.connectionPool.evictAll()
+                retireControlClient(previous)
             }
             return created
         }
     }
 
+    /**
+     * Drop the client reference here. [OkHttpClient.connectionPool] eviction
+     * closes TLS sockets, and that write throws NetworkOnMainThreadException
+     * on the thread that calls it. onStartCommand, onRevoke, onDestroy, and
+     * the network callbacks are that thread.
+     */
+    private fun retireControlClient(client: OkHttpClient?) {
+        if (client == null) return
+        socketCloseScope.launch(Dispatchers.IO) {
+            runCatching { client.dispatcher.cancelAll() }
+            runCatching { client.connectionPool.evictAll() }
+        }
+    }
+
     private fun dropUnderlyingControlClient() {
-        synchronized(controlClientLock) {
-            val previous = controlClient
+        val previous = synchronized(controlClientLock) {
+            val current = controlClient
             controlClient = null
             controlClientHandle = Long.MIN_VALUE
-            previous?.connectionPool?.evictAll()
+            current
         }
+        retireControlClient(previous)
     }
 
     private fun isUsableUnderlay(caps: NetworkCapabilities): Boolean =

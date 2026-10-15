@@ -139,7 +139,7 @@ class EndpointRefreshTest {
             EndpointRefresh.displayStatus("java.net.SocketTimeoutException"),
         )
         assertEquals(
-            "Connection timed out. Check your network and try again.",
+            EndpointRefresh.GIVE_UP_MESSAGE,
             EndpointRefresh.displayStatus("Connection timed out. Check your network and try again."),
         )
         assertEquals("Reconnecting…", EndpointRefresh.statusWhileReconnecting(null))

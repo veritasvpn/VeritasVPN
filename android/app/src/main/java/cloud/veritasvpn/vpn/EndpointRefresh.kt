@@ -302,7 +302,7 @@ object EndpointRefresh {
         val text = raw.trim()
         if (text.equals("timeout", ignoreCase = true)) return true
         if (text.equals("timed out", ignoreCase = true)) return true
-        if (text.equals("Connection timed out", ignoreCase = true)) return true
+        if (text.contains("timed out", ignoreCase = true)) return true
         if (text.contains("Exception")) return true
         if (text.startsWith("java.")) return true
         return false

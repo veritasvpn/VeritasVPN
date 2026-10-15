@@ -699,7 +699,7 @@ class MainActivity : ComponentActivity() {
                         if (connecting && !hadEstablishedSession && !stableEstablished && !awaitingVpnConsent) {
                             connecting = false
                             userWantsConnected = false
-                            statusMsg = "Connection timed out. Check your network and try again."
+                            statusMsg = EndpointRefresh.GIVE_UP_MESSAGE
                             runCatching {
                                 context.startService(
                                     Intent(context, VeritasVpnService::class.java).apply {
