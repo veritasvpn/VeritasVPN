@@ -239,6 +239,9 @@ class MainActivity : ComponentActivity() {
                 val observedBillingReturnVersion = billingReturnVersion
 
                 fun disconnectVpnService() {
+                    // Same-process activity recreate must see an ended session
+                    // before prefs flush, and must not start a system screen.
+                    VeritasVpnService.markSessionEnded()
                     context.startService(
                         Intent(context, VeritasVpnService::class.java).apply {
                             action = VeritasVpnService.ACTION_DISCONNECT
@@ -300,15 +303,14 @@ class MainActivity : ComponentActivity() {
 
                 fun noteIntentionalDisconnect() {
                     // The circle tap stays in the app. Always-on cannot be
-                    // cleared from here, and this must not open system settings.
-                    val presentation = DisconnectUi.afterCircleTap(
-                        VpnKillSwitch.isLockdownEnabled(context),
-                    )
+                    // cleared from here. Do not read lockdown with
+                    // VpnService.prepare, and do not open system settings.
+                    val presentation = DisconnectUi.afterCircleTap(lockdownEnabled)
                     showReleaseLockdown = false
                     awaitingLockdownRelease = false
                     releaseLockdownError = null
-                    if (!presentation.launchSettings) {
-                        presentation.note?.let { statusMsg = it }
+                    if (!presentation.leavesApp && !presentation.callsPrepare && !presentation.launchSettings) {
+                        statusMsg = presentation.note
                     }
                 }
 
@@ -527,7 +529,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun blockConnectForKillSwitch(): Boolean {
-                    if (VpnKillSwitch.isLockdownEnabled(context)) {
+                    if (VpnKillSwitch.isLockdownEnabled(context, vpnPrepared = true)) {
                         showKillSwitchRequired = false
                         return false
                     }
@@ -561,7 +563,7 @@ class MainActivity : ComponentActivity() {
                     if (!shouldStart) return@rememberLauncherForActivityResult
                     scope.launch {
                         val lockdownOn = withContext(Dispatchers.IO) {
-                            VpnKillSwitch.isLockdownEnabled(context)
+                            VpnKillSwitch.isLockdownEnabled(context, allowPrepare = true)
                         }
                         if (!lockdownOn) {
                             showKillSwitchBlock()
@@ -995,13 +997,20 @@ class MainActivity : ComponentActivity() {
                 val lifecycleOwner = LocalLifecycleOwner.current
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
-                        if (event == Lifecycle.Event.ON_RESUME) {
+                            if (event == Lifecycle.Event.ON_RESUME) {
                             // Some builds publish Always-on and lockdown slightly after
                             // the VPN screen closes. Re-read before leaving the modal up.
+                            // Resume must not call VpnService.prepare: that call can
+                            // revoke the tunnel or open the system consent screen.
                             val generation = ++killSwitchRecheckGeneration[0]
                             val waitingForSettings = pendingConnectAfterKillSwitch
+                            val preparedNow = connected || connecting || reconnecting ||
+                                userWantsConnected || waitingForSettings
                             scope.launch {
-                                var enabled = VpnKillSwitch.isLockdownEnabled(context)
+                                var enabled = VpnKillSwitch.isLockdownEnabled(
+                                    context,
+                                    vpnPrepared = preparedNow,
+                                )
                                 if (!enabled && waitingForSettings) {
                                     var reads = 0
                                     while (!enabled && reads < 4) {
@@ -1009,7 +1018,10 @@ class MainActivity : ComponentActivity() {
                                         delay(300)
                                         if (generation != killSwitchRecheckGeneration[0]) return@launch
                                         if (!pendingConnectAfterKillSwitch) return@launch
-                                        enabled = VpnKillSwitch.isLockdownEnabled(context)
+                                        enabled = VpnKillSwitch.isLockdownEnabled(
+                                            context,
+                                            vpnPrepared = true,
+                                        )
                                     }
                                 }
                                 if (generation != killSwitchRecheckGeneration[0]) return@launch
@@ -1022,13 +1034,19 @@ class MainActivity : ComponentActivity() {
                                     showKillSwitchRequired = true
                                 }
                                 if (awaitingLockdownRelease) {
-                                    var stillBlocking = VpnKillSwitch.isLockdownEnabled(context)
+                                    var stillBlocking = VpnKillSwitch.isLockdownEnabled(
+                                        context,
+                                        vpnPrepared = preparedNow,
+                                    )
                                     var reads = 0
                                     while (stillBlocking && reads < 4) {
                                         reads += 1
                                         delay(300)
                                         if (generation != killSwitchRecheckGeneration[0]) return@launch
-                                        stillBlocking = VpnKillSwitch.isLockdownEnabled(context)
+                                        stillBlocking = VpnKillSwitch.isLockdownEnabled(
+                                            context,
+                                            vpnPrepared = preparedNow,
+                                        )
                                     }
                                     if (generation != killSwitchRecheckGeneration[0]) return@launch
                                     if (!stillBlocking) {
@@ -1039,8 +1057,11 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             if (user != null) ensureSessionFresh()
-                            // Update lockdown status for UI
-                            lockdownEnabled = VpnKillSwitch.isLockdownEnabled(context)
+                            // Update lockdown status for UI without VpnService.prepare.
+                            lockdownEnabled = VpnKillSwitch.isLockdownEnabled(
+                                context,
+                                vpnPrepared = preparedNow,
+                            )
                             if (user != null && ReconnectDecisions.shouldActivityReconnect(
                                     userWantsConnected = userWantsConnected,
                                     connected = connected,

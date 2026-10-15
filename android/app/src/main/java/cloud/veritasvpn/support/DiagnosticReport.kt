@@ -17,6 +17,7 @@ data class DiagnosticReport(
     val peerCheck: String = "—",
     val peerGoneAt: String = "—",
     val reprovision: String = "attempts=0",
+    val roamLog: String = "—",
 ) {
     fun versionLabel(): String =
         if (versionCode.isBlank()) "v$versionName" else "v$versionName ($versionCode)"
@@ -32,6 +33,7 @@ private val ENDPOINT = Regex(
     """^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?|(?:\d{1,3}\.){3}\d{1,3}):(\d{1,5})$"""
 )
 private val VERSION_NAME = Regex("""^[0-9A-Za-z][0-9A-Za-z._+-]{0,31}$""")
+private val ROAM_IPV4 = Regex("""(?:\d{1,3}\.){3}\d{1,3}""")
 private val PROGRESS_STATUS = Regex(
     """(?i)^(restoring|connecting|reconnecting|disconnecting|creating secure|establishing)\b"""
 )
@@ -162,6 +164,7 @@ fun buildDiagnosticReport(
     peerCheck: String = "—",
     peerGoneAt: String = "—",
     reprovision: String = "attempts=0",
+    roamLog: String = "—",
 ): DiagnosticReport {
     val safeError = sanitizeError(lastError)
     return DiagnosticReport(
@@ -177,7 +180,26 @@ fun buildDiagnosticReport(
         peerCheck = sanitizeStatusFact(peerCheck, "—"),
         peerGoneAt = sanitizeStatusFact(peerGoneAt, "—"),
         reprovision = sanitizeStatusFact(reprovision, "attempts=0"),
+        roamLog = sanitizeRoamLog(roamLog),
     )
+}
+
+/**
+ * Roam steps only. A line with an address, a key, or a token is dropped.
+ * The public endpoint field above is unchanged.
+ */
+fun sanitizeRoamLog(raw: String?): String {
+    val text = raw?.trim().orEmpty()
+    if (text.isEmpty() || text == "—") return "—"
+    val kept = text.lineSequence().map { it.trim() }.filter { line ->
+        line.isNotEmpty() &&
+            line.length <= 160 &&
+            !ROAM_IPV4.containsMatchIn(line) &&
+            !SECRET_MARKER.containsMatchIn(line) &&
+            !WG_KEY.containsMatchIn(line) &&
+            !line.contains("://")
+    }.take(40).toList()
+    return if (kept.isEmpty()) "—" else kept.joinToString("\n")
 }
 
 /** A diagnostic fact that is only a status word, a code, or an age. */
@@ -221,7 +243,9 @@ fun formatDiagnosticReport(report: DiagnosticReport): String = buildString {
     append("Peer gone at: ")
     appendLine(report.peerGoneAt)
     append("Re-provision: ")
-    append(report.reprovision)
+    appendLine(report.reprovision)
+    appendLine("Roam:")
+    append(report.roamLog)
 }.let { text ->
     if (SECRET_MARKER.containsMatchIn(text) || WG_KEY.containsMatchIn(text) || text.contains("[Interface]")) {
         "VeritasVPN diagnostic report\nLast error: details redacted"

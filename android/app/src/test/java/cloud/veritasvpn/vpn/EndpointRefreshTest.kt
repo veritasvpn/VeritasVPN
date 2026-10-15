@@ -164,6 +164,74 @@ class EndpointRefreshTest {
     }
 
     @Test
+    fun homeLanWifiToCellularChoosesThePublicEndpoint() {
+        val lan = "192.168.0.6:51820"
+        val wan = "203.0.113.10:443"
+        val cellular = listOf("10.64.1.8")
+
+        // The server still says LAN because the read left over home Wi-Fi or the tunnel.
+        val stale = EndpointRefresh.chooseForUnderlay(
+            advertised = lan,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = cellular,
+        )
+        assertEquals(wan, stale?.udpEndpoint)
+        assertEquals("public", stale?.kind)
+
+        val storedOnly = EndpointRefresh.chooseForUnderlay(
+            advertised = null,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = cellular,
+        )
+        assertEquals(wan, storedOnly?.udpEndpoint)
+        assertEquals("public", storedOnly?.kind)
+
+        // A different private /24 is not the node LAN.
+        val otherPrivate = EndpointRefresh.chooseForUnderlay(
+            advertised = lan,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = listOf("192.168.1.20"),
+        )
+        assertEquals(wan, otherPrivate?.udpEndpoint)
+
+        assertNull(
+            EndpointRefresh.chooseForUnderlay(
+                advertised = lan,
+                lan = lan,
+                wan = null,
+                underlayIpv4s = cellular,
+            ),
+        )
+        assertFalse(EndpointRefresh.keepsPrivateEndpoint(lan, cellular))
+        assertTrue(EndpointRefresh.keepsPrivateEndpoint(lan, listOf("192.168.0.10")))
+        assertTrue(EndpointRefresh.keepsPrivateEndpoint(wan, cellular))
+
+        val stillHome = EndpointRefresh.chooseForUnderlay(
+            advertised = wan,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = listOf("192.168.0.10"),
+        )
+        assertEquals(lan, stillHome?.udpEndpoint)
+        assertEquals("LAN", stillHome?.kind)
+
+        val stealth = EndpointRefresh.chooseForUnderlay(
+            advertised = lan,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = cellular,
+            stealth = true,
+            stealthEndpoint = "192.168.0.6:8443",
+        )
+        assertEquals(wan, stealth?.udpEndpoint)
+        assertEquals("203.0.113.10:8443", stealth?.stealthEndpoint)
+        assertEquals("stealth", stealth?.kind)
+    }
+
+    @Test
     fun serviceReResolvesInsteadOfProbingThePreviousEndpoint() {
         val source = serviceSource()
             .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
@@ -181,6 +249,9 @@ class EndpointRefreshTest {
         assertTrue(source.contains("RoamRecovery.installAfterFailedSwaps"))
         assertTrue(source.contains("rebuildKeepingKillSwitch"))
         assertTrue(source.contains("dropUnderlyingControlClient"))
+        assertTrue(source.contains("chooseForUnderlay"))
+        assertTrue(source.contains("RoamLog.record"))
+        assertTrue(source.contains("markSessionEnded"))
         assertFalse(source.contains("recreateTun = true"))
         val rebuildStart = source.indexOf("fun rebuildKeepingKillSwitch")
         val rebuildEnd = source.indexOf("private fun rebindLiveTunnel", rebuildStart)

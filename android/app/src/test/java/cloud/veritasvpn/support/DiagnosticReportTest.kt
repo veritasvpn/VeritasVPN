@@ -21,6 +21,7 @@ class DiagnosticReportTest {
         assertTrue(text.contains("Handshake: 12s ago"))
         assertTrue(text.contains("Endpoint: 203.0.113.8:443"))
         assertTrue(text.contains("Last error: none"))
+        assertTrue(text.contains("Roam:"))
         assertFalse(text.contains("PrivateKey"))
         assertFalse(text.contains("[Interface]"))
     }
@@ -140,6 +141,20 @@ class DiagnosticReportTest {
     }
 
     @Test
+    fun roamLogIsShareableWithoutAddresses() {
+        val text = sample(
+            roamLog = "handle 10 -> 20\nendpoint class=public\nendpoint 192.168.0.6:51820\nhandshake ok\ntoken=abc",
+        ).text()
+        assertTrue(text.contains("Roam:"))
+        assertTrue(text.contains("handle 10 -> 20"))
+        assertTrue(text.contains("endpoint class=public"))
+        assertTrue(text.contains("handshake ok"))
+        assertFalse(text.contains("192.168.0.6"))
+        assertFalse(text.contains("token"))
+        assertTrue(text.contains("Endpoint: 203.0.113.8:443"))
+    }
+
+    @Test
     fun progressLinesAreNotStoredAsErrors() {
         assertFalse(isRecordableError(null))
         assertFalse(isRecordableError("Connecting…"))
@@ -173,6 +188,7 @@ class DiagnosticReportTest {
         peerCheck: String = "—",
         peerGoneAt: String = "—",
         reprovision: String = "attempts=0",
+        roamLog: String = "—",
     ) = buildDiagnosticReport(
         versionName = "0.2.88",
         versionCode = "72",
@@ -190,5 +206,6 @@ class DiagnosticReportTest {
         peerCheck = peerCheck,
         peerGoneAt = peerGoneAt,
         reprovision = reprovision,
+        roamLog = roamLog,
     )
 }

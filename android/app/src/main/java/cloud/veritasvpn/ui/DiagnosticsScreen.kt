@@ -36,6 +36,7 @@ import cloud.veritasvpn.support.SupportLinks
 import cloud.veritasvpn.support.buildDiagnosticReport
 import cloud.veritasvpn.support.formatHandshakeAge
 import cloud.veritasvpn.vpn.PeerCheckLog
+import cloud.veritasvpn.vpn.RoamLog
 import cloud.veritasvpn.vpn.VpnSettings
 import cloud.veritasvpn.ui.theme.Cyan
 import cloud.veritasvpn.ui.theme.CyanHover
@@ -110,6 +111,7 @@ fun DiagnosticsScreen(
                 recovery.reprovisionOutcome,
                 recovery.reprovisionCode,
             ),
+            roamLog = RoamLog.snapshot(),
         ).text()
     }
 
@@ -131,7 +133,7 @@ fun DiagnosticsScreen(
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    "Connection state, app version, and the public endpoint. Private keys, preshared keys, and auth tokens are not included.",
+                    "Connection state, app version, the public endpoint, and recent roam steps. Roam steps name the endpoint class only. Private keys, addresses, and auth tokens are not included.",
                     color = PaperMuted,
                     style = MaterialTheme.typography.bodyMedium,
                 )

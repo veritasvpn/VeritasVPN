@@ -68,6 +68,94 @@ object EndpointRefresh {
     fun freshEndpoint(serverEndpoint: String?): String? = blankToNull(serverEndpoint)
 
     /**
+     * Endpoint to install for the network the phone is on now.
+     *
+     * A private LAN endpoint is kept only when an underlay address shares its
+     * /24. Leaving that LAN installs the public endpoint, including when the
+     * server still advertises the LAN address because the read left over the
+     * old network or through the tunnel. The previous private endpoint is
+     * never a fallback, and no port is invented.
+     */
+    data class UnderlayChoice(
+        val udpEndpoint: String,
+        val stealthEndpoint: String?,
+        val kind: String,
+    )
+
+    fun chooseForUnderlay(
+        advertised: String?,
+        lan: String?,
+        wan: String?,
+        underlayIpv4s: List<String>,
+        stealth: Boolean = false,
+        stealthEndpoint: String? = null,
+    ): UnderlayChoice? {
+        val advertisedEp = blankToNull(advertised)
+        val lanEp = blankToNull(lan) ?: advertisedEp?.takeIf { isPrivateEndpoint(it) }
+        val wanEp = blankToNull(wan)?.takeUnless { isPrivateEndpoint(it) }
+            ?: advertisedEp?.takeUnless { isPrivateEndpoint(it) }
+        val onLan = lanEp != null &&
+            isPrivateEndpoint(lanEp) &&
+            underlayIpv4s.any { EndpointSelector.sameIpv4Slash24(it, EndpointSelector.host(lanEp)) }
+        val udp = if (onLan) lanEp else wanEp
+        if (udp == null) return null
+        if (!stealth) {
+            val kind = if (isPrivateEndpoint(udp)) "LAN" else "public"
+            return UnderlayChoice(udp, null, kind)
+        }
+        val chosenStealth = chooseStealth(blankToNull(stealthEndpoint), lanEp, wanEp, onLan) ?: return null
+        return UnderlayChoice(udp, chosenStealth, "stealth")
+    }
+
+    /**
+     * True when [endpoint] may stay installed on this underlay. A private
+     * address stays only on its own LAN. An empty endpoint is not private.
+     */
+    fun keepsPrivateEndpoint(endpoint: String?, underlayIpv4s: List<String>): Boolean {
+        val ep = blankToNull(endpoint) ?: return true
+        if (!isPrivateEndpoint(ep)) return true
+        val host = EndpointSelector.host(ep)
+        return underlayIpv4s.any { EndpointSelector.sameIpv4Slash24(it, host) }
+    }
+
+    private fun chooseStealth(
+        stealth: String?,
+        lan: String?,
+        wan: String?,
+        onLan: Boolean,
+    ): String? {
+        if (stealth == null) return null
+        if (onLan && lan != null && isPrivateEndpoint(lan)) {
+            return withHost(stealth, EndpointSelector.host(lan)) ?: stealth.takeIf { isPrivateEndpoint(it) }
+        }
+        if (!isPrivateEndpoint(stealth)) return stealth
+        val wanHost = wan?.let { EndpointSelector.host(it) }?.takeUnless { EndpointSelector.isRfc1918(it) }
+            ?: return null
+        if (lan != null && EndpointSelector.host(stealth) == EndpointSelector.host(lan)) {
+            return withHost(stealth, wanHost)
+        }
+        return null
+    }
+
+    private fun isPrivateEndpoint(endpoint: String): Boolean =
+        EndpointSelector.isRfc1918(EndpointSelector.host(endpoint))
+
+    private fun withHost(endpoint: String, host: String): String? {
+        val port = portOf(endpoint) ?: return null
+        if (host.isBlank() || host.contains(':')) return null
+        return "$host:$port"
+    }
+
+    private fun portOf(endpoint: String): String? {
+        val colon = endpoint.lastIndexOf(':')
+        if (colon <= 0 || colon == endpoint.lastIndex) return null
+        val port = endpoint.substring(colon + 1)
+        val n = port.toIntOrNull() ?: return null
+        if (n !in 1..65535) return null
+        return port
+    }
+
+    /**
      * Connected when the backend has a handshake newer than the network change.
      * An older handshake from the previous network does not count, and the
      * decision does not wait for a timer to expire.
