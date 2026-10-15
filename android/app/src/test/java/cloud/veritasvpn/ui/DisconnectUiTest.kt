@@ -98,6 +98,25 @@ class DisconnectUiTest {
         assertTrue(teardown.contains("markSessionEnded"))
         assertTrue(teardown.contains("releaseTunnelOnce"))
 
+        val release = slice(service, "fun releaseTunnelOnce", "fun turnUserspaceOff()")
+        assertFalse(release.contains("setState"))
+        assertFalse(release.contains("stopSelf("))
+        assertTrue(release.contains("turnUserspaceOffLocked"))
+
+        val off = slice(service, "fun turnUserspaceOffLocked", "fun swapTunKeeper")
+        assertTrue(off.contains("wgTurnOff"))
+        assertFalse(off.contains("setState"))
+        assertFalse(off.contains("stopSelf("))
+
+        val stateChange = slice(service, "fun onStateChange", "fun startStatsPolling")
+        assertFalse(stateChange.contains("setState"))
+        assertFalse(stateChange.contains("applyBackendState"))
+        assertTrue(stateChange.contains("turnUserspaceOff"))
+        assertTrue(stateChange.contains("runCatching { stopForeground"))
+
+        assertFalse(service.contains("System.exit"))
+        assertFalse(service.contains("killProcess"))
+
         val killSwitch = kotlinSource("VpnKillSwitch.kt")
         val guard = killSwitch.indexOf("if (!allowPrepare) return false")
         val prepare = killSwitch.indexOf("VpnService.prepare")

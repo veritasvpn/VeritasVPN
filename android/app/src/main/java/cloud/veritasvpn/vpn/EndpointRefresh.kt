@@ -21,6 +21,13 @@ object EndpointRefresh {
     /** Upper bound for one attempt. Connected is published as soon as stats move, not when this ends. */
     const val HANDSHAKE_WAIT_MS = 1_200L
 
+    /**
+     * The peer GET runs beside the socket swap. It must not use the old 4s
+     * budget: a slow read was holding the first handshake.
+     */
+    const val PEER_READ_TIMEOUT_SECONDS = 2L
+    const val PEER_READ_BUDGET_MS = 2_000L
+
     const val RETRY_DELAY_MS = 1_000L
     const val RETRIES_BEFORE_MESSAGE = 3
 
@@ -201,8 +208,26 @@ object EndpointRefresh {
     fun abandon(disconnectRequested: Boolean, attempt: Flight, latest: Flight?): Boolean =
         disconnectRequested || !stillCurrent(attempt, latest)
 
-    fun noticeAfter(failures: Int): String? =
-        if (failures >= RETRIES_BEFORE_MESSAGE) GIVE_UP_MESSAGE else null
+    /**
+     * Shown only after a socket swap and a full rebuild have both been tried,
+     * and only when that recovery is no longer pending. A peer-read miss
+     * alone stays on Reconnecting.
+     */
+    fun noticeAfter(
+        failures: Int,
+        rebuildTried: Boolean = false,
+        recoveryPending: Boolean = false,
+    ): String? {
+        if (!RoamRecovery.failureEligible(
+                socketSwapTried = failures > 0,
+                rebuildTried = rebuildTried,
+                recoveryPending = recoveryPending,
+            )
+        ) {
+            return null
+        }
+        return if (failures >= RETRIES_BEFORE_MESSAGE) GIVE_UP_MESSAGE else null
+    }
 
     /**
      * Raw timeout and exception text never reach the UI. A sentence that

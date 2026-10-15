@@ -32,6 +32,17 @@ object RoamRecovery {
     fun installAfterFailedSwaps(failedSocketSwaps: Int): Install =
         if (failedSocketSwaps <= 0) Install.SOCKET_SWAP else Install.FULL_REBUILD
 
+    /**
+     * The give-up line is not a status update for a round that is still
+     * running. A socket-swap miss or a peer-read miss does not count, and
+     * the message stays hidden until recovery has actually stopped.
+     */
+    fun failureEligible(
+        socketSwapTried: Boolean,
+        rebuildTried: Boolean,
+        recoveryPending: Boolean,
+    ): Boolean = socketSwapTried && rebuildTried && !recoveryPending
+
     fun plan(
         previousHandle: Long?,
         currentHandle: Long?,

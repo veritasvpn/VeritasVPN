@@ -57,5 +57,26 @@ class RoamRecoveryTest {
         )
         assertEquals(RoamRecovery.Install.FULL_REBUILD, afterFailedSwap.install)
         assertTrue(afterFailedSwap.readPeerOnCurrentNetwork)
+        assertFalse(
+            RoamRecovery.failureEligible(
+                socketSwapTried = true,
+                rebuildTried = false,
+                recoveryPending = false,
+            ),
+        )
+        assertFalse(
+            RoamRecovery.failureEligible(
+                socketSwapTried = true,
+                rebuildTried = true,
+                recoveryPending = true,
+            ),
+        )
+        assertTrue(
+            RoamRecovery.failureEligible(
+                socketSwapTried = true,
+                rebuildTried = true,
+                recoveryPending = false,
+            ),
+        )
     }
 }

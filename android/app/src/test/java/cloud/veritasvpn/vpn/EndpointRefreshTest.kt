@@ -96,7 +96,42 @@ class EndpointRefreshTest {
     fun failedRetriesShowAClearMessageInsteadOfARawTimeout() {
         assertNull(EndpointRefresh.noticeAfter(0))
         assertNull(EndpointRefresh.noticeAfter(2))
-        assertEquals(EndpointRefresh.GIVE_UP_MESSAGE, EndpointRefresh.noticeAfter(3))
+        assertNull(EndpointRefresh.noticeAfter(3))
+        assertNull(EndpointRefresh.noticeAfter(3, rebuildTried = false, recoveryPending = false))
+        assertNull(EndpointRefresh.noticeAfter(3, rebuildTried = true, recoveryPending = true))
+        assertNull(EndpointRefresh.noticeAfter(2, rebuildTried = true, recoveryPending = false))
+        assertEquals(
+            EndpointRefresh.GIVE_UP_MESSAGE,
+            EndpointRefresh.noticeAfter(3, rebuildTried = true, recoveryPending = false),
+        )
+        assertFalse(
+            RoamRecovery.failureEligible(
+                socketSwapTried = true,
+                rebuildTried = false,
+                recoveryPending = false,
+            ),
+        )
+        assertFalse(
+            RoamRecovery.failureEligible(
+                socketSwapTried = false,
+                rebuildTried = true,
+                recoveryPending = false,
+            ),
+        )
+        assertFalse(
+            RoamRecovery.failureEligible(
+                socketSwapTried = true,
+                rebuildTried = true,
+                recoveryPending = true,
+            ),
+        )
+        assertTrue(
+            RoamRecovery.failureEligible(
+                socketSwapTried = true,
+                rebuildTried = true,
+                recoveryPending = false,
+            ),
+        )
         assertEquals(EndpointRefresh.GIVE_UP_MESSAGE, EndpointRefresh.displayStatus("timeout"))
         assertEquals(EndpointRefresh.GIVE_UP_MESSAGE, EndpointRefresh.displayStatus("Connection timed out"))
         assertEquals(
@@ -135,6 +170,8 @@ class EndpointRefreshTest {
         )
         assertTrue(EndpointRefresh.DEBOUNCE_MS <= 250L)
         assertTrue(EndpointRefresh.HANDSHAKE_WAIT_MS <= 1_500L)
+        assertTrue(EndpointRefresh.PEER_READ_TIMEOUT_SECONDS <= 2L)
+        assertTrue(EndpointRefresh.PEER_READ_BUDGET_MS <= 2_000L)
         assertFalse(EndpointRefresh.establishesNewTunOnRoam())
     }
 
@@ -252,6 +289,12 @@ class EndpointRefreshTest {
         assertTrue(source.contains("chooseForUnderlay"))
         assertTrue(source.contains("RoamLog.record"))
         assertTrue(source.contains("markSessionEnded"))
+        assertTrue(source.contains("async { fetchFreshEndpoint"))
+        assertTrue(source.contains("HandshakeKick.withoutKeepalive"))
+        assertTrue(source.contains("kickHandshakeAfterProtect"))
+        assertTrue(source.contains("recoveryPending = true"))
+        assertTrue(source.contains("installSwapThenRebuild"))
+        assertTrue(source.contains("turnUserspaceOff"))
         assertFalse(source.contains("recreateTun = true"))
         val rebuildStart = source.indexOf("fun rebuildKeepingKillSwitch")
         val rebuildEnd = source.indexOf("private fun rebindLiveTunnel", rebuildStart)
