@@ -74,6 +74,12 @@ class DisconnectUiTest {
         assertFalse(DisconnectUi.stopService(userEndedSession = true, systemRevoke = true))
         assertFalse(DisconnectUi.stopService(userEndedSession = true, systemRevoke = false))
         assertFalse(DisconnectUi.stopService(userEndedSession = false, systemRevoke = true))
+        assertTrue(DisconnectUi.keepVpnInterface(lockdownEnabled = true))
+        assertFalse(DisconnectUi.keepVpnInterface(lockdownEnabled = false))
+        assertFalse(DisconnectUi.circleTapLine(lockdownEnabled = true).contains("finish=1"))
+        assertTrue(DisconnectUi.circleTapLine(lockdownEnabled = false).contains("finish=0"))
+        assertTrue(DisconnectUi.circleTapLine(lockdownEnabled = true).contains("settings=0"))
+        assertTrue(DisconnectUi.circleTapLine(lockdownEnabled = true).contains("prepare=0"))
     }
 
     @Test
@@ -92,6 +98,7 @@ class DisconnectUiTest {
         }
         assertTrue(disconnect.contains("markSessionEnded"))
         assertTrue(circle.contains("noteIntentionalDisconnect()"))
+        assertTrue(circle.contains("CircleDisconnect.run"))
         assertTrue(note.contains("DisconnectUi.afterCircleTap"))
 
         val service = kotlinSource("VeritasVpnService.kt")
@@ -104,16 +111,40 @@ class DisconnectUiTest {
         assertFalse(teardown.contains("stopSelf("))
         assertTrue(teardown.contains("markSessionEnded"))
         assertTrue(teardown.contains("releaseTunnelOnce"))
+        assertTrue(teardown.contains("keepVpnInterface"))
+        assertTrue(teardown.contains("interface=kept"))
+        assertTrue(teardown.contains("joinBeforeTurnOff"))
+        assertTrue(teardown.contains("disconnect roam-joined"))
+        assertTrue(teardown.contains("recordCrash"))
+        assertFalse(teardown.contains("throw e"))
+        assertTrue(teardown.indexOf("joinBeforeTurnOff") < teardown.indexOf("releaseTunnelOnce"))
+        assertTrue(teardown.indexOf("joinBeforeTurnOff") < teardown.indexOf("synchronized(tunnelOpLock)"))
 
         val release = slice(service, "fun releaseTunnelOnce", "fun turnUserspaceOff()")
         assertFalse(release.contains("setState"))
         assertFalse(release.contains("stopSelf("))
         assertTrue(release.contains("turnUserspaceOffLocked"))
+        assertTrue(release.contains("keepInterface"))
 
         val off = slice(service, "fun turnUserspaceOffLocked", "fun swapTunKeeper")
         assertTrue(off.contains("wgTurnOff"))
         assertFalse(off.contains("setState"))
         assertFalse(off.contains("stopSelf("))
+        val cleared = off.indexOf("setInt(backend, -1)")
+        val nativeOff = off.indexOf("wgTurnOff")
+        assertTrue(cleared >= 0 && nativeOff > cleared)
+
+        val rebind = slice(service, "fun rebindLiveTunnel", "fun userspaceConfigOrThrow")
+        assertTrue(rebind.contains("turnOffCurrentHandleLocked()"))
+        assertTrue(rebind.indexOf("turnOffCurrentHandleLocked()") < rebind.indexOf("wgTurnOn"))
+        val between = rebind.substring(
+            rebind.indexOf("turnOffCurrentHandleLocked()"),
+            rebind.indexOf("wgTurnOn"),
+        )
+        assertTrue(between.contains("sessionIntended()"))
+
+        val adapt = slice(service, "fun scheduleUnderlayAdapt", "fun adaptUnderlay")
+        assertTrue(adapt.contains("gate !== disconnectJob"))
 
         val stateChange = slice(service, "fun onStateChange", "fun startStatsPolling")
         assertFalse(stateChange.contains("setState"))
@@ -133,7 +164,9 @@ class DisconnectUiTest {
         assertFalse(revoke.contains("super.onRevoke"))
         assertFalse(revoke.contains("startActivity"))
         assertFalse(revoke.contains("VpnService.prepare"))
-        assertTrue(revoke.contains("runCatching { stopForeground"))
+        val userEnded = revoke.substring(0, revoke.indexOf("sessionGeneration++"))
+        assertFalse(userEnded.contains("stopForeground"))
+        assertFalse(userEnded.contains("stopSelf("))
 
         val connectGiveUp = slice(service, "Connect retry failed", "ACTION_DISCONNECT")
         assertFalse(connectGiveUp.contains("stopSelf("))

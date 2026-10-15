@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import cloud.veritasvpn.support.DiagnosticLog
 import cloud.veritasvpn.support.DiagnosticSnapshot
 import cloud.veritasvpn.support.SupportLinks
 import cloud.veritasvpn.support.buildDiagnosticReport
@@ -112,6 +113,7 @@ fun DiagnosticsScreen(
                 recovery.reprovisionCode,
             ),
             roamLog = RoamLog.snapshot(),
+            processLog = DiagnosticLog.snapshot(),
         ).text()
     }
 
@@ -133,7 +135,7 @@ fun DiagnosticsScreen(
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    "Connection state, app version, the public endpoint, and recent roam steps. Roam steps name the endpoint class only. Private keys, addresses, and auth tokens are not included.",
+                    "Connection state, app version, the public endpoint, recent roam steps, and the last process exit. Crash lines are the exception class and frames from this app. Private keys, addresses, and auth tokens are not included.",
                     color = PaperMuted,
                     style = MaterialTheme.typography.bodyMedium,
                 )

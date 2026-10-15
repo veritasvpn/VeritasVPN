@@ -22,6 +22,7 @@ class DiagnosticReportTest {
         assertTrue(text.contains("Endpoint: 203.0.113.8:443"))
         assertTrue(text.contains("Last error: none"))
         assertTrue(text.contains("Roam:"))
+        assertTrue(text.contains("Process:"))
         assertFalse(text.contains("PrivateKey"))
         assertFalse(text.contains("[Interface]"))
     }
@@ -164,6 +165,16 @@ class DiagnosticReportTest {
     }
 
     @Test
+    fun processLogDropsAddresses() {
+        val text = sample(
+            processLog = "exit proc=main reason=CRASH importance=100 ts=10 desc=none\nframe cloud.veritasvpn.MainActivity.onCreate MainActivity.kt:10\nexit proc=main reason=CRASH importance=100 ts=10 desc=198.51.100.9",
+        ).text()
+        assertTrue(text.contains("reason=CRASH"))
+        assertTrue(text.contains("frame cloud.veritasvpn.MainActivity.onCreate MainActivity.kt:10"))
+        assertFalse(text.contains("198.51.100.9"))
+    }
+
+    @Test
     fun handshakeAgeUsesTheClock() {
         val now = 1_700_000_060_000L
         assertEquals("—", formatHandshakeAge(0L, now))
@@ -189,6 +200,7 @@ class DiagnosticReportTest {
         peerGoneAt: String = "—",
         reprovision: String = "attempts=0",
         roamLog: String = "—",
+        processLog: String = "—",
     ) = buildDiagnosticReport(
         versionName = "0.2.88",
         versionCode = "72",
@@ -207,5 +219,6 @@ class DiagnosticReportTest {
         peerGoneAt = peerGoneAt,
         reprovision = reprovision,
         roamLog = roamLog,
+        processLog = processLog,
     )
 }

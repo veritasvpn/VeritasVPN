@@ -37,6 +37,7 @@ import cloud.veritasvpn.support.SupportLinks
 import cloud.veritasvpn.support.isRecordableError
 import cloud.veritasvpn.support.sanitizeError
 import cloud.veritasvpn.ui.AuthScreen
+import cloud.veritasvpn.ui.CircleDisconnect
 import cloud.veritasvpn.ui.SignInAgainSignal
 import cloud.veritasvpn.vpn.ControlPlane
 import cloud.veritasvpn.vpn.EndpointRefresh
@@ -1415,17 +1416,19 @@ class MainActivity : ComponentActivity() {
                         connecting = connecting,
                         onConnect = { requestConnect() },
                         onDisconnect = {
-                            userWantsConnected = false
-                            hadEstablishedSession = false
-                            cancelReconnect()
-                            signInAgain = false
-                            awaitingAuthClear = false
-                            reauthenticate = false
-                            statusMsg = null
-                            val disconnectedPeerId = peerIdForDisconnect()
-                            disconnectVpnService()
-                            deletePeerBestEffort(disconnectedPeerId)
-                            noteIntentionalDisconnect()
+                            CircleDisconnect.run(lockdownEnabled) {
+                                userWantsConnected = false
+                                hadEstablishedSession = false
+                                cancelReconnect()
+                                signInAgain = false
+                                awaitingAuthClear = false
+                                reauthenticate = false
+                                statusMsg = null
+                                val disconnectedPeerId = peerIdForDisconnect()
+                                disconnectVpnService()
+                                deletePeerBestEffort(disconnectedPeerId)
+                                noteIntentionalDisconnect()
+                            }
                         },
                         onSignIn = { reauthenticate = true },
                         onSignOut = { performLocalSignOut() },

@@ -18,6 +18,7 @@ data class DiagnosticReport(
     val peerGoneAt: String = "—",
     val reprovision: String = "attempts=0",
     val roamLog: String = "—",
+    val processLog: String = "—",
 ) {
     fun versionLabel(): String =
         if (versionCode.isBlank()) "v$versionName" else "v$versionName ($versionCode)"
@@ -165,6 +166,7 @@ fun buildDiagnosticReport(
     peerGoneAt: String = "—",
     reprovision: String = "attempts=0",
     roamLog: String = "—",
+    processLog: String = "—",
 ): DiagnosticReport {
     val safeError = sanitizeError(lastError)
     return DiagnosticReport(
@@ -181,6 +183,7 @@ fun buildDiagnosticReport(
         peerGoneAt = sanitizeStatusFact(peerGoneAt, "—"),
         reprovision = sanitizeStatusFact(reprovision, "attempts=0"),
         roamLog = sanitizeRoamLog(roamLog),
+        processLog = sanitizeProcessLog(processLog),
     )
 }
 
@@ -198,6 +201,24 @@ fun sanitizeRoamLog(raw: String?): String {
             !SECRET_MARKER.containsMatchIn(line) &&
             !WG_KEY.containsMatchIn(line) &&
             !line.contains("://")
+    }.take(40).toList()
+    return if (kept.isEmpty()) "—" else kept.joinToString("\n")
+}
+
+/**
+ * Exit reasons and crash frames. A line with an address is dropped.
+ */
+fun sanitizeProcessLog(raw: String?): String {
+    val text = raw?.trim().orEmpty()
+    if (text.isEmpty() || text == "—") return "—"
+    val kept = text.lineSequence().map { it.trim() }.filter { line ->
+        line.isNotEmpty() &&
+            line.length <= 160 &&
+            !ROAM_IPV4.containsMatchIn(line) &&
+            !SECRET_MARKER.containsMatchIn(line) &&
+            !WG_KEY.containsMatchIn(line) &&
+            !line.contains("://") &&
+            line.all { it.isLetterOrDigit() || it == ' ' || it in "=._\$:-" }
     }.take(40).toList()
     return if (kept.isEmpty()) "—" else kept.joinToString("\n")
 }
@@ -245,7 +266,9 @@ fun formatDiagnosticReport(report: DiagnosticReport): String = buildString {
     append("Re-provision: ")
     appendLine(report.reprovision)
     appendLine("Roam:")
-    append(report.roamLog)
+    appendLine(report.roamLog)
+    appendLine("Process:")
+    append(report.processLog)
 }.let { text ->
     if (SECRET_MARKER.containsMatchIn(text) || WG_KEY.containsMatchIn(text) || text.contains("[Interface]")) {
         "VeritasVPN diagnostic report\nLast error: details redacted"

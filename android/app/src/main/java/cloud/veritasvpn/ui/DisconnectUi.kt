@@ -35,4 +35,14 @@ object DisconnectUi {
         @Suppress("UNUSED_PARAMETER") userEndedSession: Boolean,
         @Suppress("UNUSED_PARAMETER") systemRevoke: Boolean,
     ): Boolean = false
+
+    /**
+     * Closing the VPN interface while Always-on lockdown is on makes the
+     * system take this task off screen. Keep the interface up in that case.
+     * With lockdown off, closing it does not leave the app.
+     */
+    fun keepVpnInterface(lockdownEnabled: Boolean): Boolean = lockdownEnabled
+
+    fun circleTapLine(lockdownEnabled: Boolean): String =
+        "ui circle-tap lockdown=${if (lockdownEnabled) 1 else 0} finish=0 settings=0 prepare=0"
 }

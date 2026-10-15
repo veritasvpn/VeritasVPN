@@ -98,6 +98,7 @@ object DiagnosticSnapshot {
                 recovery?.reprovisionCode ?: -1,
             ),
             roamLog = RoamLog.snapshot(),
+            processLog = DiagnosticLog.snapshot(),
         )
     }
 }

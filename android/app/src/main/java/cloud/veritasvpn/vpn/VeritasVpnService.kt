@@ -38,6 +38,8 @@ import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.auth.ControlAccess
 import cloud.veritasvpn.auth.ControlRefresh
 import cloud.veritasvpn.secure.SecurePrefs
+import cloud.veritasvpn.support.DiagnosticLog
+import cloud.veritasvpn.ui.DisconnectUi
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Response
@@ -88,6 +90,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     @Volatile private var tunKeeper: ParcelFileDescriptor? = null
     /** One teardown per disconnect. A second DOWN on the same fds can abort the process. */
     @Volatile private var tunnelReleased = false
+    /** Always-on lockdown: the tun stays open so the system does not drop this task. */
+    @Volatile private var holdInterface = false
     @Volatile private var stealthTransport: StealthTransport? = null
     @Volatile private var activeTransport: String = ""
     @Volatile private var lastNotificationText: String = "Connecting…"
@@ -251,6 +255,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             ACTION_CONNECT -> {
                 markSessionStarted()
                 tunnelReleased = false
+                holdInterface = false
                 natKeepaliveJob?.cancel()
                 val config = intent.getStringExtra(EXTRA_CONFIG) ?: return START_STICKY
                 val endpointLan = intent.getStringExtra(EXTRA_ENDPOINT_LAN).orEmpty()
@@ -412,6 +417,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 // is set restarts this service and, on some builds, takes the
                 // task off screen. The tunnel and the notification still go away.
                 val disconnectGen = ++sessionGeneration
+                // Snapshot before any cancel nulls the job fields. wgTurnOff
+                // while a roam rebuild is inside wgTurnOn kills the process.
+                val pendingTunnelJobs = tunnelJobs()
                 markSessionEnded()
                 VpnSettings.clearSession(this)
                 VpnSettings.clearPeerGoneAt(this)
@@ -439,15 +447,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 rebuildDefaultHandle = Long.MIN_VALUE
                 controlSignedOut = false
                 dropUnderlyingControlClient()
-                adaptJob?.cancel()
-                healthJob?.cancel()
-                cancelPeerRecovery()
-                restoreJob?.cancel()
-                transitionJob?.cancel()
-                disconnectJob?.cancel()
-                natKeepaliveJob?.cancel()
+                cancelTunnelJobs()
                 disconnectJob = scope.launch {
+                    var keepInterface = true
                     try {
+                        // Join off the tunnel lock. The roam job holds that
+                        // lock across the native call; joining it here waits
+                        // until that call has returned.
+                        joinBeforeTurnOff(pendingTunnelJobs)
+                        DiagnosticLog.record("disconnect roam-joined")
+                        if (disconnectGen != sessionGeneration) return@launch
                         synchronized(tunnelOpLock) {
                             if (disconnectGen != sessionGeneration) return@launch
                             runCatching {
@@ -466,17 +475,52 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         }
                         if (disconnectGen != sessionGeneration) return@launch
                         validationGeneration++
-                        validationJob?.cancel()
                         stopStatsPolling()
-                        releaseTunnelOnce(disconnectGen)
+                        keepInterface = DisconnectUi.keepVpnInterface(
+                            runCatching {
+                                VpnKillSwitch.isLockdownEnabled(
+                                    this@VeritasVpnService,
+                                    vpnPrepared = true,
+                                    allowPrepare = false,
+                                )
+                            }.getOrElse {
+                                DiagnosticLog.record("disconnect lockdown-read-failed")
+                                true
+                            },
+                        )
+                        DiagnosticLog.record("disconnect turn-off")
+                        releaseTunnelOnce(disconnectGen, keepInterface = keepInterface)
                         if (disconnectGen != sessionGeneration) return@launch
                         broadcastState(false, null)
-                        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                        if (keepInterface) {
+                            DiagnosticLog.record("disconnect interface=kept")
+                            runCatching {
+                                ServiceCompat.startForeground(
+                                    this@VeritasVpnService,
+                                    NOTIFICATION_ID,
+                                    buildNotification("Disconnected"),
+                                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                                )
+                            }
+                        } else {
+                            DiagnosticLog.record("disconnect interface=closed")
+                            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                        }
                     } catch (e: CancellationException) {
-                        throw e
+                        // The click path and this scope must not surface
+                        // cancellation. A newer disconnect owns the session
+                        // when the generation has moved.
                     } catch (e: Exception) {
+                        DiagnosticLog.recordCrash(e)
                         Log.w(TAG, "disconnect teardown: ${e.javaClass.simpleName}")
                         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                    } finally {
+                        if (disconnectGen == sessionGeneration && !tunnelReleased) {
+                            DiagnosticLog.record("disconnect turn-off")
+                            runCatching {
+                                releaseTunnelOnce(disconnectGen, keepInterface = keepInterface)
+                            }
+                        }
                     }
                 }
                 transitionJob = disconnectJob
@@ -593,7 +637,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         // it and the task leaves the screen, so this override never calls
         // super and never stops itself. The user stays on the offline home.
         if (sessionEndedByUser) {
-            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
             return
         }
         sessionGeneration++
@@ -660,7 +703,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         cancelStealthWork()
         // Do not turn the tunnel DOWN here when a session is still intended —
         // START_STICKY / Always-on will restart and restore from KEY_CONFIG.
-        if (!sessionIntended()) {
+        if (!sessionIntended() && !holdInterface) {
             // Main-thread teardown must not throw: an exception here kills the
             // process and the activity disappears with it.
             runCatching { releaseTunnelOnce(sessionGeneration) }
@@ -989,9 +1032,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
                     return@launch
                 }
-                // Wait for any active transition (connect/disconnect) to finish
-                // before touching the tunnel.
-                transitionJob?.takeIf { it.isActive && it !== adaptJob }?.join()
+                // Wait for a connect to finish before touching the tunnel.
+                // Never join the disconnect job: it joins this one, and the
+                // two waits deadlock with wgTurnOn still in flight.
+                val gate = transitionJob
+                if (gate != null && gate.isActive && gate !== adaptJob && gate !== disconnectJob) {
+                    gate.join()
+                }
                 if (gen != sessionGeneration || !sessionIntended() || disconnectJob?.isActive == true) {
                     return@launch
                 }
@@ -2417,13 +2464,18 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      * same lock, so this cannot turn that new tunnel down. The service stays
      * running so the activity is not destroyed with it.
      */
-    private fun releaseTunnelOnce(expectedGen: Long) {
+    private fun releaseTunnelOnce(expectedGen: Long, keepInterface: Boolean = false) {
         synchronized(tunnelOpLock) {
             if (expectedGen != sessionGeneration || tunnelReleased) return
             tunnelReleased = true
             // GoBackend.setState(DOWN) calls stopSelf(). That destroys this
             // service and, with Always-on, takes the activity off screen.
             runCatching { turnUserspaceOffLocked() }
+            if (keepInterface) {
+                holdInterface = true
+                return
+            }
+            holdInterface = false
             val old = tunKeeper
             tunKeeper = null
             runCatching { old?.close() }
@@ -2443,16 +2495,29 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun turnUserspaceOffLocked() {
         natKeepaliveJob?.cancel()
-        runCatching {
-            val handleField = goField("currentTunnelHandle")
-            val handle = handleField.getInt(backend)
-            if (handle >= 0) {
-                goNative("wgTurnOff", Integer.TYPE).invoke(null, handle)
-                handleField.setInt(backend, -1)
-            }
-            goField("currentTunnel").set(backend, null)
-            goField("currentConfig").set(backend, null)
+        runCatching { turnOffCurrentHandleLocked() }
+    }
+
+    /**
+     * Publish "no tunnel" before the native call. A second teardown then
+     * sees a negative handle and does not free it again.
+     */
+    private fun detachUserspaceHandleLocked(): Int {
+        val handleField = goField("currentTunnelHandle")
+        val handle = handleField.getInt(backend)
+        if (handle >= 0) {
+            handleField.setInt(backend, -1)
         }
+        goField("currentTunnel").set(backend, null)
+        goField("currentConfig").set(backend, null)
+        return handle
+    }
+
+    private fun turnOffCurrentHandleLocked() {
+        val handle = detachUserspaceHandleLocked()
+        if (handle < 0) return
+        DiagnosticLog.record("userspace turn-off")
+        goNative("wgTurnOff", Integer.TYPE).invoke(null, handle)
     }
 
     private fun swapTunKeeper(newKeeper: ParcelFileDescriptor?) {
@@ -2503,17 +2568,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             // any pin before they exist. Do not bindSocket these fds.
             releaseUnderlyingPin()
             try {
+                turnOffCurrentHandleLocked()
+                if (gen != sessionGeneration || !sessionIntended()) return false
                 val handleField = goField("currentTunnelHandle")
                 val tunnelField = goField("currentTunnel")
                 val configField = goField("currentConfig")
-                val handle = handleField.getInt(backend)
-                if (handle >= 0) {
-                    goNative("wgTurnOff", Integer.TYPE).invoke(null, handle)
-                    handleField.setInt(backend, -1)
-                }
-                tunnelField.set(backend, null)
-                configField.set(backend, null)
-                if (gen != sessionGeneration || !sessionIntended()) return false
                 val goConfig = userspaceConfigOrThrow(parsed)
                 val dup = keeper.dup()
                 val fd = dup.detachFd()
@@ -2783,6 +2842,49 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_USB)),
     )
+
+    /** Jobs that can be inside a native tunnel call. Snapshot before cancel. */
+    private fun tunnelJobs(): List<Job> = listOfNotNull(
+        adaptJob,
+        healthJob,
+        waitRecheckJob,
+        restoreJob,
+        validationJob,
+        stealthReconnectJob,
+        peerCheckJob,
+        reprovisionJob,
+        natKeepaliveJob,
+        statsJob,
+        transitionJob,
+        disconnectJob,
+    )
+
+    private fun cancelTunnelJobs() {
+        adaptJob?.cancel()
+        healthJob?.cancel()
+        waitRecheckJob?.cancel()
+        restoreJob?.cancel()
+        validationJob?.cancel()
+        stealthReconnectJob?.cancel()
+        natKeepaliveJob?.cancel()
+        statsJob?.cancel()
+        cancelPeerRecovery()
+        transitionJob?.cancel()
+        disconnectJob?.cancel()
+    }
+
+    /**
+     * Wait until roam, rebuild, connect, and the previous disconnect have
+     * left the native tunnel calls. Does not join the caller, and does not
+     * take [tunnelOpLock].
+     */
+    private suspend fun joinBeforeTurnOff(jobs: List<Job>) {
+        val self = coroutineContext[Job]
+        for (job in jobs.distinct()) {
+            if (job === self) continue
+            job.join()
+        }
+    }
 
     private fun cancelPeerRecovery() {
         peerCheckJob?.cancel()
