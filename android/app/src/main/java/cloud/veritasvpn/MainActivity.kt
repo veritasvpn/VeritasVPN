@@ -44,6 +44,7 @@ import cloud.veritasvpn.vpn.PeerCheckLog
 import cloud.veritasvpn.vpn.ReprovisionFlight
 import cloud.veritasvpn.ui.VpnDisclosureScreen
 import cloud.veritasvpn.ui.DashboardScreen
+import cloud.veritasvpn.ui.DisconnectUi
 import cloud.veritasvpn.ui.DiagnosticsScreen
 import cloud.veritasvpn.ui.HelpScreen
 import cloud.veritasvpn.ui.ReleaseLockdownDialog
@@ -298,14 +299,17 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun noteIntentionalDisconnect() {
-                    // Always-on and lockdown are system settings. Stopping the
-                    // tunnel cannot clear them, and while they stay on Android
-                    // blocks every connection. Prompt only after the user asked
-                    // to disconnect, never while the tunnel is meant to stay up.
-                    if (!VpnKillSwitch.isLockdownEnabled(context)) return
+                    // The circle tap stays in the app. Always-on cannot be
+                    // cleared from here, and this must not open system settings.
+                    val presentation = DisconnectUi.afterCircleTap(
+                        VpnKillSwitch.isLockdownEnabled(context),
+                    )
+                    showReleaseLockdown = false
+                    awaitingLockdownRelease = false
                     releaseLockdownError = null
-                    awaitingLockdownRelease = true
-                    showReleaseLockdown = true
+                    if (!presentation.launchSettings) {
+                        presentation.note?.let { statusMsg = it }
+                    }
                 }
 
                 fun performLocalSignOut() {
@@ -796,7 +800,7 @@ class MainActivity : ComponentActivity() {
                                         transport = ""
                                         signInAgain = false
                                         awaitingAuthClear = false
-                                        statusMsg = error
+                                        statusMsg = error ?: statusMsg?.takeIf { it == DisconnectUi.LOCKDOWN_NOTE }
                                     }
                                 }
                                 VeritasVpnService.ACTION_STATS -> {

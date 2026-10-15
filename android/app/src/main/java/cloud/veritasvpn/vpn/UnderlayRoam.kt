@@ -3,8 +3,9 @@ package cloud.veritasvpn.vpn
 /**
  * Decides whether path-adapt should move WireGuard onto [liveIdentity].
  *
- * [liveIdentity] is the system best-matching non-VPN network, not whichever
- * leftover Wi‑Fi or cell just fired a callback. Same-/24 is irrelevant.
+ * [liveIdentity] is the system-default network handle, not link properties
+ * and not whichever leftover Wi-Fi or cell just fired a callback. A
+ * capability or link update for that same handle skips. Same-/24 is irrelevant.
  */
 object UnderlayRoam {
 

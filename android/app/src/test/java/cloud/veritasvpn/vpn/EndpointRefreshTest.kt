@@ -177,8 +177,15 @@ class EndpointRefreshTest {
         assertTrue(source.contains("EndpointRefresh.DEBOUNCE_MS"))
         assertTrue(source.contains("underlyingControlClient()"))
         assertTrue(source.contains("handshakeRestoresConnected"))
+        assertTrue(source.contains("RoamRecovery.sameNetworkLeavesTunnelAlone"))
+        assertTrue(source.contains("RoamRecovery.installAfterFailedSwaps"))
+        assertTrue(source.contains("rebuildKeepingKillSwitch"))
+        assertTrue(source.contains("dropUnderlyingControlClient"))
         assertFalse(source.contains("recreateTun = true"))
-        assertFalse(source.contains("setStateInternal"))
+        val rebuildStart = source.indexOf("fun rebuildKeepingKillSwitch")
+        val rebuildEnd = source.indexOf("private fun rebindLiveTunnel", rebuildStart)
+        assertTrue(rebuildStart >= 0 && rebuildEnd > rebuildStart)
+        assertFalse(source.substring(rebuildStart, rebuildEnd).contains("DOWN"))
     }
 
     private fun serviceSource(): String {
