@@ -133,8 +133,34 @@ class EndpointRefreshTest {
             EndpointRefresh.Transport.STEALTH,
             EndpointRefresh.selectedTransport(modeStored = "auto", resumeStealth = true, transportRunning = false),
         )
-        assertEquals(1_000L, EndpointRefresh.DEBOUNCE_MS)
-        assertTrue(EndpointRefresh.HANDSHAKE_WAIT_MS <= 3_000L)
+        assertTrue(EndpointRefresh.DEBOUNCE_MS <= 250L)
+        assertTrue(EndpointRefresh.HANDSHAKE_WAIT_MS <= 1_500L)
+        assertFalse(EndpointRefresh.establishesNewTunOnRoam())
+    }
+
+    @Test
+    fun handshakeOnTheNewNetworkLeavesReconnecting() {
+        val changedAt = 5_000L
+        assertEquals(
+            "Reconnecting…",
+            EndpointRefresh.statusAfterHandshake(
+                reconnecting = true,
+                handshakeMs = 1_000L,
+                changedAtMs = changedAt,
+            ),
+        )
+        assertEquals(
+            "Connected",
+            EndpointRefresh.statusAfterHandshake(
+                reconnecting = true,
+                handshakeMs = 5_400L,
+                changedAtMs = changedAt,
+            ),
+        )
+        assertTrue(EndpointRefresh.handshakeRestoresConnected(5_400L, changedAt))
+        assertFalse(EndpointRefresh.handshakeRestoresConnected(1_000L, changedAt))
+        assertFalse(EndpointRefresh.endpointChanged("203.0.113.10:443", "203.0.113.10:443"))
+        assertTrue(EndpointRefresh.endpointChanged("203.0.113.10:443", "198.51.100.6:51820"))
     }
 
     @Test
@@ -150,6 +176,9 @@ class EndpointRefreshTest {
         assertFalse(source.contains("SOFT_ATTACH_MS"))
         assertTrue(source.contains("EndpointRefresh.DEBOUNCE_MS"))
         assertTrue(source.contains("underlyingControlClient()"))
+        assertTrue(source.contains("handshakeRestoresConnected"))
+        assertFalse(source.contains("recreateTun = true"))
+        assertFalse(source.contains("setStateInternal"))
     }
 
     private fun serviceSource(): String {

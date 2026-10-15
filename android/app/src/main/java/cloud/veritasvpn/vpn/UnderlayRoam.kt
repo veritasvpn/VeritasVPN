@@ -9,7 +9,11 @@ package cloud.veritasvpn.vpn
 object UnderlayRoam {
 
     enum class Action {
-        /** Best-matching underlay is missing or not yet VALIDATED. */
+        /**
+         * The system default has no address yet. NET_CAPABILITY_VALIDATED is
+         * not required: validation probes can sit behind the tunnel and never
+         * complete while the roam waits for them.
+         */
         WAIT,
         /** Already on that underlay. */
         SKIP,

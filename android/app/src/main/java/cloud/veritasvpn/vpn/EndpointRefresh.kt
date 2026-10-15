@@ -9,10 +9,17 @@ package cloud.veritasvpn.vpn
  * cannot deliver that public address back onto the LAN.
  */
 object EndpointRefresh {
-    const val DEBOUNCE_MS = 1_000L
+    /**
+     * Coalesce the burst of callbacks from one switch. A real network change
+     * must not sit behind a one-second timer before the socket swap starts.
+     */
+    const val DEBOUNCE_MS = 200L
 
-    /** How long to wait for a handshake after the fresh endpoint is installed. */
-    const val HANDSHAKE_WAIT_MS = 2_500L
+    /** How often to read backend handshake stats while a roam is in progress. */
+    const val HANDSHAKE_POLL_MS = 200L
+
+    /** Upper bound for one attempt. Connected is published as soon as stats move, not when this ends. */
+    const val HANDSHAKE_WAIT_MS = 1_200L
 
     const val RETRY_DELAY_MS = 1_000L
     const val RETRIES_BEFORE_MESSAGE = 3
@@ -59,6 +66,34 @@ object EndpointRefresh {
     }
 
     fun freshEndpoint(serverEndpoint: String?): String? = blankToNull(serverEndpoint)
+
+    /**
+     * Connected when the backend has a handshake newer than the network change.
+     * An older handshake from the previous network does not count, and the
+     * decision does not wait for a timer to expire.
+     */
+    fun handshakeRestoresConnected(handshakeMs: Long, changedAtMs: Long): Boolean =
+        changedAtMs > 0L && handshakeMs > changedAtMs
+
+    fun statusAfterHandshake(reconnecting: Boolean, handshakeMs: Long, changedAtMs: Long): String =
+        if (reconnecting && !handshakeRestoresConnected(handshakeMs, changedAtMs)) {
+            "Reconnecting…"
+        } else {
+            "Connected"
+        }
+
+    /** The fresh endpoint is already the one in the tunnel. No second socket swap. */
+    fun endpointChanged(current: String?, fresh: String?): Boolean {
+        val next = fresh?.trim().orEmpty()
+        if (next.isEmpty()) return false
+        return next != current?.trim().orEmpty()
+    }
+
+    /**
+     * A roam keeps the VpnService interface. Replacing it with a new establish()
+     * drops the kill switch and lets traffic out in the clear.
+     */
+    fun establishesNewTunOnRoam(): Boolean = false
 
     /** A new default network cancels every in-flight attempt for the old one. */
     fun supersede(current: Flight?, nextHandle: Long?): Flight =
