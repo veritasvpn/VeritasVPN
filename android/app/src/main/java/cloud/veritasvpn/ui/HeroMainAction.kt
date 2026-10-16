@@ -9,10 +9,22 @@ fun heroMainAction(
     connected: Boolean,
     signInAgain: Boolean,
     isPremium: Boolean,
+    reconnecting: Boolean = false,
 ): HeroMainAction = when {
     signInAgain -> HeroMainAction.SignIn
-    connecting || !billingReady -> HeroMainAction.None
-    connected -> HeroMainAction.Disconnect
+    connecting || reconnecting || connected -> HeroMainAction.Disconnect
+    !billingReady -> HeroMainAction.None
     isPremium -> HeroMainAction.Connect
     else -> HeroMainAction.Plans
+}
+
+/** Spoken name for the circle. Connecting and Reconnecting stay tappable so a stuck session can be cancelled. */
+fun heroActionName(phase: HeroPhase, signInAgain: Boolean): String? = when {
+    signInAgain -> "Sign in"
+    phase == HeroPhase.Ready -> "Connect"
+    phase == HeroPhase.Upsell -> "Get Premium"
+    phase == HeroPhase.Connecting ||
+        phase == HeroPhase.Reconnecting ||
+        phase == HeroPhase.Protected -> "Disconnect"
+    else -> null
 }

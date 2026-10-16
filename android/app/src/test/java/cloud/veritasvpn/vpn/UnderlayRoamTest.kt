@@ -66,6 +66,19 @@ class UnderlayRoamTest {
     }
 
     @Test
+    fun addressOnTheNewDefaultRoamsWithoutWaitingForValidation() {
+        // liveReady is "has an address", not NET_CAPABILITY_VALIDATED.
+        assertEquals(
+            UnderlayRoam.Action.ROAM,
+            UnderlayRoam.action(
+                liveIdentity = "cell",
+                liveReady = true,
+                lastIdentity = "wifi",
+            ),
+        )
+    }
+
+    @Test
     fun underlayLostThenReturnsAsUnvalidatedWaits() {
         val action = UnderlayRoam.action(
             liveIdentity = "wifi",

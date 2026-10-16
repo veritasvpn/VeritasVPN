@@ -27,22 +27,31 @@ import cloud.veritasvpn.api.PeerListResponse
 import cloud.veritasvpn.api.PeerResponse
 import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.auth.AuthenticatedApi
+import cloud.veritasvpn.auth.ControlAccess
+import cloud.veritasvpn.auth.ControlRefresh
 import cloud.veritasvpn.auth.SessionExpiredException
 import cloud.veritasvpn.BuildConfig
 import cloud.veritasvpn.billing.BillingRepository
+import cloud.veritasvpn.billing.PlanEntitlement
 import cloud.veritasvpn.billing.StoreBillingCallbacks
 import cloud.veritasvpn.billing.createStoreBilling
 import java.io.IOException
+import cloud.veritasvpn.support.ConnectTiming
+import cloud.veritasvpn.support.DiagnosticLog
 import cloud.veritasvpn.support.SupportLinks
 import cloud.veritasvpn.support.isRecordableError
 import cloud.veritasvpn.support.sanitizeError
 import cloud.veritasvpn.ui.AuthScreen
+import cloud.veritasvpn.ui.CircleDisconnect
 import cloud.veritasvpn.ui.SignInAgainSignal
 import cloud.veritasvpn.vpn.ControlPlane
+import cloud.veritasvpn.vpn.ProvisionRoute
+import cloud.veritasvpn.vpn.EndpointRefresh
 import cloud.veritasvpn.vpn.PeerCheckLog
 import cloud.veritasvpn.vpn.ReprovisionFlight
 import cloud.veritasvpn.ui.VpnDisclosureScreen
 import cloud.veritasvpn.ui.DashboardScreen
+import cloud.veritasvpn.ui.DisconnectUi
 import cloud.veritasvpn.ui.DiagnosticsScreen
 import cloud.veritasvpn.ui.HelpScreen
 import cloud.veritasvpn.ui.ReleaseLockdownDialog
@@ -204,6 +213,8 @@ class MainActivity : ComponentActivity() {
                 var lockdownEnabled by remember { mutableStateOf(false) }
                 val killSwitchRecheckGeneration = remember { intArrayOf(0) }
                 var awaitingVpnConsent by remember { mutableStateOf(false) }
+                var homeDrawn by remember { mutableStateOf(false) }
+                var needsVpnConsent by remember { mutableStateOf(false) }
                 var rxBytes by remember { mutableStateOf(0L) }
                 var txBytes by remember { mutableStateOf(0L) }
                 var handshakeMs by remember { mutableStateOf(0L) }
@@ -225,6 +236,7 @@ class MainActivity : ComponentActivity() {
                 var appliedStealthMode by remember { mutableStateOf(VpnSettings.stealthMode(context)) }
                 var transport by remember { mutableStateOf("") }
                 var billingStatus by remember { mutableStateOf<BillingStatus?>(null) }
+                var billingSettled by remember { mutableStateOf(false) }
                 var billingRefreshing by remember { mutableStateOf(false) }
                 var cancellationInProgress by remember { mutableStateOf(false) }
                 var billingError by remember { mutableStateOf<String?>(null) }
@@ -237,13 +249,20 @@ class MainActivity : ComponentActivity() {
                 val observedBillingReturnVersion = billingReturnVersion
 
                 fun disconnectVpnService() {
-                    context.startService(
-                        Intent(context, VeritasVpnService::class.java).apply {
-                            action = VeritasVpnService.ACTION_DISCONNECT
-                        }
-                    )
+                    // startService, not startForegroundService. A foreground
+                    // start that does not call startForeground in time is a
+                    // process-killing RuntimeException on API 36.
+                    VeritasVpnService.markSessionEnded()
+                    runCatching {
+                        context.startService(
+                            Intent(context, VeritasVpnService::class.java).apply {
+                                action = VeritasVpnService.ACTION_DISCONNECT
+                            },
+                        )
+                    }
                     connected = false
                     connecting = false
+                    reconnecting = false
                     rxBytes = 0
                     txBytes = 0
                     handshakeMs = 0
@@ -256,6 +275,8 @@ class MainActivity : ComponentActivity() {
                 fun cancelReconnect() {
                     reconnectJob?.cancel()
                     reconnectJob = null
+                    connectJob?.cancel()
+                    connectJob = null
                     reconnecting = false
                     hardReconnectRequested = false
                     reconnectAttempt = 0
@@ -270,7 +291,18 @@ class MainActivity : ComponentActivity() {
                     val accessToken = authRepo.getAccessToken()?.takeIf { it.isNotBlank() } ?: return
                     peerCleanupJob = scope.launch(Dispatchers.IO) {
                         try {
-                            ApiClient.delete("/api/v1/wg/peers/$peerId", accessToken).close()
+                            // The normal client's pooled socket is blackholed once
+                            // lockdown keeps the interface and userspace is off.
+                            // Skip the delete rather than wait out that read.
+                            // The next peer POST upserts this device.
+                            val held = VeritasVpnService.interfaceHeld()
+                            val protected = if (held) VeritasVpnService.provisioningClient() else null
+                            if (held && protected == null) return@launch
+                            ApiClient.delete(
+                                "/api/v1/wg/peers/$peerId",
+                                accessToken,
+                                httpClient = protected,
+                            ).close()
                         } catch (_: Exception) {
                         }
                     }
@@ -279,6 +311,7 @@ class MainActivity : ComponentActivity() {
                 fun clearLocalSessionUi() {
                     authRepo.signOut()
                     billingStatus = null
+                    billingSettled = false
                     checkoutUrl = null
                     billingError = null
                     purchaseHistoryFailed = false
@@ -294,14 +327,16 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun noteIntentionalDisconnect() {
-                    // Always-on and lockdown are system settings. Stopping the
-                    // tunnel cannot clear them, and while they stay on Android
-                    // blocks every connection. Prompt only after the user asked
-                    // to disconnect, never while the tunnel is meant to stay up.
-                    if (!VpnKillSwitch.isLockdownEnabled(context)) return
+                    // The circle tap stays in the app. Always-on cannot be
+                    // cleared from here. Do not read lockdown with
+                    // VpnService.prepare, and do not open system settings.
+                    val presentation = DisconnectUi.afterCircleTap(lockdownEnabled)
+                    showReleaseLockdown = false
+                    awaitingLockdownRelease = false
                     releaseLockdownError = null
-                    awaitingLockdownRelease = true
-                    showReleaseLockdown = true
+                    if (!presentation.leavesApp && !presentation.callsPrepare && !presentation.launchSettings) {
+                        statusMsg = presentation.note
+                    }
                 }
 
                 fun performLocalSignOut() {
@@ -340,6 +375,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             billingStatus = status
+                            billingSettled = true
                             writeCachedBillingStatus(context, user!!.accountId, status)
                             billingError = null
                             purchaseHistoryFailed = false
@@ -348,15 +384,11 @@ class MainActivity : ComponentActivity() {
                                 handleSessionExpired()
                                 return@launch
                             }
-                            // Preserve the last verified plan during a transient
-                            // network failure. It is safer and clearer than
-                            // replacing an active cached plan with an error state.
-                            val hadCachedStatus = billingStatus != null
-                            if (!hadCachedStatus) billingStatus = BillingStatus()
-                            billingError = if (!hadCachedStatus) {
-                                cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
-                            } else {
-                                null
+                            // A failed read is not a free plan. Installing the
+                            // default status makes the home say Premium required
+                            // before the account endpoint has answered.
+                            if (billingStatus == null) {
+                                billingError = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
                             }
                             if (billingStatus?.payments == null) purchaseHistoryFailed = true
                         } finally {
@@ -408,10 +440,12 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(user?.accountId) {
                     if (user != null) {
-                        // Use the last verified plan for this account immediately,
-                        // then refresh it in the background without blocking the
-                        // dashboard or the Connect button.
-                        billingStatus = readCachedBillingStatus(context, user!!.accountId)
+                        // A cached free plan must not become "Premium required"
+                        // before this sign-in's status read. A cached Premium
+                        // plan can show immediately, then the read confirms it.
+                        val cached = readCachedBillingStatus(context, user!!.accountId)
+                        billingSettled = false
+                        billingStatus = cached?.takeIf { PlanEntitlement.grantsPremium(it) }
                         billingRefreshing = false
                         refreshBilling()
                         if (BuildConfig.PLAY_BILLING) {
@@ -465,6 +499,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             billingStatus = status
+                            billingSettled = true
                             writeCachedBillingStatus(context, user!!.accountId, status)
                             purchaseHistoryFailed = false
                             if (status.isPremium) {
@@ -519,7 +554,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun blockConnectForKillSwitch(): Boolean {
-                    if (VpnKillSwitch.isLockdownEnabled(context)) {
+                    if (VpnKillSwitch.isLockdownEnabled(context, vpnPrepared = true)) {
                         showKillSwitchRequired = false
                         return false
                     }
@@ -631,6 +666,7 @@ class MainActivity : ComponentActivity() {
                     ActivityResultContracts.StartActivityForResult()
                 ) { result ->
                     awaitingVpnConsent = false
+                    needsVpnConsent = false
                     if (result.resultCode == Activity.RESULT_OK) {
                         statusMsg = null
                         // If we're in onboarding mode, just mark onboarding as done and go to dashboard.
@@ -678,7 +714,7 @@ class MainActivity : ComponentActivity() {
                         if (connecting && !hadEstablishedSession && !stableEstablished && !awaitingVpnConsent) {
                             connecting = false
                             userWantsConnected = false
-                            statusMsg = "Connection timed out. Check your network and try again."
+                            statusMsg = EndpointRefresh.GIVE_UP_MESSAGE
                             runCatching {
                                 context.startService(
                                     Intent(context, VeritasVpnService::class.java).apply {
@@ -710,6 +746,17 @@ class MainActivity : ComponentActivity() {
                         override fun onReceive(ctx: Context?, intent: Intent?) {
                             when (intent?.action) {
                                 VeritasVpnService.ACTION_STATE -> {
+                                    if (intent.getBooleanExtra(
+                                            VeritasVpnService.EXTRA_NEEDS_VPN_CONSENT,
+                                            false,
+                                        )
+                                    ) {
+                                        // Restore could not open the tun. Ask only
+                                        // after the home frame, from this activity.
+                                        needsVpnConsent = true
+                                        connecting = false
+                                        if (statusMsg == "Restoring secure connection…") statusMsg = null
+                                    }
                                     val nowConnected =
                                         intent.getBooleanExtra(VeritasVpnService.EXTRA_CONNECTED, false)
                                     val error = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
@@ -754,7 +801,7 @@ class MainActivity : ComponentActivity() {
                                         handshakeOk = svcHandshakeOk
                                         statusMsg = when {
                                             signInAgain -> ControlPlane.SIGN_IN_AGAIN
-                                            svcReconnecting -> "Reconnecting…"
+                                            svcReconnecting -> EndpointRefresh.statusWhileReconnecting(error)
                                             else -> null
                                         }
                                     } else if (error != null && error.contains("revoked", ignoreCase = true)) {
@@ -774,7 +821,11 @@ class MainActivity : ComponentActivity() {
                                         connecting = false
                                         reconnecting = svcReconnecting
                                         hardReconnectRequested = false
-                                        statusMsg = if (svcReconnecting) "Reconnecting…" else null
+                                        statusMsg = if (svcReconnecting) {
+                                            EndpointRefresh.statusWhileReconnecting(error)
+                                        } else {
+                                            null
+                                        }
                                     } else {
                                         connected = false
                                         connecting = false
@@ -788,7 +839,7 @@ class MainActivity : ComponentActivity() {
                                         transport = ""
                                         signInAgain = false
                                         awaitingAuthClear = false
-                                        statusMsg = error
+                                        statusMsg = error ?: statusMsg?.takeIf { it == DisconnectUi.LOCKDOWN_NOTE }
                                     }
                                 }
                                 VeritasVpnService.ACTION_STATS -> {
@@ -823,7 +874,12 @@ class MainActivity : ComponentActivity() {
                                         val svcReconnecting = intent.getBooleanExtra(VeritasVpnService.EXTRA_RECONNECTING, false)
                                         reconnecting = svcReconnecting
                                         if (connected) {
-                                            statusMsg = if (svcReconnecting) "Reconnecting…" else null
+                                            val notice = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
+                                            statusMsg = if (svcReconnecting) {
+                                                EndpointRefresh.statusWhileReconnecting(notice)
+                                            } else {
+                                                null
+                                            }
                                         }
                                     }
                                 }
@@ -920,7 +976,7 @@ class MainActivity : ComponentActivity() {
 
                 fun requestConnect() {
                     if (connecting || connected || reconnecting) return
-                    if (billingStatus?.isPremium != true) {
+                    if (!PlanEntitlement.grantsPremium(billingStatus)) {
                         statusMsg = "An active subscription is required. Open Plans to subscribe."
                         return
                     }
@@ -935,9 +991,13 @@ class MainActivity : ComponentActivity() {
                     cancelReconnect()
                     connecting = true
                     statusMsg = null
-                    scope.launch(Dispatchers.IO) {
+                    scope.launch {
+                        // The circle is already on screen. Wait one frame so
+                        // the consent dialog cannot cover an undrawn window.
+                        withContext(Dispatchers.Main) { withFrameNanos { } }
+                        if (!userWantsConnected) return@launch
                         val consentIntent = try {
-                            VpnService.prepare(context)
+                            withContext(Dispatchers.IO) { VpnService.prepare(context) }
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
                                 if (!userWantsConnected) return@withContext
@@ -951,10 +1011,12 @@ class MainActivity : ComponentActivity() {
                         // VeritasVPN to Settings → VPN and shows the system allow
                         // dialog. Checking lockdown first leaves a fresh install
                         // unregistered, so the user cannot turn the switches on.
-                        val lockdownOn = VpnKillSwitch.isLockdownEnabled(
-                            context,
-                            vpnPrepared = consentIntent == null,
-                        )
+                        val lockdownOn = withContext(Dispatchers.IO) {
+                            VpnKillSwitch.isLockdownEnabled(
+                                context,
+                                vpnPrepared = consentIntent == null,
+                            )
+                        }
                         val gate = VpnKillSwitch.nextConnectGate(
                             vpnPrepared = consentIntent == null,
                             lockdownEnabled = lockdownOn,
@@ -975,16 +1037,43 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                LaunchedEffect(homeDrawn, needsVpnConsent, showOnboardingDisclosure) {
+                    // A saved session does not call prepare(). That check is what
+                    // raised the system dialog on startup, including over a black
+                    // window when the service used to call it. Ask only after the
+                    // home frame, and only when establish() was actually refused.
+                    if (!homeDrawn || showOnboardingDisclosure || !needsVpnConsent) return@LaunchedEffect
+                    if (!userWantsConnected || awaitingVpnConsent) return@LaunchedEffect
+                    val consentIntent = withContext(Dispatchers.IO) {
+                        runCatching { VpnService.prepare(context) }.getOrNull()
+                    }
+                    if (!userWantsConnected || awaitingVpnConsent) return@LaunchedEffect
+                    needsVpnConsent = false
+                    if (consentIntent == null) {
+                        startVpnAfterPermissions(lockdownVerified = false)
+                        return@LaunchedEffect
+                    }
+                    awaitingVpnConsent = true
+                    vpnPermissionLauncher.launch(consentIntent)
+                }
+
                 val lifecycleOwner = LocalLifecycleOwner.current
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
-                        if (event == Lifecycle.Event.ON_RESUME) {
+                            if (event == Lifecycle.Event.ON_RESUME) {
                             // Some builds publish Always-on and lockdown slightly after
                             // the VPN screen closes. Re-read before leaving the modal up.
+                            // Resume must not call VpnService.prepare: that call can
+                            // revoke the tunnel or open the system consent screen.
                             val generation = ++killSwitchRecheckGeneration[0]
                             val waitingForSettings = pendingConnectAfterKillSwitch
+                            val preparedNow = connected || connecting || reconnecting ||
+                                userWantsConnected || waitingForSettings
                             scope.launch {
-                                var enabled = VpnKillSwitch.isLockdownEnabled(context)
+                                var enabled = VpnKillSwitch.isLockdownEnabled(
+                                    context,
+                                    vpnPrepared = preparedNow,
+                                )
                                 if (!enabled && waitingForSettings) {
                                     var reads = 0
                                     while (!enabled && reads < 4) {
@@ -992,7 +1081,10 @@ class MainActivity : ComponentActivity() {
                                         delay(300)
                                         if (generation != killSwitchRecheckGeneration[0]) return@launch
                                         if (!pendingConnectAfterKillSwitch) return@launch
-                                        enabled = VpnKillSwitch.isLockdownEnabled(context)
+                                        enabled = VpnKillSwitch.isLockdownEnabled(
+                                            context,
+                                            vpnPrepared = true,
+                                        )
                                     }
                                 }
                                 if (generation != killSwitchRecheckGeneration[0]) return@launch
@@ -1005,13 +1097,19 @@ class MainActivity : ComponentActivity() {
                                     showKillSwitchRequired = true
                                 }
                                 if (awaitingLockdownRelease) {
-                                    var stillBlocking = VpnKillSwitch.isLockdownEnabled(context)
+                                    var stillBlocking = VpnKillSwitch.isLockdownEnabled(
+                                        context,
+                                        vpnPrepared = preparedNow,
+                                    )
                                     var reads = 0
                                     while (stillBlocking && reads < 4) {
                                         reads += 1
                                         delay(300)
                                         if (generation != killSwitchRecheckGeneration[0]) return@launch
-                                        stillBlocking = VpnKillSwitch.isLockdownEnabled(context)
+                                        stillBlocking = VpnKillSwitch.isLockdownEnabled(
+                                            context,
+                                            vpnPrepared = preparedNow,
+                                        )
                                     }
                                     if (generation != killSwitchRecheckGeneration[0]) return@launch
                                     if (!stillBlocking) {
@@ -1021,9 +1119,15 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
-                            if (user != null) ensureSessionFresh()
-                            // Update lockdown status for UI
-                            lockdownEnabled = VpnKillSwitch.isLockdownEnabled(context)
+                            if (user != null) {
+                                ensureSessionFresh()
+                                refreshBilling()
+                            }
+                            // Update lockdown status for UI without VpnService.prepare.
+                            lockdownEnabled = VpnKillSwitch.isLockdownEnabled(
+                                context,
+                                vpnPrepared = preparedNow,
+                            )
                             if (user != null && ReconnectDecisions.shouldActivityReconnect(
                                     userWantsConnected = userWantsConnected,
                                     connected = connected,
@@ -1068,6 +1172,11 @@ class MainActivity : ComponentActivity() {
                     VpnSettings.setLastError(context, safe)
                 }
 
+                LaunchedEffect(Unit) {
+                    withFrameNanos { }
+                    homeDrawn = true
+                }
+
                 // On cold start, check if onboarding is needed for a logged-in user.
                 LaunchedEffect(user) {
                     if (user != null) {
@@ -1100,6 +1209,7 @@ class MainActivity : ComponentActivity() {
                     if (statusMsg == ControlPlane.SIGN_IN_AGAIN) statusMsg = null
                     if (!fromReauth) {
                         billingStatus = null
+                        billingSettled = false
                         billingRefreshing = false
                         cancellationInProgress = false
                     }
@@ -1142,27 +1252,10 @@ class MainActivity : ComponentActivity() {
                                 // Stay on disclosure screen, wait for user action.
                             }
                             OnboardingGate.Step.SHOW_SYSTEM_DIALOG -> {
-                                // Call prepare() and launch the system dialog.
-                                val consentIntent = try {
-                                    withContext(Dispatchers.IO) {
-                                        VpnService.prepare(context)
-                                    }
-                                } catch (e: Exception) {
-                                    // If prepare() fails, mark onboarding as done and go to dashboard.
-                                    VpnSettings.setOnboardingVpnDone(context, true)
-                                    showOnboardingDisclosure = false
-                                    return@LaunchedEffect
-                                }
-                                if (consentIntent != null) {
-                                    // Show the system dialog.
-                                    onboardingConsentIntent = consentIntent
-                                    awaitingVpnConsent = true
-                                    vpnPermissionLauncher.launch(consentIntent)
-                                } else {
-                                    // Already prepared; onboarding is done.
-                                    VpnSettings.setOnboardingVpnDone(context, true)
-                                    showOnboardingDisclosure = false
-                                }
+                                // Restoring this step must not raise the system
+                                // dialog over a blank window. The disclosure
+                                // accept path asks, after that screen is drawn.
+                                onboardingStep = OnboardingGate.Step.SHOW_DISCLOSURE
                             }
                             OnboardingGate.Step.DONE, OnboardingGate.Step.SKIP -> {
                                 // Should not reach here, but handle gracefully.
@@ -1173,19 +1266,29 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // Render the disclosure screen if needed.
-                    if (onboardingStep == OnboardingGate.Step.SHOW_DISCLOSURE) {
+                    if (onboardingStep == OnboardingGate.Step.SHOW_DISCLOSURE ||
+                        onboardingStep == OnboardingGate.Step.SHOW_SYSTEM_DIALOG
+                    ) {
                         VpnDisclosureScreen(
                             onAccept = {
                                 VpnSettings.setVpnDisclosureAccepted(context, true)
-                                // Move to next step: check if VPN is prepared.
-                                scope.launch(Dispatchers.IO) {
-                                    val prepared = try {
-                                        VpnService.prepare(context) == null
+                                scope.launch {
+                                    withContext(Dispatchers.Main) { withFrameNanos { } }
+                                    val consentIntent = try {
+                                        withContext(Dispatchers.IO) { VpnService.prepare(context) }
                                     } catch (e: Exception) {
-                                        false
+                                        null
                                     }
                                     withContext(Dispatchers.Main) {
-                                        onboardingStep = OnboardingGate.afterAccept(prepared)
+                                        if (consentIntent == null) {
+                                            VpnSettings.setOnboardingVpnDone(context, true)
+                                            showOnboardingDisclosure = false
+                                        } else {
+                                            onboardingStep = OnboardingGate.Step.SHOW_SYSTEM_DIALOG
+                                            onboardingConsentIntent = consentIntent
+                                            awaitingVpnConsent = true
+                                            vpnPermissionLauncher.launch(consentIntent)
+                                        }
                                     }
                                 }
                             },
@@ -1220,7 +1323,7 @@ class MainActivity : ComponentActivity() {
                 } else if (showShieldSettings) {
                     ShieldSettingsScreen(
                         policy = shieldPolicy,
-                        isPremium = billingStatus?.isPremium == true,
+                        isPremium = PlanEntitlement.grantsPremium(billingStatus),
                         connected = connected,
                         error = shieldError,
                         onPolicyChange = { next ->
@@ -1377,17 +1480,19 @@ class MainActivity : ComponentActivity() {
                         connecting = connecting,
                         onConnect = { requestConnect() },
                         onDisconnect = {
-                            userWantsConnected = false
-                            hadEstablishedSession = false
-                            cancelReconnect()
-                            signInAgain = false
-                            awaitingAuthClear = false
-                            reauthenticate = false
-                            statusMsg = null
-                            val disconnectedPeerId = peerIdForDisconnect()
-                            disconnectVpnService()
-                            deletePeerBestEffort(disconnectedPeerId)
-                            noteIntentionalDisconnect()
+                            CircleDisconnect.run(lockdownEnabled) {
+                                userWantsConnected = false
+                                hadEstablishedSession = false
+                                cancelReconnect()
+                                signInAgain = false
+                                awaitingAuthClear = false
+                                reauthenticate = false
+                                statusMsg = null
+                                val disconnectedPeerId = peerIdForDisconnect()
+                                disconnectVpnService()
+                                deletePeerBestEffort(disconnectedPeerId)
+                                noteIntentionalDisconnect()
+                            }
                         },
                         onSignIn = { reauthenticate = true },
                         onSignOut = { performLocalSignOut() },
@@ -1435,8 +1540,8 @@ class MainActivity : ComponentActivity() {
                             connecting = false
                             reconnecting = false
                         },
-                        isPremium = billingStatus?.isPremium == true,
-                        billingReady = billingStatus != null,
+                        isPremium = PlanEntitlement.grantsPremium(billingStatus),
+                        billingReady = PlanEntitlement.homeBillingReady(billingStatus, billingSettled),
                         statusMsg = statusMsg,
                         rxBytes = rxBytes,
                         txBytes = txBytes,
@@ -1476,12 +1581,87 @@ class MainActivity : ComponentActivity() {
     }
 
     private var currentPeerId: String? = null
+    private var connectJob: Job? = null
 
     private fun peerIdForDisconnect(): String? {
         val id = currentPeerId ?: VpnSettings.currentPeerId(this)
         currentPeerId = null
         VpnSettings.setCurrentPeerId(this, null)
         return id
+    }
+
+    /**
+     * Peer create for a circle-tap reconnect. Lockdown keeps the interface up
+     * after disconnect, and the normal client is blackholed. That path uses
+     * the protected system-default client. With the interface closed the
+     * normal client is used, including its token refresh.
+     */
+    private suspend fun createPeer(
+        context: Context,
+        keyPair: KeyPair,
+        deviceId: String,
+    ): PeerResponse {
+        val body = mapOf<String, Any>(
+            "public_key" to keyPair.publicKey.toBase64(),
+            "device_id" to deviceId,
+        ) + WireGuardSession.deviceMetadata(context) + VpnSettings.shieldPolicy(context).wireBody()
+        val protected = VeritasVpnService.provisioningClient()
+        val route = ProvisionRoute.choose(
+            interfaceHeld = VeritasVpnService.interfaceHeld(),
+            protectedAvailable = protected != null,
+        )
+        DiagnosticLog.record("provision route=${ProvisionRoute.logName(route)}")
+        ConnectTiming.mark("client")
+        return when (route) {
+            ProvisionRoute.Route.NORMAL ->
+                AuthenticatedApi.execute(authRepo, { token ->
+                    ApiClient.post("/api/v1/wg/peers", body, token)
+                }, ::parseCreatedPeer)
+            ProvisionRoute.Route.PROTECTED ->
+                postPeerOutsideTunnel(body, requireNotNull(protected))
+            ProvisionRoute.Route.BLOCKED ->
+                throw java.net.ConnectException("api")
+        }
+    }
+
+    private suspend fun postPeerOutsideTunnel(
+        body: Map<String, Any>,
+        client: okhttp3.OkHttpClient,
+    ): PeerResponse {
+        val access = authRepo.accessForControl(client, tunnelHealthy = false)
+        val token = when (access) {
+            is ControlAccess.Ready -> access.token
+            is ControlAccess.SignedOut -> throw SessionExpiredException()
+            is ControlAccess.Unavailable -> throw java.net.ConnectException("api")
+        }
+        var response = ApiClient.post("/api/v1/wg/peers", body, token, httpClient = client)
+        if (response.code == 401) {
+            response.close()
+            when (authRepo.refreshForControl(client, force = true)) {
+                ControlRefresh.SignedOut -> throw SessionExpiredException()
+                ControlRefresh.Unavailable -> throw java.net.ConnectException("api")
+                ControlRefresh.Refreshed -> {
+                    val refreshed = authRepo.getAccessToken()?.takeIf { it.isNotBlank() }
+                        ?: throw SessionExpiredException()
+                    response = ApiClient.post(
+                        "/api/v1/wg/peers",
+                        body,
+                        refreshed,
+                        httpClient = client,
+                    )
+                }
+            }
+        }
+        return response.use(::parseCreatedPeer)
+    }
+
+    private fun parseCreatedPeer(res: okhttp3.Response): PeerResponse {
+        if (!res.isSuccessful) {
+            val err = ApiClient.parse<PeerResponse>(res)?.error
+            throw PeerError(err ?: "Failed to create peer")
+        }
+        return ApiClient.parse<PeerResponse>(res)
+            ?: throw PeerError("Invalid VPN server response")
     }
 
     private fun startConnection(
@@ -1509,7 +1689,8 @@ class MainActivity : ComponentActivity() {
         // Key generation, the peer request, and config assembly stay off the
         // UI thread. Compose only hears the small state hop afterwards, so the
         // hero clock is not paused or restarted by this work.
-        scope.launch(Dispatchers.IO) {
+        connectJob?.cancel()
+        connectJob = scope.launch(Dispatchers.IO) {
             val flight = if (isReconnect) {
                 ReprovisionFlight.tryClaim(
                     persistedAtMs = VpnSettings.reprovisionInProgressAt(context),
@@ -1527,29 +1708,28 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
             try {
-                // Wait for prior DELETE so we do not race ourselves; server upserts
-                // by (account_id, device_id) so other installs stay untouched.
-                peerCleanupJob?.join()
+                ConnectTiming.arm(System.currentTimeMillis())
+                // The server upserts by (account_id, device_id). While the
+                // interface is held, the earlier delete is on a socket lockdown
+                // will not answer, and waiting for it is the multi-second gap.
+                // Cancelling it also stops a late delete of the peer we create.
+                if (ConnectTiming.shouldWaitForCleanup(VeritasVpnService.interfaceHeld())) {
+                    peerCleanupJob?.join()
+                    ConnectTiming.mark("waitcleanup")
+                } else {
+                    peerCleanupJob?.cancel()
+                    peerCleanupJob = null
+                    // The delete may still be on the cached client. Drop it so
+                    // the peer POST opens a new socket instead of inheriting
+                    // that read.
+                    VeritasVpnService.retireProvisioningClient()
+                    ConnectTiming.mark("skipcleanup")
+                }
                 if (!shouldContinue()) return@launch
                 val keyPair = KeyPair()
                 val deviceId = VpnSettings.deviceId(context)
-                val peer = AuthenticatedApi.execute(authRepo, { token ->
-                    ApiClient.post(
-                        "/api/v1/wg/peers",
-                        mapOf<String, Any>(
-                            "public_key" to keyPair.publicKey.toBase64(),
-                            "device_id" to deviceId,
-                        ) + WireGuardSession.deviceMetadata(context) + VpnSettings.shieldPolicy(context).wireBody(),
-                        token
-                    )
-                }) { res ->
-                    if (!res.isSuccessful) {
-                        val err = ApiClient.parse<PeerResponse>(res)?.error
-                        throw PeerError(err ?: "Failed to create peer")
-                    }
-                    ApiClient.parse<PeerResponse>(res)
-                        ?: throw PeerError("Invalid VPN server response")
-                }
+                val peer = createPeer(context, keyPair, deviceId)
+                ConnectTiming.mark("provision")
                 if (!shouldContinue()) return@launch
                 val config = WireGuardSession.buildConfig(context, peer, keyPair)
                 val intent = Intent(context, VeritasVpnService::class.java).apply {
@@ -1589,6 +1769,7 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
+                ConnectTiming.finish()
                 withContext(Dispatchers.Main) {
                     if (e is SessionExpiredException) {
                         onSessionExpired?.invoke()
