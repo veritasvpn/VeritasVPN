@@ -2,6 +2,7 @@ package cloud.veritasvpn.vpn
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -15,9 +16,22 @@ import java.io.File
 class KeptTunRoamTest {
     @Test
     fun reconnectOnTheKeptTunThenRoamRetriesWithAVisibleMessage() {
+        assertNull(
+            EndpointRefresh.noticeAfter(
+                1,
+                rebuildTried = true,
+                recoveryPending = false,
+                elapsedMs = 2_000L,
+            ),
+        )
         assertEquals(
             EndpointRefresh.GIVE_UP_MESSAGE,
-            EndpointRefresh.noticeAfter(1, rebuildTried = true, recoveryPending = false),
+            EndpointRefresh.noticeAfter(
+                1,
+                rebuildTried = true,
+                recoveryPending = false,
+                elapsedMs = RoamRecovery.NOTICE_AFTER_MS,
+            ),
         )
         assertEquals(2_000L, RoamRecovery.Retry.next(RoamRecovery.Retry.INITIAL_MS))
         assertEquals(RoamRecovery.Retry.MAX_MS, RoamRecovery.Retry.next(RoamRecovery.Retry.MAX_MS))

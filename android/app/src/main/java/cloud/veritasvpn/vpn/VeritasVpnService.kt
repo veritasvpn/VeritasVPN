@@ -173,6 +173,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      * bindSocket's them to this handle only.
      */
     @Volatile private var watchedDefault: TunnelRebuild.DefaultWatch = TunnelRebuild.DefaultWatch()
+    /**
+     * Network from onAvailable or onCapabilities before it is the validated
+     * default. The data plane binds to it, then again when it becomes default.
+     */
+    @Volatile private var earlyUnderlay: EarlyUnderlay.State = EarlyUnderlay.State()
+    @Volatile private var earlyNetwork: Network? = null
+    /** Roam already running for this handle. Same-network callbacks do not restart it. */
+    @Volatile private var activeRoamHandle: Long = Long.MIN_VALUE
+    /** Failed rebuilds on [roamFailHandle]. Survives a same-handle restart. */
+    private var roamFailHandle: Long? = null
+    private var roamFailRebuilds: Int = 0
     @Volatile private var lastPeerOutcome: PeerCheckOutcome.Outcome? = null
     @Volatile private var peerCheckSerial = 0
     private var lastPeerCheckAtMs = 0L
@@ -197,37 +208,34 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private val underlayCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             underlayLostSeen = false
-            scheduleUnderlayAdapt()
+            observeUnderlay(network, newlyAvailable = true)
         }
         override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) =
-            scheduleUnderlayAdapt()
+            observeUnderlay(network, newlyAvailable = false)
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
-            scheduleUnderlayAdapt()
+            observeUnderlay(network, newlyAvailable = false)
         override fun onLost(network: Network) {
             underlayLostSeen = true
-            scheduleUnderlayAdapt()
+            observeUnderlayLost(network)
         }
     }
     private val bestMatchingCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             bestMatchingNetwork = network
             underlayLostSeen = false
-            noteRoamHandle(network.networkHandle)
-            scheduleUnderlayAdapt()
+            observeUnderlay(network, newlyAvailable = true)
         }
         override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) {
             bestMatchingNetwork = network
-            noteRoamHandle(network.networkHandle)
-            scheduleUnderlayAdapt()
+            observeUnderlay(network, newlyAvailable = false)
         }
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
             bestMatchingNetwork = network
-            noteRoamHandle(network.networkHandle)
-            scheduleUnderlayAdapt()
+            observeUnderlay(network, newlyAvailable = false)
         }
         override fun onLost(network: Network) {
             if (bestMatchingNetwork == network) bestMatchingNetwork = null
-            scheduleUnderlayAdapt()
+            observeUnderlayLost(network)
         }
     }
     /** True while the user intends to stay connected (saved config present). */
@@ -338,6 +346,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 underlayLostSeen = false
                 rxAtLinkAttach = 0L
                 watchedDefault = TunnelRebuild.DefaultWatch()
+                clearEarlyRoam()
                 lastPeerOutcome = null
                 peerCheckSerial++
                 lastPeerCheckAtMs = 0L
@@ -498,6 +507,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     healthUnderlayWaitStartedAtMs = 0L
                     lastStatsLogAtMs = 0L
                     watchedDefault = TunnelRebuild.DefaultWatch()
+                    clearEarlyRoam()
                     lastPeerOutcome = null
                     peerCheckSerial++
                     lastPeerCheckAtMs = 0L
@@ -739,6 +749,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         healthUnderlayWaitStartedAtMs = 0L
         lastStatsLogAtMs = 0L
         watchedDefault = TunnelRebuild.DefaultWatch()
+        clearEarlyRoam()
         lastPeerOutcome = null
         peerCheckSerial++
         lastPeerCheckAtMs = 0L
@@ -1192,7 +1203,20 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             // wakes the loop so it can reset and rebuild on that default.
             return
         }
+        val target = EarlyUnderlay.bindTarget(earlyUnderlay)
+        // Wi-Fi validation fires onCapabilities many times for one switch.
+        // Cancelling the roam there turns userspace off again and resets the
+        // re-provision count, so the handshake never finishes.
+        if (!forceHard && adaptJob?.isActive == true && target != null && target == activeRoamHandle) {
+            return
+        }
+        if (!forceHard && adaptJob?.isActive != true && target != null && target == activeRoamHandle &&
+            handshakeOk()
+        ) {
+            return
+        }
         adaptJob?.cancel()
+        if (target != null) activeRoamHandle = target
         adaptJob = scope.launch {
             try {
                 delay(UNDERLAY_ADAPT_DEBOUNCE_MS)
@@ -1227,7 +1251,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val config = vpnStatePrefs().getString(KEY_CONFIG, null) ?: return
         // An address is enough. Waiting for NET_CAPABILITY_VALIDATED stalls
         // Wi-Fi to cellular: those probes can be captured by the tunnel.
-        val available = systemDefaultSnap()?.takeIf { ipv4Addresses(it.link).isNotEmpty() }
+        // The callback network is used before it is the validated default.
+        val available = dataPlaneSnap()?.takeIf { ipv4Addresses(it.link).isNotEmpty() }
         val roam = UnderlayRoam.action(
             liveIdentity = available?.identity,
             liveReady = available != null,
@@ -1307,8 +1332,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      * LAN endpoint is installed only when this network is that LAN. A healthy
      * handshake on this same network is left alone. One socket swap that does
      * not handshake is followed by a full rebuild that does not turn the
-     * tunnel down. Once that rebuild has also missed, the give-up line stays
-     * up while later attempts continue on this network.
+     * tunnel down. The give-up line waits until the roam has been failing for
+     * [RoamRecovery.NOTICE_AFTER_MS]. Later attempts continue on this network.
      */
     private suspend fun recoverWithFreshEndpoint(gen: Long, initialHandle: Long?) {
         if (RoamRecovery.sameNetworkLeavesTunnelAlone(
@@ -1321,7 +1346,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         var handshakeRecovered = false
         var tracked = initialHandle
         var failedSocketSwaps = 0
-        var failedRebuilds = 0
+        if (initialHandle != null) activeRoamHandle = initialHandle
         stealthReconnectJob?.cancel()
         stealthReconnectJob = null
         if (controlClientHandle != (initialHandle ?: Long.MIN_VALUE)) dropUnderlyingControlClient()
@@ -1341,18 +1366,22 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     TunnelRebuild.RecoveryStep.WAIT,
                     TunnelRebuild.RecoveryStep.RESET -> Unit
                 }
-                val snap = systemDefaultSnap()
+                val snap = dataPlaneSnap()
                 val handle = snap?.network?.networkHandle
                 if (snap == null || ipv4Addresses(snap.link).isEmpty() ||
-                    snap.network != systemDefaultNetwork()
+                    (handle != null && !roamTargetStill(handle))
                 ) {
                     delay(EndpointRefresh.HANDSHAKE_POLL_MS)
                     continue
                 }
                 if (handle != tracked) {
                     failedSocketSwaps = 0
-                    failedRebuilds = 0
+                    if (handle != roamFailHandle) {
+                        roamFailHandle = handle
+                        roamFailRebuilds = 0
+                    }
                     tracked = handle
+                    if (handle != null) activeRoamHandle = handle
                     roamRetryDelayMs = RoamRecovery.Retry.INITIAL_MS
                     reconnectNotice = null
                     armedAt = roamArmedAtMs.takeIf { it > 0L } ?: System.currentTimeMillis()
@@ -1384,13 +1413,15 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         // The line is not a stop. After repeated misses on this
                         // same network, replace the peer and the tun and keep going.
                         if (round.rebuildTried) {
-                            failedRebuilds = TunnelRebuild.noteFailedRebuild(
-                                TunnelRebuild.RebuildStreak(tracked, failedRebuilds),
+                            val streak = TunnelRebuild.noteFailedRebuild(
+                                TunnelRebuild.RebuildStreak(roamFailHandle, roamFailRebuilds),
                                 tracked,
-                            ).count
+                            )
+                            roamFailHandle = streak.handle
+                            roamFailRebuilds = streak.count
                         }
-                        if (TunnelRebuild.shouldReprovisionFreshTunnel(failedRebuilds)) {
-                            failedRebuilds = 0
+                        if (TunnelRebuild.shouldReprovisionFreshTunnel(roamFailRebuilds)) {
+                            roamFailRebuilds = 0
                             val freshSince = System.currentTimeMillis()
                             if (escalateFreshTunnel(gen) &&
                                 waitForHandshake(gen, freshSince, 3_000L, handle)
@@ -1413,6 +1444,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
             }
         } finally {
+            if (handshakeRecovered) {
+                roamFailHandle = null
+                roamFailRebuilds = 0
+            }
             if (handshakeRecovered || !sessionStillActive(gen)) {
                 publishReconnecting(false)
             }
@@ -1487,7 +1522,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
                 is EndpointFetch.Ready -> {
                     if (!EndpointRefresh.stillCurrent(fresh.flight, endpointFlight) ||
-                        systemDefaultNetwork()?.networkHandle != handle
+                        (handle != null && !roamTargetStill(handle))
                     ) {
                         return@coroutineScope RoamRound(InstallOutcome.STALE, 0, armedAt, rebuildTried)
                     }
@@ -1624,7 +1659,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (!sessionStillActive(gen) || controlSignedOut) {
             return InstallWatch(InstallOutcome.STOPPED, nextFailed, armedAt)
         }
-        if (systemDefaultNetwork()?.networkHandle != handle) {
+        if (!roamTargetStill(handle)) {
             return InstallWatch(InstallOutcome.STALE, 0, armedAt)
         }
         if (!rebuildTun) {
@@ -1705,19 +1740,21 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private fun noteResolveFailure(failures: Int = 1, rebuildTried: Boolean = false) {
-        // The round is still running until its rebuild has finished. After
-        // that, the line stays up while later retries continue.
+        // A finished rebuild is not enough. The line waits out a normal roam.
         val recoveryPending = !rebuildTried
+        val elapsed = if (roamArmedAtMs > 0L) System.currentTimeMillis() - roamArmedAtMs else 0L
         if (RoamRecovery.failureEligible(
                 socketSwapTried = failures > 0,
                 rebuildTried = rebuildTried,
                 recoveryPending = recoveryPending,
+                elapsedMs = elapsed,
             )
         ) {
             EndpointRefresh.noticeAfter(
                 failures,
                 rebuildTried = rebuildTried,
                 recoveryPending = recoveryPending,
+                elapsedMs = elapsed,
             )?.let { showReconnectNotice(it) }
         }
         if (lastPeerOutcome == null) ensurePeerCheck(force = true, forceUnderlying = true)
@@ -1888,7 +1925,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun endpointAttemptCurrent(flight: EndpointRefresh.Flight, expectedHandle: Long?): Boolean =
         EndpointRefresh.stillCurrent(flight, endpointFlight) &&
-            systemDefaultNetwork()?.networkHandle == expectedHandle &&
+            (expectedHandle == null || roamTargetStill(expectedHandle)) &&
             sessionIntended() &&
             disconnectJob?.isActive != true &&
             !controlSignedOut
@@ -1981,7 +2018,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             if (response.code !in 200..299) return EndpointFetch.Failed
             val view = ApiClient.parse<PeerEndpointView>(response)
-            val snap = systemDefaultSnap()
+            val snap = dataPlaneSnap()
             if (snap == null || snap.network.networkHandle != expectedHandle) return EndpointFetch.Stale
             val chosen = offerForUnderlay(snap, view)
             if (chosen == null) {
@@ -2241,11 +2278,77 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return systemDefaultNetwork()?.networkHandle != handle
     }
 
+    private fun clearEarlyRoam() {
+        earlyUnderlay = EarlyUnderlay.State()
+        earlyNetwork = null
+        activeRoamHandle = Long.MIN_VALUE
+        roamFailHandle = null
+        roamFailRebuilds = 0
+    }
+
     /**
-     * A new system default, or the loss of one, drops cached peer results and
-     * wakes recovery. Data-plane sockets are re-protected on every observation,
-     * including a repeat of the same handle. Nothing here bindSocket's them.
+     * Record the network a callback just delivered. Wi-Fi with an address is
+     * bound before it is the validated default. Becoming the default re-binds
+     * that same network and does not start another userspace turn.
      */
+    private fun observeUnderlay(network: Network, newlyAvailable: Boolean) {
+        val hasAddress = runCatching { addressedUnderlay(network) != null }.getOrDefault(false)
+        val isDefault = bestMatchingNetwork?.networkHandle == network.networkHandle
+        val adopt = hasAddress && !isDefault && adoptsEarly(network)
+        val next = if (newlyAvailable) {
+            EarlyUnderlay.onAvailable(
+                earlyUnderlay,
+                network.networkHandle,
+                hasAddress,
+                isDefault,
+                adoptEarly = adopt,
+            )
+        } else {
+            EarlyUnderlay.onCapabilities(
+                earlyUnderlay,
+                network.networkHandle,
+                hasAddress,
+                isDefault,
+                adoptEarly = adopt,
+            )
+        }
+        val becameDefault = isDefault && earlyUnderlay.early == network.networkHandle && next.early == null
+        if (next.early != null && next.early != earlyUnderlay.early) {
+            RoamLog.record("early-bind")
+        } else if (becameDefault) {
+            RoamLog.record("rebind-default")
+        }
+        earlyUnderlay = next
+        if (next.early == network.networkHandle) {
+            earlyNetwork = network
+        } else if (earlyNetwork?.networkHandle == network.networkHandle) {
+            earlyNetwork = null
+        }
+        noteRoamHandle(EarlyUnderlay.bindTarget(next))
+        scheduleUnderlayAdapt()
+    }
+
+    private fun observeUnderlayLost(network: Network) {
+        val next = EarlyUnderlay.onLost(earlyUnderlay, network.networkHandle)
+        earlyUnderlay = next
+        if (earlyNetwork?.networkHandle == network.networkHandle) earlyNetwork = null
+        noteRoamHandle(EarlyUnderlay.bindTarget(next))
+        scheduleUnderlayAdapt()
+    }
+
+    /** Home Wi-Fi, or any Wi-Fi the callback just delivered. Not the other transport. */
+    private fun adoptsEarly(network: Network): Boolean {
+        val caps = connectivityManager().getNetworkCapabilities(network) ?: return false
+        if (!isUsableUnderlay(caps)) return false
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return true
+        val host = vpnStatePrefs().getString(KEY_ENDPOINT_LAN, null)
+            ?.let { EndpointSelector.host(it) }
+            ?: return false
+        if (!EndpointSelector.isRfc1918(host)) return false
+        val link = connectivityManager().getLinkProperties(network) ?: return false
+        return ipv4Addresses(link).any { EndpointSelector.sameIpv4Slash24(it, host) }
+    }
+
     private fun noteRoamHandle(handle: Long?) {
         if (handle == null || handle == roamWatchHandle) return
         val previous = roamWatchHandle
@@ -2258,8 +2361,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         }
     }
 
+    /**
+     * A new bind target drops cached peer results and wakes recovery.
+     * Data-plane sockets are re-protected on every observation, including a
+     * repeat of the same handle.
+     */
     private fun noteDefaultNetworkForRecovery() {
-        val next = systemDefaultNetwork()?.networkHandle
+        val next = dataPlaneNetwork()?.networkHandle
         noteRoamHandle(next)
         noteEndpointNetwork(next)
         val reaction = TunnelRebuild.onSystemDefault(
@@ -2575,7 +2683,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private suspend fun adaptWhileStealth(gen: Long, forceHard: Boolean = false) {
         if (gen != sessionGeneration || !sessionIntended()) return
         // An address is enough. Validation probes can be captured by the tunnel.
-        val live = systemDefaultSnap()?.takeIf { ipv4Addresses(it.link).isNotEmpty() }
+        val live = dataPlaneSnap()?.takeIf { ipv4Addresses(it.link).isNotEmpty() }
         if (live == null) {
             waitRecheckJob?.cancel()
             waitRecheckJob = scope.launch {
@@ -2641,7 +2749,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private suspend fun awaitFreshHandshake(gen: Long, sinceMs: Long, handle: Long?): Boolean {
         val deadline = System.currentTimeMillis() + EndpointRefresh.HANDSHAKE_WAIT_MS
         while (sessionStillActive(gen)) {
-            if (handle != null && systemDefaultNetwork()?.networkHandle != handle) return false
+            if (handle != null && !roamTargetStill(handle)) return false
             if (noteHandshake(sinceMs)) return true
             if (System.currentTimeMillis() >= deadline) return false
             delay(EndpointRefresh.HANDSHAKE_POLL_MS)
@@ -2665,11 +2773,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (gen != sessionGeneration || !sessionIntended()) return false
-            if (handle != null && systemDefaultNetwork()?.networkHandle != handle) return false
+            if (handle != null && !roamTargetStill(handle)) return false
             if (latestHandshakeMs() > afterMs) return true
             delay(400)
         }
-        if (handle != null && systemDefaultNetwork()?.networkHandle != handle) return false
+        if (handle != null && !roamTargetStill(handle)) return false
         return gen == sessionGeneration && sessionIntended() && latestHandshakeMs() > afterMs
     }
 
@@ -3006,12 +3114,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         GoBackend::class.java.getDeclaredMethod(name, *types).apply { isAccessible = true }
 
     /**
-     * Keep the WireGuard UDP sockets on the current system-default network.
+     * Keep the WireGuard UDP sockets on the callback network.
      *
      * Never `setUnderlyingNetworks(arrayOf(...))`. protect() on this device
      * stamps a stale VPN netId, so each fd is protect()'d and then bindSocket'd
-     * to [systemDefaultNetwork] only. A network the phone already left is not
-     * a bind target. There is no pin-success gate: every call does this again.
+     * to [dataPlaneNetwork]: the network from onAvailable or onCapabilities
+     * even before it is the validated default, and again once it is. A network
+     * the phone already left is not a bind target. There is no pin-success
+     * gate: every call does this again.
      */
     private fun followSystemDefault() {
         releaseUnderlyingPin()
@@ -3029,7 +3139,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      * config and is never written to a log.
      */
     private fun protectBackendSockets(intendedEndpoint: String? = null) {
-        val network = systemDefaultNetwork()
+        val network = dataPlaneNetwork()
         val expected = network?.networkHandle
         synchronized(tunnelOpLock) {
             val status = runCatching {
@@ -3202,6 +3312,32 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     /** Unvalidated is still this same network — never the other transport. */
     private fun systemDefaultSnap(): UnderlaySnap? = snapshotUnderlay(systemDefaultNetwork())
+
+    /**
+     * Socket bind target. The callback network while it is waiting to become
+     * the validated default, otherwise the system default. Never a third network.
+     */
+    private fun dataPlaneNetwork(): Network? {
+        val target = EarlyUnderlay.bindTarget(earlyUnderlay)
+        val early = earlyNetwork
+        if (target != null && early != null && early.networkHandle == target &&
+            addressedUnderlay(early) != null
+        ) {
+            return early
+        }
+        val def = systemDefaultNetwork()
+        if (target == null || def?.networkHandle == target) return def
+        return def
+    }
+
+    private fun dataPlaneSnap(): UnderlaySnap? = snapshotUnderlay(dataPlaneNetwork())
+
+    /** True while [handle] is the callback target or the validated default. */
+    private fun roamTargetStill(handle: Long): Boolean = EarlyUnderlay.attemptStillCurrent(
+        attempt = handle,
+        bindTarget = dataPlaneNetwork()?.networkHandle,
+        systemDefault = systemDefaultNetwork()?.networkHandle,
+    )
 
     private fun controlTunnelHealthy(): Boolean = ControlPlane.tunnelHealthy(
         reconnecting = isReconnecting,

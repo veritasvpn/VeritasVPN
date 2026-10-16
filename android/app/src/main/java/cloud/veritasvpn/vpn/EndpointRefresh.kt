@@ -251,19 +251,21 @@ object EndpointRefresh {
         disconnectRequested || !stillCurrent(attempt, latest)
 
     /**
-     * Shown once a socket swap and a full rebuild have both failed. Later
-     * retries on this network keep the line up. A peer-read miss alone, or a
-     * rebuild that has not finished, stays on Reconnecting.
+     * Shown once a socket swap and a full rebuild have both failed and this
+     * network has been down for [RoamRecovery.NOTICE_AFTER_MS]. A normal roam
+     * stays on Reconnecting with no error line. Later retries keep the line.
      */
     fun noticeAfter(
         failures: Int,
         rebuildTried: Boolean = false,
         recoveryPending: Boolean = false,
+        elapsedMs: Long = 0L,
     ): String? {
         if (!RoamRecovery.failureEligible(
                 socketSwapTried = failures > 0,
                 rebuildTried = rebuildTried,
                 recoveryPending = recoveryPending,
+                elapsedMs = elapsedMs,
             )
         ) {
             return null

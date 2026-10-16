@@ -99,19 +99,38 @@ class EndpointRefreshTest {
         assertNull(EndpointRefresh.noticeAfter(3))
         assertNull(EndpointRefresh.noticeAfter(3, rebuildTried = false, recoveryPending = false))
         assertNull(EndpointRefresh.noticeAfter(3, rebuildTried = true, recoveryPending = true))
-        assertEquals(
-            EndpointRefresh.GIVE_UP_MESSAGE,
-            EndpointRefresh.noticeAfter(1, rebuildTried = true, recoveryPending = false),
+        assertNull(
+            EndpointRefresh.noticeAfter(
+                1,
+                rebuildTried = true,
+                recoveryPending = false,
+                elapsedMs = 2_000L,
+            ),
         )
         assertEquals(
             EndpointRefresh.GIVE_UP_MESSAGE,
-            EndpointRefresh.noticeAfter(2, rebuildTried = true, recoveryPending = false),
+            EndpointRefresh.noticeAfter(
+                1,
+                rebuildTried = true,
+                recoveryPending = false,
+                elapsedMs = RoamRecovery.NOTICE_AFTER_MS,
+            ),
+        )
+        assertEquals(
+            EndpointRefresh.GIVE_UP_MESSAGE,
+            EndpointRefresh.noticeAfter(
+                2,
+                rebuildTried = true,
+                recoveryPending = false,
+                elapsedMs = RoamRecovery.NOTICE_AFTER_MS,
+            ),
         )
         assertFalse(
             RoamRecovery.failureEligible(
                 socketSwapTried = true,
                 rebuildTried = false,
                 recoveryPending = false,
+                elapsedMs = RoamRecovery.NOTICE_AFTER_MS,
             ),
         )
         assertFalse(
@@ -119,6 +138,7 @@ class EndpointRefreshTest {
                 socketSwapTried = false,
                 rebuildTried = true,
                 recoveryPending = false,
+                elapsedMs = RoamRecovery.NOTICE_AFTER_MS,
             ),
         )
         assertFalse(
@@ -126,6 +146,15 @@ class EndpointRefreshTest {
                 socketSwapTried = true,
                 rebuildTried = true,
                 recoveryPending = true,
+                elapsedMs = RoamRecovery.NOTICE_AFTER_MS,
+            ),
+        )
+        assertFalse(
+            RoamRecovery.failureEligible(
+                socketSwapTried = true,
+                rebuildTried = true,
+                recoveryPending = false,
+                elapsedMs = 2_000L,
             ),
         )
         assertTrue(
@@ -133,6 +162,7 @@ class EndpointRefreshTest {
                 socketSwapTried = true,
                 rebuildTried = true,
                 recoveryPending = false,
+                elapsedMs = RoamRecovery.NOTICE_AFTER_MS,
             ),
         )
         assertEquals(EndpointRefresh.GIVE_UP_MESSAGE, EndpointRefresh.displayStatus("timeout"))

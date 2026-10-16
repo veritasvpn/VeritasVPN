@@ -33,15 +33,23 @@ object RoamRecovery {
         if (failedSocketSwaps <= 0) Install.SOCKET_SWAP else Install.FULL_REBUILD
 
     /**
-     * The give-up line waits until this round's rebuild has finished.
-     * [recoveryPending] means that rebuild is still in progress. A later
-     * retry on the same network does not clear the line.
+     * How long a roam may stay on Reconnecting before the give-up line.
+     * A switch that handshakes in a few seconds never shows it.
+     */
+    const val NOTICE_AFTER_MS = 20_000L
+
+    /**
+     * The give-up line waits until this round's rebuild has finished and the
+     * roam has been failing for [NOTICE_AFTER_MS]. [recoveryPending] means
+     * that rebuild is still in progress. A later retry on the same network
+     * does not clear the line.
      */
     fun failureEligible(
         socketSwapTried: Boolean,
         rebuildTried: Boolean,
         recoveryPending: Boolean,
-    ): Boolean = socketSwapTried && rebuildTried && !recoveryPending
+        elapsedMs: Long,
+    ): Boolean = socketSwapTried && rebuildTried && !recoveryPending && elapsedMs >= NOTICE_AFTER_MS
 
     /**
      * After a swap and a rebuild both miss, keep trying on this network.

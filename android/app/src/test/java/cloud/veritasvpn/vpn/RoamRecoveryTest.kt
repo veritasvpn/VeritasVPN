@@ -62,6 +62,7 @@ class RoamRecoveryTest {
                 socketSwapTried = true,
                 rebuildTried = false,
                 recoveryPending = false,
+                elapsedMs = RoamRecovery.NOTICE_AFTER_MS,
             ),
         )
         assertFalse(
@@ -69,6 +70,15 @@ class RoamRecoveryTest {
                 socketSwapTried = true,
                 rebuildTried = true,
                 recoveryPending = true,
+                elapsedMs = RoamRecovery.NOTICE_AFTER_MS,
+            ),
+        )
+        assertFalse(
+            RoamRecovery.failureEligible(
+                socketSwapTried = true,
+                rebuildTried = true,
+                recoveryPending = false,
+                elapsedMs = 2_000L,
             ),
         )
         assertTrue(
@@ -76,6 +86,7 @@ class RoamRecoveryTest {
                 socketSwapTried = true,
                 rebuildTried = true,
                 recoveryPending = false,
+                elapsedMs = RoamRecovery.NOTICE_AFTER_MS,
             ),
         )
     }
