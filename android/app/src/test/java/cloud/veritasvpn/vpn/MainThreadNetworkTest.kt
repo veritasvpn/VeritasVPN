@@ -33,6 +33,7 @@ class MainThreadNetworkTest {
         assertTrue(retire.contains("dispatcher.cancelAll()"))
         val drop = slice(service, "fun dropUnderlyingControlClient", "fun isUsableUnderlay")
         assertFalse(drop.contains("evictAll"))
+        assertFalse(drop.contains("retireSharedClient"))
         assertTrue(drop.contains("retireControlClient"))
         val build = slice(service, "fun underlyingControlClient()", "fun retireControlClient")
         assertFalse(build.contains("evictAll"))

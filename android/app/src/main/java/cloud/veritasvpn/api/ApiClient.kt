@@ -1,5 +1,6 @@
 package cloud.veritasvpn.api
 
+import cloud.veritasvpn.support.ConnectTiming
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.delay
@@ -59,11 +60,12 @@ object ApiClient {
             .header("X-Veritas-Client", "android")
         token?.let { builder.header("Authorization", "Bearer $it") }
         val base = httpClient ?: client
+        val timed = if (ConnectTiming.isArmed()) notingDns(base) else base
         val callTimeout = if (retryOnTimeout) 15L else 20L
         val retryClient = if (retryOnTimeout) {
-            base.newBuilder().callTimeout(callTimeout, TimeUnit.SECONDS).build()
+            timed.newBuilder().callTimeout(callTimeout, TimeUnit.SECONDS).build()
         } else {
-            base
+            timed
         }
         return executeWithRetry(requestFactory = { builder.build() }, httpClient = retryClient, retryOnTimeout = retryOnTimeout, onRetry = onRetry)
     }
@@ -98,11 +100,29 @@ object ApiClient {
         return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = false)
     }
 
-    suspend fun delete(path: String, token: String): Response {
+    suspend fun delete(path: String, token: String, httpClient: OkHttpClient? = null): Response {
         val builder = Request.Builder().url("$BASE_URL$path").delete()
             .header("Authorization", "Bearer $token")
-        return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = false)
+        return executeWithRetry(
+            requestFactory = { builder.build() },
+            httpClient = httpClient ?: client,
+            retryOnTimeout = false,
+        )
     }
+
+    /** DNS completion for an armed connect. The host is not recorded. */
+    private fun notingDns(base: OkHttpClient): OkHttpClient =
+        base.newBuilder()
+            .eventListener(object : EventListener() {
+                override fun dnsEnd(
+                    call: Call,
+                    domainName: String,
+                    inetAddressList: List<java.net.InetAddress>,
+                ) {
+                    ConnectTiming.mark("dns")
+                }
+            })
+            .build()
 
     suspend fun delete(path: String, body: Map<String, Any>, token: String): Response {
         val requestBody = gson.toJson(body).toRequestBody(JSON)

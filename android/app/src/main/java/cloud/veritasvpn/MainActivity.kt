@@ -36,6 +36,7 @@ import cloud.veritasvpn.billing.PlanEntitlement
 import cloud.veritasvpn.billing.StoreBillingCallbacks
 import cloud.veritasvpn.billing.createStoreBilling
 import java.io.IOException
+import cloud.veritasvpn.support.ConnectTiming
 import cloud.veritasvpn.support.DiagnosticLog
 import cloud.veritasvpn.support.SupportLinks
 import cloud.veritasvpn.support.isRecordableError
@@ -288,7 +289,18 @@ class MainActivity : ComponentActivity() {
                     val accessToken = authRepo.getAccessToken()?.takeIf { it.isNotBlank() } ?: return
                     peerCleanupJob = scope.launch(Dispatchers.IO) {
                         try {
-                            ApiClient.delete("/api/v1/wg/peers/$peerId", accessToken).close()
+                            // The normal client's pooled socket is blackholed once
+                            // lockdown keeps the interface and userspace is off.
+                            // Skip the delete rather than wait out that read.
+                            // The next peer POST upserts this device.
+                            val held = VeritasVpnService.interfaceHeld()
+                            val protected = if (held) VeritasVpnService.provisioningClient() else null
+                            if (held && protected == null) return@launch
+                            ApiClient.delete(
+                                "/api/v1/wg/peers/$peerId",
+                                accessToken,
+                                httpClient = protected,
+                            ).close()
                         } catch (_: Exception) {
                         }
                     }
@@ -1561,6 +1573,7 @@ class MainActivity : ComponentActivity() {
             protectedAvailable = protected != null,
         )
         DiagnosticLog.record("provision route=${ProvisionRoute.logName(route)}")
+        ConnectTiming.mark("client")
         return when (route) {
             ProvisionRoute.Route.NORMAL ->
                 AuthenticatedApi.execute(authRepo, { token ->
@@ -1657,13 +1670,28 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
             try {
-                // Wait for prior DELETE so we do not race ourselves; server upserts
-                // by (account_id, device_id) so other installs stay untouched.
-                peerCleanupJob?.join()
+                ConnectTiming.arm(System.currentTimeMillis())
+                // The server upserts by (account_id, device_id). While the
+                // interface is held, the earlier delete is on a socket lockdown
+                // will not answer, and waiting for it is the multi-second gap.
+                // Cancelling it also stops a late delete of the peer we create.
+                if (ConnectTiming.shouldWaitForCleanup(VeritasVpnService.interfaceHeld())) {
+                    peerCleanupJob?.join()
+                    ConnectTiming.mark("waitcleanup")
+                } else {
+                    peerCleanupJob?.cancel()
+                    peerCleanupJob = null
+                    // The delete may still be on the cached client. Drop it so
+                    // the peer POST opens a new socket instead of inheriting
+                    // that read.
+                    VeritasVpnService.retireProvisioningClient()
+                    ConnectTiming.mark("skipcleanup")
+                }
                 if (!shouldContinue()) return@launch
                 val keyPair = KeyPair()
                 val deviceId = VpnSettings.deviceId(context)
                 val peer = createPeer(context, keyPair, deviceId)
+                ConnectTiming.mark("provision")
                 if (!shouldContinue()) return@launch
                 val config = WireGuardSession.buildConfig(context, peer, keyPair)
                 val intent = Intent(context, VeritasVpnService::class.java).apply {
@@ -1703,6 +1731,7 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
+                ConnectTiming.finish()
                 withContext(Dispatchers.Main) {
                     if (e is SessionExpiredException) {
                         onSessionExpired?.invoke()

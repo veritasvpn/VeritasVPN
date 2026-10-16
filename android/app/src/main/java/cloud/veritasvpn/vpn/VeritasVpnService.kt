@@ -38,6 +38,7 @@ import cloud.veritasvpn.auth.AuthRepository
 import cloud.veritasvpn.auth.ControlAccess
 import cloud.veritasvpn.auth.ControlRefresh
 import cloud.veritasvpn.secure.SecurePrefs
+import cloud.veritasvpn.support.ConnectTiming
 import cloud.veritasvpn.support.DiagnosticLog
 import cloud.veritasvpn.ui.DisconnectUi
 import okhttp3.Call
@@ -381,6 +382,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         startStatsPolling()
                         startBackgroundEgressValidation()
                         VpnSettings.setSessionEstablishedAt(this@VeritasVpnService, System.currentTimeMillis())
+                        noteTunnelReady(connectGen)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -422,6 +424,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                                         ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                                     )
                                     broadcastState(true, null)
+                                    noteTunnelReady(connectGen)
                                 }.onFailure { retryError ->
                                     Log.e(TAG, "Connect retry failed; keeping session intended", retryError)
                                 }
@@ -524,6 +527,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         DiagnosticLog.record("disconnect turn-off")
                         releaseTunnelOnce(disconnectGen, keepInterface = keepInterface)
                         if (disconnectGen != sessionGeneration) return@launch
+                        if (keepInterface) {
+                            // The activity's peer delete is still on the shared
+                            // client. That socket is now blackholed. Close it
+                            // here, on this IO job, so the read cannot sit for
+                            // the 15s timeout.
+                            retireSharedClient()
+                        }
                         broadcastState(false, null)
                         if (keepInterface) {
                             DiagnosticLog.record("disconnect interface=kept")
@@ -2267,9 +2277,33 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             return Tunnel.State.DOWN
         }
         val parsed = Config.parse(ByteArrayInputStream(liveConfig.toByteArray(Charsets.UTF_8)))
-        followSystemDefault()
-        val state = applyBackendState(Tunnel.State.UP, parsed)
-        followSystemDefault()
+        // The kept tun is still the lockdown interface. setState runs wgTurnOn
+        // before protect(), and the keepalive makes that first handshake enter
+        // the tun and start the 5s retransmit. Rebind strips the keepalive,
+        // protects, then kicks.
+        val keptTun = !stealth && tunKeeper != null
+        val state = when {
+            keptTun -> {
+                if (gen != sessionGeneration || !sessionIntended()) return Tunnel.State.DOWN
+                if (rebindLiveTunnel(parsed, gen)) {
+                    Tunnel.State.UP
+                } else if (gen != sessionGeneration || !sessionIntended()) {
+                    return Tunnel.State.DOWN
+                } else {
+                    followSystemDefault()
+                    val brought = applyBackendState(Tunnel.State.UP, parsed)
+                    followSystemDefault()
+                    if (brought == Tunnel.State.UP) kickHandshakeAfterProtect()
+                    brought
+                }
+            }
+            else -> {
+                followSystemDefault()
+                val brought = applyBackendState(Tunnel.State.UP, parsed)
+                followSystemDefault()
+                brought
+            }
+        }
         synchronized(tunnelOpLock) {
             if (gen == sessionGeneration && sessionIntended()) {
                 val prefs = vpnStatePrefs()
@@ -2735,6 +2769,25 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return HandshakeKick.withoutKeepalive(parsed.toWgUserspaceString())
     }
 
+    /** Tun is up. The handshake mark waits for a handshake newer than the tap. */
+    private fun noteTunnelReady(gen: Long) {
+        ConnectTiming.mark("tun")
+        scope.launch {
+            val deadline = System.currentTimeMillis() + 8_000
+            while (System.currentTimeMillis() < deadline &&
+                gen == sessionGeneration &&
+                sessionIntended()
+            ) {
+                if (ConnectTiming.handshakeIsNew(latestHandshakeMs())) {
+                    ConnectTiming.mark("handshake")
+                    break
+                }
+                delay(200)
+            }
+            ConnectTiming.finish()
+        }
+    }
+
     /**
      * One unprotected datagram enters the tun. Userspace then sends the first
      * initiation on the socket protect() already excluded from the VPN.
@@ -2969,6 +3022,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_USB)),
     )
+
+    /**
+     * The shared client still holds the socket from the previous API call.
+     * Under lockdown that socket never answers. Closing it is network I/O,
+     * so this runs on [socketCloseScope], not on the caller.
+     */
+    private fun retireSharedClient() {
+        socketCloseScope.launch(Dispatchers.IO) {
+            val shared = ApiClient.sharedClient()
+            runCatching { shared.dispatcher.cancelAll() }
+            runCatching { shared.connectionPool.evictAll() }
+        }
+    }
 
     /** Jobs that can be inside a native tunnel call. Snapshot before cancel. */
     private fun tunnelJobs(): List<Job> = listOfNotNull(
@@ -3594,6 +3660,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
         /** True while this process still holds the VPN interface. */
         fun interfaceHeld(): Boolean = active?.tunKeeper != null
+
+        /**
+         * Drop the cached system-default client. The next [provisioningClient]
+         * builds a new one. The close itself runs off the caller.
+         */
+        fun retireProvisioningClient() {
+            active?.dropUnderlyingControlClient()
+        }
 
         /**
          * Protected client for a peer request while the interface is held.
