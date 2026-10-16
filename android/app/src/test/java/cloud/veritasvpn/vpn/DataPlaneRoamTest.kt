@@ -8,9 +8,10 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Wi-Fi, then no default, then cellular. The data-plane sockets are never
- * bindSocket'd. Each change clears the cached peer result and wakes recovery
- * on the network the system is using now.
+ * Wi-Fi, then no default, then cellular. Data-plane sockets are bindSocket'd
+ * only to the current system default, and only while that handle exists.
+ * Each change clears the cached peer result and wakes recovery on the
+ * network the system is using now.
  */
 class DataPlaneRoamTest {
     private val wifi = 10L
@@ -50,7 +51,9 @@ class DataPlaneRoamTest {
         val cell = observe(watch, cellular, controlOpen, controlHandle)
         assertTrue(cell.clearCachedPeerOutcome)
         assertTrue(cell.wakeRecovery)
-        assertFalse(cell.dataPlaneBindSocket)
+        assertTrue(cell.dataPlaneBindSocket)
+        assertTrue(TunnelRebuild.dataPlaneMayBind(cellular, cellular))
+        assertFalse(TunnelRebuild.dataPlaneMayBind(cellular, wifi))
         assertEquals(cellular, TunnelRebuild.pinHandle(cellular))
         assertNull(TunnelRebuild.pinHandle(null))
         clears += 1
@@ -82,7 +85,8 @@ class DataPlaneRoamTest {
 
         val again = observe(watch, cellular, controlOpen, controlHandle)
         assertTrue(again.followDataPlane)
-        assertFalse(again.dataPlaneBindSocket)
+        assertTrue(again.dataPlaneBindSocket)
+        assertTrue(TunnelRebuild.dataPlaneMayBind(cellular, cellular))
         assertFalse(again.clearCachedPeerOutcome)
         assertFalse(again.dropControlClient)
         assertTrue(again.wakeRecovery)
@@ -102,8 +106,9 @@ class DataPlaneRoamTest {
             controlClientHandle = cellular,
         )
         assertTrue(reaction.followDataPlane)
-        assertFalse(reaction.dataPlaneBindSocket)
-        assertEquals(TunnelRebuild.DataPlaneAction.PROTECT_UNBOUND, reaction.dataPlane)
+        assertTrue(reaction.dataPlaneBindSocket)
+        assertEquals(TunnelRebuild.DataPlaneAction.PROTECT_THEN_BIND_DEFAULT, reaction.dataPlane)
+        assertFalse(TunnelRebuild.dataPlaneMayBind(cellular, wifi))
     }
 
     @Test
@@ -114,7 +119,8 @@ class DataPlaneRoamTest {
             .lineSequence()
             .filterNot { it.trimStart().startsWith("//") }
             .joinToString("\n")
-        assertEquals(1, Regex("""\.bindSocket\(""").findAll(code).count())
+        assertEquals(2, Regex("""\.bindSocket\(""").findAll(code).count())
+        assertTrue(code.contains("dataPlaneMayBind"))
         assertTrue(code.contains("protectThenBind"))
         assertFalse(code.contains("setUnderlyingNetworks(arrayOf"))
         assertFalse(code.contains("boundV4 || boundV6"))
@@ -134,7 +140,9 @@ class DataPlaneRoamTest {
         assertTrue(reaction.dropControlClient)
         assertTrue(reaction.wakeRecovery)
         assertTrue(reaction.followDataPlane)
-        assertFalse(reaction.dataPlaneBindSocket)
+        assertTrue(reaction.dataPlaneBindSocket)
+        assertTrue(TunnelRebuild.dataPlaneMayBind(cellular, cellular))
+        assertFalse(TunnelRebuild.dataPlaneMayBind(wifi, cellular))
         assertEquals(
             TunnelRebuild.RecoveryStep.RESET,
             recoveryStep(defaultHandle = cellular, trackedHandle = wifi, peerCleared = false),
@@ -166,8 +174,14 @@ class DataPlaneRoamTest {
             controlClientHandle = controlHandle,
         )
         assertTrue(reaction.followDataPlane)
-        assertFalse(reaction.dataPlaneBindSocket)
-        assertEquals(TunnelRebuild.DataPlaneAction.PROTECT_UNBOUND, reaction.dataPlane)
+        if (next != null) {
+            assertTrue(reaction.dataPlaneBindSocket)
+            assertTrue(TunnelRebuild.dataPlaneMayBind(next, next))
+        } else {
+            assertFalse(reaction.dataPlaneBindSocket)
+            assertFalse(TunnelRebuild.dataPlaneMayBind(null, next))
+        }
+        assertEquals(TunnelRebuild.DataPlaneAction.PROTECT_THEN_BIND_DEFAULT, reaction.dataPlane)
         return reaction
     }
 

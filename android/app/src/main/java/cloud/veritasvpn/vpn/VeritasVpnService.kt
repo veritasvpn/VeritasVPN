@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import java.io.FileDescriptor
 import android.system.OsConstants
 import android.util.Log
 import java.net.DatagramPacket
@@ -102,6 +103,23 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private val tunnelOpLock = Any()
     @Volatile private var tunKeeper: ParcelFileDescriptor? = null
 
+    /** Set only for the post-rebuild escalation. A normal reconnect leaves this false. */
+    @Volatile private var nextTunnelIsFresh = false
+
+    private data class DataPlaneStatus(
+        val v4Present: Boolean = false,
+        val v6Present: Boolean = false,
+        val protectV4: Boolean = false,
+        val protectV6: Boolean = false,
+        val bindAttempted: Boolean = false,
+        val bindV4: Boolean = false,
+        val bindV6: Boolean = false,
+        val boundHandle: Long? = null,
+        val config: DataPlaneHealth.ConfigCheck = DataPlaneHealth.ConfigCheck.UNREAD,
+    )
+
+    @Volatile private var dataPlaneStatus = DataPlaneStatus()
+
     /** establish() refused the tun. The activity asks for consent after the home frame. */
     @Volatile private var vpnConsentRequired = false
     /** One teardown per disconnect. A second DOWN on the same fds can abort the process. */
@@ -150,9 +168,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var underlayLostSeen = false
     private var rxAtLinkAttach = 0L
     /**
-     * Last system-default handle this session has reacted to. Not a socket pin:
-     * data-plane sockets are never bindSocket'd, and a repeated handle still
-     * re-protects them.
+     * Last system-default handle this session has reacted to. Not a pin that
+     * skips later work: every observation protect()'s the UDP sockets and
+     * bindSocket's them to this handle only.
      */
     @Volatile private var watchedDefault: TunnelRebuild.DefaultWatch = TunnelRebuild.DefaultWatch()
     @Volatile private var lastPeerOutcome: PeerCheckOutcome.Outcome? = null
@@ -290,6 +308,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 holdInterface = false
                 natKeepaliveJob?.cancel()
                 handshakeBurstJob?.cancel()
+                nextTunnelIsFresh = false
                 roamRetryDelayMs = RoamRecovery.Retry.INITIAL_MS
                 val config = intent.getStringExtra(EXTRA_CONFIG) ?: return START_STICKY
                 val endpointLan = intent.getStringExtra(EXTRA_ENDPOINT_LAN).orEmpty()
@@ -1302,6 +1321,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         var handshakeRecovered = false
         var tracked = initialHandle
         var failedSocketSwaps = 0
+        var failedRebuilds = 0
         stealthReconnectJob?.cancel()
         stealthReconnectJob = null
         if (controlClientHandle != (initialHandle ?: Long.MIN_VALUE)) dropUnderlyingControlClient()
@@ -1331,6 +1351,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
                 if (handle != tracked) {
                     failedSocketSwaps = 0
+                    failedRebuilds = 0
                     tracked = handle
                     roamRetryDelayMs = RoamRecovery.Retry.INITIAL_MS
                     reconnectNotice = null
@@ -1360,7 +1381,25 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     }
                     InstallOutcome.RETRY, InstallOutcome.FAILED -> {
                         // The swap and, when it missed, the rebuild have finished.
-                        // Show the clear line and keep trying on this network.
+                        // The line is not a stop. After repeated misses on this
+                        // same network, replace the peer and the tun and keep going.
+                        if (round.rebuildTried) {
+                            failedRebuilds = TunnelRebuild.noteFailedRebuild(
+                                TunnelRebuild.RebuildStreak(tracked, failedRebuilds),
+                                tracked,
+                            ).count
+                        }
+                        if (TunnelRebuild.shouldReprovisionFreshTunnel(failedRebuilds)) {
+                            failedRebuilds = 0
+                            val freshSince = System.currentTimeMillis()
+                            if (escalateFreshTunnel(gen) &&
+                                waitForHandshake(gen, freshSince, 3_000L, handle)
+                            ) {
+                                roamRetryDelayMs = RoamRecovery.Retry.INITIAL_MS
+                                handshakeRecovered = true
+                                return
+                            }
+                        }
                         noteResolveFailure(rebuildTried = round.rebuildTried)
                         val wait = if (round.rebuildTried) {
                             val current = roamRetryDelayMs
@@ -1581,7 +1620,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             Log.i(TAG, "path-adapt handshake ok handle=$handle rebuild=$rebuildTun")
             return InstallWatch(InstallOutcome.HANDSHOOK, nextFailed, armedAt)
         }
-        RoamLog.record("handshake fail")
+        recordHandshakeFailure(handle)
         if (!sessionStillActive(gen) || controlSignedOut) {
             return InstallWatch(InstallOutcome.STOPPED, nextFailed, armedAt)
         }
@@ -2328,8 +2367,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         // The kept tun is still the lockdown interface. setState runs wgTurnOn
         // before protect(), and the keepalive makes that first handshake enter
         // the tun and start the 5s retransmit. Rebind strips the keepalive,
-        // protects, then kicks.
-        val keptTun = !stealth && tunKeeper != null
+        // protects, binds to the current default, then kicks. A fresh tun is
+        // only the escalation after repeated failed rebuilds, not a reconnect.
+        val freshTun = nextTunnelIsFresh.also { nextTunnelIsFresh = false }
+        val keptTun = !stealth && tunKeeper != null && !freshTun
         val state = when {
             keptTun -> {
                 if (gen != sessionGeneration || !sessionIntended()) return Tunnel.State.DOWN
@@ -2348,7 +2389,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             else -> {
                 followSystemDefault()
-                val brought = applyBackendState(Tunnel.State.UP, parsed, gen)
+                val brought = applyBackendState(Tunnel.State.UP, parsed, gen, replaceTun = freshTun)
                 followSystemDefault()
                 brought
             }
@@ -2650,9 +2691,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      * on this device that consent dialog covers a black window. Consent stays
      * on the activity, after the home UI has drawn.
      */
-    private fun applyBackendState(state: Tunnel.State, config: Config?, gen: Long): Tunnel.State {
+    private fun applyBackendState(
+        state: Tunnel.State,
+        config: Config?,
+        gen: Long,
+        replaceTun: Boolean = false,
+    ): Tunnel.State {
         if (state != Tunnel.State.UP || config == null) return Tunnel.State.DOWN
-        if (tunKeeper == null && !openInterface(config)) return Tunnel.State.DOWN
+        if (replaceTun || tunKeeper == null) {
+            if (replaceTun) turnUserspaceOff()
+            if (!openInterface(config)) return Tunnel.State.DOWN
+        }
         vpnConsentRequired = false
         return if (rebindLiveTunnel(config, gen)) Tunnel.State.UP else Tunnel.State.DOWN
     }
@@ -2818,9 +2867,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 Log.w(TAG, "path-adapt tun keeper missing; leaving the interface up")
                 return false
             }
-            // New UDP sockets must be created unbound. protect() on HyperOS
-            // stamps whatever underlying network is set right now, so clear
-            // any pin before they exist. Do not bindSocket these fds.
+            // New UDP sockets must not inherit a pinned underlying network.
+            // protect() on HyperOS stamps whatever is set right now. Clear it,
+            // then protect and bindSocket to the current system default only.
             releaseUnderlyingPin()
             try {
                 turnOffCurrentHandleLocked()
@@ -2854,7 +2903,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     handleField.setInt(backend, newHandle)
                     tunnelField.set(backend, this)
                     configField.set(backend, parsed)
-                    protectBackendSockets()
+                    val endpoint = parsed.peers.firstOrNull()?.endpoint?.orElse(null)?.toString()
+                    protectBackendSockets(endpoint)
                 } finally {
                     userspaceInstalling = false
                 }
@@ -2956,16 +3006,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         GoBackend::class.java.getDeclaredMethod(name, *types).apply { isAccessible = true }
 
     /**
-     * Keep the WireGuard UDP sockets on whatever network the system is using.
+     * Keep the WireGuard UDP sockets on the current system-default network.
      *
-     * Never `setUnderlyingNetworks(arrayOf(...))` and never `Network.bindSocket`
-     * on these fds. Both pin the session to one Network object, so the next
-     * switch leaves the sockets on the network the phone already left. A
-     * protected, unbound socket re-resolves its route per packet.
-     *
-     * bindSocket stays on the protected control client, which is created again
-     * for the current system-default network. There is no pin-success gate
-     * here: every call clears the underlying network and protect()'s both fds.
+     * Never `setUnderlyingNetworks(arrayOf(...))`. protect() on this device
+     * stamps a stale VPN netId, so each fd is protect()'d and then bindSocket'd
+     * to [systemDefaultNetwork] only. A network the phone already left is not
+     * a bind target. There is no pin-success gate: every call does this again.
      */
     private fun followSystemDefault() {
         releaseUnderlyingPin()
@@ -2977,25 +3023,126 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     /**
-     * protect() only. A missing fd is skipped. Neither socket is bound.
-     * The lock keeps this off an fd that [rebindLiveTunnel] is replacing.
+     * protect(), then bindSocket to the current system default. A missing fd
+     * is skipped. The lock keeps this off an fd that [rebindLiveTunnel] is
+     * replacing. [intendedEndpoint] is compared to the running userspace
+     * config and is never written to a log.
      */
-    private fun protectBackendSockets() {
+    private fun protectBackendSockets(intendedEndpoint: String? = null) {
+        val network = systemDefaultNetwork()
+        val expected = network?.networkHandle
         synchronized(tunnelOpLock) {
-            runCatching {
+            val status = runCatching {
                 val handle = goField("currentTunnelHandle").getInt(backend)
-                if (handle < 0) return
-                protectSocket(goNative("wgGetSocketV4", Integer.TYPE).invoke(null, handle) as Int)
-                protectSocket(goNative("wgGetSocketV6", Integer.TYPE).invoke(null, handle) as Int)
-            }.onFailure { error ->
+                if (handle < 0) {
+                    return@runCatching DataPlaneStatus()
+                }
+                val v4 = socketFd("wgGetSocketV4", handle)
+                val v6 = socketFd("wgGetSocketV6", handle)
+                val mayBind = network != null &&
+                    TunnelRebuild.dataPlaneMayBind(expected, network.networkHandle)
+                val boundV4 = protectAndBind(v4, if (mayBind) network else null)
+                val boundV6 = protectAndBind(v6, if (mayBind) network else null)
+                val observed = readBoundHandle(v4) ?: readBoundHandle(v6)
+                val bound = observed ?: boundV4.handle ?: boundV6.handle
+                val previous = dataPlaneStatus.config
+                val config = if (intendedEndpoint.isNullOrBlank()) {
+                    previous
+                } else {
+                    DataPlaneHealth.configCheck(readUserspaceConfig(handle), intendedEndpoint)
+                }
+                DataPlaneStatus(
+                    v4Present = v4 >= 0,
+                    v6Present = v6 >= 0,
+                    protectV4 = boundV4.protectedOk,
+                    protectV6 = boundV6.protectedOk,
+                    bindAttempted = mayBind && v4 >= 0,
+                    bindV4 = boundV4.boundOk,
+                    bindV6 = boundV6.boundOk,
+                    boundHandle = bound,
+                    config = config,
+                )
+            }.getOrElse { error ->
                 Log.w(TAG, "Could not reprotect WireGuard sockets: ${error.javaClass.simpleName}")
+                DataPlaneStatus()
             }
+            dataPlaneStatus = status
         }
     }
 
-    private fun protectSocket(fd: Int) {
-        if (fd < 0) return
-        protect(fd)
+    private data class BoundSocket(
+        val protectedOk: Boolean,
+        val boundOk: Boolean,
+        val handle: Long?,
+    )
+
+    private fun socketFd(nativeName: String, handle: Int): Int =
+        runCatching { goNative(nativeName, Integer.TYPE).invoke(null, handle) as Int }.getOrDefault(-1)
+
+    private fun protectAndBind(fd: Int, network: Network?): BoundSocket {
+        if (fd < 0) return BoundSocket(protectedOk = false, boundOk = false, handle = null)
+        val protectedOk = runCatching { protect(fd) }.getOrDefault(false)
+        if (!protectedOk || network == null) {
+            return BoundSocket(protectedOk, boundOk = false, handle = null)
+        }
+        val boundOk = runCatching { network.bindSocket(rawFileDescriptor(fd)) }.isSuccess
+        return BoundSocket(
+            protectedOk = protectedOk,
+            boundOk = boundOk,
+            handle = if (boundOk) network.networkHandle else null,
+        )
+    }
+
+    private fun rawFileDescriptor(fd: Int): FileDescriptor {
+        val descriptor = FileDescriptor()
+        val field = FileDescriptor::class.java.declaredFields.firstOrNull {
+            it.type == Int::class.javaPrimitiveType && (it.name == "descriptor" || it.name == "fd")
+        } ?: throw NoSuchFieldException("descriptor")
+        field.isAccessible = true
+        field.setInt(descriptor, fd)
+        return descriptor
+    }
+
+    /** Platform read-back of the network this fd is bound to. Null if unknown. */
+    private fun readBoundHandle(fd: Int): Long? {
+        if (fd < 0) return null
+        return runCatching {
+            val cm = connectivityManager()
+            val raw = rawFileDescriptor(fd)
+            val method = cm.javaClass.methods.firstOrNull { candidate ->
+                candidate.parameterTypes.size == 1 &&
+                    FileDescriptor::class.java.isAssignableFrom(candidate.parameterTypes[0]) &&
+                    (candidate.name == "getBoundNetworkForSocket" || candidate.name == "getBoundNetwork")
+            } ?: return null
+            val network = method.invoke(cm, raw) as? Network
+            network?.networkHandle ?: 0L
+        }.getOrNull()
+    }
+
+    private fun readUserspaceConfig(handle: Int): String? =
+        runCatching { goNative("wgGetConfig", Integer.TYPE).invoke(null, handle) as? String }.getOrNull()
+
+    private fun recordHandshakeFailure(expectedHandle: Long?) {
+        val status = dataPlaneStatus
+        val stats = runCatching { backend.getStatistics(this) }.getOrNull()
+        val tx = stats?.totalTx() ?: 0L
+        val rx = stats?.totalRx() ?: 0L
+        val err = DataPlaneHealth.failure(
+            v4Present = status.v4Present,
+            protectV4 = status.protectV4,
+            bindAttempted = status.bindAttempted,
+            bindV4 = status.bindV4,
+            boundHandle = status.boundHandle,
+            expectedHandle = expectedHandle,
+            tx = tx,
+            rx = rx,
+            config = status.config,
+        )
+        val bound = status.boundHandle ?: 0L
+        val line = "handshake fail err=$err protect4=${if (status.protectV4) 1 else 0} " +
+            "protect6=${if (status.protectV6) 1 else 0} bound=$bound tx=$tx rx=$rx"
+        RoamLog.record(line)
+        DiagnosticLog.record(line)
     }
 
     private data class UnderlaySnap(
@@ -3461,7 +3608,53 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     /** @return true when a retry owns the flight and the caller must not release it. */
-    private suspend fun handlePeerGone(gen: Long, epoch: Int): Boolean {
+    /**
+     * New peer and a new tun on the current system default. Does not switch
+     * network or mode. The roam loop keeps running when this does not handshake.
+     */
+    private suspend fun escalateFreshTunnel(gen: Long): Boolean {
+        if (!sessionStillActive(gen) || controlSignedOut) return false
+        if (reprovisionJob?.isActive == true) return false
+        val now = System.currentTimeMillis()
+        val epoch = synchronized(reprovisionLock) {
+            ReprovisionFlight.tryClaim(
+                persistedAtMs = VpnSettings.reprovisionInProgressAt(this),
+                nowMs = now,
+                replaceWaiting = true,
+            ) { claimedAt ->
+                VpnSettings.setReprovisionInProgressAt(this, claimedAt)
+            }
+        } ?: return false
+        RoamLog.record("reprovision fresh")
+        DiagnosticLog.record("reprovision fresh")
+        val keep = try {
+            handlePeerGone(
+                gen,
+                epoch,
+                freshInterface = true,
+                markGone = false,
+                scheduleRetry = false,
+            )
+        } catch (e: CancellationException) {
+            ReprovisionFlight.release(epoch) { VpnSettings.clearReprovisionInProgressAt(this) }
+            throw e
+        }
+        if (!keep) {
+            ReprovisionFlight.release(epoch) { VpnSettings.clearReprovisionInProgressAt(this) }
+        }
+        val up = synchronized(tunnelOpLock) {
+            runCatching { goField("currentTunnelHandle").getInt(backend) }.getOrDefault(-1) >= 0
+        }
+        return up && sessionStillActive(gen)
+    }
+
+    private suspend fun handlePeerGone(
+        gen: Long,
+        epoch: Int,
+        freshInterface: Boolean = false,
+        markGone: Boolean = true,
+        scheduleRetry: Boolean = true,
+    ): Boolean {
         var attempted = false
         var succeeded = false
         var signedOut = controlSignedOut
@@ -3505,7 +3698,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             val token = access.token
 
             attempted = true
-            VpnSettings.setPeerGoneAt(this, System.currentTimeMillis())
+            if (markGone) VpnSettings.setPeerGoneAt(this, System.currentTimeMillis())
             logReprovision("started", 0)
 
             publishReconnecting(true)
@@ -3566,7 +3759,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             VpnSettings.setCurrentPeerId(this, peer.peerId)
 
-            val state = establishTunnel(config, gen)
+            if (freshInterface) nextTunnelIsFresh = true
+            val state = try {
+                establishTunnel(config, gen)
+            } finally {
+                nextTunnelIsFresh = false
+            }
             if (gen != sessionGeneration || !sessionIntended()) {
                 runCatching { turnUserspaceOff() }
                 return false
@@ -3611,7 +3809,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 )
                 if (succeeded) {
                     publishReconnecting(false)
-                } else if (retry) {
+                } else if (retry && scheduleRetry) {
                     // Stay on Reconnecting / Not protected. The old peer is gone.
                     // The flight stays claimed through the backoff so a second
                     // create cannot start.

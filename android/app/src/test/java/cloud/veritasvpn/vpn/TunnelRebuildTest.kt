@@ -206,8 +206,12 @@ class TunnelRebuildTest {
             controlClientOpen = true,
             controlClientHandle = other,
         )
-        assertFalse(reaction.dataPlaneBindSocket)
-        assertEquals(TunnelRebuild.DataPlaneAction.PROTECT_UNBOUND, reaction.dataPlane)
+        assertTrue(reaction.dataPlaneBindSocket)
+        assertEquals(TunnelRebuild.DataPlaneAction.PROTECT_THEN_BIND_DEFAULT, reaction.dataPlane)
+        assertTrue(TunnelRebuild.dataPlaneMayBind(systemDefault, systemDefault))
+        assertFalse(TunnelRebuild.dataPlaneMayBind(systemDefault, other))
+        assertFalse(TunnelRebuild.shouldReprovisionFreshTunnel(1))
+        assertTrue(TunnelRebuild.shouldReprovisionFreshTunnel(TunnelRebuild.REBUILDS_BEFORE_FRESH_TUNNEL))
         assertEquals(systemDefault, TunnelRebuild.pinHandle(systemDefault))
     }
 

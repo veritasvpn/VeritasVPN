@@ -50,7 +50,8 @@ class KeptTunRoamTest {
         val failed = recover.substring(failedAt, recover.indexOf("delay(wait)", failedAt) + "delay(wait)".length)
         assertTrue(failed.contains("noteResolveFailure(rebuildTried = round.rebuildTried)"))
         assertTrue(failed.contains("RoamRecovery.Retry.next"))
-        assertFalse(failed.contains("return"))
+        assertTrue(failed.contains("escalateFreshTunnel"))
+        assertTrue(failed.indexOf("noteResolveFailure") < failed.indexOf("delay(wait)"))
         val publish = slice(service, "fun publishReconnecting", "fun ")
         assertTrue(publish.contains("if (!reconnecting) reconnectNotice = null"))
 

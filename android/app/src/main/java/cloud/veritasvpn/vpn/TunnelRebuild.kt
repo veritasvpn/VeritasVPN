@@ -8,9 +8,12 @@ package cloud.veritasvpn.vpn
  * A peer-check network error does not block a rebuild. A deleted peer is
  * re-provision's job.
  *
- * WireGuard data-plane sockets stay unbound. They are protect()'d and the
- * underlying network is cleared, so each packet follows the system default.
- * bindSocket is only for the control client, and only on that same default.
+ * WireGuard data-plane sockets are protect()'d and then bindSocket'd to the
+ * current system-default network only. protect() alone can stamp a stale VPN
+ * netId, which is why a peer check on the bound control client can succeed
+ * while the UDP handshake never leaves. Another network is never selected.
+ * After repeated rebuilds with no handshake, the peer is re-provisioned and
+ * the tun is replaced. That is not a give-up: the next attempt still runs.
  */
 object TunnelRebuild {
     const val MIN_BACKOFF_MS = 5_000L
@@ -19,6 +22,12 @@ object TunnelRebuild {
 
     /** Full rebuilds on one default network with no handshake before a forced check. */
     const val REBUILDS_BEFORE_UNDERLYING_CHECK = 3
+
+    /**
+     * Rebuilds on one system-default handle with no handshake before a new
+     * peer and a new tun. The roam does not stop.
+     */
+    const val REBUILDS_BEFORE_FRESH_TUNNEL = 2
 
     enum class RecoveryStep {
         /** Create a new tunnel on the current system default. */
@@ -85,15 +94,29 @@ object TunnelRebuild {
     }
 
     /**
-     * The only handle the protected control client may pass to bindSocket.
-     * Null means the system default is gone and that client is dropped.
-     * WireGuard data-plane sockets do not use this. They stay unbound.
+     * The only handle a socket may pass to bindSocket: the current system
+     * default. Null means that network is gone and nothing is bound.
      */
     fun pinHandle(systemDefaultHandle: Long?): Long? = systemDefaultHandle
 
-    /** protect() both UDP fds and setUnderlyingNetworks(null). Never bindSocket. */
+    /**
+     * Data-plane bindSocket is allowed only when [targetHandle] is the current
+     * system default. Any other handle, including a network the phone already
+     * left, is rejected.
+     */
+    fun dataPlaneMayBind(systemDefaultHandle: Long?, targetHandle: Long?): Boolean =
+        systemDefaultHandle != null && targetHandle == systemDefaultHandle
+
+    /**
+     * Enough failed rebuilds on this handle to replace the peer and the tun.
+     * A smaller count stays on socket swap and rebuild.
+     */
+    fun shouldReprovisionFreshTunnel(failedRebuildsOnHandle: Int): Boolean =
+        failedRebuildsOnHandle >= REBUILDS_BEFORE_FRESH_TUNNEL
+
+    /** protect(), then bindSocket to the current system default when it exists. */
     enum class DataPlaneAction {
-        PROTECT_UNBOUND,
+        PROTECT_THEN_BIND_DEFAULT,
     }
 
     /**
@@ -111,7 +134,8 @@ object TunnelRebuild {
      *
      * [followDataPlane] is always true. A failed or skipped protect must not
      * record a pin that suppresses the next callback, and a v4-only or v6-only
-     * result is not a success. [dataPlaneBindSocket] is always false.
+     * result is not a success. [dataPlaneBindSocket] is true only while a
+     * system-default handle exists, and that handle is the only bind target.
      * [clearCachedPeerOutcome] and [wakeRecovery] still run on a real handle
      * change, including Wi-Fi to lost and lost to cellular.
      */
@@ -139,8 +163,8 @@ object TunnelRebuild {
             dropControlClient = dropControl,
             wakeRecovery = true,
             followDataPlane = true,
-            dataPlaneBindSocket = false,
-            dataPlane = DataPlaneAction.PROTECT_UNBOUND,
+            dataPlaneBindSocket = nextHandle != null,
+            dataPlane = DataPlaneAction.PROTECT_THEN_BIND_DEFAULT,
             next = DefaultWatch(seen = true, handle = nextHandle),
         )
     }
