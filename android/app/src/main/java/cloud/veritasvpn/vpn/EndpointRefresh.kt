@@ -29,7 +29,6 @@ object EndpointRefresh {
     const val PEER_READ_BUDGET_MS = 2_000L
 
     const val RETRY_DELAY_MS = 1_000L
-    const val RETRIES_BEFORE_MESSAGE = 3
 
     const val GIVE_UP_MESSAGE =
         "Couldn't reconnect on this network. Check your connection and try again."
@@ -252,9 +251,9 @@ object EndpointRefresh {
         disconnectRequested || !stillCurrent(attempt, latest)
 
     /**
-     * Shown only after a socket swap and a full rebuild have both been tried,
-     * and only when that recovery is no longer pending. A peer-read miss
-     * alone stays on Reconnecting.
+     * Shown once a socket swap and a full rebuild have both failed. Later
+     * retries on this network keep the line up. A peer-read miss alone, or a
+     * rebuild that has not finished, stays on Reconnecting.
      */
     fun noticeAfter(
         failures: Int,
@@ -269,7 +268,7 @@ object EndpointRefresh {
         ) {
             return null
         }
-        return if (failures >= RETRIES_BEFORE_MESSAGE) GIVE_UP_MESSAGE else null
+        return GIVE_UP_MESSAGE
     }
 
     /**

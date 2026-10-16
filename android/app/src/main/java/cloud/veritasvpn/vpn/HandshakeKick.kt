@@ -11,6 +11,24 @@ object HandshakeKick {
     /** NAT on cellular dies without traffic. This stands in for WireGuard's 25s keepalive. */
     const val KEEPALIVE_EVERY_MS = 20_000L
 
+    /**
+     * Userspace is started without persistent keepalive, so it does not
+     * retransmit on its own. These kicks stand in for that timer. The first
+     * packet is sent by the caller; the delays here are the retries.
+     */
+    const val RETRANSMIT_EVERY_MS = 250L
+    const val RETRANSMIT_WINDOW_MS = 2_000L
+
+    fun retransmitDelaysMs(): List<Long> {
+        val delays = ArrayList<Long>()
+        var at = RETRANSMIT_EVERY_MS
+        while (at <= RETRANSMIT_WINDOW_MS) {
+            delays.add(at)
+            at += RETRANSMIT_EVERY_MS
+        }
+        return delays
+    }
+
     fun withoutKeepalive(configText: String): String {
         val kept = configText.lineSequence().filterNot { isKeepaliveLine(it) }.toList()
         if (kept.isEmpty()) return ""

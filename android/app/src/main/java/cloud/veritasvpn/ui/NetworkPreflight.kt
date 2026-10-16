@@ -13,7 +13,7 @@ object NetworkPreflight {
     }
 
     fun classifyFailure(context: Context, error: Throwable): String {
-        val lockdownOn = VpnKillSwitch.isLockdownEnabled(context, allowPrepare = true)
+        val lockdownOn = VpnKillSwitch.isLockdownEnabled(context)
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val tunnelUp = isVpnTunnelUp(cm)
         if (lockdownOn && !tunnelUp) {
@@ -31,7 +31,7 @@ object NetworkPreflight {
     }
 
     fun checkLockdownOnly(context: Context): Result {
-        val lockdownOn = VpnKillSwitch.isLockdownEnabled(context, allowPrepare = true)
+        val lockdownOn = VpnKillSwitch.isLockdownEnabled(context)
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val tunnelUp = isVpnTunnelUp(cm)
         if (lockdownOn && !tunnelUp) {

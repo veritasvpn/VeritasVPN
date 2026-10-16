@@ -213,6 +213,8 @@ class MainActivity : ComponentActivity() {
                 var lockdownEnabled by remember { mutableStateOf(false) }
                 val killSwitchRecheckGeneration = remember { intArrayOf(0) }
                 var awaitingVpnConsent by remember { mutableStateOf(false) }
+                var homeDrawn by remember { mutableStateOf(false) }
+                var needsVpnConsent by remember { mutableStateOf(false) }
                 var rxBytes by remember { mutableStateOf(0L) }
                 var txBytes by remember { mutableStateOf(0L) }
                 var handshakeMs by remember { mutableStateOf(0L) }
@@ -586,7 +588,7 @@ class MainActivity : ComponentActivity() {
                     if (!shouldStart) return@rememberLauncherForActivityResult
                     scope.launch {
                         val lockdownOn = withContext(Dispatchers.IO) {
-                            VpnKillSwitch.isLockdownEnabled(context, allowPrepare = true)
+                            VpnKillSwitch.isLockdownEnabled(context)
                         }
                         if (!lockdownOn) {
                             showKillSwitchBlock()
@@ -664,6 +666,7 @@ class MainActivity : ComponentActivity() {
                     ActivityResultContracts.StartActivityForResult()
                 ) { result ->
                     awaitingVpnConsent = false
+                    needsVpnConsent = false
                     if (result.resultCode == Activity.RESULT_OK) {
                         statusMsg = null
                         // If we're in onboarding mode, just mark onboarding as done and go to dashboard.
@@ -743,6 +746,17 @@ class MainActivity : ComponentActivity() {
                         override fun onReceive(ctx: Context?, intent: Intent?) {
                             when (intent?.action) {
                                 VeritasVpnService.ACTION_STATE -> {
+                                    if (intent.getBooleanExtra(
+                                            VeritasVpnService.EXTRA_NEEDS_VPN_CONSENT,
+                                            false,
+                                        )
+                                    ) {
+                                        // Restore could not open the tun. Ask only
+                                        // after the home frame, from this activity.
+                                        needsVpnConsent = true
+                                        connecting = false
+                                        if (statusMsg == "Restoring secure connection…") statusMsg = null
+                                    }
                                     val nowConnected =
                                         intent.getBooleanExtra(VeritasVpnService.EXTRA_CONNECTED, false)
                                     val error = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
@@ -977,9 +991,13 @@ class MainActivity : ComponentActivity() {
                     cancelReconnect()
                     connecting = true
                     statusMsg = null
-                    scope.launch(Dispatchers.IO) {
+                    scope.launch {
+                        // The circle is already on screen. Wait one frame so
+                        // the consent dialog cannot cover an undrawn window.
+                        withContext(Dispatchers.Main) { withFrameNanos { } }
+                        if (!userWantsConnected) return@launch
                         val consentIntent = try {
-                            VpnService.prepare(context)
+                            withContext(Dispatchers.IO) { VpnService.prepare(context) }
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
                                 if (!userWantsConnected) return@withContext
@@ -993,10 +1011,12 @@ class MainActivity : ComponentActivity() {
                         // VeritasVPN to Settings → VPN and shows the system allow
                         // dialog. Checking lockdown first leaves a fresh install
                         // unregistered, so the user cannot turn the switches on.
-                        val lockdownOn = VpnKillSwitch.isLockdownEnabled(
-                            context,
-                            vpnPrepared = consentIntent == null,
-                        )
+                        val lockdownOn = withContext(Dispatchers.IO) {
+                            VpnKillSwitch.isLockdownEnabled(
+                                context,
+                                vpnPrepared = consentIntent == null,
+                            )
+                        }
                         val gate = VpnKillSwitch.nextConnectGate(
                             vpnPrepared = consentIntent == null,
                             lockdownEnabled = lockdownOn,
@@ -1015,6 +1035,26 @@ class MainActivity : ComponentActivity() {
                             startVpnAfterPermissions(lockdownVerified = true)
                         }
                     }
+                }
+
+                LaunchedEffect(homeDrawn, needsVpnConsent, showOnboardingDisclosure) {
+                    // A saved session does not call prepare(). That check is what
+                    // raised the system dialog on startup, including over a black
+                    // window when the service used to call it. Ask only after the
+                    // home frame, and only when establish() was actually refused.
+                    if (!homeDrawn || showOnboardingDisclosure || !needsVpnConsent) return@LaunchedEffect
+                    if (!userWantsConnected || awaitingVpnConsent) return@LaunchedEffect
+                    val consentIntent = withContext(Dispatchers.IO) {
+                        runCatching { VpnService.prepare(context) }.getOrNull()
+                    }
+                    if (!userWantsConnected || awaitingVpnConsent) return@LaunchedEffect
+                    needsVpnConsent = false
+                    if (consentIntent == null) {
+                        startVpnAfterPermissions(lockdownVerified = false)
+                        return@LaunchedEffect
+                    }
+                    awaitingVpnConsent = true
+                    vpnPermissionLauncher.launch(consentIntent)
                 }
 
                 val lifecycleOwner = LocalLifecycleOwner.current
@@ -1132,6 +1172,11 @@ class MainActivity : ComponentActivity() {
                     VpnSettings.setLastError(context, safe)
                 }
 
+                LaunchedEffect(Unit) {
+                    withFrameNanos { }
+                    homeDrawn = true
+                }
+
                 // On cold start, check if onboarding is needed for a logged-in user.
                 LaunchedEffect(user) {
                     if (user != null) {
@@ -1207,27 +1252,10 @@ class MainActivity : ComponentActivity() {
                                 // Stay on disclosure screen, wait for user action.
                             }
                             OnboardingGate.Step.SHOW_SYSTEM_DIALOG -> {
-                                // Call prepare() and launch the system dialog.
-                                val consentIntent = try {
-                                    withContext(Dispatchers.IO) {
-                                        VpnService.prepare(context)
-                                    }
-                                } catch (e: Exception) {
-                                    // If prepare() fails, mark onboarding as done and go to dashboard.
-                                    VpnSettings.setOnboardingVpnDone(context, true)
-                                    showOnboardingDisclosure = false
-                                    return@LaunchedEffect
-                                }
-                                if (consentIntent != null) {
-                                    // Show the system dialog.
-                                    onboardingConsentIntent = consentIntent
-                                    awaitingVpnConsent = true
-                                    vpnPermissionLauncher.launch(consentIntent)
-                                } else {
-                                    // Already prepared; onboarding is done.
-                                    VpnSettings.setOnboardingVpnDone(context, true)
-                                    showOnboardingDisclosure = false
-                                }
+                                // Restoring this step must not raise the system
+                                // dialog over a blank window. The disclosure
+                                // accept path asks, after that screen is drawn.
+                                onboardingStep = OnboardingGate.Step.SHOW_DISCLOSURE
                             }
                             OnboardingGate.Step.DONE, OnboardingGate.Step.SKIP -> {
                                 // Should not reach here, but handle gracefully.
@@ -1238,19 +1266,29 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // Render the disclosure screen if needed.
-                    if (onboardingStep == OnboardingGate.Step.SHOW_DISCLOSURE) {
+                    if (onboardingStep == OnboardingGate.Step.SHOW_DISCLOSURE ||
+                        onboardingStep == OnboardingGate.Step.SHOW_SYSTEM_DIALOG
+                    ) {
                         VpnDisclosureScreen(
                             onAccept = {
                                 VpnSettings.setVpnDisclosureAccepted(context, true)
-                                // Move to next step: check if VPN is prepared.
-                                scope.launch(Dispatchers.IO) {
-                                    val prepared = try {
-                                        VpnService.prepare(context) == null
+                                scope.launch {
+                                    withContext(Dispatchers.Main) { withFrameNanos { } }
+                                    val consentIntent = try {
+                                        withContext(Dispatchers.IO) { VpnService.prepare(context) }
                                     } catch (e: Exception) {
-                                        false
+                                        null
                                     }
                                     withContext(Dispatchers.Main) {
-                                        onboardingStep = OnboardingGate.afterAccept(prepared)
+                                        if (consentIntent == null) {
+                                            VpnSettings.setOnboardingVpnDone(context, true)
+                                            showOnboardingDisclosure = false
+                                        } else {
+                                            onboardingStep = OnboardingGate.Step.SHOW_SYSTEM_DIALOG
+                                            onboardingConsentIntent = consentIntent
+                                            awaitingVpnConsent = true
+                                            vpnPermissionLauncher.launch(consentIntent)
+                                        }
                                     }
                                 }
                             },

@@ -1,5 +1,6 @@
 package cloud.veritasvpn.vpn
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -30,5 +31,14 @@ class HandshakeKickTest {
         assertFalse(quiet.lineSequence().any { HandshakeKick.isKeepaliveLine(it) })
         assertTrue(quiet.contains("Endpoint = 203.0.113.10:443"))
         assertTrue(HandshakeKick.KEEPALIVE_EVERY_MS in 15_000L..25_000L)
+    }
+
+    @Test
+    fun strippedKeepaliveRetransmitsInsideTheHandshakeWatch() {
+        val delays = HandshakeKick.retransmitDelaysMs()
+        assertEquals(listOf(250L, 500L, 750L, 1_000L, 1_250L, 1_500L, 1_750L, 2_000L), delays)
+        assertTrue(delays.first() > 0L)
+        assertTrue(delays.first() < EndpointRefresh.HANDSHAKE_WAIT_MS)
+        assertTrue(delays.all { it <= HandshakeKick.RETRANSMIT_WINDOW_MS })
     }
 }

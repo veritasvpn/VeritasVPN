@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.system.OsConstants
 import android.util.Log
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -100,6 +101,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var lastRebindAtMs = 0L
     private val tunnelOpLock = Any()
     @Volatile private var tunKeeper: ParcelFileDescriptor? = null
+
+    /** establish() refused the tun. The activity asks for consent after the home frame. */
+    @Volatile private var vpnConsentRequired = false
     /** One teardown per disconnect. A second DOWN on the same fds can abort the process. */
     @Volatile private var tunnelReleased = false
     /** Always-on lockdown: the tun stays open so the system does not drop this task. */
@@ -127,6 +131,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var hardLoopStartedAtMs = 0L
     private var stealthReconnectJob: Job? = null
     private var natKeepaliveJob: Job? = null
+    private var handshakeBurstJob: Job? = null
     @Volatile private var userspaceInstalling = false
     private var waitRecheckJob: Job? = null
     private var peerCheckJob: Job? = null
@@ -140,6 +145,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     @Volatile private var roamWatchHandle: Long = Long.MIN_VALUE
     /** Wall time of the latest default-network change. A handshake must be newer. */
     @Volatile private var roamArmedAtMs: Long = 0L
+    private var roamRetryDelayMs = RoamRecovery.Retry.INITIAL_MS
     private var lastPeerVerifyAtMs = 0L
     private var underlayLostSeen = false
     private var rxAtLinkAttach = 0L
@@ -283,6 +289,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 tunnelReleased = false
                 holdInterface = false
                 natKeepaliveJob?.cancel()
+                handshakeBurstJob?.cancel()
+                roamRetryDelayMs = RoamRecovery.Retry.INITIAL_MS
                 val config = intent.getStringExtra(EXTRA_CONFIG) ?: return START_STICKY
                 val endpointLan = intent.getStringExtra(EXTRA_ENDPOINT_LAN).orEmpty()
                 val endpointWan = intent.getStringExtra(EXTRA_ENDPOINT_WAN).orEmpty()
@@ -644,10 +652,22 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     val savedConfig = vpnStatePrefs().getString(KEY_UDP_CONFIG, null)
                         ?: vpnStatePrefs().getString(KEY_CONFIG, null)
                         ?: return@launch
-                    establishTunnel(savedConfig, restoreGen)
+                    val restored = establishTunnel(savedConfig, restoreGen)
                     if (restoreGen != sessionGeneration || !sessionIntended()) {
                         runCatching { turnUserspaceOff() }
                         return@launch
+                    }
+                    if (restored != Tunnel.State.UP) {
+                        // Already-granted consent needs no dialog. prepare()
+                        // from this service is what covered the undrawn window.
+                        if (vpnConsentRequired) {
+                            broadcastConsentNeeded()
+                            return@launch
+                        }
+                        Log.w(TAG, "Automatic VPN restore failed; retrying")
+                        broadcastState(true, null)
+                        delay(3_000)
+                        continue
                     }
                     registerUnderlayWatch()
                     followSystemDefault()
@@ -978,6 +998,21 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         sendBroadcast(intent)
     }
 
+    /**
+     * The tun was refused because this package is not the prepared VPN.
+     * The activity launches the system consent dialog after its first frame.
+     * Calling [android.net.VpnService.prepare] here would raise that dialog
+     * from a service, over the still-black window.
+     */
+    private fun broadcastConsentNeeded() {
+        if (!sessionIntended()) return
+        sendBroadcast(
+            Intent(ACTION_STATE).setPackage(packageName)
+                .putExtra(EXTRA_CONNECTED, false)
+                .putExtra(EXTRA_NEEDS_VPN_CONSENT, true),
+        )
+    }
+
     private fun handshakeOk(): Boolean {
         val hs = latestHandshakeMs()
         if (hs <= 0L) return false
@@ -1253,8 +1288,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      * LAN endpoint is installed only when this network is that LAN. A healthy
      * handshake on this same network is left alone. One socket swap that does
      * not handshake is followed by a full rebuild that does not turn the
-     * tunnel down. The give-up line stays hidden while that recovery is still
-     * running.
+     * tunnel down. Once that rebuild has also missed, the give-up line stays
+     * up while later attempts continue on this network.
      */
     private suspend fun recoverWithFreshEndpoint(gen: Long, initialHandle: Long?) {
         if (RoamRecovery.sameNetworkLeavesTunnelAlone(
@@ -1271,6 +1306,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         stealthReconnectJob = null
         if (controlClientHandle != (initialHandle ?: Long.MIN_VALUE)) dropUnderlyingControlClient()
         try {
+            reconnectNotice = null
+            roamRetryDelayMs = RoamRecovery.Retry.INITIAL_MS
             publishReconnecting(true)
             var armedAt = roamArmedAtMs.takeIf { it > 0L } ?: System.currentTimeMillis()
             linkAttachedAtMs = armedAt
@@ -1295,6 +1332,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 if (handle != tracked) {
                     failedSocketSwaps = 0
                     tracked = handle
+                    roamRetryDelayMs = RoamRecovery.Retry.INITIAL_MS
+                    reconnectNotice = null
                     armedAt = roamArmedAtMs.takeIf { it > 0L } ?: System.currentTimeMillis()
                     linkAttachedAtMs = armedAt
                     if (controlClientHandle != (handle ?: Long.MIN_VALUE)) dropUnderlyingControlClient()
@@ -1310,6 +1349,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 failedSocketSwaps = round.failedSocketSwaps
                 when (round.outcome) {
                     InstallOutcome.HANDSHOOK -> {
+                        roamRetryDelayMs = RoamRecovery.Retry.INITIAL_MS
                         handshakeRecovered = true
                         return
                     }
@@ -1319,10 +1359,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         continue
                     }
                     InstallOutcome.RETRY, InstallOutcome.FAILED -> {
-                        // Swap and rebuild already ran in this round. Another
-                        // attempt is still pending, so do not show the failure.
+                        // The swap and, when it missed, the rebuild have finished.
+                        // Show the clear line and keep trying on this network.
                         noteResolveFailure(rebuildTried = round.rebuildTried)
-                        delay(EndpointRefresh.RETRY_DELAY_MS)
+                        val wait = if (round.rebuildTried) {
+                            val current = roamRetryDelayMs
+                            roamRetryDelayMs = RoamRecovery.Retry.next(current)
+                            current
+                        } else {
+                            EndpointRefresh.RETRY_DELAY_MS
+                        }
+                        delay(wait)
                     }
                 }
             }
@@ -1619,18 +1666,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private fun noteResolveFailure(failures: Int = 1, rebuildTried: Boolean = false) {
-        // recoveryPending stays true: this loop has not stopped, so the
-        // give-up line is not eligible yet.
+        // The round is still running until its rebuild has finished. After
+        // that, the line stays up while later retries continue.
+        val recoveryPending = !rebuildTried
         if (RoamRecovery.failureEligible(
                 socketSwapTried = failures > 0,
                 rebuildTried = rebuildTried,
-                recoveryPending = true,
+                recoveryPending = recoveryPending,
             )
         ) {
             EndpointRefresh.noticeAfter(
                 failures,
                 rebuildTried = rebuildTried,
-                recoveryPending = true,
+                recoveryPending = recoveryPending,
             )?.let { showReconnectNotice(it) }
         }
         if (lastPeerOutcome == null) ensurePeerCheck(force = true, forceUnderlying = true)
@@ -2286,12 +2334,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             keptTun -> {
                 if (gen != sessionGeneration || !sessionIntended()) return Tunnel.State.DOWN
                 if (rebindLiveTunnel(parsed, gen)) {
+                    followSystemDefault()
                     Tunnel.State.UP
                 } else if (gen != sessionGeneration || !sessionIntended()) {
                     return Tunnel.State.DOWN
                 } else {
                     followSystemDefault()
-                    val brought = applyBackendState(Tunnel.State.UP, parsed)
+                    val brought = applyBackendState(Tunnel.State.UP, parsed, gen)
                     followSystemDefault()
                     if (brought == Tunnel.State.UP) kickHandshakeAfterProtect()
                     brought
@@ -2299,7 +2348,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             else -> {
                 followSystemDefault()
-                val brought = applyBackendState(Tunnel.State.UP, parsed)
+                val brought = applyBackendState(Tunnel.State.UP, parsed, gen)
                 followSystemDefault()
                 brought
             }
@@ -2444,9 +2493,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun publishReconnecting(reconnecting: Boolean) {
         if (controlSignedOut) return
         isReconnecting = reconnecting
-        // A new attempt drops any give-up line. Recovery still in progress
-        // must not keep showing "Couldn't reconnect".
-        reconnectNotice = null
+        // A successful return clears the line. Another attempt on the same
+        // network keeps it, so the retry does not look like a silent wait.
+        if (!reconnecting) reconnectNotice = null
         if (!sessionIntended()) return
         val text = if (reconnecting) "Reconnecting…" else lastNotificationText
         ServiceCompat.startForeground(
@@ -2595,9 +2644,68 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return handshakeMs
     }
 
-    private fun applyBackendState(state: Tunnel.State, config: Config?): Tunnel.State {
-        synchronized(tunnelOpLock) {
-            return backend.setState(this, state, config)
+    /**
+     * Bring userspace up on a tun we establish here. [GoBackend.setState]
+     * calls [android.net.VpnService.prepare] on the application context, and
+     * on this device that consent dialog covers a black window. Consent stays
+     * on the activity, after the home UI has drawn.
+     */
+    private fun applyBackendState(state: Tunnel.State, config: Config?, gen: Long): Tunnel.State {
+        if (state != Tunnel.State.UP || config == null) return Tunnel.State.DOWN
+        if (tunKeeper == null && !openInterface(config)) return Tunnel.State.DOWN
+        vpnConsentRequired = false
+        return if (rebindLiveTunnel(config, gen)) Tunnel.State.UP else Tunnel.State.DOWN
+    }
+
+    private fun openInterface(parsed: Config): Boolean {
+        vpnConsentRequired = false
+        return try {
+            val builder = getBuilder()
+            builder.setSession(TUNNEL_NAME)
+            val iface = parsed.getInterface()
+            for (app in iface.excludedApplications) {
+                builder.addDisallowedApplication(app)
+            }
+            for (app in iface.includedApplications) {
+                builder.addAllowedApplication(app)
+            }
+            for (addr in iface.addresses) {
+                builder.addAddress(addr.address, addr.mask)
+            }
+            for (dns in iface.dnsServers) {
+                val host = dns.hostAddress ?: continue
+                builder.addDnsServer(host)
+            }
+            for (domain in iface.dnsSearchDomains) {
+                builder.addSearchDomain(domain)
+            }
+            var hasDefaultRoute = false
+            for (peer in parsed.peers) {
+                for (net in peer.allowedIps) {
+                    if (net.mask == 0) hasDefaultRoute = true
+                    builder.addRoute(net.address, net.mask)
+                }
+            }
+            if (!hasDefaultRoute || parsed.peers.size != 1) {
+                builder.allowFamily(OsConstants.AF_INET)
+                builder.allowFamily(OsConstants.AF_INET6)
+            }
+            builder.setMtu(iface.mtu.orElse(1280))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setMetered(false)
+            }
+            setUnderlyingNetworks(null)
+            builder.setBlocking(true)
+            val established = builder.establish() ?: return false
+            established.close()
+            tunKeeper != null
+        } catch (e: SecurityException) {
+            vpnConsentRequired = true
+            Log.w(TAG, "tun establish: SecurityException")
+            false
+        } catch (e: Exception) {
+            Log.w(TAG, "tun establish: ${e.javaClass.simpleName}")
+            false
         }
     }
 
@@ -2641,6 +2749,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun turnUserspaceOffLocked() {
         natKeepaliveJob?.cancel()
+        handshakeBurstJob?.cancel()
         runCatching { turnOffCurrentHandleLocked() }
     }
 
@@ -2796,6 +2905,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun kickHandshakeAfterProtect() {
         RoamLog.record("handshake kick")
         kickHandshakePacket()
+        val gen = sessionGeneration
+        handshakeBurstJob?.cancel()
+        handshakeBurstJob = scope.launch {
+            var waited = 0L
+            for (at in HandshakeKick.retransmitDelaysMs()) {
+                delay(at - waited)
+                waited = at
+                if (!sessionStillActive(gen) || userspaceInstalling) return@launch
+                kickHandshakePacket()
+            }
+        }
         armNatKeepalive()
     }
 
@@ -3030,8 +3150,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      */
     private fun retireSharedClient() {
         socketCloseScope.launch(Dispatchers.IO) {
+            // Idle sockets only. cancelAll on this dispatcher would also abort
+            // a roam peer read that shares it, and the delete's own coroutine
+            // already cancels the in-flight call.
             val shared = ApiClient.sharedClient()
-            runCatching { shared.dispatcher.cancelAll() }
             runCatching { shared.connectionPool.evictAll() }
         }
     }
@@ -3060,6 +3182,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         validationJob?.cancel()
         stealthReconnectJob?.cancel()
         natKeepaliveJob?.cancel()
+        handshakeBurstJob?.cancel()
         statsJob?.cancel()
         cancelPeerRecovery()
         transitionJob?.cancel()
@@ -3722,6 +3845,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val EXTRA_HANDSHAKE_MS = "handshake_ms"
         const val EXTRA_RECONNECTING = "reconnecting"
         const val EXTRA_HANDSHAKE_OK = "handshake_ok"
+        const val EXTRA_NEEDS_VPN_CONSENT = "needs_vpn_consent"
         const val PREFS_NAME = "veritas_vpn_state"
         const val KEY_CONFIG = "last_approved_config"
         const val KEY_UDP_CONFIG = "udp_config"

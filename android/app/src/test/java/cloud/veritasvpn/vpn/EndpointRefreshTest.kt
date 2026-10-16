@@ -99,10 +99,13 @@ class EndpointRefreshTest {
         assertNull(EndpointRefresh.noticeAfter(3))
         assertNull(EndpointRefresh.noticeAfter(3, rebuildTried = false, recoveryPending = false))
         assertNull(EndpointRefresh.noticeAfter(3, rebuildTried = true, recoveryPending = true))
-        assertNull(EndpointRefresh.noticeAfter(2, rebuildTried = true, recoveryPending = false))
         assertEquals(
             EndpointRefresh.GIVE_UP_MESSAGE,
-            EndpointRefresh.noticeAfter(3, rebuildTried = true, recoveryPending = false),
+            EndpointRefresh.noticeAfter(1, rebuildTried = true, recoveryPending = false),
+        )
+        assertEquals(
+            EndpointRefresh.GIVE_UP_MESSAGE,
+            EndpointRefresh.noticeAfter(2, rebuildTried = true, recoveryPending = false),
         )
         assertFalse(
             RoamRecovery.failureEligible(
@@ -378,7 +381,10 @@ class EndpointRefreshTest {
         assertTrue(source.contains("async { fetchFreshEndpoint"))
         assertTrue(source.contains("HandshakeKick.withoutKeepalive"))
         assertTrue(source.contains("kickHandshakeAfterProtect"))
-        assertTrue(source.contains("recoveryPending = true"))
+        assertTrue(source.contains("val recoveryPending = !rebuildTried"))
+        assertTrue(source.contains("RoamRecovery.Retry.next"))
+        assertTrue(source.contains("HandshakeKick.retransmitDelaysMs"))
+        assertFalse(source.contains("recoveryPending = true"))
         assertTrue(source.contains("installSwapThenRebuild"))
         assertTrue(source.contains("turnUserspaceOff"))
         assertFalse(source.contains("recreateTun = true"))
