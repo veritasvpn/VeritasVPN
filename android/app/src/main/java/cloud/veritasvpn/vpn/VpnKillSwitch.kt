@@ -61,6 +61,49 @@ object VpnKillSwitch {
         return ConnectGate.Tunnel
     }
 
+    /** Reads taken before Always-on + lockdown is treated as off. */
+    const val RECHECK_ATTEMPTS = 6
+
+    /**
+     * Pause between rechecks. The first read is immediate so a true result
+     * does not delay connect.
+     */
+    const val RECHECK_DELAY_MS = 400L
+
+    /**
+     * Dialog decision for one connect attempt.
+     * [CONTINUE] means a read saw both switches on.
+     * [SHOW] is the single prompt for this attempt.
+     * [ALREADY_SHOWN] means a later off-read must not raise the dialog again.
+     */
+    enum class Prompt {
+        CONTINUE,
+        SHOW,
+        ALREADY_SHOWN,
+    }
+
+    fun promptAfterRecheck(anyReadOn: Boolean, shownThisAttempt: Boolean): Prompt {
+        if (anyReadOn) return Prompt.CONTINUE
+        if (shownThisAttempt) return Prompt.ALREADY_SHOWN
+        return Prompt.SHOW
+    }
+
+    /**
+     * Settings can stay stale across a return from the VPN screen, and
+     * [android.net.VpnService.isLockdownEnabled] stays stale until the
+     * platform rebinds the service. A true always-on + lockdown pair from
+     * the service counts even when settings are hidden or still off. A false
+     * or missing service read does not override a true settings read.
+     */
+    fun lockdownFromSources(
+        settingsOn: Boolean,
+        serviceAlwaysOn: Boolean?,
+        serviceLockdown: Boolean?,
+    ): Boolean {
+        if (serviceAlwaysOn == true && serviceLockdown == true) return true
+        return settingsOn
+    }
+
     /**
      * True when lockdown is on for [packageName].
      *

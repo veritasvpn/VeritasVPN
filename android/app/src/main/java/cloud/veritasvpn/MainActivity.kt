@@ -207,6 +207,7 @@ class MainActivity : ComponentActivity() {
                 var lastError by remember { mutableStateOf(VpnSettings.lastError(context)) }
                 var showKillSwitchRequired by remember { mutableStateOf(false) }
                 var pendingConnectAfterKillSwitch by remember { mutableStateOf(false) }
+                var killSwitchPromptShown by remember { mutableStateOf(false) }
                 var showReleaseLockdown by remember { mutableStateOf(false) }
                 var awaitingLockdownRelease by remember { mutableStateOf(false) }
                 var releaseLockdownError by remember { mutableStateOf<String?>(null) }
@@ -545,6 +546,7 @@ class MainActivity : ComponentActivity() {
                 var pendingNotificationReconnect by remember { mutableStateOf(false) }
 
                 fun showKillSwitchBlock() {
+                    killSwitchPromptShown = true
                     pendingConnectAfterKillSwitch = true
                     showKillSwitchRequired = true
                     connecting = false
@@ -553,13 +555,52 @@ class MainActivity : ComponentActivity() {
                     statusMsg = null
                 }
 
-                fun blockConnectForKillSwitch(): Boolean {
-                    if (VpnKillSwitch.isLockdownEnabled(context, vpnPrepared = true)) {
-                        showKillSwitchRequired = false
-                        return false
+                fun clearKillSwitchPrompt() {
+                    killSwitchPromptShown = false
+                    pendingConnectAfterKillSwitch = false
+                    showKillSwitchRequired = false
+                }
+
+                /**
+                 * Settings plus the live service. [VpnService.prepare] is not
+                 * called: it can revoke the tunnel or open the consent screen.
+                 * A missing service is not ready, and does not count as off
+                 * when settings already say the switches are on.
+                 */
+                suspend fun readLockdownCombined(vpnPrepared: Boolean): Boolean {
+                    val settingsOn = withContext(Dispatchers.IO) {
+                        VpnKillSwitch.isLockdownEnabled(
+                            context,
+                            vpnPrepared = vpnPrepared,
+                            allowPrepare = false,
+                        )
                     }
-                    showKillSwitchBlock()
-                    return true
+                    val service = withContext(Dispatchers.IO) {
+                        VeritasVpnService.readServiceLockdown()
+                    }
+                    return VpnKillSwitch.lockdownFromSources(
+                        settingsOn = settingsOn,
+                        serviceAlwaysOn = service?.first,
+                        serviceLockdown = service?.second,
+                    )
+                }
+
+                /**
+                 * Returns on the first true read. Later reads run only while
+                 * every read is off. Null when a newer recheck owns the attempt,
+                 * so this one cannot show the dialog.
+                 */
+                suspend fun awaitLockdown(vpnPrepared: Boolean, generation: Int): Boolean? {
+                    var reads = 0
+                    while (reads < VpnKillSwitch.RECHECK_ATTEMPTS) {
+                        if (generation != killSwitchRecheckGeneration[0]) return null
+                        if (readLockdownCombined(vpnPrepared)) return true
+                        reads += 1
+                        if (reads >= VpnKillSwitch.RECHECK_ATTEMPTS) break
+                        delay(VpnKillSwitch.RECHECK_DELAY_MS)
+                    }
+                    if (generation != killSwitchRecheckGeneration[0]) return null
+                    return false
                 }
 
                 fun markReconnectNeeded() {
@@ -586,30 +627,26 @@ class MainActivity : ComponentActivity() {
                     pendingNotificationStart = false
                     pendingNotificationReconnect = false
                     if (!shouldStart) return@rememberLauncherForActivityResult
-                    scope.launch {
-                        val lockdownOn = withContext(Dispatchers.IO) {
-                            VpnKillSwitch.isLockdownEnabled(context)
-                        }
-                        if (!lockdownOn) {
-                            showKillSwitchBlock()
-                            return@launch
-                        }
-                        if (!userWantsConnected && !isReconnect) return@launch
-                        startConnection(
-                            context, scope,
-                            setStatus = { msg -> statusMsg = msg },
-                            setConnecting = { connecting = it },
-                            isReconnect = isReconnect,
-                            onFailure = { markReconnectNeeded() },
-                            onSessionExpired = { handleSessionExpired() },
-                            onDnsGateway = {
-                                dnsGateway = it
-                                dnsBlockedBaseline = null
-                            },
-                            shouldContinue = { userWantsConnected },
-                        )
-                    }
+                    if (!userWantsConnected && !isReconnect) return@rememberLauncherForActivityResult
+                    startConnection(
+                        context, scope,
+                        setStatus = { msg -> statusMsg = msg },
+                        setConnecting = { connecting = it },
+                        isReconnect = isReconnect,
+                        onFailure = { markReconnectNeeded() },
+                        onSessionExpired = { handleSessionExpired() },
+                        onDnsGateway = {
+                            dnsGateway = it
+                            dnsBlockedBaseline = null
+                        },
+                        shouldContinue = { userWantsConnected },
+                    )
                 }
+
+                // Assigned after applyLockdownPrompt. startVpnAfterPermissions is
+                // declared first because the prompt calls it, and the prompt is
+                // declared later because it calls this function.
+                val lockdownPrompt = arrayOf<(Boolean, Boolean) -> Unit>({ _, _ -> })
 
                 fun startVpnAfterPermissions(
                     isReconnect: Boolean = false,
@@ -617,10 +654,18 @@ class MainActivity : ComponentActivity() {
                 ) {
                     // VPN consent is already granted here. The tunnel still does
                     // not start until Always-on + Block connections without VPN
-                    // are on for this package. Callers that just read lockdown
-                    // off the UI thread pass lockdownVerified so this does not
-                    // block the hero animation with another settings read.
-                    if (!lockdownVerified && blockConnectForKillSwitch()) return
+                    // are on for this package. Callers that just finished a
+                    // recheck pass lockdownVerified so this does not read again.
+                    if (!lockdownVerified) {
+                        val generation = ++killSwitchRecheckGeneration[0]
+                        scope.launch {
+                            val enabled = awaitLockdown(vpnPrepared = true, generation)
+                                ?: return@launch
+                            if (!userWantsConnected && !isReconnect) return@launch
+                            lockdownPrompt[0](enabled, isReconnect)
+                        }
+                        return
+                    }
                     val notificationManager =
                         context.getSystemService(NotificationManager::class.java)
                     val permissionPrefs = SecurePrefs.open(
@@ -662,6 +707,31 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                fun applyLockdownPrompt(enabled: Boolean, isReconnect: Boolean = false) {
+                    when (VpnKillSwitch.promptAfterRecheck(enabled, killSwitchPromptShown)) {
+                        VpnKillSwitch.Prompt.CONTINUE -> {
+                            // The attempt has passed the gate. Keep the slot
+                            // consumed so a later stale off cannot show the dialog.
+                            killSwitchPromptShown = true
+                            pendingConnectAfterKillSwitch = false
+                            showKillSwitchRequired = false
+                            userWantsConnected = true
+                            connecting = true
+                            reconnecting = false
+                            statusMsg = null
+                            startVpnAfterPermissions(
+                                isReconnect = isReconnect,
+                                lockdownVerified = true,
+                            )
+                        }
+                        VpnKillSwitch.Prompt.SHOW -> showKillSwitchBlock()
+                        VpnKillSwitch.Prompt.ALREADY_SHOWN -> Unit
+                    }
+                }
+                lockdownPrompt[0] = { enabled, isReconnect ->
+                    applyLockdownPrompt(enabled, isReconnect)
+                }
+
                 val vpnPermissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.StartActivityForResult()
                 ) { result ->
@@ -678,15 +748,12 @@ class MainActivity : ComponentActivity() {
                             return@rememberLauncherForActivityResult
                         }
                         scope.launch {
-                            val lockdownOn = withContext(Dispatchers.IO) {
-                                VpnKillSwitch.isLockdownEnabled(context, vpnPrepared = true)
-                            }
                             if (!userWantsConnected) return@launch
-                            if (!lockdownOn) {
-                                showKillSwitchBlock()
-                                return@launch
-                            }
-                            startVpnAfterPermissions(lockdownVerified = true)
+                            val generation = ++killSwitchRecheckGeneration[0]
+                            val enabled = awaitLockdown(vpnPrepared = true, generation)
+                                ?: return@launch
+                            if (!userWantsConnected) return@launch
+                            applyLockdownPrompt(enabled)
                         }
                     } else {
                         // If we're in onboarding mode, mark onboarding as done even on cancel.
@@ -976,6 +1043,7 @@ class MainActivity : ComponentActivity() {
 
                 fun requestConnect() {
                     if (connecting || connected || reconnecting) return
+                    if (showKillSwitchRequired) return
                     if (!PlanEntitlement.grantsPremium(billingStatus)) {
                         statusMsg = "An active subscription is required. Open Plans to subscribe."
                         return
@@ -988,6 +1056,7 @@ class MainActivity : ComponentActivity() {
                     // prepare() and the lockdown read both hit system processes and
                     // stall the frame clock if they run on the UI thread.
                     userWantsConnected = true
+                    killSwitchPromptShown = false
                     cancelReconnect()
                     connecting = true
                     statusMsg = null
@@ -1011,28 +1080,20 @@ class MainActivity : ComponentActivity() {
                         // VeritasVPN to Settings → VPN and shows the system allow
                         // dialog. Checking lockdown first leaves a fresh install
                         // unregistered, so the user cannot turn the switches on.
-                        val lockdownOn = withContext(Dispatchers.IO) {
-                            VpnKillSwitch.isLockdownEnabled(
-                                context,
-                                vpnPrepared = consentIntent == null,
-                            )
+                        if (consentIntent != null) {
+                            withContext(Dispatchers.Main) {
+                                if (!userWantsConnected || !connecting) return@withContext
+                                awaitingVpnConsent = true
+                                vpnPermissionLauncher.launch(consentIntent)
+                            }
+                            return@launch
                         }
-                        val gate = VpnKillSwitch.nextConnectGate(
-                            vpnPrepared = consentIntent == null,
-                            lockdownEnabled = lockdownOn,
-                        )
+                        val generation = ++killSwitchRecheckGeneration[0]
+                        val enabled = awaitLockdown(vpnPrepared = true, generation)
+                        if (enabled == null) return@launch
                         withContext(Dispatchers.Main) {
                             if (!userWantsConnected || !connecting) return@withContext
-                            if (gate == VpnKillSwitch.ConnectGate.VpnConsent) {
-                                awaitingVpnConsent = true
-                                vpnPermissionLauncher.launch(requireNotNull(consentIntent))
-                                return@withContext
-                            }
-                            if (!lockdownOn) {
-                                showKillSwitchBlock()
-                                return@withContext
-                            }
-                            startVpnAfterPermissions(lockdownVerified = true)
+                            applyLockdownPrompt(enabled)
                         }
                     }
                 }
@@ -1065,51 +1126,35 @@ class MainActivity : ComponentActivity() {
                             // the VPN screen closes. Re-read before leaving the modal up.
                             // Resume must not call VpnService.prepare: that call can
                             // revoke the tunnel or open the system consent screen.
-                            val generation = ++killSwitchRecheckGeneration[0]
-                            val waitingForSettings = pendingConnectAfterKillSwitch
+                            // A successful recheck continues the tunnel directly.
+                            // requestConnect() would read once more and can raise
+                            // the dialog again on a stale off.
+                            val waitingForSettings = pendingConnectAfterKillSwitch ||
+                                showKillSwitchRequired
                             val preparedNow = connected || connecting || reconnecting ||
                                 userWantsConnected || waitingForSettings
+                            val generation = if (waitingForSettings) {
+                                ++killSwitchRecheckGeneration[0]
+                            } else {
+                                killSwitchRecheckGeneration[0]
+                            }
                             scope.launch {
-                                var enabled = VpnKillSwitch.isLockdownEnabled(
-                                    context,
-                                    vpnPrepared = preparedNow,
-                                )
-                                if (!enabled && waitingForSettings) {
-                                    var reads = 0
-                                    while (!enabled && reads < 4) {
-                                        reads += 1
-                                        delay(300)
-                                        if (generation != killSwitchRecheckGeneration[0]) return@launch
-                                        if (!pendingConnectAfterKillSwitch) return@launch
-                                        enabled = VpnKillSwitch.isLockdownEnabled(
-                                            context,
-                                            vpnPrepared = true,
-                                        )
+                                if (waitingForSettings) {
+                                    val enabled = awaitLockdown(vpnPrepared = true, generation)
+                                    if (enabled != null &&
+                                        generation == killSwitchRecheckGeneration[0]
+                                    ) {
+                                        applyLockdownPrompt(enabled)
                                     }
                                 }
-                                if (generation != killSwitchRecheckGeneration[0]) return@launch
-                                if (enabled) {
-                                    val continueConnect = pendingConnectAfterKillSwitch
-                                    pendingConnectAfterKillSwitch = false
-                                    showKillSwitchRequired = false
-                                    if (continueConnect) requestConnect()
-                                } else if (pendingConnectAfterKillSwitch) {
-                                    showKillSwitchRequired = true
-                                }
                                 if (awaitingLockdownRelease) {
-                                    var stillBlocking = VpnKillSwitch.isLockdownEnabled(
-                                        context,
-                                        vpnPrepared = preparedNow,
-                                    )
+                                    var stillBlocking = readLockdownCombined(preparedNow)
                                     var reads = 0
-                                    while (stillBlocking && reads < 4) {
+                                    while (stillBlocking && reads < VpnKillSwitch.RECHECK_ATTEMPTS - 1) {
                                         reads += 1
-                                        delay(300)
+                                        delay(VpnKillSwitch.RECHECK_DELAY_MS)
                                         if (generation != killSwitchRecheckGeneration[0]) return@launch
-                                        stillBlocking = VpnKillSwitch.isLockdownEnabled(
-                                            context,
-                                            vpnPrepared = preparedNow,
-                                        )
+                                        stillBlocking = readLockdownCombined(preparedNow)
                                     }
                                     if (generation != killSwitchRecheckGeneration[0]) return@launch
                                     if (!stillBlocking) {
@@ -1534,8 +1579,7 @@ class MainActivity : ComponentActivity() {
                         },
                         showKillSwitchRequired = showKillSwitchRequired,
                         onDismissKillSwitchRequired = {
-                            showKillSwitchRequired = false
-                            pendingConnectAfterKillSwitch = false
+                            clearKillSwitchPrompt()
                             userWantsConnected = false
                             connecting = false
                             reconnecting = false

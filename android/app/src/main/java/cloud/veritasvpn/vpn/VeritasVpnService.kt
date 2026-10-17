@@ -4119,6 +4119,21 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         fun interfaceHeld(): Boolean = active?.tunKeeper != null
 
         /**
+         * Always-on and lockdown as the live VPN service reports them.
+         * Null when this process has no service instance, or the platform
+         * call fails. Null means the service is not ready, not that the
+         * switches are off. Callers must not start the service only to read this.
+         */
+        fun readServiceLockdown(): Pair<Boolean, Boolean>? {
+            val service = active ?: return null
+            return try {
+                service.isAlwaysOn() to service.isLockdownEnabled()
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        /**
          * Drop the cached system-default client. The next [provisioningClient]
          * builds a new one. The close itself runs off the caller.
          */
