@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.R
 import cloud.veritasvpn.api.BillingStatus
+import cloud.veritasvpn.billing.PlanEntitlement
 import cloud.veritasvpn.api.PurchaseHistoryItem
 import cloud.veritasvpn.ui.theme.*
 import java.time.LocalDate
@@ -133,7 +134,7 @@ fun AccountScreen(
         AccountIdentity(email = email, accountId = accountId)
         Spacer(Modifier.height(18.dp))
 
-        val premium = billingStatus?.isPremium == true
+        val premium = PlanEntitlement.grantsPremium(billingStatus)
         Row(
             Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(20.dp)).padding(16.dp),
             verticalAlignment = Alignment.CenterVertically

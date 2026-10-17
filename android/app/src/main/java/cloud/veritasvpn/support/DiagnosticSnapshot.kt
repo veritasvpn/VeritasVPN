@@ -5,6 +5,7 @@ import android.os.Build
 import cloud.veritasvpn.secure.SecurePrefs
 import cloud.veritasvpn.vpn.EndpointSelector
 import cloud.veritasvpn.vpn.PeerCheckLog
+import cloud.veritasvpn.vpn.RoamLog
 import cloud.veritasvpn.vpn.VeritasVpnService
 import cloud.veritasvpn.vpn.VpnSettings
 
@@ -96,6 +97,8 @@ object DiagnosticSnapshot {
                 recovery?.reprovisionOutcome.orEmpty(),
                 recovery?.reprovisionCode ?: -1,
             ),
+            roamLog = RoamLog.snapshot(),
+            processLog = DiagnosticLog.snapshot(),
         )
     }
 }

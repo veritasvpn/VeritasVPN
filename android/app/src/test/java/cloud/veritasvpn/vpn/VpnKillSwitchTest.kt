@@ -148,4 +148,131 @@ class VpnKillSwitchTest {
             VpnKillSwitch.nextConnectGate(vpnPrepared = true, lockdownEnabled = true)
         )
     }
+
+    @Test
+    fun anOnReadContinuesEvenAfterTheDialogWasShown() {
+        assertEquals(
+            VpnKillSwitch.Prompt.CONTINUE,
+            VpnKillSwitch.promptAfterRecheck(anyReadOn = true, shownThisAttempt = false),
+        )
+        assertEquals(
+            VpnKillSwitch.Prompt.CONTINUE,
+            VpnKillSwitch.promptAfterRecheck(anyReadOn = true, shownThisAttempt = true),
+        )
+    }
+
+    @Test
+    fun anOffReadShowsOncePerConnectAttempt() {
+        assertEquals(
+            VpnKillSwitch.Prompt.SHOW,
+            VpnKillSwitch.promptAfterRecheck(anyReadOn = false, shownThisAttempt = false),
+        )
+        assertEquals(
+            VpnKillSwitch.Prompt.ALREADY_SHOWN,
+            VpnKillSwitch.promptAfterRecheck(anyReadOn = false, shownThisAttempt = true),
+        )
+    }
+
+    @Test
+    fun serviceOnOverridesStaleSettingsAndSettingsOnSurvivesAMissingService() {
+        assertTrue(
+            VpnKillSwitch.lockdownFromSources(
+                settingsOn = false,
+                serviceAlwaysOn = true,
+                serviceLockdown = true,
+            )
+        )
+        assertTrue(
+            VpnKillSwitch.lockdownFromSources(
+                settingsOn = true,
+                serviceAlwaysOn = false,
+                serviceLockdown = false,
+            )
+        )
+        assertTrue(
+            VpnKillSwitch.lockdownFromSources(
+                settingsOn = true,
+                serviceAlwaysOn = null,
+                serviceLockdown = null,
+            )
+        )
+        assertFalse(
+            VpnKillSwitch.lockdownFromSources(
+                settingsOn = false,
+                serviceAlwaysOn = true,
+                serviceLockdown = false,
+            )
+        )
+        assertFalse(
+            VpnKillSwitch.lockdownFromSources(
+                settingsOn = false,
+                serviceAlwaysOn = null,
+                serviceLockdown = true,
+            )
+        )
+        assertFalse(
+            VpnKillSwitch.lockdownFromSources(
+                settingsOn = false,
+                serviceAlwaysOn = null,
+                serviceLockdown = null,
+            )
+        )
+    }
+
+    @Test
+    fun resumeContinuesWithoutRequestConnectAndTheDialogIsGatedOnce() {
+        val activity = kotlinSource("MainActivity.kt")
+        val resume = slice(activity, "Lifecycle.Event.ON_RESUME", "refreshBilling()")
+        assertFalse(resume.contains("requestConnect()"))
+        assertTrue(resume.contains("awaitLockdown"))
+        assertTrue(resume.contains("applyLockdownPrompt"))
+        assertFalse(resume.contains("VpnService.prepare"))
+        assertFalse(resume.contains("showKillSwitchRequired = true"))
+
+        val connect = slice(activity, "fun requestConnect()", "LaunchedEffect(homeDrawn, needsVpnConsent")
+        assertTrue(connect.indexOf("withFrameNanos") < connect.indexOf("VpnService.prepare"))
+        assertTrue(connect.contains("if (showKillSwitchRequired) return"))
+        assertTrue(connect.contains("awaitLockdown"))
+        assertTrue(connect.contains("applyLockdownPrompt"))
+        assertFalse(connect.contains("showKillSwitchBlock()"))
+
+        val prompt = slice(activity, "fun applyLockdownPrompt", "val vpnPermissionLauncher")
+        assertTrue(prompt.contains("VpnKillSwitch.Prompt.SHOW -> showKillSwitchBlock()"))
+        assertTrue(prompt.contains("VpnKillSwitch.Prompt.ALREADY_SHOWN -> Unit"))
+        assertTrue(prompt.contains("lockdownVerified = true"))
+
+        val reader = slice(activity, "fun readLockdownCombined", "fun awaitLockdown")
+        assertTrue(reader.contains("allowPrepare = false"))
+        assertTrue(reader.contains("readServiceLockdown()"))
+        assertFalse(reader.contains("VpnService.prepare"))
+
+        val service = kotlinSource("VeritasVpnService.kt")
+        val live = slice(service, "fun readServiceLockdown()", "fun retireProvisioningClient()")
+        assertTrue(live.contains("active ?: return null"))
+        assertTrue(live.contains("isAlwaysOn()"))
+        assertTrue(live.contains("isLockdownEnabled()"))
+    }
+
+    private fun slice(source: String, start: String, end: String): String {
+        val from = source.indexOf(start)
+        val to = source.indexOf(end, from + start.length)
+        assertTrue("$start not found", from >= 0 && to > from)
+        return source.substring(from, to)
+    }
+
+    private fun kotlinSource(name: String): String {
+        val roots = listOf(
+            java.io.File("src/main/java"),
+            java.io.File("app/src/main/java"),
+            java.io.File("android/app/src/main/java"),
+        )
+        val file = roots.firstNotNullOfOrNull { root ->
+            root.walk().firstOrNull { it.isFile && it.name == name }
+        } ?: error("$name not found from ${java.io.File(".").absolutePath}")
+        return file.readText()
+            .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
+            .lines()
+            .filterNot { it.trimStart().startsWith("//") }
+            .joinToString("\n")
+    }
 }

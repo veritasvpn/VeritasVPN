@@ -48,6 +48,9 @@ class StealthTransport(
     val localEndpoint: String
         get() = "127.0.0.1:${udpSocket.localPort}"
 
+    fun targets(host: String, port: Int, pathPrefix: String): Boolean =
+        remoteHost == host && remotePort == port && this.pathPrefix == pathPrefix
+
     fun start() {
         if (running.getAndSet(true)) return
         udpSocket.reuseAddress = true
@@ -61,7 +64,7 @@ class StealthTransport(
                 } catch (e: Exception) {
                     lastError = (e as? cloud.veritasvpn.api.UserVisibleError)?.userMessage ?: when (e) {
                         is java.net.SocketTimeoutException,
-                        is java.io.InterruptedIOException -> "Connection timed out"
+                        is java.io.InterruptedIOException -> EndpointRefresh.GIVE_UP_MESSAGE
                         is java.net.UnknownHostException -> "Could not resolve server address"
                         is java.net.ConnectException -> "Could not connect to server"
                         is javax.net.ssl.SSLException -> "Secure connection failed"

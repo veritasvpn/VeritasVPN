@@ -1,5 +1,6 @@
 package cloud.veritasvpn.api
 
+import cloud.veritasvpn.support.ConnectTiming
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.delay
@@ -59,11 +60,12 @@ object ApiClient {
             .header("X-Veritas-Client", "android")
         token?.let { builder.header("Authorization", "Bearer $it") }
         val base = httpClient ?: client
+        val timed = if (ConnectTiming.isArmed()) notingDns(base) else base
         val callTimeout = if (retryOnTimeout) 15L else 20L
         val retryClient = if (retryOnTimeout) {
-            base.newBuilder().callTimeout(callTimeout, TimeUnit.SECONDS).build()
+            timed.newBuilder().callTimeout(callTimeout, TimeUnit.SECONDS).build()
         } else {
-            base
+            timed
         }
         return executeWithRetry(requestFactory = { builder.build() }, httpClient = retryClient, retryOnTimeout = retryOnTimeout, onRetry = onRetry)
     }
@@ -98,11 +100,29 @@ object ApiClient {
         return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = false)
     }
 
-    suspend fun delete(path: String, token: String): Response {
+    suspend fun delete(path: String, token: String, httpClient: OkHttpClient? = null): Response {
         val builder = Request.Builder().url("$BASE_URL$path").delete()
             .header("Authorization", "Bearer $token")
-        return executeWithRetry(requestFactory = { builder.build() }, retryOnTimeout = false)
+        return executeWithRetry(
+            requestFactory = { builder.build() },
+            httpClient = httpClient ?: client,
+            retryOnTimeout = false,
+        )
     }
+
+    /** DNS completion for an armed connect. The host is not recorded. */
+    private fun notingDns(base: OkHttpClient): OkHttpClient =
+        base.newBuilder()
+            .eventListener(object : EventListener() {
+                override fun dnsEnd(
+                    call: Call,
+                    domainName: String,
+                    inetAddressList: List<java.net.InetAddress>,
+                ) {
+                    ConnectTiming.mark("dns")
+                }
+            })
+            .build()
 
     suspend fun delete(path: String, body: Map<String, Any>, token: String): Response {
         val requestBody = gson.toJson(body).toRequestBody(JSON)
@@ -121,6 +141,35 @@ object ApiClient {
             httpClient = httpClient,
             retryOnTimeout = true,
         )
+    }
+
+    /**
+     * One short read on [httpClient]. Reconnect uses this so a network change
+     * does not sit through the general retry budget before it can install the
+     * endpoint for the network the phone is on now. [onCall] runs before the
+     * call is awaited so a newer network can cancel it.
+     */
+    suspend fun getOnce(
+        path: String,
+        token: String,
+        httpClient: OkHttpClient,
+        timeoutSeconds: Long = 4,
+        onCall: ((Call) -> Unit)? = null,
+    ): Response {
+        val request = Request.Builder().url("$BASE_URL$path").get()
+            .header("Authorization", "Bearer $token")
+            .header("Content-Type", "application/json")
+            .header("X-Veritas-Client", "android")
+            .build()
+        val fast = httpClient.newBuilder()
+            .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .build()
+        val call = fast.newCall(request)
+        onCall?.invoke(call)
+        return call.await()
     }
 
     /**
@@ -249,8 +298,8 @@ data class PurchaseHistoryItem(
 )
 
 data class BillingStatus(
-    val tier: String = "free",
-    val status: String = "active",
+    @SerializedName("tier") val tier: String = "free",
+    @SerializedName("status") val status: String = "active",
     @SerializedName("payment_method") val paymentMethod: String = "none",
     @SerializedName("plan_id") val planId: String? = null,
     @SerializedName("current_period_end") val currentPeriodEnd: String? = null,
@@ -287,6 +336,16 @@ data class PeerResponse(
     @SerializedName("client_allowed_ips") val clientAllowedIps: List<String>?,
     @SerializedName("allowed_ips") val allowedIps: List<String>?,
     val error: String? = null
+)
+
+/** GET /api/v1/wg/peers/{id}: the endpoint fields for the caller’s current address. */
+data class PeerEndpointView(
+    @SerializedName("server_endpoint") val serverEndpoint: String? = null,
+    @SerializedName("server_endpoint_lan") val serverEndpointLan: String? = null,
+    @SerializedName("server_endpoint_wan") val serverEndpointWan: String? = null,
+    @SerializedName("stealth_endpoint") val stealthEndpoint: String? = null,
+    @SerializedName("stealth_available") val stealthAvailable: Boolean? = null,
+    @SerializedName("stealth_path_prefix") val stealthPathPrefix: String? = null,
 )
 
 data class PeerListResponse(

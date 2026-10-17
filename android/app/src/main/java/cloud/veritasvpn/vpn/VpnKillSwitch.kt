@@ -61,6 +61,49 @@ object VpnKillSwitch {
         return ConnectGate.Tunnel
     }
 
+    /** Reads taken before Always-on + lockdown is treated as off. */
+    const val RECHECK_ATTEMPTS = 6
+
+    /**
+     * Pause between rechecks. The first read is immediate so a true result
+     * does not delay connect.
+     */
+    const val RECHECK_DELAY_MS = 400L
+
+    /**
+     * Dialog decision for one connect attempt.
+     * [CONTINUE] means a read saw both switches on.
+     * [SHOW] is the single prompt for this attempt.
+     * [ALREADY_SHOWN] means a later off-read must not raise the dialog again.
+     */
+    enum class Prompt {
+        CONTINUE,
+        SHOW,
+        ALREADY_SHOWN,
+    }
+
+    fun promptAfterRecheck(anyReadOn: Boolean, shownThisAttempt: Boolean): Prompt {
+        if (anyReadOn) return Prompt.CONTINUE
+        if (shownThisAttempt) return Prompt.ALREADY_SHOWN
+        return Prompt.SHOW
+    }
+
+    /**
+     * Settings can stay stale across a return from the VPN screen, and
+     * [android.net.VpnService.isLockdownEnabled] stays stale until the
+     * platform rebinds the service. A true always-on + lockdown pair from
+     * the service counts even when settings are hidden or still off. A false
+     * or missing service read does not override a true settings read.
+     */
+    fun lockdownFromSources(
+        settingsOn: Boolean,
+        serviceAlwaysOn: Boolean?,
+        serviceLockdown: Boolean?,
+    ): Boolean {
+        if (serviceAlwaysOn == true && serviceLockdown == true) return true
+        return settingsOn
+    }
+
     /**
      * True when lockdown is on for [packageName].
      *
@@ -137,7 +180,11 @@ object VpnKillSwitch {
         return parseLockdown(systemRaw)
     }
 
-    fun isLockdownEnabled(context: Context, vpnPrepared: Boolean? = null): Boolean {
+    fun isLockdownEnabled(
+        context: Context,
+        vpnPrepared: Boolean? = null,
+        allowPrepare: Boolean = false,
+    ): Boolean {
         val resolver = context.contentResolver
         val alwaysOnApp = firstAlwaysOnPackage(
             readSetting(resolver, SettingsTable.Secure, ALWAYS_ON_VPN_APP),
@@ -154,7 +201,7 @@ object VpnKillSwitch {
                 readSetting(resolver, SettingsTable.System, ALWAYS_ON_VPN_LOCKDOWN),
             )
         }
-        val prepared = resolvePrepared(context, alwaysOnApp, lockdown, vpnPrepared)
+        val prepared = resolvePrepared(context, alwaysOnApp, lockdown, vpnPrepared, allowPrepare)
         val satisfied = lockdownSatisfied(alwaysOnApp, context.packageName, lockdown, prepared)
         if (!satisfied) {
             Log.i(
@@ -170,20 +217,21 @@ object VpnKillSwitch {
     fun systemVpnSettingsIntent(): Intent = Intent(Settings.ACTION_VPN_SETTINGS)
 
     /**
-     * [VpnService.prepare] is not a pure read: it can take the VPN slot when
-     * this app is pre-consented and no always-on VPN is set. Call it only when
-     * lockdown is already on and the package is hidden. In that state another
-     * always-on app cannot be replaced, and this app is already prepared if it
-     * is the always-on VPN.
+     * [VpnService.prepare] is not a pure read. On some builds it revokes the
+     * running tunnel or brings up the system consent screen, which leaves the
+     * app. Disconnect, resume, and the connect circle never pass [allowPrepare].
+     * A connect attempt that still needs the hidden-package signal may.
      */
     private fun resolvePrepared(
         context: Context,
         alwaysOnApp: String?,
         lockdown: Int,
         vpnPrepared: Boolean?,
+        allowPrepare: Boolean,
     ): Boolean {
         if (lockdown == 0 || alwaysOnApp != null) return vpnPrepared == true
         if (vpnPrepared != null) return vpnPrepared
+        if (!allowPrepare) return false
         return try {
             VpnService.prepare(context) == null
         } catch (e: RuntimeException) {

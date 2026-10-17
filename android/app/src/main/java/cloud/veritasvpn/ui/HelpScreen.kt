@@ -217,7 +217,7 @@ fun HelpScreen(
                         Spacer(Modifier.height(8.dp))
                         HelpNavRow(
                             label = "Diagnostic information",
-                            note = "Connection, version, and endpoint",
+                            note = "Connection, version, endpoint, and roam steps",
                             icon = Icons.Rounded.Build,
                             onClick = onOpenDiagnostics,
                         )

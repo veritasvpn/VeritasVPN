@@ -1,0 +1,103 @@
+package cloud.veritasvpn.support
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+
+class ProcessExitLogTest {
+    @Test
+    fun exitLineNamesTheReasonWithoutAnAddress() {
+        val line = ProcessExitLog.exitLine(
+            process = "main",
+            reason = ProcessExitLog.reasonName(4),
+            description = "low memory",
+            importance = 100,
+            timestampMs = 1_700_000_000_000L,
+        )
+        assertEquals(
+            "exit proc=main reason=CRASH importance=100 ts=1700000000000 desc=low memory",
+            line,
+        )
+        assertEquals("vpn", ProcessExitLog.processLabel("cloud.veritasvpn:vpn", "cloud.veritasvpn"))
+        assertEquals("main", ProcessExitLog.processLabel("cloud.veritasvpn", "cloud.veritasvpn"))
+        assertNull(ProcessExitLog.processLabel("cloud.veritasvpn:other", "cloud.veritasvpn"))
+        assertEquals("redacted", ProcessExitLog.sanitizeDescription("died at 203.0.113.10"))
+        assertNull(
+            ProcessExitLog.exitLine(
+                process = "other",
+                reason = "CRASH",
+                description = null,
+                importance = 100,
+                timestampMs = 1L,
+            ),
+        )
+    }
+
+    @Test
+    fun crashLinesKeepFrameworkFramesAndCauses() {
+        val framework = ProcessExitLog.frame(
+            "android.app.ActivityThread",
+            "throwRemoteServiceException",
+            "ActivityThread.java",
+            2140,
+        )
+        val ours = ProcessExitLog.frame(
+            "cloud.veritasvpn.vpn.VeritasVpnService",
+            "onStartCommand",
+            "VeritasVpnService.kt",
+            220,
+        )
+        assertEquals(
+            "android.app.ActivityThread.throwRemoteServiceException ActivityThread.java:2140",
+            framework,
+        )
+        val lines = ProcessExitLog.crashLines(
+            "java.lang.RuntimeException",
+            listOfNotNull(framework, ours),
+            causes = listOf(
+                "android.app.RemoteServiceException\$ForegroundServiceDidNotStartInTimeException",
+            ),
+        )
+        assertEquals("crash java.lang.RuntimeException", lines[0])
+        assertEquals(
+            "frame android.app.ActivityThread.throwRemoteServiceException ActivityThread.java:2140",
+            lines[1],
+        )
+        assertTrue(lines.any { it.startsWith("frame cloud.veritasvpn.vpn.VeritasVpnService.onStartCommand") })
+        assertTrue(
+            lines.any {
+                it == "cause android.app.RemoteServiceException\$ForegroundServiceDidNotStartInTimeException"
+            },
+        )
+        assertFalse(lines.any { it.contains("203.0.113") })
+        val crashed = RuntimeException()
+        crashed.initCause(IllegalStateException())
+        assertEquals(listOf("java.lang.IllegalStateException"), ProcessExitLog.causeNames(crashed))
+    }
+
+    @Test
+    fun applicationRecordsExitsAndInstallsTheHandler() {
+        val source = File("src/main/java/cloud/veritasvpn/VeritasVpnApplication.kt").let { primary ->
+            val file = if (primary.isFile) primary else File("app/src/main/java/cloud/veritasvpn/VeritasVpnApplication.kt")
+            file.readText()
+        }
+        assertTrue(source.contains("DiagnosticLog.install"))
+        assertTrue(source.contains("DiagnosticLog.recordExitReasons"))
+        val log = File("src/main/java/cloud/veritasvpn/support/DiagnosticLog.kt").let { primary ->
+            val file = if (primary.isFile) primary else File("app/src/main/java/cloud/veritasvpn/support/DiagnosticLog.kt")
+            file.readText()
+        }
+        assertTrue(log.contains("getHistoricalProcessExitReasons"))
+        assertTrue(log.contains("uncaughtException"))
+        assertTrue(log.contains("recordCrash"))
+        assertTrue(log.contains("fd.sync"))
+        val service = File("src/main/java/cloud/veritasvpn/vpn/VeritasVpnService.kt").let { primary ->
+            if (primary.isFile) primary else File("app/src/main/java/cloud/veritasvpn/vpn/VeritasVpnService.kt")
+        }.readText()
+        assertTrue(service.contains("userspace turn-off"))
+        assertTrue(service.contains("disconnect roam-joined"))
+    }
+}
