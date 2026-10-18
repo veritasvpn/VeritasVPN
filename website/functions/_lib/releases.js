@@ -17,11 +17,10 @@ const MAX_ASSET_BYTES = 100 * 1024 * 1024;
 
 export const DOWNLOADS = {
   "veritasvpn-android.apk": {
-    // android-v0.2.90 is the signed website APK (versionCode 74) with
-    // the connect circle pulsing through Protected (#201).
+    // android-v0.2.93 is the signed website APK (versionCode 77).
     // Play production stays on the older Play-tracked build.
-    tag: "android-v0.2.90",
-    sha256: "92b6761136304c6bbbdefc3721f313511afbc0f0a8d488486f79103bb9caf0af",
+    tag: "android-v0.2.93",
+    sha256: "fe3c7f921b8143da6f520f2ca45f1dda55787f523ac31d8dd3b89ea8c5a2a2f0",
     contentType: "application/vnd.android.package-archive",
     unavailable: "Android APK is temporarily unavailable.",
   },
