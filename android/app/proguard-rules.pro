@@ -4,6 +4,17 @@
 -keepclasseswithmembernames class com.wireguard.android.backend.GoBackend {
     native <methods>;
 }
+# VeritasVpnService looks these up by name (getDeclaredField / getDeclaredMethod).
+-keepclassmembers class com.wireguard.android.backend.GoBackend {
+    *** currentTunnelHandle;
+    *** currentTunnel;
+    *** currentConfig;
+    native int wgTurnOn(java.lang.String, int, java.lang.String);
+    native void wgTurnOff(int);
+    native int wgGetSocketV4(int);
+    native int wgGetSocketV6(int);
+    native java.lang.String wgGetConfig(int);
+}
 
 # EncryptedSharedPreferences / Tink (MasterKey)
 -keep class androidx.security.crypto.** { *; }
