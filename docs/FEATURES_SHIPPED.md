@@ -1,6 +1,6 @@
 # Features shipped (source of truth)
 
-Last updated: 2026-10-05
+Last updated: 2026-10-19
 
 ## Core VPN
 - WireGuard on Linux desktop, Android, CLI; Chrome HTTP proxy extension
@@ -17,7 +17,7 @@ Last updated: 2026-10-05
 - Split tunnel: exclude LAN (desktop/Android); Android per-app bypass
 
 ## Account / site
-- Anonymous Account ID + email accounts
+- Anonymous Account ID + email accounts. On Android, signed-out sign-up (including an anonymous Account ID) reaches the security check while Always-on lockdown is on (0.2.94). Verify your email uses the same top bar as Account and Help, shows the address and a spam hint, offers Open email app, and waits 30 seconds before resend (0.2.95).
 - Account dashboard: subscription, devices, downloads, security
 - FAQ documents kill switch, split tunnel, and stealth
 - Free website privacy checks at `/check/` (IP, DNS leak, VPN leak, browser reveal, breach, report)
