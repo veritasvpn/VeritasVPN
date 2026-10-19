@@ -126,6 +126,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     @Volatile private var tunnelReleased = false
     /** Always-on lockdown: the tun stays open so the system does not drop this task. */
     @Volatile private var holdInterface = false
+    /** The held tun disallows this app, so sign-up is not blackholed with everyone else. */
+    @Volatile private var lockdownHoldActive = false
     @Volatile private var stealthTransport: StealthTransport? = null
     @Volatile private var activeTransport: String = ""
     @Volatile private var lastNotificationText: String = "Connecting…"
@@ -282,8 +284,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         when (intent?.action) {
             ACTION_QUERY_STATE -> {
                 if (!sessionIntended()) {
+                    openLockdownHold(sessionGeneration, alreadyLockdown = false)
                     broadcastState(false, null)
-                    return START_NOT_STICKY
+                    return if (lockdownHoldActive) START_STICKY else START_NOT_STICKY
                 }
 
                 // An activity can be recreated while this service stays alive,
@@ -310,10 +313,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
                 return START_STICKY
             }
+            ACTION_ENSURE_LOCKDOWN_HOLD -> {
+                if (!sessionIntended()) {
+                    openLockdownHold(sessionGeneration, alreadyLockdown = false)
+                }
+                return if (sessionIntended() || lockdownHoldActive) START_STICKY else START_NOT_STICKY
+            }
             ACTION_CONNECT -> {
                 markSessionStarted()
                 tunnelReleased = false
                 holdInterface = false
+                lockdownHoldActive = false
                 natKeepaliveJob?.cancel()
                 handshakeBurstJob?.cancel()
                 nextTunnelIsFresh = false
@@ -608,7 +618,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 // enterForeground already ran, so this restart is not killed for
                 // missing startForeground. Keep the last approved configuration.
                 if (!sessionIntended()) {
-                    return START_NOT_STICKY
+                    openLockdownHold(sessionGeneration, alreadyLockdown = false)
+                    return if (lockdownHoldActive) START_STICKY else START_NOT_STICKY
                 }
                 restoreSavedSessionIfNeeded()
                 return START_STICKY
@@ -2866,6 +2877,60 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         }
     }
 
+    /**
+     * Replace a signed-out lockdown tun with one that disallows this app.
+     * Other apps stay on the tun. WireGuard stays off, so their packets are
+     * discarded. A failed establish leaves the previous tun in place.
+     */
+    private fun openLockdownHold(expectedGen: Long, alreadyLockdown: Boolean) {
+        synchronized(tunnelOpLock) {
+            if (expectedGen != sessionGeneration || sessionIntended()) return
+            if (lockdownHoldActive && tunKeeper != null) return
+            val lockdown = alreadyLockdown || runCatching {
+                isLockdownEnabled() || VpnKillSwitch.isLockdownEnabled(
+                    this,
+                    vpnPrepared = true,
+                    allowPrepare = false,
+                )
+            }.getOrDefault(false)
+            if (!lockdown) return
+            if (!establishLockdownHoldLocked()) return
+            if (expectedGen != sessionGeneration || sessionIntended()) return
+            holdInterface = true
+            lockdownHoldActive = true
+        }
+    }
+
+    private fun establishLockdownHoldLocked(): Boolean {
+        return try {
+            val builder = getBuilder()
+            builder.setSession(TUNNEL_NAME)
+            val own = packageName
+            builder.addDisallowedApplication(own)
+            for (app in LockdownHold.disallowedPackages(own, VpnSettings.bypassApps(this))) {
+                if (app == own) continue
+                runCatching { builder.addDisallowedApplication(app) }
+            }
+            builder.addAddress(LockdownHold.IPV4_ADDRESS, LockdownHold.IPV4_PREFIX)
+            builder.addRoute(LockdownHold.IPV4_ROUTE, 0)
+            builder.addDnsServer(LockdownHold.DNS)
+            builder.addAddress(LockdownHold.IPV6_ADDRESS, LockdownHold.IPV6_PREFIX)
+            builder.addRoute(LockdownHold.IPV6_ROUTE, 0)
+            builder.setMtu(LockdownHold.MTU)
+            builder.setBlocking(true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setMetered(false)
+            }
+            setUnderlyingNetworks(null)
+            val established = builder.establish() ?: return false
+            established.close()
+            tunKeeper != null
+        } catch (e: Exception) {
+            Log.w(TAG, "lockdown hold: ${e.javaClass.simpleName}")
+            false
+        }
+    }
+
     private fun closeTunKeeper() {
         swapTunKeeper(null)
     }
@@ -2876,7 +2941,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      * running so the activity is not destroyed with it.
      */
     private fun releaseTunnelOnce(expectedGen: Long, keepInterface: Boolean = false) {
-        synchronized(tunnelOpLock) {
+        val replaceWithAppExemptHold = synchronized(tunnelOpLock) {
             if (expectedGen != sessionGeneration || tunnelReleased) return
             tunnelReleased = true
             // GoBackend.setState(DOWN) calls stopSelf(). That destroys this
@@ -2884,14 +2949,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             runCatching { turnUserspaceOffLocked() }
             if (keepInterface) {
                 holdInterface = true
-                return
+                lockdownHoldActive = false
+                true
+            } else {
+                holdInterface = false
+                lockdownHoldActive = false
+                val old = tunKeeper
+                tunKeeper = null
+                runCatching { old?.close() }
+                runCatching { setUnderlyingNetworks(null) }
+                false
             }
-            holdInterface = false
-            val old = tunKeeper
-            tunKeeper = null
-            runCatching { old?.close() }
-            runCatching { setUnderlyingNetworks(null) }
         }
+        if (replaceWithAppExemptHold) openLockdownHold(expectedGen, alreadyLockdown = true)
     }
 
     /**
@@ -4173,6 +4243,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val ACTION_DISCONNECT = "cloud.veritasvpn.DISCONNECT"
         const val ACTION_AUTH_RESTORED = "cloud.veritasvpn.AUTH_RESTORED"
         const val ACTION_QUERY_STATE = "cloud.veritasvpn.QUERY_STATE"
+        const val ACTION_ENSURE_LOCKDOWN_HOLD = "cloud.veritasvpn.ENSURE_LOCKDOWN_HOLD"
         const val ACTION_STATE = "cloud.veritasvpn.STATE"
         const val ACTION_STATS = "cloud.veritasvpn.STATS"
         const val ACTION_RECONNECT_NEEDED = "cloud.veritasvpn.RECONNECT_NEEDED"

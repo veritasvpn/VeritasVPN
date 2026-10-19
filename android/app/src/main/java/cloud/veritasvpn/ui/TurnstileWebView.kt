@@ -1,12 +1,14 @@
 package cloud.veritasvpn.ui
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -26,8 +28,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
 
-private const val TURNSTILE_PAGE = "https://veritasvpn.cloud/turnstile-mobile-v2"
-
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun TurnstileWebView(
@@ -39,6 +39,7 @@ fun TurnstileWebView(
     onReady: () -> Unit,
     onInteractiveRequired: () -> Unit,
     onError: (String) -> Unit,
+    onUnavailable: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // A Turnstile token is single-use. Recreate its WebView only when the caller
@@ -48,9 +49,12 @@ fun TurnstileWebView(
         var webViewRef by remember { mutableStateOf<WebView?>(null) }
         var lastExecuteVersion by remember { mutableStateOf(0) }
         val mainHandler = remember { Handler(Looper.getMainLooper()) }
+        val loadFailures = remember { intArrayOf(0) }
+        val showingBlank = remember { booleanArrayOf(false) }
 
         DisposableEffect(Unit) {
             onDispose {
+                mainHandler.removeCallbacksAndMessages(null)
                 webViewRef?.apply {
                     stopLoading()
                     destroy()
@@ -108,9 +112,48 @@ fun TurnstileWebView(
                             view: WebView,
                             request: WebResourceRequest
                         ): Boolean = false
+
+                        override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                            if (url != null && url.startsWith(TurnstileLoad.PAGE)) {
+                                showingBlank[0] = false
+                            }
+                        }
+
+                        override fun onReceivedError(
+                            view: WebView,
+                            request: WebResourceRequest,
+                            error: WebResourceError,
+                        ) {
+                            if (!request.isForMainFrame || showingBlank[0]) return
+                            val target = request.url?.toString().orEmpty()
+                            if (!target.startsWith(TurnstileLoad.PAGE)) return
+                            mainHandler.post { failMainFrame(view) }
+                        }
+
+                        private fun failMainFrame(view: WebView) {
+                            if (view.parent == null) return
+                            loadFailures[0] += 1
+                            showingBlank[0] = true
+                            view.stopLoading()
+                            view.loadDataWithBaseURL(
+                                "about:blank",
+                                TurnstileLoad.BLANK_HTML,
+                                "text/html",
+                                "utf-8",
+                                null,
+                            )
+                            if (TurnstileLoad.retry(loadFailures[0])) {
+                                mainHandler.postDelayed({
+                                    if (view.parent == null) return@postDelayed
+                                    view.loadUrl(TurnstileLoad.PAGE)
+                                }, TurnstileLoad.RETRY_DELAY_MS)
+                            } else {
+                                onUnavailable()
+                            }
+                        }
                     }
                     webViewRef = this
-                    loadUrl(TURNSTILE_PAGE)
+                    loadUrl(TurnstileLoad.PAGE)
                 }
             },
             update = { view ->

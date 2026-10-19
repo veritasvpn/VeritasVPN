@@ -16,6 +16,11 @@
     native java.lang.String wgGetConfig(int);
 }
 
+# Turnstile posts through this annotation. The method is only called from JS.
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+
 # EncryptedSharedPreferences / Tink (MasterKey)
 -keep class androidx.security.crypto.** { *; }
 -keep class com.google.crypto.tink.** { *; }

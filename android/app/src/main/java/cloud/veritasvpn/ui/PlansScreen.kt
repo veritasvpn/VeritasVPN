@@ -65,6 +65,7 @@ fun AccountScreen(
     var turnstileResetKey by remember { mutableIntStateOf(0) }
     var turnstileReady by remember { mutableStateOf(false) }
     var turnstileExecuteVersion by remember { mutableIntStateOf(0) }
+    var turnstileUnavailable by remember { mutableStateOf<String?>(null) }
     var selectedPlan by remember { mutableStateOf("premium_monthly") }
     val requiresPassword = !email.isNullOrBlank()
     val periodEnd = remember(billingStatus?.currentPeriodEnd) {
@@ -389,9 +390,14 @@ fun AccountScreen(
                             turnstileReady = false
                             turnstileResetKey += 1
                         },
+                        onUnavailable = {
+                            turnstileToken = ""
+                            turnstileReady = false
+                            turnstileUnavailable = TurnstileLoad.UNAVAILABLE
+                        },
                     )
                 }
-                deleteError?.let {
+                (turnstileUnavailable ?: deleteError)?.let {
                     Spacer(Modifier.height(8.dp))
                     Text(it, color = WarningOrange, fontSize = 13.sp)
                 }

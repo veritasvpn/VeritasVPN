@@ -2,6 +2,7 @@ package cloud.veritasvpn.ui
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -83,6 +84,7 @@ fun AuthScreen(
     var turnstileExecuteVersion by remember { mutableIntStateOf(0) }
     var turnstileInteractive by remember { mutableStateOf(false) }
     var pendingTurnstileSubmit by remember { mutableStateOf(false) }
+    var turnstileFailed by remember { mutableStateOf(false) }
     var signInTurnstileRequired by remember { mutableStateOf(false) }
     var retryStatus by remember { mutableStateOf<String?>(null) }
     var lockdownBlocked by remember { mutableStateOf(false) }
@@ -96,6 +98,7 @@ fun AuthScreen(
         turnstileToken = ""
         turnstileInteractive = false
         turnstileReady = false
+        turnstileFailed = false
         turnstileResetKey += 1
         error = message
     }
@@ -115,7 +118,7 @@ fun AuthScreen(
                 if (turnstileInteractive) {
                     "Security check expired. Please try again."
                 } else {
-                    "Security check took too long. Please try again."
+                    TurnstileLoad.UNAVAILABLE
                 }
             )
         }
@@ -131,6 +134,25 @@ fun AuthScreen(
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val authRepo = remember(context) { cloud.veritasvpn.auth.AuthRepository(context) }
+
+    // Signed out + lockdown keeps a tun with WireGuard off. That tun blackholes
+    // this process, including the security-check WebView, unless the service
+    // replaces it with one that disallows this app. No consent dialog.
+    LaunchedEffect(Unit) {
+        val lockdown = cloud.veritasvpn.vpn.VpnKillSwitch.isLockdownEnabled(
+            context,
+            vpnPrepared = true,
+            allowPrepare = false,
+        )
+        if (!lockdown) return@LaunchedEffect
+        runCatching {
+            context.startService(
+                Intent(context, cloud.veritasvpn.vpn.VeritasVpnService::class.java).apply {
+                    action = cloud.veritasvpn.vpn.VeritasVpnService.ACTION_ENSURE_LOCKDOWN_HOLD
+                },
+            )
+        }
+    }
 
     fun submitWithTurnstileToken() {
         val lockdownCheck = NetworkPreflight.checkLockdownOnly(context)
@@ -720,7 +742,7 @@ fun AuthScreen(
                 // The prewarmed frame takes no meaningful space. It expands
                 // only while the person explicitly starts verification or
                 // Cloudflare requests an interactive challenge.
-                showInteractive = turnstileInteractive || pendingTurnstileSubmit,
+                showInteractive = turnstileInteractive,
                 onToken = { token ->
                     turnstileToken = token
                     turnstileInteractive = false
@@ -736,7 +758,15 @@ fun AuthScreen(
                 onInteractiveRequired = { turnstileInteractive = true },
                 onError = {
                     resetTurnstile(it)
-                }
+                },
+                onUnavailable = {
+                    pendingTurnstileSubmit = false
+                    turnstileToken = ""
+                    turnstileReady = false
+                    turnstileInteractive = false
+                    turnstileFailed = true
+                    error = TurnstileLoad.UNAVAILABLE
+                },
             )
         }
 
@@ -773,7 +803,13 @@ fun AuthScreen(
                     // rather than asking the person to press the button again.
                     pendingTurnstileSubmit = true
                     error = null
-                    if (turnstileReady) turnstileExecuteVersion += 1
+                    if (turnstileFailed) {
+                        turnstileFailed = false
+                        turnstileReady = false
+                        turnstileResetKey += 1
+                    } else if (turnstileReady) {
+                        turnstileExecuteVersion += 1
+                    }
                 } else {
                     submitWithTurnstileToken()
                 }
