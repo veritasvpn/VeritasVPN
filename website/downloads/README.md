@@ -4,6 +4,8 @@
 
 **Production traffic** is served by Cloudflare Functions that stream from GitHub Releases only when the bytes match the SHA-256 pinned in `functions/_lib/releases.js`. Android is served from `android-v0.2.95` (app version 0.2.95). Linux is served from desktop `v0.2.90` (git tag `linux-v0.2.90`). The local fallback files in this directory are not deployed to Pages and retain their own checksum manifest until they are refreshed separately.
 
+The site’s primary Android button opens the Google Play listing (`https://play.google.com/store/apps/details?id=cloud.veritasvpn`). `/downloads/veritasvpn-android.apk` stays available as the sideload fallback linked from the Android install page.
+
 | File | Purpose |
 |------|---------|
 | `veritasvpn-android.apk` | Local signed-APK fallback — must match the local SHA-256 manifest; public downloads stream GitHub `android-v0.2.95` |

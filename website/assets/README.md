@@ -8,6 +8,7 @@ Brand image files for the VeritasVPN marketing site:
 |------|-----|
 | `logo.png` | Full lockup (shield + wordmark + tagline). Used in the hero. |
 | `logo-mark.png` | Shield-only mark. Used in the navbar, footer, and favicon. |
+| `google-play-badge.png` | Unmodified official English “Get it on Google Play” badge (646×250). Do not recolor, crop, or add effects. |
 
 Source art is the official company logo (dark background, cyan→blue shield gradient). Backgrounds were made transparent so the marks sit cleanly on the dark site theme.
 
