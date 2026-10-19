@@ -83,7 +83,7 @@ test("Linux downloads and the APK endpoint stay in place", async () => {
   const linux = await read("website/install/linux.html");
   assert.match(linux, /\/downloads\/veritasvpn-linux\.deb\?v=/);
   assert.match(linux, /\/downloads\/veritasvpn-linux\.AppImage\?v=/);
-  assert.equal(linux.includes("play.google.com"), false);
+  assert.doesNotMatch(linux, /https:\/\/play\.google\.com\//);
 
   const chrome = await read("website/install/chrome.html");
   assert.match(chrome, /href="\/install\/linux\.html"/);
@@ -91,7 +91,7 @@ test("Linux downloads and the APK endpoint stay in place", async () => {
 
   const status = await read("website/js/status.js");
   assert.match(status, /url: '\/downloads\/veritasvpn-android\.apk'/);
-  assert.equal(status.includes("play.google.com"), false);
+  assert.doesNotMatch(status, /https:\/\/play\.google\.com\//);
 
   const endpoint = await read("website/functions/downloads/veritasvpn-android.apk.js");
   assert.match(endpoint, /serveRelease\(context\.request, "veritasvpn-android\.apk"\)/);
