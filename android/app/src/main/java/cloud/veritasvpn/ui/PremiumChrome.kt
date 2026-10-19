@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -84,13 +85,17 @@ fun PremiumTopBar(
     title: String,
     onBack: () -> Unit,
     backContentDescription: String = "Back",
+    modifier: Modifier = Modifier,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         GlassIconButton(onClick = onBack, contentDescription = backContentDescription) {
             Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = null, tint = CyanHover)
         }
         Spacer(Modifier.width(12.dp))
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(eyebrow, style = MaterialTheme.typography.labelSmall, color = CyanHover)
             Text(title, style = MaterialTheme.typography.headlineMedium, color = Paper)
         }
