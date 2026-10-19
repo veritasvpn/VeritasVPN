@@ -73,6 +73,7 @@ fun AuthScreen(
     var verificationResendEmail by remember { mutableStateOf<String?>(null) }
     var pendingVerificationEmail by remember { mutableStateOf<String?>(null) }
     var resendLoading by remember { mutableStateOf(false) }
+    var resendCooldown by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(false) }
     var forgotPassword by remember { mutableStateOf(false) }
     var resetSent by remember { mutableStateOf(false) }
@@ -128,6 +129,13 @@ fun AuthScreen(
         if (resetCooldown > 0) {
             delay(1000)
             resetCooldown -= 1
+        }
+    }
+
+    LaunchedEffect(resendCooldown) {
+        if (resendCooldown > 0) {
+            delay(1000)
+            resendCooldown -= 1
         }
     }
 
@@ -201,6 +209,7 @@ fun AuthScreen(
             } catch (e: cloud.veritasvpn.auth.AuthRepository.VerificationRequired) {
                 if (method == AuthMethod.EMAIL && mode == AuthMode.SIGN_UP) {
                     pendingVerificationEmail = e.email
+                    resendCooldown = VerifyEmailResend.COOLDOWN_SECONDS
                     notice = null
                     error = null
                 } else {
@@ -236,6 +245,86 @@ fun AuthScreen(
                 retryStatus = null
             }
         }
+    }
+
+    fun leaveVerification() {
+        pendingVerificationEmail = null
+        notice = null
+        error = null
+        lockdownBlocked = false
+        resendCooldown = 0
+        retryStatus = null
+        mode = AuthMode.SIGN_IN
+    }
+
+    fun resendPendingVerification() {
+        val email = pendingVerificationEmail ?: return
+        if (!VerifyEmailResend.canResend(resendLoading, resendCooldown)) return
+        val lockdownCheck = NetworkPreflight.checkLockdownOnly(context)
+        if (lockdownCheck is NetworkPreflight.Result.Blocked) {
+            notice = null
+            error = lockdownCheck.message
+            lockdownBlocked = lockdownCheck.openVpnSettings
+            return
+        }
+        lockdownBlocked = false
+        resendLoading = true
+        notice = null
+        error = null
+        retryStatus = null
+        scope.launch {
+            try {
+                withTimeout(50_000L) {
+                    withContext(Dispatchers.IO) {
+                        authRepo.resendVerification(email, onRetry = {
+                            scope.launch {
+                                if (resendLoading) {
+                                    retryStatus = context.getString(R.string.status_retrying)
+                                }
+                            }
+                        })
+                    }
+                }
+                notice = context.getString(R.string.verify_email_sent)
+                error = null
+                resendCooldown = VerifyEmailResend.COOLDOWN_SECONDS
+            } catch (e: TimeoutCancellationException) {
+                error = context.getString(R.string.error_server_timeout)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = NetworkPreflight.classifyFailure(context, e)
+            } finally {
+                resendLoading = false
+                retryStatus = null
+            }
+        }
+    }
+
+    val pendingEmail = pendingVerificationEmail
+    if (pendingEmail != null) {
+        VerifyEmailScreen(
+            email = pendingEmail,
+            notice = notice,
+            error = error,
+            retryStatus = retryStatus,
+            resendLoading = resendLoading,
+            resendCooldownSeconds = resendCooldown,
+            showOpenVpnSettings = lockdownBlocked && !error.isNullOrBlank(),
+            onBackToSignIn = { leaveVerification() },
+            onResend = { resendPendingVerification() },
+            onOpenEmailApp = {
+                if (!EmailInbox.open(context)) {
+                    notice = null
+                    lockdownBlocked = false
+                    error = context.getString(R.string.verify_email_no_app)
+                }
+            },
+            onOpenVpnSettings = {
+                context.startActivity(cloud.veritasvpn.vpn.VpnKillSwitch.systemVpnSettingsIntent())
+            },
+        )
+        return
     }
 
     PremiumBackdrop {
@@ -360,89 +449,6 @@ fun AuthScreen(
                 Text(if (loading) "Sending…" else if (resetCooldown > 0) "Try again in $resetCooldown s" else "Send reset link", color = Color.White)
             }
             TextButton(onClick = { forgotPassword = false; error = null; resetSent = false }) {
-                Text("Back to sign in", color = CyanHover, fontWeight = FontWeight.Medium)
-            }
-            return
-        }
-
-        if (pendingVerificationEmail != null) {
-            IconButton(
-                onClick = {
-                    pendingVerificationEmail = null
-                    notice = null
-                    error = null
-                    mode = AuthMode.SIGN_IN
-                },
-                modifier = Modifier.align(Alignment.Start)
-            ) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to sign in", tint = CyanHover)
-            }
-            Spacer(Modifier.height(8.dp))
-            Text("Verify your email", color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Confirm your account creation by clicking the verification link we sent to $pendingVerificationEmail.",
-                color = PaperMuted,
-                fontSize = 14.sp,
-                textAlign = TextAlign.Center
-            )
-            notice?.let {
-                Spacer(Modifier.height(12.dp))
-                Text(it, color = CyanHover, fontSize = 13.sp, textAlign = TextAlign.Center)
-            }
-            error?.let {
-                Spacer(Modifier.height(12.dp))
-                Text(it, color = ErrorRed, fontSize = 13.sp, textAlign = TextAlign.Center)
-            }
-            Spacer(Modifier.height(20.dp))
-            Button(
-                onClick = {
-                    val email = pendingVerificationEmail ?: return@Button
-                    val lockdownCheck = NetworkPreflight.checkLockdownOnly(context)
-                    if (lockdownCheck is NetworkPreflight.Result.Blocked) {
-                        error = lockdownCheck.message
-                        lockdownBlocked = lockdownCheck.openVpnSettings
-                        return@Button
-                    }
-                    lockdownBlocked = false
-                    resendLoading = true
-                    notice = null
-                    error = null
-                    scope.launch {
-                        try {
-                            withTimeout(50_000L) {
-                                withContext(Dispatchers.IO) { 
-                                    authRepo.resendVerification(email, onRetry = { attempt ->
-                                        scope.launch { retryStatus = context.getString(R.string.status_retrying) }
-                                    })
-                                }
-                            }
-                            notice = "A new verification link was sent to $email."
-                        } catch (e: TimeoutCancellationException) {
-                            error = context.getString(R.string.error_server_timeout)
-                        } catch (e: Exception) {
-                            error = NetworkPreflight.classifyFailure(context, e)
-                        } finally {
-                            resendLoading = false
-                        }
-                    }
-                },
-                enabled = !resendLoading,
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Royal)
-            ) {
-                Text(
-                    if (resendLoading) "Sending verification email…" else "Resend verification email",
-                    color = Color.White
-                )
-            }
-            TextButton(onClick = {
-                pendingVerificationEmail = null
-                notice = null
-                error = null
-                mode = AuthMode.SIGN_IN
-            }) {
                 Text("Back to sign in", color = CyanHover, fontWeight = FontWeight.Medium)
             }
             return
@@ -622,6 +628,8 @@ fun AuthScreen(
                             notice = "A new verification link was sent to $pendingEmail."
                         } catch (e: TimeoutCancellationException) {
                             error = context.getString(R.string.error_server_timeout)
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             error = NetworkPreflight.classifyFailure(context, e)
                         } finally {

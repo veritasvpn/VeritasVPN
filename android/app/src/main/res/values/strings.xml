@@ -15,4 +15,16 @@
     <string name="trial_days_free">%d days free</string>
     <string name="trial_offer_copy">Try Premium free for %1$d days, then %2$s/%3$s. Cancel anytime in Google Play.</string>
     <string name="start_free_trial">Start free trial</string>
+    <string name="verify_email_eyebrow">SIGN UP</string>
+    <string name="verify_email_title">Verify your email</string>
+    <string name="verify_email_sent_to">We sent a verification link to</string>
+    <string name="verify_email_body">Open the link to finish creating your account. You can sign in after it\'s confirmed.</string>
+    <string name="verify_email_spam">Check your spam folder if you don\'t see it.</string>
+    <string name="verify_email_resend">Resend verification email</string>
+    <string name="verify_email_resend_in">Resend in %1$ds</string>
+    <string name="verify_email_sending">Sending…</string>
+    <string name="verify_email_sent">A new verification link was sent.</string>
+    <string name="verify_email_open_app">Open email app</string>
+    <string name="verify_email_no_app">No email app found on this device.</string>
+    <string name="verify_email_back">Back to sign in</string>
 </resources>
