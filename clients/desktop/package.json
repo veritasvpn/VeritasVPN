@@ -1,7 +1,7 @@
 {
   "name": "veritasvpn-desktop",
   "private": true,
-  "version": "0.2.90",
+  "version": "0.2.96",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,14 +11,15 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-http": "^2",
-    "@tauri-apps/plugin-shell": "^2",
+    "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/plugin-http": "2.8.3",
+    "@tauri-apps/plugin-notification": "2.7.0",
+    "@tauri-apps/plugin-shell": "2.5.0",
     "react": "^19",
     "react-dom": "^19"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
+    "@tauri-apps/cli": "2.12.3",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^4",

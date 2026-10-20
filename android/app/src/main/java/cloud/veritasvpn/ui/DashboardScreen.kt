@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.ui.theme.*
 import cloud.veritasvpn.vpn.ControlPlane
+import cloud.veritasvpn.vpn.ShieldCategoryRow
 
 @Composable
 fun DashboardScreen(
@@ -52,6 +53,8 @@ fun DashboardScreen(
     handshakeMs: Long = 0,
     dnsBlockedCount: Long? = null,
     dnsBlockedBaseline: Long? = null,
+    shieldRows: List<ShieldCategoryRow> = emptyList(),
+    shieldBanner: String? = null,
     dnsGateway: String? = null,
     transport: String = "",
     reconnecting: Boolean = false,
@@ -231,6 +234,8 @@ fun DashboardScreen(
                         dnsBlockedThisSession = if (dnsBlockedCount != null && dnsBlockedBaseline != null) {
                             (dnsBlockedCount - dnsBlockedBaseline).coerceAtLeast(0)
                         } else null,
+                        shieldRows = shieldRows.filter { it.enabled },
+                        shieldBanner = shieldBanner,
                         dnsGateway = dnsGateway,
                         reconnecting = reconnecting,
                     )
@@ -285,6 +290,8 @@ private fun LiveTransferStats(
     txBytes: Long,
     handshakeMs: Long,
     dnsBlockedThisSession: Long?,
+    shieldRows: List<ShieldCategoryRow>,
+    shieldBanner: String?,
     dnsGateway: String?,
     reconnecting: Boolean,
 ) {
@@ -327,6 +334,25 @@ private fun LiveTransferStats(
                     fontWeight = FontWeight.Bold
                 )
             }
+        }
+        if (!shieldBanner.isNullOrBlank() || shieldRows.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            if (!shieldBanner.isNullOrBlank()) {
+                Text(shieldBanner, color = Paper, fontSize = 13.sp, lineHeight = 18.sp)
+                Spacer(Modifier.height(6.dp))
+            }
+            shieldRows.forEach { row ->
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(row.group.label, color = PaperMuted, fontSize = 13.sp)
+                    Text(
+                        "${row.today} today · ${row.week} this week",
+                        color = Paper,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            Text("Today and this week are UTC, for this account.", color = PaperDim, fontSize = 11.sp)
         }
         Spacer(Modifier.height(12.dp))
         HorizontalDivider(color = Line)

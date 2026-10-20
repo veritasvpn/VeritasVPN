@@ -38,8 +38,8 @@ android {
         targetSdk = 36
         // Google Play requires a new monotonically increasing version code for
         // every uploaded release artifact.
-        versionCode = 79
-        versionName = "0.2.95"
+        versionCode = 80
+        versionName = "0.2.96"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

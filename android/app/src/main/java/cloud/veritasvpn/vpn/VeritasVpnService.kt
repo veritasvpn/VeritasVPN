@@ -35,8 +35,11 @@ import cloud.veritasvpn.R
 import cloud.veritasvpn.api.ApiClient
 import cloud.veritasvpn.api.UserFacingError
 import cloud.veritasvpn.api.PeerEndpointView
+import cloud.veritasvpn.api.PeerListResponse
 import cloud.veritasvpn.api.PeerResponse
+import cloud.veritasvpn.auth.AuthenticatedApi
 import cloud.veritasvpn.auth.AuthRepository
+import cloud.veritasvpn.auth.SessionExpiredException
 import cloud.veritasvpn.auth.ControlAccess
 import cloud.veritasvpn.auth.ControlRefresh
 import cloud.veritasvpn.secure.SecurePrefs
@@ -90,6 +93,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var disconnectJob: Job? = null
     private var validationJob: Job? = null
     private var statsJob: Job? = null
+    private var shieldJob: Job? = null
     private var adaptJob: Job? = null
     private var restoreJob: Job? = null
     private var healthJob: Job? = null
@@ -300,6 +304,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     restoreSavedSessionIfNeeded()
                 }
                 broadcastState(true, null)
+                broadcastShieldUpdate()
                 return START_STICKY
             }
             ACTION_AUTH_RESTORED -> {
@@ -658,6 +663,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 )
             }
             broadcastState(true, null)
+            startShieldPolling()
         }
         if (decision.forcePeerCheck) ensurePeerCheck(force = true)
     }
@@ -895,18 +901,185 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun startStatsPolling() {
         if (!sessionIntended()) return
-        if (statsJob?.isActive == true) return
-        statsJob = scope.launch {
-            while (sessionIntended()) {
-                broadcastStats()
-                delay(1_500)
+        if (statsJob?.isActive != true) {
+            statsJob = scope.launch {
+                while (sessionIntended()) {
+                    broadcastStats()
+                    delay(1_500)
+                }
             }
         }
+        // Reconnect, roam, and a later network change all come through here
+        // while stats are already running. A shield job that already stopped
+        // still has to start again. A live policy change is read on the next poll.
+        startShieldPolling()
     }
 
     private fun stopStatsPolling() {
         statsJob?.cancel()
         statsJob = null
+        stopShieldPolling()
+    }
+
+    /**
+     * Polls block notices while the tunnel is up. The job follows the VPN
+     * service, not the activity, so a closed screen still gets a notice.
+     * It does not touch WireGuard, the kill switch, or the shared API client.
+     * While reconnecting it only waits, so it does not compete with recovery.
+     */
+    private fun startShieldPolling() {
+        if (!sessionIntended() || controlSignedOut) return
+        if (shieldJob?.isActive == true) return
+        shieldJob = scope.launch {
+            var failures = 0
+            val seen = LinkedHashSet<String>()
+            var lastSentAt = 0L
+            while (isActive && sessionIntended() && !controlSignedOut) {
+                if (isReconnecting || disconnectJob?.isActive == true) {
+                    delay(ShieldPollPolicy.RECONNECT_SLICE_MS)
+                    continue
+                }
+                when (val outcome = pollShieldOnce(seen, lastSentAt)) {
+                    ShieldPollOutcome.SignedOut -> {
+                        stopForSignedOut()
+                        break
+                    }
+                    ShieldPollOutcome.Stop -> break
+                    ShieldPollOutcome.Ok -> {
+                        failures = 0
+                        lastSentAt = shieldLastSentAt
+                        delay(ShieldPollPolicy.INTERVAL_MS)
+                    }
+                    ShieldPollOutcome.Retry -> {
+                        failures++
+                        delay(ShieldPollPolicy.failureDelayMs(failures))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun stopShieldPolling() {
+        shieldJob?.cancel()
+        shieldJob = null
+        runCatching {
+            getSystemService(NotificationManager::class.java).cancel(SHIELD_NOTIFICATION_ID)
+        }
+    }
+
+    @Volatile private var shieldLastSentAt: Long = 0L
+    private var lastShieldCount: Long = -1L
+    private var lastShieldBlocksJson: String? = null
+    private var lastShieldBanner: String? = null
+    private val shieldHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+            .callTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
+    private enum class ShieldPollOutcome { Ok, Retry, Stop, SignedOut }
+
+    private class ShieldFetch(
+        val peer: cloud.veritasvpn.api.PeerInfo?,
+        val stop: Boolean,
+    )
+
+    private suspend fun pollShieldOnce(seen: LinkedHashSet<String>, lastSentAt: Long): ShieldPollOutcome {
+        val peerId = VpnSettings.currentPeerId(this) ?: return ShieldPollOutcome.Retry
+        return try {
+            val parsed = AuthenticatedApi.execute(authRepo, { token ->
+                ApiClient.getOnce("/api/v1/wg/peers", token, shieldHttpClient, timeoutSeconds = 4)
+            }) { res ->
+                when {
+                    // Refresh already ran. Another 401 is not a reason to loop or sign out.
+                    res.code == 401 -> ShieldFetch(null, stop = true)
+                    !res.isSuccessful -> ShieldFetch(null, stop = false)
+                    else -> ShieldFetch(
+                        ApiClient.parse<PeerListResponse>(res)?.peers?.firstOrNull { it.id == peerId },
+                        stop = false,
+                    )
+                }
+            }
+            if (parsed.stop) return ShieldPollOutcome.Stop
+            val peer = parsed.peer ?: return ShieldPollOutcome.Retry
+            val blocks = peer.shieldBlocks?.toBlocks()
+            val plan = planShieldNotices(
+                incoming = peer.shieldNotices.map { it.toNotice() },
+                seen = seen,
+                prefs = VpnSettings.shieldNoticePrefs(this),
+                policy = VpnSettings.shieldPolicy(this),
+                nowMs = System.currentTimeMillis(),
+                lastSentAtMs = lastSentAt,
+            )
+            if (sessionIntended() && !controlSignedOut) {
+                val posted = plan.notification?.let { postShieldNotification(it) } ?: true
+                if (shieldPollAccepted(plan, posted)) {
+                    seen.clear()
+                    seen.addAll(plan.seen)
+                    shieldLastSentAt = plan.lastSentAtMs
+                }
+                lastShieldCount = peer.dnsBlockedCount
+                lastShieldBlocksJson = blocks?.let { ApiClient.gson.toJson(it) }
+                lastShieldBanner = plan.banner
+                broadcastShieldUpdate()
+            }
+            ShieldPollOutcome.Ok
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: SessionExpiredException) {
+            ShieldPollOutcome.SignedOut
+        } catch (e: Exception) {
+            Log.i(TAG, "shield poll skipped: ${e.javaClass.simpleName}")
+            ShieldPollOutcome.Retry
+        }
+    }
+
+    private fun broadcastShieldUpdate() {
+        if (lastShieldCount < 0 && lastShieldBlocksJson == null && lastShieldBanner == null) return
+        val intent = Intent(ACTION_SHIELD).setPackage(packageName)
+        if (lastShieldCount >= 0) intent.putExtra(EXTRA_DNS_BLOCKED, lastShieldCount)
+        lastShieldBlocksJson?.let { intent.putExtra(EXTRA_SHIELD_BLOCKS, it) }
+        lastShieldBanner?.let { intent.putExtra(EXTRA_SHIELD_BANNER, it) }
+        sendBroadcast(intent)
+    }
+
+    private fun postShieldNotification(notice: PreparedShieldNotice): Boolean {
+        val manager = getSystemService(NotificationManager::class.java) ?: return false
+        // The VPN foreground notification is exempt from POST_NOTIFICATIONS.
+        // This channel is not. A denied permission drops the post with no throw.
+        if (!manager.areNotificationsEnabled()) return false
+        return try {
+            val open = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_OPEN_SHIELD, true)
+            }
+            val pending = PendingIntent.getActivity(
+                this,
+                2,
+                open,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val builder = NotificationCompat.Builder(this, SHIELD_CHANNEL_ID)
+                .setContentTitle(notice.title)
+                .setContentText(notice.body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(notice.body))
+                .setSmallIcon(R.drawable.ic_stat_veritas)
+                .setContentIntent(pending)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            if (notice.redactOnLockScreen) {
+                builder.setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            }
+            manager.notify(SHIELD_NOTIFICATION_ID, builder.build())
+            true
+        } catch (e: Exception) {
+            Log.i(TAG, "shield notification not posted: ${e.javaClass.simpleName}")
+            false
+        }
     }
 
     private fun broadcastStats() {
@@ -1118,12 +1291,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     private fun createNotificationChannel() {
+        val manager = getSystemService(NotificationManager::class.java)
         val channel = NotificationChannel(
             CHANNEL_ID, "VeritasVPN", NotificationManager.IMPORTANCE_LOW
         ).apply {
             description = "VPN connection status"
         }
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        manager.createNotificationChannel(channel)
+        val shield = NotificationChannel(
+            SHIELD_CHANNEL_ID, "Veritas Shield", NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "Sites Veritas Shield blocked"
+        }
+        manager.createNotificationChannel(shield)
     }
 
     private fun vpnStatePrefs() = SecurePrefs.open(this, PREFS_NAME)
@@ -3537,6 +3717,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         natKeepaliveJob?.cancel()
         handshakeBurstJob?.cancel()
         statsJob?.cancel()
+        shieldJob?.cancel()
         cancelPeerRecovery()
         transitionJob?.cancel()
         disconnectJob?.cancel()
@@ -3724,6 +3905,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      */
     private fun stopForSignedOut() {
         controlSignedOut = true
+        stopShieldPolling()
         isReconnecting = false
         synchronized(reprovisionLock) {
             reprovisionJob?.cancel()
@@ -4246,6 +4428,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val ACTION_ENSURE_LOCKDOWN_HOLD = "cloud.veritasvpn.ENSURE_LOCKDOWN_HOLD"
         const val ACTION_STATE = "cloud.veritasvpn.STATE"
         const val ACTION_STATS = "cloud.veritasvpn.STATS"
+        const val ACTION_SHIELD = "cloud.veritasvpn.SHIELD"
+        const val SHIELD_CHANNEL_ID = "veritas_shield"
+        const val SHIELD_NOTIFICATION_ID = 2
         const val ACTION_RECONNECT_NEEDED = "cloud.veritasvpn.RECONNECT_NEEDED"
         const val ACTION_PEER_CHECK = "cloud.veritasvpn.PEER_CHECK"
         const val EXTRA_CONFIG = "config"
@@ -4266,6 +4451,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val EXTRA_RECONNECTING = "reconnecting"
         const val EXTRA_HANDSHAKE_OK = "handshake_ok"
         const val EXTRA_NEEDS_VPN_CONSENT = "needs_vpn_consent"
+        const val EXTRA_OPEN_SHIELD = "open_shield"
+        const val EXTRA_DNS_BLOCKED = "dns_blocked"
+        const val EXTRA_SHIELD_BLOCKS = "shield_blocks"
+        const val EXTRA_SHIELD_BANNER = "shield_banner"
         const val PREFS_NAME = "veritas_vpn_state"
         const val KEY_CONFIG = "last_approved_config"
         const val KEY_UDP_CONFIG = "udp_config"

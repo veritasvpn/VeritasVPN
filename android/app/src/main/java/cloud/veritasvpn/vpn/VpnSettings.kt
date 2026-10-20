@@ -21,6 +21,10 @@ object VpnSettings {
     private const val KEY_SHIELD_ADS = "shield_block_ads"
     private const val KEY_SHIELD_ADULT = "shield_block_adult"
     private const val KEY_SHIELD_TRACKERS = "shield_block_trackers"
+    private const val KEY_NOTICE_MALICIOUS = "shield_notice_malicious"
+    private const val KEY_NOTICE_TRACKERS = "shield_notice_trackers"
+    private const val KEY_NOTICE_ADS = "shield_notice_ads"
+    private const val KEY_NOTICE_ADULT = "shield_notice_adult"
     private const val KEY_SHARE_DIAGNOSTICS = "share_diagnostics"
     private const val KEY_LAST_ERROR = "last_error"
     private const val KEY_VPN_DISCLOSURE_ACCEPTED = "vpn_disclosure_accepted"
@@ -134,6 +138,26 @@ object VpnSettings {
             return
         }
         prefs(context).edit().putString(KEY_LAST_ERROR, safe).apply()
+    }
+
+    /** Local only. The server does not store which notices a device wants. */
+    fun shieldNoticePrefs(context: Context): ShieldNoticePrefs {
+        val stored = prefs(context)
+        return ShieldNoticePrefs(
+            malicious = stored.getBoolean(KEY_NOTICE_MALICIOUS, true),
+            trackers = stored.getBoolean(KEY_NOTICE_TRACKERS, false),
+            ads = stored.getBoolean(KEY_NOTICE_ADS, false),
+            adult = stored.getBoolean(KEY_NOTICE_ADULT, false),
+        )
+    }
+
+    fun setShieldNoticePrefs(context: Context, noticePrefs: ShieldNoticePrefs) {
+        prefs(context).edit()
+            .putBoolean(KEY_NOTICE_MALICIOUS, noticePrefs.malicious)
+            .putBoolean(KEY_NOTICE_TRACKERS, noticePrefs.trackers)
+            .putBoolean(KEY_NOTICE_ADS, noticePrefs.ads)
+            .putBoolean(KEY_NOTICE_ADULT, noticePrefs.adult)
+            .apply()
     }
 
     fun setShieldPolicy(context: Context, policy: ShieldPolicy) {

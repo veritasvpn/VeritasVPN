@@ -146,6 +146,7 @@ class MainActivity : ComponentActivity() {
     private var peerCleanupJob: Job? = null
     private var reconnectJob: Job? = null
     private var billingReturnVersion by mutableIntStateOf(0)
+    private var shieldOpenVersion by mutableIntStateOf(0)
 
     private fun handleBillingReturn(intent: Intent?) {
         val uri = intent?.data ?: return
@@ -169,6 +170,9 @@ class MainActivity : ComponentActivity() {
         authRepo = AuthRepository(this)
         currentPeerId = VpnSettings.currentPeerId(this)
         handleBillingReturn(intent)
+        if (intent?.getBooleanExtra(VeritasVpnService.EXTRA_OPEN_SHIELD, false) == true) {
+            shieldOpenVersion += 1
+        }
 
         setContent {
             VeritasVPNTheme {
@@ -230,6 +234,9 @@ class MainActivity : ComponentActivity() {
                 var awaitingAuthClear by remember { mutableStateOf(false) }
                 var dnsBlockedCount by remember { mutableStateOf<Long?>(null) }
                 var dnsBlockedBaseline by remember { mutableStateOf<Long?>(null) }
+                var shieldBlocks by remember { mutableStateOf<cloud.veritasvpn.vpn.ShieldBlocks?>(null) }
+                var shieldBanner by remember { mutableStateOf<String?>(null) }
+                var shieldNoticePrefs by remember { mutableStateOf(VpnSettings.shieldNoticePrefs(context)) }
                 var dnsGateway by remember { mutableStateOf<String?>(null) }
                 var excludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
                 var bypassApps by remember { mutableStateOf(VpnSettings.bypassApps(context)) }
@@ -274,6 +281,8 @@ class MainActivity : ComponentActivity() {
                     handshakeMs = 0
                     dnsBlockedCount = null
                     dnsBlockedBaseline = null
+                    shieldBlocks = null
+                    shieldBanner = null
                     dnsGateway = null
                     transport = ""
                 }
@@ -332,6 +341,74 @@ class MainActivity : ComponentActivity() {
                     user = null
                 }
 
+                val disconnectNoteGeneration = remember { intArrayOf(0) }
+
+                /**
+                 * Fresh Always-on read for the disconnect line. The live service
+                 * wins when this process still has one. Settings are the fallback.
+                 * [VpnService.prepare] is not called.
+                 */
+                suspend fun readDisconnectLockdownState(): DisconnectUi.Note {
+                    val settings = withContext(Dispatchers.IO) {
+                        VpnKillSwitch.readSight(
+                            context,
+                            vpnPrepared = false,
+                            allowPrepare = false,
+                        )
+                    }
+                    val service = withContext(Dispatchers.IO) {
+                        VeritasVpnService.readServiceLockdown()
+                    }
+                    return DisconnectUi.lockdownNote(
+                        settings = settings,
+                        serviceAlwaysOn = service?.first,
+                        serviceLockdown = service?.second,
+                    )
+                }
+
+                fun applyDisconnectNote(state: DisconnectUi.Note, afterDisconnect: Boolean) {
+                    if (connected || connecting || reconnecting || userWantsConnected) return
+                    when (state) {
+                        DisconnectUi.Note.On -> lockdownEnabled = true
+                        DisconnectUi.Note.Off -> lockdownEnabled = false
+                        DisconnectUi.Note.Unknown -> Unit
+                    }
+                    val current = statusMsg
+                    val replaceAssertion = afterDisconnect ||
+                        current == DisconnectUi.LOCKDOWN_NOTE ||
+                        current == DisconnectUi.CHECK_NOTE
+                    if (!replaceAssertion) return
+                    statusMsg = DisconnectUi.textFor(state, replaceAssertion = true)
+                }
+
+                /**
+                 * Re-read on disconnect and whenever the activity comes back,
+                 * including a return from system VPN settings. The first off
+                 * read clears the line. A few later reads cover a setting that
+                 * publishes just after the screen closes.
+                 */
+                fun refreshDisconnectLockdownNote(afterDisconnect: Boolean) {
+                    if (connected || connecting || reconnecting || userWantsConnected) return
+                    val showing = statusMsg == DisconnectUi.LOCKDOWN_NOTE ||
+                        statusMsg == DisconnectUi.CHECK_NOTE
+                    if (!afterDisconnect && !showing) return
+                    val generation = ++disconnectNoteGeneration[0]
+                    scope.launch {
+                        var reads = 0
+                        while (reads < VpnKillSwitch.RECHECK_ATTEMPTS) {
+                            if (generation != disconnectNoteGeneration[0]) return@launch
+                            val state = readDisconnectLockdownState()
+                            if (generation != disconnectNoteGeneration[0]) return@launch
+                            applyDisconnectNote(state, afterDisconnect)
+                            if (state == DisconnectUi.Note.Off) return@launch
+                            if (connected || connecting || reconnecting || userWantsConnected) return@launch
+                            reads += 1
+                            if (reads >= VpnKillSwitch.RECHECK_ATTEMPTS) return@launch
+                            delay(VpnKillSwitch.RECHECK_DELAY_MS)
+                        }
+                    }
+                }
+
                 fun noteIntentionalDisconnect() {
                     // The circle tap stays in the app. Always-on cannot be
                     // cleared from here. Do not read lockdown with
@@ -341,7 +418,7 @@ class MainActivity : ComponentActivity() {
                     awaitingLockdownRelease = false
                     releaseLockdownError = null
                     if (!presentation.leavesApp && !presentation.callsPrepare && !presentation.launchSettings) {
-                        statusMsg = presentation.note
+                        refreshDisconnectLockdownNote(afterDisconnect = true)
                     }
                 }
 
@@ -907,11 +984,28 @@ class MainActivity : ComponentActivity() {
                                         handshakeMs = 0
                                         dnsBlockedCount = null
                                         dnsBlockedBaseline = null
+                                        shieldBlocks = null
+                                        shieldBanner = null
                                         dnsGateway = null
                                         transport = ""
                                         signInAgain = false
                                         awaitingAuthClear = false
-                                        statusMsg = error ?: statusMsg?.takeIf { it == DisconnectUi.LOCKDOWN_NOTE }
+                                        statusMsg = DisconnectUi.keepDisconnectNote(error, statusMsg)
+                                    }
+                                }
+                                VeritasVpnService.ACTION_SHIELD -> {
+                                    if (intent.hasExtra(VeritasVpnService.EXTRA_DNS_BLOCKED)) {
+                                        val count = intent.getLongExtra(VeritasVpnService.EXTRA_DNS_BLOCKED, 0L)
+                                        if (dnsBlockedBaseline == null) dnsBlockedBaseline = count
+                                        dnsBlockedCount = count
+                                    }
+                                    intent.getStringExtra(VeritasVpnService.EXTRA_SHIELD_BLOCKS)?.let { raw ->
+                                        shieldBlocks = runCatching {
+                                            ApiClient.gson.fromJson(raw, cloud.veritasvpn.vpn.ShieldBlocks::class.java)
+                                        }.getOrNull()
+                                    }
+                                    if (intent.hasExtra(VeritasVpnService.EXTRA_SHIELD_BANNER)) {
+                                        shieldBanner = intent.getStringExtra(VeritasVpnService.EXTRA_SHIELD_BANNER)
                                     }
                                 }
                                 VeritasVpnService.ACTION_STATS -> {
@@ -990,6 +1084,7 @@ class MainActivity : ComponentActivity() {
                     IntentFilter().apply {
                         addAction(VeritasVpnService.ACTION_STATE)
                         addAction(VeritasVpnService.ACTION_STATS)
+                        addAction(VeritasVpnService.ACTION_SHIELD)
                         addAction(VeritasVpnService.ACTION_RECONNECT_NEEDED)
                         addAction(VeritasVpnService.ACTION_PEER_CHECK)
                     },
@@ -1012,38 +1107,16 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(connected, user?.accountId) {
-                    if (!connected || user == null) {
-                        dnsBlockedCount = null
-                        dnsBlockedBaseline = null
-                        return@LaunchedEffect
-                    }
-                    while (isActive && connected) {
-                        val peerId = currentPeerId ?: VpnSettings.currentPeerId(context)
-                        if (peerId != null) {
-                            runCatching {
-                                withContext(Dispatchers.IO) {
-                                    AuthenticatedApi.execute(authRepo, { token ->
-                                        ApiClient.get("/api/v1/wg/peers", token)
-                                    }) { res ->
-                                        if (!res.isSuccessful) return@execute null
-                                        ApiClient.parse<PeerListResponse>(res)
-                                            ?.peers
-                                            ?.firstOrNull { it.id == peerId }
-                                    }
-                                }
-                            }.onSuccess { peer ->
-                                if (peer != null) {
-                                    val count = peer.dnsBlockedCount
-                                    if (dnsBlockedBaseline == null) dnsBlockedBaseline = count
-                                    dnsBlockedCount = count
-                                }
-                            }.onFailure {
-                                if (it is SessionExpiredException) handleSessionExpired()
-                            }
-                        }
-                        delay(5_000)
-                    }
+                val shieldOpen = shieldOpenVersion
+                LaunchedEffect(shieldOpen) {
+                    if (shieldOpen <= 0) return@LaunchedEffect
+                    showPlans = false
+                    showStealthSettings = false
+                    showTunnelSettings = false
+                    showHelp = false
+                    showDiagnostics = false
+                    showVpnDisclosure = false
+                    showShieldSettings = true
                 }
 
                 fun requestConnect() {
@@ -1126,6 +1199,11 @@ class MainActivity : ComponentActivity() {
                 val lifecycleOwner = LocalLifecycleOwner.current
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
+                            if (event == Lifecycle.Event.ON_START ||
+                                event == Lifecycle.Event.ON_RESUME
+                            ) {
+                                refreshDisconnectLockdownNote(afterDisconnect = false)
+                            }
                             if (event == Lifecycle.Event.ON_RESUME) {
                             // Some builds publish Always-on and lockdown slightly after
                             // the VPN screen closes. Re-read before leaving the modal up.
@@ -1373,9 +1451,15 @@ class MainActivity : ComponentActivity() {
                 } else if (showShieldSettings) {
                     ShieldSettingsScreen(
                         policy = shieldPolicy,
+                        noticePrefs = shieldNoticePrefs,
+                        rows = cloud.veritasvpn.vpn.shieldCategoryRows(shieldPolicy, shieldBlocks),
                         isPremium = PlanEntitlement.grantsPremium(billingStatus),
                         connected = connected,
                         error = shieldError,
+                        onNoticePrefsChange = { next ->
+                            shieldNoticePrefs = next
+                            VpnSettings.setShieldNoticePrefs(context, next)
+                        },
                         onPolicyChange = { next ->
                             val previous = shieldPolicy
                             val generation = ++shieldWriteGeneration[0]
@@ -1597,6 +1681,12 @@ class MainActivity : ComponentActivity() {
                         handshakeMs = handshakeMs,
                         dnsBlockedCount = dnsBlockedCount,
                         dnsBlockedBaseline = dnsBlockedBaseline,
+                        shieldRows = if (PlanEntitlement.grantsPremium(billingStatus)) {
+                            cloud.veritasvpn.vpn.shieldCategoryRows(shieldPolicy, shieldBlocks)
+                        } else {
+                            emptyList()
+                        },
+                        shieldBanner = shieldBanner,
                         dnsGateway = dnsGateway,
                         transport = transport,
                         reconnecting = reconnecting,
@@ -1841,6 +1931,9 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getBooleanExtra(VeritasVpnService.EXTRA_OPEN_SHIELD, false)) {
+            shieldOpenVersion += 1
+        }
         handleBillingReturn(intent)
     }
 }

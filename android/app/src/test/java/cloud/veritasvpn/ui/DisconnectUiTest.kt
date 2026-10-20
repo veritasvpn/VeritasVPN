@@ -1,5 +1,6 @@
 package cloud.veritasvpn.ui
 
+import cloud.veritasvpn.vpn.VpnKillSwitch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -22,6 +23,76 @@ class DisconnectUiTest {
         assertFalse(open.callsPrepare)
         assertFalse(open.leavesApp)
         assertNull(open.note)
+    }
+
+    @Test
+    fun serviceOffClearsTheAssertionEvenWhenSettingsStayOn() {
+        val note = DisconnectUi.lockdownNote(
+            settings = VpnKillSwitch.Sight.On,
+            serviceAlwaysOn = false,
+            serviceLockdown = false,
+        )
+        assertEquals(DisconnectUi.Note.Off, note)
+        assertNull(DisconnectUi.text(note))
+    }
+
+    @Test
+    fun disagreeingReadsDoNotClaimAlwaysOnIsStillOn() {
+        val note = DisconnectUi.lockdownNote(
+            settings = VpnKillSwitch.Sight.Off,
+            serviceAlwaysOn = true,
+            serviceLockdown = true,
+        )
+        assertEquals(DisconnectUi.Note.Unknown, note)
+        assertEquals(DisconnectUi.CHECK_NOTE, DisconnectUi.text(note))
+        assertFalse(DisconnectUi.CHECK_NOTE.contains("still on"))
+        assertNull(DisconnectUi.textFor(note, replaceAssertion = false))
+        assertEquals(DisconnectUi.CHECK_NOTE, DisconnectUi.textFor(note, replaceAssertion = true))
+    }
+
+    @Test
+    fun bothSourcesOnKeepTheAssertionAndAMissingServiceUsesSettings() {
+        val on = DisconnectUi.lockdownNote(
+            settings = VpnKillSwitch.Sight.On,
+            serviceAlwaysOn = true,
+            serviceLockdown = true,
+        )
+        assertEquals(DisconnectUi.LOCKDOWN_NOTE, DisconnectUi.text(on))
+
+        val settingsOff = DisconnectUi.lockdownNote(
+            settings = VpnKillSwitch.Sight.Off,
+            serviceAlwaysOn = null,
+            serviceLockdown = null,
+        )
+        assertEquals(DisconnectUi.Note.Off, settingsOff)
+
+        val hidden = DisconnectUi.lockdownNote(
+            settings = VpnKillSwitch.Sight.Unreadable,
+            serviceAlwaysOn = null,
+            serviceLockdown = null,
+        )
+        assertEquals(DisconnectUi.Note.Unknown, hidden)
+
+        val serviceOnHidden = DisconnectUi.lockdownNote(
+            settings = VpnKillSwitch.Sight.Unreadable,
+            serviceAlwaysOn = true,
+            serviceLockdown = true,
+        )
+        assertEquals(DisconnectUi.Note.On, serviceOnHidden)
+    }
+
+    @Test
+    fun stateBroadcastKeepsEitherDisconnectLine() {
+        assertEquals(
+            DisconnectUi.LOCKDOWN_NOTE,
+            DisconnectUi.keepDisconnectNote(null, DisconnectUi.LOCKDOWN_NOTE),
+        )
+        assertEquals(
+            DisconnectUi.CHECK_NOTE,
+            DisconnectUi.keepDisconnectNote(null, DisconnectUi.CHECK_NOTE),
+        )
+        assertNull(DisconnectUi.keepDisconnectNote(null, "something else"))
+        assertEquals("revoked", DisconnectUi.keepDisconnectNote("revoked", DisconnectUi.LOCKDOWN_NOTE))
     }
 
     @Test
