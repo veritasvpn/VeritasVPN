@@ -228,10 +228,16 @@ jobs:
       - name: Bundle wstunnel for Stealth mode
         run: bash scripts/bundle-wstunnel-linux.sh
         working-directory: clients/desktop
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          working-directory: clients/desktop/src-tauri
-          token: ${{ secrets.GITHUB_TOKEN }}
+      # rustsec/audit-check@v2.0.0 creates its check run, then
+      # PATCH update-a-check-run returns 404 (master run 39482057137).
+      # This job already has checks: write, and that create call succeeds.
+      # cargo audit still fails the job when a vulnerability is found.
+      # Informational warnings stay warnings.
+      - name: Audit Rust dependencies
+        working-directory: clients/desktop/src-tauri
+        run: |
+          cargo install cargo-audit --version 0.22.2
+          cargo audit
 
   build-android:
     name: Build Android debug APK
@@ -318,7 +324,7 @@ jobs:
           ! grep -RInP '<script(?![^>]*\bsrc=)' website --include='*.html'
           ! grep -RIn 'minlength="[0-9]"' website clients/browser-extension
       - name: Security regression tests
-        run: node --test website/functions/_lib/*.test.mjs scripts/verify-release-source.test.mjs
+        run: node --test website/functions/_lib/*.test.mjs scripts/verify-release-source.test.mjs monitoring/uptime-worker/src/state.test.mjs
       - name: Validate shell scripts
         run: |
           find deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n

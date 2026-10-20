@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.ui.theme.*
+import cloud.veritasvpn.vpn.BlockedNetworkNotice
 import cloud.veritasvpn.vpn.ControlPlane
 import cloud.veritasvpn.vpn.ShieldCategoryRow
 
@@ -61,6 +62,10 @@ fun DashboardScreen(
     handshakeOk: Boolean = false,
     lockdownEnabled: Boolean = false,
     signInAgain: Boolean = false,
+    blockedNetwork: BlockedNetworkNotice.Step = BlockedNetworkNotice.Step(),
+    onDismissBlockedNetwork: () -> Unit = {},
+    onSwitchToStealth: () -> Unit = {},
+    onUseMobileData: () -> Unit = {},
 ) {
     var showSignOutConfirmation by remember { mutableStateOf(false) }
     var showSignOutEverywhereConfirmation by remember { mutableStateOf(false) }
@@ -240,6 +245,17 @@ fun DashboardScreen(
                         reconnecting = reconnecting,
                     )
                 }
+            }
+
+            if (blockedNetwork.visible) {
+                Spacer(Modifier.height(16.dp))
+                BlockedNetworkCard(
+                    offerStealthSwitch = blockedNetwork.offerStealthSwitch,
+                    suggestOtherNetwork = blockedNetwork.suggestOtherNetwork,
+                    onSwitchToStealth = onSwitchToStealth,
+                    onUseMobileData = onUseMobileData,
+                    onDismiss = onDismissBlockedNetwork,
+                )
             }
 
             // Status message

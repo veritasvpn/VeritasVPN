@@ -55,7 +55,7 @@ enum class InitialTransport {
 object StealthPlanner {
     /**
      * Fresh connects and UDP-only always start on UDP. Auto resumes Stealth only
-     * when this process is restoring a session that already fell back, so a
+     * when this process is restoring a session that is already on Stealth, so a
      * restart does not open a clearnet gap or repeat the UDP wait.
      */
     fun initial(

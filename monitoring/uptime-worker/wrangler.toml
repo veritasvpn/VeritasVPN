@@ -1,0 +1,13 @@
+name = "veritas-uptime"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[kv_namespaces]]
+binding = "UPTIME_STATE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Worker secrets, set with wrangler secret put. Never commit values.
+# TELEGRAM_BOT_TOKEN  TELEGRAM_CHAT_ID  PUBLIC_IP  TEST_ALERT_SECRET

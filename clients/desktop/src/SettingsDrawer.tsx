@@ -352,7 +352,7 @@ export function StealthSettingsScreen({
     {
       id: "auto",
       title: "Auto",
-      subtitle: "Try UDP first. If that handshake does not complete, switch to Stealth. Recommended.",
+      subtitle: "Uses UDP. If a network blocks it, the app suggests Stealth.",
     },
     {
       id: "udp",

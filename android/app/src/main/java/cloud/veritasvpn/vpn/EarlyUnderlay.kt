@@ -89,6 +89,12 @@ object EarlyUnderlay {
         if (adoptEarly && (state.early == null || state.early == handle)) {
             return state.copy(early = handle)
         }
+        // Wi-Fi is gone and nothing is bound. Cellular is not an "early" Wi-Fi
+        // adopt, but it is the only addressed network, so it has to become the
+        // bind target. Leaving the old handle here drops the switch.
+        if (state.early == null && state.defaultHandle == null) {
+            return state.copy(defaultHandle = handle)
+        }
         return state
     }
 }

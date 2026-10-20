@@ -339,6 +339,10 @@ data class PeerResponse(
 )
 
 /** GET /api/v1/wg/peers/{id}: the endpoint fields for the caller’s current address. */
+data class PeerServerView(
+    @SerializedName("public_key") val publicKey: String? = null,
+)
+
 data class PeerEndpointView(
     @SerializedName("server_endpoint") val serverEndpoint: String? = null,
     @SerializedName("server_endpoint_lan") val serverEndpointLan: String? = null,
@@ -346,6 +350,7 @@ data class PeerEndpointView(
     @SerializedName("stealth_endpoint") val stealthEndpoint: String? = null,
     @SerializedName("stealth_available") val stealthAvailable: Boolean? = null,
     @SerializedName("stealth_path_prefix") val stealthPathPrefix: String? = null,
+    @SerializedName("server") val server: PeerServerView? = null,
 )
 
 data class PeerListResponse(

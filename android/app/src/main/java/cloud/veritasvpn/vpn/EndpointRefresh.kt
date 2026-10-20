@@ -42,6 +42,7 @@ object EndpointRefresh {
         val stealthEndpoint: String?,
         val stealthAvailable: Boolean?,
         val stealthPrefix: String?,
+        val serverPublicKey: String? = null,
     )
 
     data class Flight(val handle: Long?, val generation: Long)
@@ -59,6 +60,7 @@ object EndpointRefresh {
         stealthAvailable: Boolean?,
         stealthPrefix: String?,
         @Suppress("UNUSED_PARAMETER") ignoredPrevious: String?,
+        serverPublicKey: String? = null,
     ): Offer? {
         val server = freshEndpoint(serverEndpoint) ?: return null
         return Offer(
@@ -68,6 +70,7 @@ object EndpointRefresh {
             stealthEndpoint = blankToNull(stealthEndpoint),
             stealthAvailable = stealthAvailable,
             stealthPrefix = blankToNull(stealthPrefix),
+            serverPublicKey = blankToNull(serverPublicKey),
         )
     }
 
