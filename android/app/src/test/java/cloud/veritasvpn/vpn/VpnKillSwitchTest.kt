@@ -174,6 +174,30 @@ class VpnKillSwitchTest {
     }
 
     @Test
+    fun hiddenPackageWhileDisconnectedIsNotProofTheSwitchIsOff() {
+        assertEquals(
+            VpnKillSwitch.Sight.On,
+            VpnKillSwitch.lockdownSight("cloud.veritasvpn", "cloud.veritasvpn", 1, vpnPrepared = false),
+        )
+        assertEquals(
+            VpnKillSwitch.Sight.Off,
+            VpnKillSwitch.lockdownSight("cloud.veritasvpn", "cloud.veritasvpn", 0, vpnPrepared = true),
+        )
+        assertEquals(
+            VpnKillSwitch.Sight.Off,
+            VpnKillSwitch.lockdownSight("com.other.vpn", "cloud.veritasvpn", 1, vpnPrepared = true),
+        )
+        assertEquals(
+            VpnKillSwitch.Sight.Unreadable,
+            VpnKillSwitch.lockdownSight(null, "cloud.veritasvpn", 1, vpnPrepared = false),
+        )
+        assertEquals(
+            VpnKillSwitch.Sight.On,
+            VpnKillSwitch.lockdownSight(null, "cloud.veritasvpn", 1, vpnPrepared = true),
+        )
+    }
+
+    @Test
     fun serviceOnOverridesStaleSettingsAndSettingsOnSurvivesAMissingService() {
         assertTrue(
             VpnKillSwitch.lockdownFromSources(
@@ -245,6 +269,15 @@ class VpnKillSwitchTest {
         assertTrue(reader.contains("allowPrepare = false"))
         assertTrue(reader.contains("readServiceLockdown()"))
         assertFalse(reader.contains("VpnService.prepare"))
+
+        val disconnectRead = slice(activity, "fun readDisconnectLockdownState", "fun applyDisconnectNote")
+        assertTrue(disconnectRead.contains("readSight("))
+        assertTrue(disconnectRead.contains("allowPrepare = false"))
+        assertTrue(disconnectRead.contains("readServiceLockdown()"))
+        assertFalse(disconnectRead.contains("VpnService.prepare"))
+        assertTrue(activity.contains("Lifecycle.Event.ON_START"))
+        assertTrue(activity.contains("refreshDisconnectLockdownNote(afterDisconnect = false)"))
+        assertTrue(activity.contains("refreshDisconnectLockdownNote(afterDisconnect = true)"))
 
         val service = kotlinSource("VeritasVpnService.kt")
         val live = slice(service, "fun readServiceLockdown()", "fun retireProvisioningClient()")

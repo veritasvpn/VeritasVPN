@@ -105,6 +105,29 @@ object VpnKillSwitch {
     }
 
     /**
+     * What a settings read can actually prove.
+     * [Unreadable] is a hidden Always-on package while this app is not the
+     * prepared VPN. That is not the same as the switches being off.
+     */
+    enum class Sight { On, Off, Unreadable }
+
+    /**
+     * Same rules as [lockdownSatisfied], plus the hidden-package case.
+     * Lockdown 0 and another app's Always-on package are [Sight.Off].
+     */
+    fun lockdownSight(
+        alwaysOnApp: String?,
+        packageName: String,
+        lockdownValue: Int,
+        vpnPrepared: Boolean = false,
+    ): Sight {
+        if (lockdownSatisfied(alwaysOnApp, packageName, lockdownValue, vpnPrepared)) return Sight.On
+        if (lockdownValue == 0) return Sight.Off
+        if (normalizeAlwaysOnPackage(alwaysOnApp) != null) return Sight.Off
+        return Sight.Unreadable
+    }
+
+    /**
      * True when lockdown is on for [packageName].
      *
      * A readable Always-on package must be this app. Android 12+ and HyperOS
@@ -184,7 +207,17 @@ object VpnKillSwitch {
         context: Context,
         vpnPrepared: Boolean? = null,
         allowPrepare: Boolean = false,
-    ): Boolean {
+    ): Boolean = readSight(context, vpnPrepared, allowPrepare) == Sight.On
+
+    /**
+     * Settings sight for the disconnect note. Does not call [VpnService.prepare]
+     * unless [allowPrepare] is true. Disconnect and resume pass false.
+     */
+    fun readSight(
+        context: Context,
+        vpnPrepared: Boolean? = null,
+        allowPrepare: Boolean = false,
+    ): Sight {
         val resolver = context.contentResolver
         val alwaysOnApp = firstAlwaysOnPackage(
             readSetting(resolver, SettingsTable.Secure, ALWAYS_ON_VPN_APP),
@@ -202,8 +235,8 @@ object VpnKillSwitch {
             )
         }
         val prepared = resolvePrepared(context, alwaysOnApp, lockdown, vpnPrepared, allowPrepare)
-        val satisfied = lockdownSatisfied(alwaysOnApp, context.packageName, lockdown, prepared)
-        if (!satisfied) {
+        val sight = lockdownSight(alwaysOnApp, context.packageName, lockdown, prepared)
+        if (sight != Sight.On) {
             Log.i(
                 TAG,
                 "Always-on lockdown not detected: lockdown=$lockdown " +
@@ -211,7 +244,7 @@ object VpnKillSwitch {
                     "packageMatches=${alwaysOnApp == context.packageName} prepared=$prepared",
             )
         }
-        return satisfied
+        return sight
     }
 
     fun systemVpnSettingsIntent(): Intent = Intent(Settings.ACTION_VPN_SETTINGS)

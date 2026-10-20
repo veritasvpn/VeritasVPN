@@ -341,6 +341,74 @@ class MainActivity : ComponentActivity() {
                     user = null
                 }
 
+                val disconnectNoteGeneration = remember { intArrayOf(0) }
+
+                /**
+                 * Fresh Always-on read for the disconnect line. The live service
+                 * wins when this process still has one. Settings are the fallback.
+                 * [VpnService.prepare] is not called.
+                 */
+                suspend fun readDisconnectLockdownState(): DisconnectUi.Note {
+                    val settings = withContext(Dispatchers.IO) {
+                        VpnKillSwitch.readSight(
+                            context,
+                            vpnPrepared = false,
+                            allowPrepare = false,
+                        )
+                    }
+                    val service = withContext(Dispatchers.IO) {
+                        VeritasVpnService.readServiceLockdown()
+                    }
+                    return DisconnectUi.lockdownNote(
+                        settings = settings,
+                        serviceAlwaysOn = service?.first,
+                        serviceLockdown = service?.second,
+                    )
+                }
+
+                fun applyDisconnectNote(state: DisconnectUi.Note, afterDisconnect: Boolean) {
+                    if (connected || connecting || reconnecting || userWantsConnected) return
+                    when (state) {
+                        DisconnectUi.Note.On -> lockdownEnabled = true
+                        DisconnectUi.Note.Off -> lockdownEnabled = false
+                        DisconnectUi.Note.Unknown -> Unit
+                    }
+                    val current = statusMsg
+                    val replaceAssertion = afterDisconnect ||
+                        current == DisconnectUi.LOCKDOWN_NOTE ||
+                        current == DisconnectUi.CHECK_NOTE
+                    if (!replaceAssertion) return
+                    statusMsg = DisconnectUi.textFor(state, replaceAssertion = true)
+                }
+
+                /**
+                 * Re-read on disconnect and whenever the activity comes back,
+                 * including a return from system VPN settings. The first off
+                 * read clears the line. A few later reads cover a setting that
+                 * publishes just after the screen closes.
+                 */
+                fun refreshDisconnectLockdownNote(afterDisconnect: Boolean) {
+                    if (connected || connecting || reconnecting || userWantsConnected) return
+                    val showing = statusMsg == DisconnectUi.LOCKDOWN_NOTE ||
+                        statusMsg == DisconnectUi.CHECK_NOTE
+                    if (!afterDisconnect && !showing) return
+                    val generation = ++disconnectNoteGeneration[0]
+                    scope.launch {
+                        var reads = 0
+                        while (reads < VpnKillSwitch.RECHECK_ATTEMPTS) {
+                            if (generation != disconnectNoteGeneration[0]) return@launch
+                            val state = readDisconnectLockdownState()
+                            if (generation != disconnectNoteGeneration[0]) return@launch
+                            applyDisconnectNote(state, afterDisconnect)
+                            if (state == DisconnectUi.Note.Off) return@launch
+                            if (connected || connecting || reconnecting || userWantsConnected) return@launch
+                            reads += 1
+                            if (reads >= VpnKillSwitch.RECHECK_ATTEMPTS) return@launch
+                            delay(VpnKillSwitch.RECHECK_DELAY_MS)
+                        }
+                    }
+                }
+
                 fun noteIntentionalDisconnect() {
                     // The circle tap stays in the app. Always-on cannot be
                     // cleared from here. Do not read lockdown with
@@ -350,7 +418,7 @@ class MainActivity : ComponentActivity() {
                     awaitingLockdownRelease = false
                     releaseLockdownError = null
                     if (!presentation.leavesApp && !presentation.callsPrepare && !presentation.launchSettings) {
-                        statusMsg = presentation.note
+                        refreshDisconnectLockdownNote(afterDisconnect = true)
                     }
                 }
 
@@ -922,7 +990,7 @@ class MainActivity : ComponentActivity() {
                                         transport = ""
                                         signInAgain = false
                                         awaitingAuthClear = false
-                                        statusMsg = error ?: statusMsg?.takeIf { it == DisconnectUi.LOCKDOWN_NOTE }
+                                        statusMsg = DisconnectUi.keepDisconnectNote(error, statusMsg)
                                     }
                                 }
                                 VeritasVpnService.ACTION_SHIELD -> {
@@ -1131,6 +1199,11 @@ class MainActivity : ComponentActivity() {
                 val lifecycleOwner = LocalLifecycleOwner.current
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
+                            if (event == Lifecycle.Event.ON_START ||
+                                event == Lifecycle.Event.ON_RESUME
+                            ) {
+                                refreshDisconnectLockdownNote(afterDisconnect = false)
+                            }
                             if (event == Lifecycle.Event.ON_RESUME) {
                             // Some builds publish Always-on and lockdown slightly after
                             // the VPN screen closes. Re-read before leaving the modal up.
