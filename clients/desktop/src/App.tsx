@@ -35,7 +35,9 @@ import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
 import { SettingsDrawer, ShieldSettingsScreen, StealthSettingsScreen, TunnelSettingsScreen, type StealthChoice } from "./SettingsDrawer";
 import { HelpSupport } from "./HelpSupport";
 import { choosePublicEndpoint, isRecordableError, readStoredLastError, sanitizeError, writeStoredLastError } from "./support";
-import { readShieldFlags, shieldRequest, writeShieldFlags, type ShieldFlags } from "./shield";
+import { readShieldFlags, readShieldNoticePrefs, shieldRequest, writeShieldFlags, writeShieldNoticePrefs, type ShieldFlags } from "./shield";
+import { planShieldNotices, readBlocks, readNotices, shieldCategoryRows, type ShieldBlocks } from "./shieldNotices";
+import { listenForShieldNotification, sendShieldNotification } from "./shieldNotify";
 import { HeroConnectControl, type HeroPhase } from "./HeroConnect";
 import {
   projectLatLng,
@@ -167,6 +169,8 @@ interface PeerInfo {
   status?: string;
   created_at?: number;
   dns_blocked_count?: number;
+  shield_blocks?: unknown;
+  shield_notices?: unknown;
   shield_preset?: string;
 }
 
@@ -774,6 +778,9 @@ function HomeStage({
   wgStats,
   dnsBlockedThisSession,
   dnsGateway,
+  shieldRows,
+  shieldBanner,
+  onOpenShield,
   statusMsg,
   statusSticky,
   onConnect,
@@ -789,6 +796,9 @@ function HomeStage({
   wgStats: WgTransferStats | null;
   dnsBlockedThisSession: number | null;
   dnsGateway: string | null;
+  shieldRows: ReturnType<typeof shieldCategoryRows>;
+  shieldBanner: string;
+  onOpenShield: () => void;
   statusMsg: string;
   statusSticky: boolean;
   onConnect: () => void;
@@ -848,6 +858,20 @@ function HomeStage({
               <span>Shield blocked this session</span>
               <strong>{dnsBlockedThisSession}</strong>
             </div>
+          )}
+          {shieldBanner && (
+            <button type="button" className="live-stats-shield-banner" onClick={onOpenShield}>
+              {shieldBanner}
+            </button>
+          )}
+          {shieldRows.filter((row) => row.enabled).map((row) => (
+            <div key={row.group} className="live-stats-dns">
+              <span>{row.label}</span>
+              <strong>{row.today} today · {row.week} this week</strong>
+            </div>
+          ))}
+          {shieldRows.some((row) => row.enabled) && (
+            <p className="live-stats-shield-note">Today and this week are UTC, for this account.</p>
           )}
           <div className="live-stats-dns-status" role="status">
             <strong>Veritas Shield on</strong>
@@ -917,7 +941,12 @@ function App() {
   const [showTunnelSettings, setShowTunnelSettings] = useState(false);
   const [showShieldSettings, setShowShieldSettings] = useState(false);
   const [shieldFlags, setShieldFlags] = useState<ShieldFlags>(() => readShieldFlags());
+  const [shieldNoticePrefs, setShieldNoticePrefs] = useState(() => readShieldNoticePrefs());
+  const [shieldBlocks, setShieldBlocks] = useState<ShieldBlocks | null>(null);
+  const [shieldBanner, setShieldBanner] = useState("");
   const [shieldError, setShieldError] = useState("");
+  const noticeSeenRef = useRef<string[]>([]);
+  const noticeSentAtRef = useRef(0);
   const [showStealthSettings, setShowStealthSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [diagEndpoint, setDiagEndpoint] = useState("");
@@ -1712,6 +1741,9 @@ function App() {
     if (!connected || !peerId) {
       setDnsBlockedCount(null);
       setDnsBlockedBaseline(null);
+      setShieldBlocks(null);
+      setShieldBanner("");
+      noticeSeenRef.current = [];
       return;
     }
     let cancelled = false;
@@ -1725,6 +1757,25 @@ function App() {
         if (match && typeof match.dns_blocked_count === "number") {
           setDnsBlockedCount(match.dns_blocked_count);
           setDnsBlockedBaseline((prev) => (prev === null ? match.dns_blocked_count! : prev));
+        }
+        if (match) {
+          setShieldBlocks(readBlocks(match.shield_blocks));
+          const plan = planShieldNotices({
+            incoming: readNotices(match.shield_notices),
+            seen: noticeSeenRef.current,
+            prefs: readShieldNoticePrefs(),
+            flags: shieldFlagsRef.current,
+            nowMs: Date.now(),
+            lastSentAtMs: noticeSentAtRef.current,
+          });
+          noticeSeenRef.current = plan.seen;
+          noticeSentAtRef.current = plan.lastSentAtMs;
+          if (plan.banner) setShieldBanner(plan.banner);
+          if (plan.notification) {
+            void sendShieldNotification(plan.notification.title, plan.notification.body).then((shown) => {
+              if (!shown && plan.notification) setShieldBanner(plan.notification.body);
+            });
+          }
         }
       } catch (err) {
         if (err instanceof SessionExpiredError) expireAndReturnToSignIn();
@@ -1772,6 +1823,21 @@ function App() {
     setShowNetworkMap(false);
     setShowHelp(false);
   }, []);
+
+  useEffect(() => {
+    let stop = () => {};
+    let cancelled = false;
+    void listenForShieldNotification(() => {
+      if (!cancelled) openShieldSettings();
+    }).then((unlisten) => {
+      if (cancelled) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [openShieldSettings]);
 
   const applyShieldFlags = useCallback(async (next: ShieldFlags) => {
     const previous = shieldFlagsRef.current;
@@ -2109,10 +2175,16 @@ function App() {
         ) : showShieldSettings ? (
           <ShieldSettingsScreen
             flags={shieldFlags}
+            noticePrefs={shieldNoticePrefs}
+            rows={shieldCategoryRows(shieldFlags, shieldBlocks)}
             isPremium={subscriptionActive}
             connected={connected}
             error={shieldError}
             onChange={(next) => { void applyShieldFlags(next); }}
+            onNoticeChange={(next) => {
+              setShieldNoticePrefs(next);
+              writeShieldNoticePrefs(next);
+            }}
             onUpgrade={openAccount}
             onBack={() => setShowShieldSettings(false)}
           />
@@ -2152,6 +2224,9 @@ function App() {
             wgStats={wgStats}
             dnsBlockedThisSession={dnsBlockedThisSession}
             dnsGateway={dnsGateway}
+            shieldRows={subscriptionActive ? shieldCategoryRows(shieldFlags, shieldBlocks) : []}
+            shieldBanner={shieldBanner}
+            onOpenShield={openShieldSettings}
             statusMsg={statusMsg}
             statusSticky={statusSticky || isStickyStatusMessage(statusMsg)}
             onConnect={() => { void handleConnect(); }}

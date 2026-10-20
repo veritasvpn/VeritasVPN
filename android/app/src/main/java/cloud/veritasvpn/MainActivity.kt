@@ -146,6 +146,7 @@ class MainActivity : ComponentActivity() {
     private var peerCleanupJob: Job? = null
     private var reconnectJob: Job? = null
     private var billingReturnVersion by mutableIntStateOf(0)
+    private var shieldOpenVersion by mutableIntStateOf(0)
 
     private fun handleBillingReturn(intent: Intent?) {
         val uri = intent?.data ?: return
@@ -169,6 +170,9 @@ class MainActivity : ComponentActivity() {
         authRepo = AuthRepository(this)
         currentPeerId = VpnSettings.currentPeerId(this)
         handleBillingReturn(intent)
+        if (intent?.getBooleanExtra(VeritasVpnService.EXTRA_OPEN_SHIELD, false) == true) {
+            shieldOpenVersion += 1
+        }
 
         setContent {
             VeritasVPNTheme {
@@ -230,6 +234,9 @@ class MainActivity : ComponentActivity() {
                 var awaitingAuthClear by remember { mutableStateOf(false) }
                 var dnsBlockedCount by remember { mutableStateOf<Long?>(null) }
                 var dnsBlockedBaseline by remember { mutableStateOf<Long?>(null) }
+                var shieldBlocks by remember { mutableStateOf<cloud.veritasvpn.vpn.ShieldBlocks?>(null) }
+                var shieldBanner by remember { mutableStateOf<String?>(null) }
+                var shieldNoticePrefs by remember { mutableStateOf(VpnSettings.shieldNoticePrefs(context)) }
                 var dnsGateway by remember { mutableStateOf<String?>(null) }
                 var excludeLan by remember { mutableStateOf(VpnSettings.excludeLan(context)) }
                 var bypassApps by remember { mutableStateOf(VpnSettings.bypassApps(context)) }
@@ -274,6 +281,8 @@ class MainActivity : ComponentActivity() {
                     handshakeMs = 0
                     dnsBlockedCount = null
                     dnsBlockedBaseline = null
+                    shieldBlocks = null
+                    shieldBanner = null
                     dnsGateway = null
                     transport = ""
                 }
@@ -907,11 +916,28 @@ class MainActivity : ComponentActivity() {
                                         handshakeMs = 0
                                         dnsBlockedCount = null
                                         dnsBlockedBaseline = null
+                                        shieldBlocks = null
+                                        shieldBanner = null
                                         dnsGateway = null
                                         transport = ""
                                         signInAgain = false
                                         awaitingAuthClear = false
                                         statusMsg = error ?: statusMsg?.takeIf { it == DisconnectUi.LOCKDOWN_NOTE }
+                                    }
+                                }
+                                VeritasVpnService.ACTION_SHIELD -> {
+                                    if (intent.hasExtra(VeritasVpnService.EXTRA_DNS_BLOCKED)) {
+                                        val count = intent.getLongExtra(VeritasVpnService.EXTRA_DNS_BLOCKED, 0L)
+                                        if (dnsBlockedBaseline == null) dnsBlockedBaseline = count
+                                        dnsBlockedCount = count
+                                    }
+                                    intent.getStringExtra(VeritasVpnService.EXTRA_SHIELD_BLOCKS)?.let { raw ->
+                                        shieldBlocks = runCatching {
+                                            ApiClient.gson.fromJson(raw, cloud.veritasvpn.vpn.ShieldBlocks::class.java)
+                                        }.getOrNull()
+                                    }
+                                    if (intent.hasExtra(VeritasVpnService.EXTRA_SHIELD_BANNER)) {
+                                        shieldBanner = intent.getStringExtra(VeritasVpnService.EXTRA_SHIELD_BANNER)
                                     }
                                 }
                                 VeritasVpnService.ACTION_STATS -> {
@@ -990,6 +1016,7 @@ class MainActivity : ComponentActivity() {
                     IntentFilter().apply {
                         addAction(VeritasVpnService.ACTION_STATE)
                         addAction(VeritasVpnService.ACTION_STATS)
+                        addAction(VeritasVpnService.ACTION_SHIELD)
                         addAction(VeritasVpnService.ACTION_RECONNECT_NEEDED)
                         addAction(VeritasVpnService.ACTION_PEER_CHECK)
                     },
@@ -1012,38 +1039,16 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(connected, user?.accountId) {
-                    if (!connected || user == null) {
-                        dnsBlockedCount = null
-                        dnsBlockedBaseline = null
-                        return@LaunchedEffect
-                    }
-                    while (isActive && connected) {
-                        val peerId = currentPeerId ?: VpnSettings.currentPeerId(context)
-                        if (peerId != null) {
-                            runCatching {
-                                withContext(Dispatchers.IO) {
-                                    AuthenticatedApi.execute(authRepo, { token ->
-                                        ApiClient.get("/api/v1/wg/peers", token)
-                                    }) { res ->
-                                        if (!res.isSuccessful) return@execute null
-                                        ApiClient.parse<PeerListResponse>(res)
-                                            ?.peers
-                                            ?.firstOrNull { it.id == peerId }
-                                    }
-                                }
-                            }.onSuccess { peer ->
-                                if (peer != null) {
-                                    val count = peer.dnsBlockedCount
-                                    if (dnsBlockedBaseline == null) dnsBlockedBaseline = count
-                                    dnsBlockedCount = count
-                                }
-                            }.onFailure {
-                                if (it is SessionExpiredException) handleSessionExpired()
-                            }
-                        }
-                        delay(5_000)
-                    }
+                val shieldOpen = shieldOpenVersion
+                LaunchedEffect(shieldOpen) {
+                    if (shieldOpen <= 0) return@LaunchedEffect
+                    showPlans = false
+                    showStealthSettings = false
+                    showTunnelSettings = false
+                    showHelp = false
+                    showDiagnostics = false
+                    showVpnDisclosure = false
+                    showShieldSettings = true
                 }
 
                 fun requestConnect() {
@@ -1373,9 +1378,15 @@ class MainActivity : ComponentActivity() {
                 } else if (showShieldSettings) {
                     ShieldSettingsScreen(
                         policy = shieldPolicy,
+                        noticePrefs = shieldNoticePrefs,
+                        rows = cloud.veritasvpn.vpn.shieldCategoryRows(shieldPolicy, shieldBlocks),
                         isPremium = PlanEntitlement.grantsPremium(billingStatus),
                         connected = connected,
                         error = shieldError,
+                        onNoticePrefsChange = { next ->
+                            shieldNoticePrefs = next
+                            VpnSettings.setShieldNoticePrefs(context, next)
+                        },
                         onPolicyChange = { next ->
                             val previous = shieldPolicy
                             val generation = ++shieldWriteGeneration[0]
@@ -1597,6 +1608,12 @@ class MainActivity : ComponentActivity() {
                         handshakeMs = handshakeMs,
                         dnsBlockedCount = dnsBlockedCount,
                         dnsBlockedBaseline = dnsBlockedBaseline,
+                        shieldRows = if (PlanEntitlement.grantsPremium(billingStatus)) {
+                            cloud.veritasvpn.vpn.shieldCategoryRows(shieldPolicy, shieldBlocks)
+                        } else {
+                            emptyList()
+                        },
+                        shieldBanner = shieldBanner,
                         dnsGateway = dnsGateway,
                         transport = transport,
                         reconnecting = reconnecting,
@@ -1841,6 +1858,9 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getBooleanExtra(VeritasVpnService.EXTRA_OPEN_SHIELD, false)) {
+            shieldOpenVersion += 1
+        }
         handleBillingReturn(intent)
     }
 }

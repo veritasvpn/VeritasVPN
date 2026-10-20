@@ -36,15 +36,20 @@ import cloud.veritasvpn.ui.theme.PaperMuted
 import cloud.veritasvpn.ui.theme.PremiumBackdrop
 import cloud.veritasvpn.ui.theme.PremiumEnter
 import cloud.veritasvpn.ui.theme.glassSurface
+import cloud.veritasvpn.vpn.ShieldCategoryRow
+import cloud.veritasvpn.vpn.ShieldNoticePrefs
 import cloud.veritasvpn.vpn.ShieldPolicy
 
 @Composable
 fun ShieldSettingsScreen(
     policy: ShieldPolicy,
+    noticePrefs: ShieldNoticePrefs,
+    rows: List<ShieldCategoryRow>,
     isPremium: Boolean,
     connected: Boolean,
     error: String?,
     onPolicyChange: (ShieldPolicy) -> Unit,
+    onNoticePrefsChange: (ShieldNoticePrefs) -> Unit,
     onUpgrade: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -67,7 +72,7 @@ fun ShieldSettingsScreen(
         Spacer(Modifier.height(6.dp))
         Text(
             if (!isPremium) {
-                "These filters are Premium. Upgrade to turn them on."
+                "A free account cannot connect, so Shield is not filtering. Premium connects with malicious sites and trackers on. Ads and adult sites stay off until you turn them on."
             } else if (connected) {
                 "Changes apply to this connection immediately."
             } else {
@@ -118,9 +123,79 @@ fun ShieldSettingsScreen(
             onCheckedChange = { onPolicyChange(policy.copy(blockAdult = it)) },
             onUpgrade = onUpgrade,
         )
+        if (isPremium) {
+            Spacer(Modifier.height(18.dp))
+            Text("BLOCKED", style = MaterialTheme.typography.labelSmall, color = PaperDim)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Counts are for this account, in UTC. A category that is off is not shown as blocked.",
+                color = PaperDim,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            rows.forEach { row ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(row.group.label, color = Paper, modifier = Modifier.weight(1f), fontSize = 14.sp)
+                    Text(
+                        if (row.enabled) "${row.today} today · ${row.week} this week" else "Off",
+                        color = if (row.enabled) Paper else PaperDim,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Text("NOTICES", style = MaterialTheme.typography.labelSmall, color = PaperDim)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "A notice names the blocked site. Adult notices do not include the site name. Trackers, ads, and adult notices stay off unless you turn them on.",
+                color = PaperDim,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            NoticeSwitch("Malicious sites", noticePrefs.malicious && policy.blockMalicious, policy.blockMalicious) {
+                onNoticePrefsChange(noticePrefs.copy(malicious = it))
+            }
+            NoticeSwitch("Trackers", noticePrefs.trackers && policy.blockTrackers, policy.blockTrackers) {
+                onNoticePrefsChange(noticePrefs.copy(trackers = it))
+            }
+            NoticeSwitch("Ads", noticePrefs.ads && policy.blockAds, policy.blockAds) {
+                onNoticePrefsChange(noticePrefs.copy(ads = it))
+            }
+            NoticeSwitch("Adult sites", noticePrefs.adult && policy.blockAdult, policy.blockAdult) {
+                onNoticePrefsChange(noticePrefs.copy(adult = it))
+            }
+        }
         Spacer(Modifier.height(28.dp))
     }
     }
+    }
+}
+
+@Composable
+private fun NoticeSwitch(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            if (enabled) "Notify for $label" else "$label notices follow the filter, which is off",
+            color = if (enabled) PaperMuted else PaperDim,
+            modifier = Modifier.weight(1f).padding(end = 8.dp),
+            fontSize = 13.sp,
+        )
+        Switch(
+            checked = checked && enabled,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = Cyan,
+                checkedThumbColor = Ink,
+            ),
+        )
     }
 }
 

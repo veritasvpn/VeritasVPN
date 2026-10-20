@@ -364,5 +364,29 @@ data class PeerInfo(
     @SerializedName("shield_preset") val shieldPreset: String = "standard",
     @SerializedName("created_at") val createdAt: Long = 0,
     @SerializedName("expires_at") val expiresAt: Long? = null,
-    @SerializedName("dns_blocked_count") val dnsBlockedCount: Long = 0
+    @SerializedName("dns_blocked_count") val dnsBlockedCount: Long = 0,
+    @SerializedName("shield_blocks") val shieldBlocks: ShieldBlocksPayload? = null,
+    @SerializedName("shield_notices") val shieldNotices: List<ShieldNoticePayload> = emptyList(),
+)
+
+data class ShieldBlocksPayload(
+    @SerializedName("today") val today: ShieldCategoryPayload = ShieldCategoryPayload(),
+    @SerializedName("week") val week: ShieldCategoryPayload = ShieldCategoryPayload(),
+)
+
+data class ShieldCategoryPayload(
+    @SerializedName("malware") val malware: Long = 0,
+    @SerializedName("phishing") val phishing: Long = 0,
+    @SerializedName("scam") val scam: Long = 0,
+    @SerializedName("crypto") val crypto: Long = 0,
+    @SerializedName("trackers") val trackers: Long = 0,
+    @SerializedName("ads") val ads: Long = 0,
+    @SerializedName("adult") val adult: Long = 0,
+)
+
+data class ShieldNoticePayload(
+    @SerializedName("id") val id: String = "",
+    @SerializedName("domain") val domain: String = "",
+    @SerializedName("category") val category: String = "",
+    @SerializedName("at") val at: Long = 0,
 )

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject, type TransitionEvent } from "react";
-import type { ShieldFlags } from "./shield";
+import type { ShieldFlags, ShieldNoticePrefs } from "./shield";
+import type { ShieldCategoryRow } from "./shieldNotices";
 
 export type StealthChoice = "auto" | "udp" | "stealth";
 
@@ -393,22 +394,28 @@ export function StealthSettingsScreen({
 
 export function ShieldSettingsScreen({
   flags,
+  noticePrefs,
+  rows,
   isPremium,
   connected,
   error,
   onChange,
+  onNoticeChange,
   onUpgrade,
   onBack,
 }: {
   flags: ShieldFlags;
+  noticePrefs: ShieldNoticePrefs;
+  rows: ShieldCategoryRow[];
   isPremium: boolean;
   connected: boolean;
   error: string;
   onChange: (next: ShieldFlags) => void;
+  onNoticeChange: (next: ShieldNoticePrefs) => void;
   onUpgrade: () => void;
   onBack: () => void;
 }) {
-  const rows: { key: keyof ShieldFlags; title: string; subtitle: string }[] = [
+  const toggles: { key: keyof ShieldFlags; title: string; subtitle: string }[] = [
     {
       key: "block_ads",
       title: "Block ads",
@@ -439,13 +446,13 @@ export function ShieldSettingsScreen({
       </p>
       <p className="tunnel-lead">
         {!isPremium
-          ? "These filters are Premium. Upgrade to turn them on."
+          ? "A free account cannot connect, so Shield is not filtering. Premium connects with malicious sites and trackers on. Ads and adult sites stay off until you turn them on."
           : connected
             ? "Changes apply to this connection immediately."
             : "Saved on this device. Applied the next time you connect."}
       </p>
       {error && <p className="shield-error" role="alert">{error}</p>}
-      {rows.map((row) => (
+      {toggles.map((row) => (
         <div key={row.key} className={`tunnel-toggle-card${flags[row.key] && isPremium ? " is-on" : ""}`}>
           <div className="tunnel-toggle-copy">
             <strong>{row.title}</strong>
@@ -468,6 +475,42 @@ export function ShieldSettingsScreen({
           )}
         </div>
       ))}
+      {isPremium && (
+        <>
+          <p className="tunnel-section-label">BLOCKED</p>
+          <p className="tunnel-lead">Counts are for this account, in UTC. A category that is off is not shown as blocked.</p>
+          {rows.map((row) => (
+            <div key={row.group} className="live-stats-dns">
+              <span>{row.label}</span>
+              <strong>{row.enabled ? `${row.today} today · ${row.week} this week` : "Off"}</strong>
+            </div>
+          ))}
+          <p className="tunnel-section-label">NOTICES</p>
+          <p className="tunnel-lead">A notice names the blocked site. Adult notices do not include the site name. Trackers, ads, and adult notices stay off unless you turn them on.</p>
+          {([
+            ["malicious", "Malicious sites", flags.block_malicious],
+            ["trackers", "Trackers", flags.block_trackers],
+            ["ads", "Ads", flags.block_ads],
+            ["adult", "Adult sites", flags.block_adult],
+          ] as const).map(([key, label, filterOn]) => (
+            <div key={key} className="tunnel-toggle-card">
+              <div className="tunnel-toggle-copy">
+                <strong>{filterOn ? `Notify for ${label}` : `${label} filter is off`}</strong>
+              </div>
+              <button
+                type="button"
+                className="shield-switch"
+                aria-pressed={filterOn && noticePrefs[key]}
+                aria-label={`Notify for ${label}`}
+                disabled={!filterOn}
+                onClick={() => onNoticeChange({ ...noticePrefs, [key]: !noticePrefs[key] })}
+              >
+                <i className={filterOn && noticePrefs[key] ? "on" : ""} aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+        </>
+      )}
     </section>
   );
 }

@@ -1144,6 +1144,28 @@ div.tunnel-toggle-card {
   font-weight: 700;
 }
 
+.live-stats-shield-banner {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--paper);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.live-stats-shield-note {
+  margin: 6px 0 0;
+  color: var(--paper-dim, var(--paper-muted));
+  font-size: 11px;
+}
+
 .live-stats-dns-status {
   display: grid;
   gap: 4px;

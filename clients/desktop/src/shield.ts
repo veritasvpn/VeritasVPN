@@ -9,6 +9,10 @@ const LS_MALICIOUS = "veritas_shield_block_malicious";
 const LS_ADS = "veritas_shield_block_ads";
 const LS_ADULT = "veritas_shield_block_adult";
 const LS_TRACKERS = "veritas_shield_block_trackers";
+const LS_NOTICE_MALICIOUS = "veritas_shield_notice_malicious";
+const LS_NOTICE_TRACKERS = "veritas_shield_notice_trackers";
+const LS_NOTICE_ADS = "veritas_shield_notice_ads";
+const LS_NOTICE_ADULT = "veritas_shield_notice_adult";
 
 function readFlag(key: string, fallback: boolean): boolean {
   try {
@@ -28,6 +32,34 @@ export function readShieldFlags(): ShieldFlags {
     block_adult: readFlag(LS_ADULT, false),
     block_trackers: readFlag(LS_TRACKERS, true),
   };
+}
+
+export type ShieldNoticePrefs = {
+  malicious: boolean;
+  trackers: boolean;
+  ads: boolean;
+  adult: boolean;
+};
+
+/** Local only. Defaults: malicious notices on, the other categories off. */
+export function readShieldNoticePrefs(): ShieldNoticePrefs {
+  return {
+    malicious: readFlag(LS_NOTICE_MALICIOUS, true),
+    trackers: readFlag(LS_NOTICE_TRACKERS, false),
+    ads: readFlag(LS_NOTICE_ADS, false),
+    adult: readFlag(LS_NOTICE_ADULT, false),
+  };
+}
+
+export function writeShieldNoticePrefs(prefs: ShieldNoticePrefs) {
+  try {
+    localStorage.setItem(LS_NOTICE_MALICIOUS, prefs.malicious ? "1" : "0");
+    localStorage.setItem(LS_NOTICE_TRACKERS, prefs.trackers ? "1" : "0");
+    localStorage.setItem(LS_NOTICE_ADS, prefs.ads ? "1" : "0");
+    localStorage.setItem(LS_NOTICE_ADULT, prefs.adult ? "1" : "0");
+  } catch {
+    // ignore quota / private mode
+  }
 }
 
 export function writeShieldFlags(flags: ShieldFlags) {
