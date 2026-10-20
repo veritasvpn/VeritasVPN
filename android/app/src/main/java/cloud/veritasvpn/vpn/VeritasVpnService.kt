@@ -191,6 +191,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      */
     @Volatile private var earlyUnderlay: EarlyUnderlay.State = EarlyUnderlay.State()
     @Volatile private var earlyNetwork: Network? = null
+    /** Callback network adopted as the bind target when it is not an early Wi-Fi. */
+    @Volatile private var defaultUnderlayNetwork: Network? = null
+    /** Host address currently on the tun. A kill-switch hold is not the peer address. */
+    @Volatile private var currentInterfaceAddress: String? = null
     /** Roam already running for this handle. Same-network callbacks do not restart it. */
     @Volatile private var activeRoamHandle: Long = Long.MIN_VALUE
     /** Failed rebuilds on [roamFailHandle]. Survives a same-handle restart. */
@@ -1465,9 +1469,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         // still addressed. A dead Wi-Fi handle must not hide mobile data.
         val targetAlive = bindTargetAddressed(target)
         // Wi-Fi validation fires onCapabilities many times for one switch.
-        // Cancelling the roam there turns userspace off again and resets the
-        // re-provision count, so the handshake never finishes.
-        if (targetAlive && !forceHard && adaptJob?.isActive == true && target != null && target == activeRoamHandle) {
+        // Cancelling an adapt that is already running turns userspace off
+        // again, so the handshake never finishes. A dead target still starts
+        // a roam when nothing is in flight.
+        if (!forceHard && adaptJob?.isActive == true && target != null && target == activeRoamHandle) {
             return
         }
         if (targetAlive && !forceHard && adaptJob?.isActive != true && target != null && target == activeRoamHandle &&
@@ -2054,8 +2059,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         template: String,
         rebuildTun: Boolean,
     ): Installed? {
-        val keyed = ServerKeyConfig.withServerKey(template, offer.serverPublicKey)
-        val liveConfig = EndpointSelector.replaceEndpoint(keyed, offer.serverEndpoint)
+        val replaced = EndpointSelector.replaceEndpoint(template, offer.serverEndpoint)
+        val liveConfig = BackendConfig.select(
+            vpnStatePrefs().getString(KEY_CONFIG, null),
+            replaced,
+            offer.serverPublicKey,
+        )
         if (EndpointSelector.endpointFromConfig(liveConfig) != offer.serverEndpoint) return null
         val parsed = runCatching {
             Config.parse(ByteArrayInputStream(liveConfig.toByteArray(Charsets.UTF_8)))
@@ -2067,8 +2076,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             if (!sessionStillActive(gen)) return null
             val prefs = vpnStatePrefs()
             prefs.edit()
-                .putString(KEY_CONFIG, SavedPeerConfig.coalesce(prefs.getString(KEY_CONFIG, null), liveConfig))
-                .putString(KEY_UDP_CONFIG, SavedPeerConfig.coalesce(prefs.getString(KEY_UDP_CONFIG, null), liveConfig))
+                .putString(KEY_CONFIG, liveConfig)
+                .putString(KEY_UDP_CONFIG, liveConfig)
                 .apply()
             lastChosenEndpoint = offer.serverEndpoint
         }
@@ -2105,9 +2114,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 return null
             }
         }
-        val keyed = ServerKeyConfig.withServerKey(template, offer.serverPublicKey)
-        val liveConfig = EndpointSelector.replaceEndpoint(keyed, local)
-        val udpConfig = EndpointSelector.replaceEndpoint(keyed, offer.serverEndpoint)
+        val liveConfig = BackendConfig.select(
+            vpnStatePrefs().getString(KEY_CONFIG, null),
+            EndpointSelector.replaceEndpoint(template, local),
+            offer.serverPublicKey,
+        )
+        val udpConfig = BackendConfig.select(
+            vpnStatePrefs().getString(KEY_UDP_CONFIG, null),
+            EndpointSelector.replaceEndpoint(template, offer.serverEndpoint),
+            offer.serverPublicKey,
+        )
         val parsed = runCatching {
             Config.parse(ByteArrayInputStream(liveConfig.toByteArray(Charsets.UTF_8)))
         }.getOrNull() ?: return null
@@ -2118,8 +2134,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             if (!sessionStillActive(gen)) return null
             val prefs = vpnStatePrefs()
             prefs.edit()
-                .putString(KEY_CONFIG, SavedPeerConfig.coalesce(prefs.getString(KEY_CONFIG, null), liveConfig))
-                .putString(KEY_UDP_CONFIG, SavedPeerConfig.coalesce(prefs.getString(KEY_UDP_CONFIG, null), udpConfig))
+                .putString(KEY_CONFIG, liveConfig)
+                .putString(KEY_UDP_CONFIG, udpConfig)
                 .putString(KEY_STEALTH_ENDPOINT, stealthEp)
                 .putString(KEY_STEALTH_PREFIX, prefix)
                 .apply()
@@ -2545,6 +2561,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun clearEarlyRoam() {
         earlyUnderlay = EarlyUnderlay.State()
         earlyNetwork = null
+        defaultUnderlayNetwork = null
         activeRoamHandle = Long.MIN_VALUE
         roamFailHandle = null
         roamFailRebuilds = 0
@@ -2588,6 +2605,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         } else if (earlyNetwork?.networkHandle == network.networkHandle) {
             earlyNetwork = null
         }
+        if (next.defaultHandle == network.networkHandle) {
+            defaultUnderlayNetwork = network
+        } else if (defaultUnderlayNetwork?.networkHandle == network.networkHandle) {
+            defaultUnderlayNetwork = null
+        }
         noteRoamHandle(EarlyUnderlay.bindTarget(next))
         scheduleUnderlayAdapt()
     }
@@ -2596,6 +2618,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val next = EarlyUnderlay.onLost(earlyUnderlay, network.networkHandle)
         earlyUnderlay = next
         if (earlyNetwork?.networkHandle == network.networkHandle) earlyNetwork = null
+        if (defaultUnderlayNetwork?.networkHandle == network.networkHandle) defaultUnderlayNetwork = null
         noteRoamHandle(EarlyUnderlay.bindTarget(next))
         scheduleUnderlayAdapt()
     }
@@ -2726,11 +2749,21 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         stealth: Boolean,
         offer: StealthOffer?,
     ): Tunnel.State {
-        val liveConfig = if (stealth) {
-            EndpointSelector.replaceEndpoint(udpConfig, startStealth(requireNotNull(offer)))
+        val chosenUdp = BackendConfig.select(
+            vpnStatePrefs().getString(KEY_UDP_CONFIG, null),
+            udpConfig,
+            null,
+        )
+        val liveIncoming = if (stealth) {
+            EndpointSelector.replaceEndpoint(chosenUdp, startStealth(requireNotNull(offer)))
         } else {
-            udpConfig
+            chosenUdp
         }
+        val liveConfig = BackendConfig.select(
+            vpnStatePrefs().getString(KEY_CONFIG, null),
+            liveIncoming,
+            null,
+        )
         if (gen != sessionGeneration || !sessionIntended()) {
             if (stealth) stopStealthTransport()
             return Tunnel.State.DOWN
@@ -2741,11 +2774,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         // the tun and start the 5s retransmit. Rebind strips the keepalive,
         // protects, binds to the current default, then kicks. A fresh tun is
         // only the escalation after repeated failed rebuilds, not a reconnect.
+        // A held tun whose address is not this peer's is rebuilt first: the
+        // handshake does not carry the inner address, and the server drops
+        // every data packet from any other source.
         val freshTun = nextTunnelIsFresh.also { nextTunnelIsFresh = false }
         val keptTun = !stealth && tunKeeper != null && !freshTun
         val state = when {
             keptTun -> {
                 if (gen != sessionGeneration || !sessionIntended()) return Tunnel.State.DOWN
+                if (InterfacePlan.needsRebuild(currentInterfaceAddress, liveConfig)) {
+                    if (!openInterface(parsed)) return Tunnel.State.DOWN
+                }
                 if (rebindLiveTunnel(parsed, gen)) {
                     followSystemDefault()
                     Tunnel.State.UP
@@ -2770,8 +2809,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             if (gen == sessionGeneration && sessionIntended()) {
                 val prefs = vpnStatePrefs()
                 prefs.edit()
-                    .putString(KEY_CONFIG, SavedPeerConfig.coalesce(prefs.getString(KEY_CONFIG, null), liveConfig))
-                    .putString(KEY_UDP_CONFIG, SavedPeerConfig.coalesce(prefs.getString(KEY_UDP_CONFIG, null), udpConfig))
+                    .putString(KEY_CONFIG, liveConfig)
+                    .putString(KEY_UDP_CONFIG, chosenUdp)
                     .putBoolean(KEY_RESUME_STEALTH, stealth)
                     .apply()
                 lastChosenEndpoint = EndpointSelector.endpointFromConfig(liveConfig)
@@ -2800,7 +2839,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 stopStealthTransport()
                 return
             }
-            val live = EndpointSelector.replaceEndpoint(udpConfig, local)
+            val live = BackendConfig.select(
+                vpnStatePrefs().getString(KEY_CONFIG, null),
+                EndpointSelector.replaceEndpoint(udpConfig, local),
+                null,
+            )
             val parsed = Config.parse(ByteArrayInputStream(live.toByteArray(Charsets.UTF_8)))
             if (!rebindWithRetry(parsed, gen, recreateTun = false)) {
                 Log.w(TAG, "Stealth rebind did not stick; restoring the UDP tunnel")
@@ -2811,7 +2854,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 if (gen != sessionGeneration || !sessionIntended()) return
                 val prefs = vpnStatePrefs()
                 prefs.edit()
-                    .putString(KEY_CONFIG, SavedPeerConfig.coalesce(prefs.getString(KEY_CONFIG, null), live))
+                    .putString(KEY_CONFIG, live)
                     .putBoolean(KEY_RESUME_STEALTH, true)
                     .apply()
                 lastChosenEndpoint = local
@@ -2835,18 +2878,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun restoreUdpTunnel(udpConfig: String, gen: Long) {
         stopStealthTransport()
         if (gen != sessionGeneration || !sessionIntended()) return
+        val restored = BackendConfig.select(
+            vpnStatePrefs().getString(KEY_CONFIG, null),
+            udpConfig,
+            null,
+        )
         val parsed = runCatching {
-            Config.parse(ByteArrayInputStream(udpConfig.toByteArray(Charsets.UTF_8)))
+            Config.parse(ByteArrayInputStream(restored.toByteArray(Charsets.UTF_8)))
         }.getOrNull() ?: return
         if (rebindWithRetry(parsed, gen, recreateTun = false)) {
             synchronized(tunnelOpLock) {
                 if (gen == sessionGeneration && sessionIntended()) {
-                    val prefs = vpnStatePrefs()
-                    prefs.edit()
-                        .putString(
-                            KEY_CONFIG,
-                            SavedPeerConfig.coalesce(prefs.getString(KEY_CONFIG, null), udpConfig),
-                        )
+                    vpnStatePrefs().edit()
+                        .putString(KEY_CONFIG, restored)
                         .putBoolean(KEY_RESUME_STEALTH, false)
                         .apply()
                 }
@@ -3133,6 +3177,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             builder.setBlocking(true)
             val established = builder.establish() ?: return false
             established.close()
+            val host = iface.addresses
+                .firstOrNull { it.address is Inet4Address }
+                ?.address?.hostAddress
+                ?: iface.addresses.firstOrNull()?.address?.hostAddress
+            if (tunKeeper != null && !host.isNullOrBlank()) currentInterfaceAddress = host
             tunKeeper != null
         } catch (e: SecurityException) {
             vpnConsentRequired = true
@@ -3191,6 +3240,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             setUnderlyingNetworks(null)
             val established = builder.establish() ?: return false
             established.close()
+            if (tunKeeper != null) currentInterfaceAddress = LockdownHold.IPV4_ADDRESS
             tunKeeper != null
         } catch (e: Exception) {
             Log.w(TAG, "lockdown hold: ${e.javaClass.simpleName}")
@@ -3221,6 +3271,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             } else {
                 holdInterface = false
                 lockdownHoldActive = false
+                currentInterfaceAddress = null
                 val old = tunKeeper
                 tunKeeper = null
                 runCatching { old?.close() }
@@ -3672,6 +3723,15 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             addressedUnderlay(early) != null
         ) {
             return early
+        }
+        // Cellular is not an early Wi-Fi adopt. The callback still has to be
+        // the bind target, or protect() runs without bindSocket and the data
+        // packets loop back into the tun.
+        val adopted = defaultUnderlayNetwork
+        if (target != null && adopted != null && adopted.networkHandle == target &&
+            addressedUnderlay(adopted) != null
+        ) {
+            return adopted
         }
         val def = systemDefaultNetwork()
         if (target == null || def?.networkHandle == target) return def
@@ -4335,8 +4395,22 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val udp = prefs.getString(KEY_UDP_CONFIG, null)
         val live = prefs.getString(KEY_CONFIG, null)
         if (!ServerKeyConfig.needsRebuild(udp, live, advertised)) return
-        val nextUdp = udp?.let { ServerKeyConfig.withServerKey(it, advertised) }
-        val nextLive = (live ?: udp)?.let { ServerKeyConfig.withServerKey(it, advertised) } ?: return
+        val base = live ?: udp ?: return
+        val nextLive = BackendConfig.select(base, base, advertised)
+        val nextUdp = udp?.let { BackendConfig.select(it, it, advertised) }
+        if (BackendConfig.fields(nextLive) == BackendConfig.fields(base) &&
+            nextLive == base
+        ) {
+            return
+        }
+        val before = BackendConfig.fields(base) ?: return
+        val after = BackendConfig.fields(nextLive) ?: return
+        if (after.privateKey != before.privateKey ||
+            after.presharedKey != before.presharedKey ||
+            after.address != before.address
+        ) {
+            return
+        }
         val parsed = runCatching {
             Config.parse(ByteArrayInputStream(nextLive.toByteArray(Charsets.UTF_8)))
         }.getOrNull() ?: return
