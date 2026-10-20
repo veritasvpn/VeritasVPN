@@ -13,7 +13,7 @@ Create a Cloudflare API token with:
 - Account, Workers Scripts, Edit
 - Account, Workers KV Storage, Edit
 
-Store it as the GitHub Actions secret `CLOUDFLARE_API_TOKEN` (the same secret the website deploy uses). Also add the GitHub Actions secret `UPTIME_KV_NAMESPACE_ID` after the namespace exists. The deploy workflow writes that id into `wrangler.toml` at deploy time. The placeholder in git is not a real namespace.
+Store it as the production environment secret `UPTIME_CLOUDFLARE_API_TOKEN`. The production `CLOUDFLARE_API_TOKEN` deploys other Workers and does not cover `veritas-uptime`. The uptime deploy workflow passes `UPTIME_CLOUDFLARE_API_TOKEN` to Wrangler as `CLOUDFLARE_API_TOKEN`. Also add the production environment secret `UPTIME_KV_NAMESPACE_ID` after the namespace exists. The deploy workflow writes that id into `wrangler.toml` at deploy time. The placeholder in git is not a real namespace.
 
 ## One-time setup
 
