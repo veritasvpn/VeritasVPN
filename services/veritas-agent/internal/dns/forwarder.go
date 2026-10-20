@@ -55,8 +55,11 @@ type Forwarder struct {
 	blocklist *Blocklist
 	observer  Observer
 
-	blockedMu       sync.Mutex
-	blockedByClient map[string]uint64 // tunnel client IP → blocked query count (no domains)
+	blockedMu         sync.Mutex
+	blockedByClient   map[string]uint64            // tunnel client IP → blocked query count (no domains)
+	blockedByCategory map[string]map[string]uint64 // tunnel IP → category → absolute count (no domains)
+	noticesByClient   map[string][]dnsNotice       // tunnel IP → short-lived blocked names
+	noticeDedup       map[string]time.Time         // ip|domain|category → last enqueued
 
 	policyMu      sync.RWMutex
 	policyByIP    map[string]peerPolicy // tunnel client IP → shield policy
@@ -113,17 +116,20 @@ func New(cfg Config, observer Observer, log *logging.Logger) *Forwarder {
 	}
 
 	return &Forwarder{
-		listenAddr:      cfg.ListenAddr,
-		upstreams:       upstreams,
-		log:             log,
-		cache:           make(map[string]cacheEntry),
-		buckets:         make(map[string]*clientBucket),
-		blocklist:       blocklist,
-		observer:        observer,
-		blockedByClient: make(map[string]uint64),
-		policyByIP:      make(map[string]peerPolicy),
-		defaultPreset:   NormalizePreset(cfg.DefaultPreset),
-		allowlist:       cfg.Allowlist,
+		listenAddr:        cfg.ListenAddr,
+		upstreams:         upstreams,
+		log:               log,
+		cache:             make(map[string]cacheEntry),
+		buckets:           make(map[string]*clientBucket),
+		blocklist:         blocklist,
+		observer:          observer,
+		blockedByClient:   make(map[string]uint64),
+		blockedByCategory: make(map[string]map[string]uint64),
+		noticesByClient:   make(map[string][]dnsNotice),
+		noticeDedup:       make(map[string]time.Time),
+		policyByIP:        make(map[string]peerPolicy),
+		defaultPreset:     NormalizePreset(cfg.DefaultPreset),
+		allowlist:         cfg.Allowlist,
 	}
 }
 
@@ -153,6 +159,14 @@ func (f *Forwarder) ClearBlockedForCIDRs(cidrs []string) {
 			continue
 		}
 		delete(f.blockedByClient, ip)
+		delete(f.blockedByCategory, ip)
+		delete(f.noticesByClient, ip)
+		prefix := ip + "|"
+		for key := range f.noticeDedup {
+			if strings.HasPrefix(key, prefix) {
+				delete(f.noticeDedup, key)
+			}
+		}
 	}
 	f.blockedMu.Unlock()
 	f.ClearPeerPresets(cidrs)
@@ -342,6 +356,7 @@ func (f *Forwarder) janitor(ctx context.Context) {
 				}
 			}
 			f.rateMu.Unlock()
+			f.pruneNotices(now)
 		}
 	}
 }
@@ -471,11 +486,7 @@ func (f *Forwarder) handleQuery(query []byte, write func([]byte) error, clientIP
 		if cat, blocked := f.shouldBlock(clientIP, name); blocked {
 			f.observer.DNSQuery(true)
 			f.observer.DNSBlockedCategory(cat)
-			if clientIP != "" {
-				f.blockedMu.Lock()
-				f.blockedByClient[stripHost(clientIP)]++
-				f.blockedMu.Unlock()
-			}
+			f.noteBlock(clientIP, name, cat, time.Now())
 			if err := write(blockedResponse(query, questionEnd)); err != nil {
 				f.log.Error("write blocked DNS response", zap.Error(err))
 				return err

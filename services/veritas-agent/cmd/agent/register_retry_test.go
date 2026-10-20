@@ -150,6 +150,9 @@ func (c *seqRegisterClient) RegisterServer(ctx context.Context, req *RegisterSer
 func (c *seqRegisterClient) SendHeartbeat(context.Context, *HeartbeatRequest) error {
 	return nil
 }
+func (c *seqRegisterClient) SendDNSNotices(context.Context, *dnsNoticesRequest) error {
+	return nil
+}
 func (c *seqRegisterClient) StreamPeerUpdates(context.Context, string, string) (<-chan *PeerUpdate, <-chan error) {
 	return nil, nil
 }

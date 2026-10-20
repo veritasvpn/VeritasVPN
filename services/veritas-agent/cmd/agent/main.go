@@ -52,13 +52,19 @@ type RegisterServerResponse struct {
 }
 
 type HeartbeatRequest struct {
-	ServerID       string            `json:"server_id"`
-	PeerCount      int32             `json:"peer_count"`
-	LoadFactor     float64           `json:"load_factor"`
-	RXBytes        int64             `json:"rx_bytes"`
-	TXBytes        int64             `json:"tx_bytes"`
-	DNSBlockedByIP map[string]uint64 `json:"dns_blocked_by_ip,omitempty"`
-	PeerHandshakes map[string]int64  `json:"peer_handshakes,omitempty"`
+	ServerID               string                       `json:"server_id"`
+	PeerCount              int32                        `json:"peer_count"`
+	LoadFactor             float64                      `json:"load_factor"`
+	RXBytes                int64                        `json:"rx_bytes"`
+	TXBytes                int64                        `json:"tx_bytes"`
+	DNSBlockedByIP         map[string]uint64            `json:"dns_blocked_by_ip,omitempty"`
+	DNSBlockedByIPCategory map[string]map[string]uint64 `json:"dns_blocked_by_ip_category,omitempty"`
+	PeerHandshakes         map[string]int64             `json:"peer_handshakes,omitempty"`
+}
+
+type dnsNoticesRequest struct {
+	ServerID string                        `json:"server_id"`
+	Notices  map[string][]dnssvc.DNSNotice `json:"notices"`
 }
 
 type PeerUpdate struct {
@@ -75,6 +81,7 @@ type PeerUpdate struct {
 type AgentManagerClient interface {
 	RegisterServer(ctx context.Context, req *RegisterServerRequest) (*RegisterServerResponse, error)
 	SendHeartbeat(ctx context.Context, req *HeartbeatRequest) error
+	SendDNSNotices(ctx context.Context, req *dnsNoticesRequest) error
 	StreamPeerUpdates(ctx context.Context, serverID, authToken string) (<-chan *PeerUpdate, <-chan error)
 	ReportPeerApplied(ctx context.Context, serverID, peerID, authToken string) error
 	ReportPeerExpired(ctx context.Context, serverID, peerID, authToken string) error
@@ -160,6 +167,29 @@ func (c *httpAgentClient) SendHeartbeat(ctx context.Context, req *HeartbeatReque
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		data, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("heartbeat returned %d: %s", resp.StatusCode, string(data))
+	}
+	return nil
+}
+
+func (c *httpAgentClient) SendDNSNotices(ctx context.Context, req *dnsNoticesRequest) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal dns notices: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/v1/agents/dns-notices", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create dns notices request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("dns notices request: %w", err)
+	}
+	defer resp.Body.Close()
+	// Do not include the response body: it could echo a blocked name.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("dns notices returned %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -491,6 +521,7 @@ func (a *Agent) Run() error {
 		zap.String("server_id", resp.ServerID))
 
 	go a.heartbeatLoop(ctx)
+	go a.noticeFlushLoop(ctx)
 
 	go a.streamLoop(ctx)
 
@@ -694,6 +725,12 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 				}
 				return a.dnsForwarder.BlockedCounts()
 			}(),
+			DNSBlockedByIPCategory: func() map[string]map[string]uint64 {
+				if a.dnsForwarder == nil {
+					return nil
+				}
+				return a.dnsForwarder.BlockedCategoryCounts()
+			}(),
 			PeerHandshakes: a.peerManager.HandshakeTimes(),
 		}
 
@@ -718,6 +755,46 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 		a.metrics.UptimeSeconds.Add(30)
 		a.metrics.CPUUsage.Set(loadFactor * 100)
 		a.metrics.MemoryUsage.Set(float64(getMemoryUsage()))
+	}
+}
+
+// noticeFlushLoop posts the in-memory blocked-name ring soon after a block.
+// Heartbeats stay on 30s and do not carry names. Unchanged snapshots are not resent.
+func (a *Agent) noticeFlushLoop(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	var last string
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if a.dnsForwarder == nil || a.serverID == "" {
+			continue
+		}
+		snap := a.dnsForwarder.NoticeSnapshot(time.Now())
+		if len(snap) == 0 {
+			last = ""
+			continue
+		}
+		body, err := json.Marshal(snap)
+		if err != nil {
+			continue
+		}
+		encoded := string(body)
+		if encoded == last {
+			continue
+		}
+		err = a.managerClient.SendDNSNotices(ctx, &dnsNoticesRequest{
+			ServerID: a.serverID,
+			Notices:  snap,
+		})
+		if err != nil {
+			a.logger.Warn("dns notice flush failed", zap.Error(err))
+			continue
+		}
+		last = encoded
 	}
 }
 

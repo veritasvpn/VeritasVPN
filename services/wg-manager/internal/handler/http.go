@@ -21,6 +21,7 @@ import (
 	"github.com/veritasvpn/services/wg-manager/internal/model"
 	"github.com/veritasvpn/services/wg-manager/internal/repository"
 	"github.com/veritasvpn/services/wg-manager/internal/service"
+	"github.com/veritasvpn/services/wg-manager/internal/shieldstats"
 )
 
 type HTTPHandler struct {
@@ -63,6 +64,7 @@ func (h *HTTPHandler) Routes() http.Handler {
 	mux.Handle("/metrics", h.metrics.Handler())
 	mux.HandleFunc("/api/v1/agents/register", h.handleAgentRegister)
 	mux.HandleFunc("/api/v1/agents/heartbeat", h.handleAgentHeartbeat)
+	mux.HandleFunc("/api/v1/agents/dns-notices", h.handleDNSNotices)
 	mux.HandleFunc("/api/v1/agents/peers/stream", h.handlePeerStream)
 	mux.HandleFunc("/api/v1/agents/peers/applied", h.handlePeerApplied)
 	mux.HandleFunc("/api/v1/agents/peers/expired", h.handlePeerExpired)
@@ -79,6 +81,7 @@ func (h *HTTPHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("/metrics", h.metrics.Handler())
 	mux.HandleFunc("/api/v1/agents/register", h.handleAgentRegister)
 	mux.HandleFunc("/api/v1/agents/heartbeat", h.handleAgentHeartbeat)
+	mux.HandleFunc("/api/v1/agents/dns-notices", h.handleDNSNotices)
 	mux.HandleFunc("/api/v1/agents/peers/stream", h.handlePeerStream)
 	mux.HandleFunc("/api/v1/agents/peers/applied", h.handlePeerApplied)
 	mux.HandleFunc("/api/v1/agents/peers/expired", h.handlePeerExpired)
@@ -198,13 +201,19 @@ func (h *HTTPHandler) handleAgentRegister(w http.ResponseWriter, r *http.Request
 }
 
 type heartbeatRequest struct {
-	ServerID       string            `json:"server_id"`
-	PeerCount      int32             `json:"peer_count"`
-	LoadFactor     float64           `json:"load_factor"`
-	RXBytes        int64             `json:"rx_bytes"`
-	TXBytes        int64             `json:"tx_bytes"`
-	DNSBlockedByIP map[string]uint64 `json:"dns_blocked_by_ip"`
-	PeerHandshakes map[string]int64  `json:"peer_handshakes"`
+	ServerID               string                       `json:"server_id"`
+	PeerCount              int32                        `json:"peer_count"`
+	LoadFactor             float64                      `json:"load_factor"`
+	RXBytes                int64                        `json:"rx_bytes"`
+	TXBytes                int64                        `json:"tx_bytes"`
+	DNSBlockedByIP         map[string]uint64            `json:"dns_blocked_by_ip"`
+	DNSBlockedByIPCategory map[string]map[string]uint64 `json:"dns_blocked_by_ip_category"`
+	PeerHandshakes         map[string]int64             `json:"peer_handshakes"`
+}
+
+type dnsNoticesRequest struct {
+	ServerID string                          `json:"server_id"`
+	Notices  map[string][]shieldstats.Notice `json:"notices"`
 }
 
 func (h *HTTPHandler) handleAgentHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -236,10 +245,37 @@ func (h *HTTPHandler) handleAgentHeartbeat(w http.ResponseWriter, r *http.Reques
 		}
 		handshakes[peerID] = at
 	}
-	if err := h.svc.HandleHeartbeat(r.Context(), req.ServerID, req.PeerCount, req.LoadFactor, req.RXBytes, req.TXBytes, req.DNSBlockedByIP, handshakes); err != nil {
+	if err := h.svc.HandleHeartbeat(r.Context(), req.ServerID, req.PeerCount, req.LoadFactor, req.RXBytes, req.TXBytes, req.DNSBlockedByIP, req.DNSBlockedByIPCategory, handshakes); err != nil {
 		h.writeError(w, http.StatusInternalServerError, "heartbeat failed", err, "server_id", req.ServerID)
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *HTTPHandler) handleDNSNotices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 32*1024)
+	var req dnsNoticesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if req.ServerID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server_id is required"})
+		return
+	}
+	if err := h.requireServerAgentToken(r, req.ServerID); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	if len(req.Notices) > 64 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "too many peers"})
+		return
+	}
+	h.svc.StoreDNSNotices(r.Context(), req.ServerID, req.Notices)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -444,6 +480,13 @@ func peerResponse(peer *model.Peer) map[string]interface{} {
 	}
 }
 
+func noticesOrEmpty(in []shieldstats.Notice) []shieldstats.Notice {
+	if in == nil {
+		return []shieldstats.Notice{}
+	}
+	return in
+}
+
 func shieldJSON(peer *model.Peer) map[string]bool {
 	flags := entitlement.EffectiveFlags(peer.ShieldPolicySet, peer.ShieldBlockMalicious, peer.ShieldBlockAds, peer.ShieldBlockAdult, peer.ShieldBlockTrackers, peer.ShieldPreset)
 	return map[string]bool{
@@ -560,6 +603,9 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			h.writeError(w, http.StatusInternalServerError, "list peers failed", err, "account_hash", logging.HashIdentifier(accountID))
 			return
 		}
+		now := time.Now().UTC()
+		today, week := h.svc.AccountShieldBlocks(r.Context(), accountID, now)
+		blocks := map[string]interface{}{"today": today, "week": week}
 		out := make([]map[string]interface{}, 0, len(peers))
 		for _, p := range peers {
 			var expiresAt interface{}
@@ -591,6 +637,8 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 				}(),
 				"expires_at":        expiresAt,
 				"dns_blocked_count": h.svc.DNSBlockedCount(r.Context(), p.AssignedIP),
+				"shield_blocks":     blocks,
+				"shield_notices":    noticesOrEmpty(h.svc.DNSNoticesForPeer(r.Context(), &p, now)),
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"peers": out})

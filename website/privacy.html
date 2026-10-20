@@ -76,7 +76,7 @@
       <p>We do not collect or store:</p>
       <ul>
         <li>Browsing activity or browsing history</li>
-        <li>The contents of your DNS queries</li>
+        <li>A log of the DNS names you look up</li>
         <li>The contents of your VPN traffic</li>
         <li>A log of your real public IP address when you connect</li>
       </ul>
@@ -86,15 +86,22 @@
       </p>
       <p>
         Veritas Shield is a best-effort DNS filter for WireGuard clients that use the
-        in-tunnel resolver. It can block malware, phishing, scam, cryptomining, and
-        tracker hostnames. Premium toggles control those lists. Blocking is a DNS
-        NXDOMAIN response, not removal of ads or trackers inside a page. Prometheus
-        keeps aggregate counts (requests, blocks by category, resolver errors, list
-        freshness) for 21 days and does not record query names. In-app blocked counters
-        are keyed by the temporary WireGuard tunnel IP, expire after about 2 hours
-        without a heartbeat, and are cleared when the peer is removed. Upstream
-        DNS-over-HTTPS resolvers still see hostnames we forward for lookups that are
-        not blocked.
+        in-tunnel resolver. A free account cannot connect, so Shield does not filter
+        that account. Premium connects with malware, phishing, scam, cryptomining,
+        and tracker hostnames blocked. Ads and adult domains stay off until that
+        Premium user turns them on. Blocking is a DNS NXDOMAIN response, not removal
+        of ads or trackers inside a page. Prometheus keeps aggregate counts (requests,
+        blocks by category, resolver errors, list freshness) for 21 days and does not
+        record query names. Session block totals are keyed by the temporary WireGuard
+        tunnel IP, expire after about 2 hours without a heartbeat, and are cleared
+        when the peer is removed. Account totals by category, with no domain names,
+        are kept for about 8 days. When Shield blocks a name, that name is held in
+        gateway memory for up to about 10 minutes, so the same block is not announced
+        again, and in a Redis cache for about 2 minutes, keyed by the tunnel IP, so
+        the app can show a notice. That cache is not written to disk, is not your
+        public IP, and is deleted when the peer is removed. It is not a query log:
+        lookups that are allowed are not stored. Upstream DNS-over-HTTPS resolvers
+        still see hostnames we forward for lookups that are not blocked.
       </p>
 
       <h2>3. Data we collect</h2>
@@ -259,7 +266,9 @@
         <li><strong>Payment rows in our database</strong> — for the life of the account, including failed Bitcoin attempts after they are marked failed at 4 days. Account deletion hard-deletes them</li>
         <li><strong>BTCPay invoices</strong> — kept on the self-hosted BTCPay server. Account deletion does not delete them</li>
         <li><strong>Redis IP rate-limit keys</strong> — at most 1 hour</li>
-        <li><strong>Tunnel-IP block counters</strong> — about 2 hours, or until the peer is removed</li>
+        <li><strong>Tunnel-IP block counters</strong> — about 2 hours, or until the peer is removed. These are totals, not names</li>
+        <li><strong>Account category block counts</strong> — about 8 days in the Redis cache, with no domain names. Memory pressure can drop them sooner. Deleted when the account is deleted</li>
+        <li><strong>Blocked names for a notice</strong> — gateway memory for up to about 10 minutes, and a Redis cache for about 2 minutes, keyed by the tunnel IP. Not written to disk. Deleted when the peer is removed. Not a query log and not your public IP</li>
         <li><strong>Prometheus</strong> — 21 days of aggregate metrics, without query names or your real IP</li>
         <li><strong>Database backups</strong> — the postgres backup script keeps 7 daily, 4 weekly, and 3 monthly copies (monthly copies are removed after about 93 days). Encrypted copies uploaded to Cloudflare R2 are removed after 60 days. Single-node recovery snapshots are removed after 35 days</li>
         <li><strong>Application container logs</strong> — Docker json-file rotation, 10 MB per file, 3 files. Connect logs do not include your real public IP</li>
@@ -391,10 +400,11 @@
         If compelled, the live systems could produce an email address if the account
         has one, a password hash, session-token hashes, device and tunnel metadata,
         last handshake time, and payment records. BTCPay could produce invoices
-        tagged with an account ID. We cannot produce browsing history, DNS query
-        contents, traffic contents, or a stored log of your real public IP at
-        connect time. Short-lived Redis rate-limit keys and a Turnstile check may
-        exist only for the windows in section 7. Our
+        tagged with an account ID. We cannot produce browsing history, a DNS query
+        log, traffic contents, or a stored log of your real public IP at
+        connect time. A blocked name held so the app can show a notice may exist
+        only for the short windows in section 7. Short-lived Redis rate-limit keys
+        and a Turnstile check may exist only for those windows too. Our
         <a href="/canary.txt">warrant canary</a> states whether we have received a
         secret order we cannot describe.
       </p>

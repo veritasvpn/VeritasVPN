@@ -21,6 +21,7 @@ import (
 	"github.com/veritasvpn/services/wg-manager/internal/model"
 	"github.com/veritasvpn/services/wg-manager/internal/repository"
 	"github.com/veritasvpn/services/wg-manager/internal/scheduler"
+	"github.com/veritasvpn/services/wg-manager/internal/shieldstats"
 )
 
 type PeerConfig struct {
@@ -404,7 +405,7 @@ func (s *Service) RegisterServer(ctx context.Context, hostname, publicKey, publi
 	return srv, plaintext, nil
 }
 
-func (s *Service) HandleHeartbeat(ctx context.Context, serverID string, peerCount int32, loadFactor float64, rxBytes, txBytes int64, dnsBlockedByIP map[string]uint64, peerHandshakes map[string]time.Time) error {
+func (s *Service) HandleHeartbeat(ctx context.Context, serverID string, peerCount int32, loadFactor float64, rxBytes, txBytes int64, dnsBlockedByIP map[string]uint64, dnsBlockedByIPCategory map[string]map[string]uint64, peerHandshakes map[string]time.Time) error {
 	if err := s.postgres.UpdateServerLoad(ctx, serverID, peerCount, loadFactor); err != nil {
 		return fmt.Errorf("update server load: %w", err)
 	}
@@ -417,6 +418,9 @@ func (s *Service) HandleHeartbeat(ctx context.Context, serverID string, peerCoun
 		if err := s.redis.SetDNSBlockedCounts(ctx, dnsBlockedByIP); err != nil {
 			s.log.Warn("failed to store dns blocked counts", "server_id", serverID, "error", err)
 		}
+	}
+	if len(dnsBlockedByIPCategory) > 0 {
+		s.applyCategoryCounts(ctx, serverID, dnsBlockedByIPCategory)
 	}
 	if err := s.postgres.UpdatePeerHandshakes(ctx, serverID, peerHandshakes); err != nil {
 		s.log.Warn("failed to store peer handshake times", "server_id", serverID, "error", err)
@@ -447,6 +451,85 @@ func (s *Service) DNSBlockedCount(ctx context.Context, assignedIP string) uint64
 		return 0
 	}
 	return n
+}
+
+// applyCategoryCounts turns absolute per-IP snapshots into account/day totals.
+// The first snapshot for an IP is a baseline. A backwards count (agent restart)
+// replaces the baseline and adds nothing. Names are not stored.
+func (s *Service) applyCategoryCounts(ctx context.Context, serverID string, counts map[string]map[string]uint64) {
+	day := time.Now().UTC().Format("2006-01-02")
+	for ip, current := range counts {
+		peer, err := s.postgres.ActivePeerByAssignedIP(ctx, serverID, ip)
+		if err != nil {
+			continue
+		}
+		prev, had, err := s.redis.GetDNSCategoryAbs(ctx, ip)
+		if err != nil {
+			s.log.Warn("dns category snapshot unreadable", "server_id", serverID, "error", err)
+			continue
+		}
+		delta, reset := shieldstats.Delta(prev, current, had)
+		if !reset && len(delta) > 0 {
+			if err := s.redis.AddAccountCategoryCounts(ctx, peer.AccountID, day, delta); err != nil {
+				s.log.Warn("dns category counters not stored", "server_id", serverID, "error", err)
+				continue
+			}
+		}
+		if err := s.redis.SetDNSCategoryAbs(ctx, ip, shieldstats.Normalize(current)); err != nil {
+			s.log.Warn("dns category snapshot not stored", "server_id", serverID, "error", err)
+		}
+	}
+}
+
+// StoreDNSNotices keeps a short blocked-name buffer for tunnel IPs that belong
+// to a live peer. The buffer is not logged.
+func (s *Service) StoreDNSNotices(ctx context.Context, serverID string, notices map[string][]shieldstats.Notice) {
+	now := time.Now().UTC()
+	for ip, batch := range notices {
+		peer, err := s.postgres.ActivePeerByAssignedIP(ctx, serverID, ip)
+		if err != nil {
+			continue
+		}
+		clean := shieldstats.SanitizeNotices(batch, now, peer.CreatedAt)
+		if err := s.redis.SetDNSNotices(ctx, ip, clean); err != nil {
+			s.log.Warn("dns notice buffer not stored", "server_id", serverID, "error", err)
+		}
+	}
+}
+
+// AccountShieldBlocks returns today and the last 7 UTC days of category counts.
+func (s *Service) AccountShieldBlocks(ctx context.Context, accountID string, now time.Time) (today, week map[string]uint64) {
+	today = shieldstats.EmptyWindow()
+	week = shieldstats.EmptyWindow()
+	days := shieldstats.UTCDays(now, 7)
+	if len(days) == 0 {
+		return today, week
+	}
+	todayKey := now.UTC().Format("2006-01-02")
+	for _, day := range days {
+		counts, err := s.redis.AccountCategoryCounts(ctx, accountID, day)
+		if err != nil {
+			continue
+		}
+		week = shieldstats.AddWindows(week, counts)
+		if day == todayKey {
+			today = shieldstats.AddWindows(today, counts)
+		}
+	}
+	return today, week
+}
+
+// DNSNoticesForPeer returns the short-lived buffer, dropping names from before
+// this peer row existed.
+func (s *Service) DNSNoticesForPeer(ctx context.Context, peer *model.Peer, now time.Time) []shieldstats.Notice {
+	if peer == nil {
+		return nil
+	}
+	raw, err := s.redis.GetDNSNotices(ctx, peer.AssignedIP)
+	if err != nil || len(raw) == 0 {
+		return nil
+	}
+	return shieldstats.SanitizeNotices(raw, now, peer.CreatedAt)
 }
 
 func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, deviceID, deviceName, devicePlatform, deviceModel, deviceOSVersion, clientVersion, preferredRegion, clientIP, shieldPreset string, shield *entitlement.ShieldFlags) (*PeerConfig, error) {
@@ -625,7 +708,7 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		}
 		if stripCIDR(replacedPeer.AssignedIP) != assignedIP || oldServerID != serverID {
 			_ = s.redis.ReleaseIP(syncCtx, oldServerID, replacedPeer.AssignedIP)
-			_ = s.redis.ClearDNSBlockedCount(syncCtx, replacedPeer.AssignedIP)
+			_ = s.redis.ClearDNSShieldEphemeral(syncCtx, replacedPeer.AssignedIP)
 		}
 	}
 	if err := s.communicator.PushPeerAdded(syncCtx, serverID, peer); err != nil {
@@ -827,7 +910,7 @@ func (s *Service) DeletePeer(ctx context.Context, peerID, accountID string) erro
 	}
 
 	_ = s.redis.ReleaseIP(ctx, peer.ServerID, peer.AssignedIP)
-	_ = s.redis.ClearDNSBlockedCount(ctx, peer.AssignedIP)
+	_ = s.redis.ClearDNSShieldEphemeral(ctx, peer.AssignedIP)
 
 	s.log.Info("peer deleted", "peer_hash", logging.HashIdentifier(peerID), "account_hash", logging.HashIdentifier(accountID))
 
@@ -863,7 +946,7 @@ func (s *Service) ExpirePeer(ctx context.Context, serverID, peerID string) error
 	}
 	if changed {
 		_ = s.redis.ReleaseIP(ctx, serverID, peer.AssignedIP)
-		_ = s.redis.ClearDNSBlockedCount(ctx, peer.AssignedIP)
+		_ = s.redis.ClearDNSShieldEphemeral(ctx, peer.AssignedIP)
 		s.publishEvent("peer.expired", map[string]interface{}{
 			"peer_hash":    logging.HashIdentifier(peerID),
 			"account_hash": logging.HashIdentifier(peer.AccountID),

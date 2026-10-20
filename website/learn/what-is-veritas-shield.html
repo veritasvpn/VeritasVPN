@@ -53,7 +53,7 @@
         <a class="learn-back" href="/learn/">← All topics</a>
         <span class="learn-kicker">Protect</span>
         <h1>What is Veritas Shield?</h1>
-        <p class="learn-meta">Updated 2026-10-05</p>
+        <p class="learn-meta">Updated 2026-10-19</p>
         <p class="learn-lede">Veritas Shield is the DNS security layer inside VeritasVPN. While the tunnel is up, lookups go through our gateway and threat feeds can NXDOMAIN dangerous names. Premium can turn malicious sites, trackers, ads, and adult sites on or off independently.</p>
         <div class="learn-prose">
 <h2>VPN + Veritas Shield</h2>
@@ -70,7 +70,7 @@
 <h2>Honesty limits</h2>
 <ul><li>This is <strong>DNS domain blocking</strong>, not full-page ad removal and not in-page tracker removal. An ad or tracker served from the same host as the page can still appear.</li><li>Upstream DoH resolvers still see hostnames we forward for <strong>non-blocked</strong> lookups</li><li>Uncommon or custom DoH endpoints remain a <strong>residual</strong> bypass risk</li><li>Shield does not inspect HTTPS bodies or replace browser updates</li></ul>
 <h2>Privacy</h2>
-<p>We do not log query names. In-app blocked counts are keyed by your temporary tunnel IP for the session—not your public WAN IP. The toggles are stored with peer metadata so the gateway can apply them. Details: <a href="/privacy.html">Privacy Policy</a>.</p>
+<p>We do not keep a DNS query log. When Shield blocks a name, that name is held in gateway memory for up to about 10 minutes and in a Redis cache for about 2 minutes, keyed by your temporary tunnel IP, so the app can show a notice. It is not your public IP, it is not written to disk, and it is deleted when the peer is removed. Account block counts by category, with no names, are kept for about eight days. Session totals stay on the tunnel IP and clear with the peer. Prometheus keeps aggregate counts without query names. The toggles are stored with peer metadata so the gateway can apply them. Details: <a href="/privacy.html">Privacy Policy</a>.</p>
 <h2>How to verify</h2>
 <p>Connect on Android or Linux with Premium, then run a <a href="/check/dns.html">DNS leak test</a>. Resolvers should show the provider path.</p>
 <p>With <strong>Block malicious sites</strong> on (the default), this harmless name must return NXDOMAIN:</p>

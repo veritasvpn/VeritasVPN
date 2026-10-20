@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -252,6 +253,47 @@ func (p *Postgres) IsActiveIPAssigned(ctx context.Context, serverID, assignedIP 
 		return false, fmt.Errorf("check assigned ip: %w", err)
 	}
 	return assigned, nil
+}
+
+// ActivePeerByAssignedIP returns the single pending or active peer on this
+// server with that tunnel address. More than one row is an error so a block
+// is never attributed to the wrong account. The IP is not included in the error.
+func (p *Postgres) ActivePeerByAssignedIP(ctx context.Context, serverID, assignedIP string) (*model.Peer, error) {
+	ip := strings.TrimSpace(assignedIP)
+	if i := strings.IndexByte(ip, '/'); i >= 0 {
+		ip = ip[:i]
+	}
+	if serverID == "" || ip == "" {
+		return nil, pgx.ErrNoRows
+	}
+	rows, err := p.pool.Query(ctx, `SELECT `+peerColumns+`
+		FROM peers
+		WHERE server_id = $1
+		  AND status IN ('pending', 'active')
+		  AND (assigned_ip = $2 OR assigned_ip = $2 || '/32')`,
+		serverID, ip)
+	if err != nil {
+		return nil, fmt.Errorf("lookup peer by tunnel ip: %w", err)
+	}
+	defer rows.Close()
+	var found *model.Peer
+	for rows.Next() {
+		if found != nil {
+			return nil, fmt.Errorf("ambiguous tunnel assignment")
+		}
+		var peer model.Peer
+		if err := rows.Scan(scanPeerArgs(&peer)...); err != nil {
+			return nil, fmt.Errorf("scan peer by tunnel ip: %w", err)
+		}
+		found = &peer
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if found == nil {
+		return nil, pgx.ErrNoRows
+	}
+	return found, nil
 }
 
 // LatestPeerByAccountDevice returns the newest peer row for a device,
