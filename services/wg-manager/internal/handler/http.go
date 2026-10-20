@@ -487,6 +487,13 @@ func noticesOrEmpty(in []shieldstats.Notice) []shieldstats.Notice {
 	return in
 }
 
+// putShieldListFields attaches the account counters and this peer's name buffer
+// to one GET /api/v1/wg/peers element. A nil buffer is an empty JSON array.
+func putShieldListFields(dst map[string]interface{}, blocks map[string]interface{}, notices []shieldstats.Notice) {
+	dst["shield_blocks"] = blocks
+	dst["shield_notices"] = noticesOrEmpty(notices)
+}
+
 func shieldJSON(peer *model.Peer) map[string]bool {
 	flags := entitlement.EffectiveFlags(peer.ShieldPolicySet, peer.ShieldBlockMalicious, peer.ShieldBlockAds, peer.ShieldBlockAdult, peer.ShieldBlockTrackers, peer.ShieldPreset)
 	return map[string]bool{
@@ -612,7 +619,7 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 			if p.ExpiresAt != nil {
 				expiresAt = p.ExpiresAt.Unix()
 			}
-			out = append(out, map[string]interface{}{
+			peerJSON := map[string]interface{}{
 				"id":                p.ID,
 				"account_id":        p.AccountID,
 				"server_id":         p.ServerID,
@@ -637,9 +644,9 @@ func (h *HTTPHandler) handlePeers(w http.ResponseWriter, r *http.Request) {
 				}(),
 				"expires_at":        expiresAt,
 				"dns_blocked_count": h.svc.DNSBlockedCount(r.Context(), p.AssignedIP),
-				"shield_blocks":     blocks,
-				"shield_notices":    noticesOrEmpty(h.svc.DNSNoticesForPeer(r.Context(), &p, now)),
-			})
+			}
+			putShieldListFields(peerJSON, blocks, h.svc.DNSNoticesForPeer(r.Context(), &p, now))
+			out = append(out, peerJSON)
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"peers": out})
 	default:

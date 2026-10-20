@@ -113,6 +113,30 @@ class ShieldNoticesTest {
     }
 
     @Test
+    fun failedPostDoesNotConsumeTheFirstNotice() {
+        val plan = planShieldNotices(
+            listOf(ShieldServerNotice("0123456789abcdef", "cheetoclient.com", "malware", 1)),
+            emptySet(),
+            prefs,
+            policy,
+            nowMs = 100_000,
+            lastSentAtMs = 0,
+        )
+        assertEquals("Veritas Shield blocked cheetoclient.com (malware)", plan.notification?.body)
+        assertFalse(shieldPollAccepted(plan, posted = false))
+        assertTrue(shieldPollAccepted(plan, posted = true))
+        val again = planShieldNotices(
+            listOf(ShieldServerNotice("0123456789abcdef", "cheetoclient.com", "malware", 1)),
+            emptySet(),
+            prefs,
+            policy,
+            nowMs = 130_000,
+            lastSentAtMs = 0,
+        )
+        assertEquals(plan.notification?.body, again.notification?.body)
+    }
+
+    @Test
     fun failureBackoffGrowsAndCaps() {
         assertEquals(15_000L, ShieldPollPolicy.failureDelayMs(1))
         assertEquals(30_000L, ShieldPollPolicy.failureDelayMs(2))

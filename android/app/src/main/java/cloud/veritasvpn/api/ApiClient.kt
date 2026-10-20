@@ -349,18 +349,20 @@ data class PeerEndpointView(
 )
 
 data class PeerListResponse(
-    val peers: List<PeerInfo> = emptyList(),
-    val error: String? = null
+    // Release minify renames these fields. Gson 2.11 then ignores the JSON
+    // keys, the poller never selects this device, and no block notice is posted.
+    @SerializedName("peers") val peers: List<PeerInfo> = emptyList(),
+    @SerializedName("error") val error: String? = null
 )
 
 data class PeerInfo(
-    val id: String = "",
+    @SerializedName("id") val id: String = "",
     @SerializedName("account_id") val accountId: String? = null,
     @SerializedName("server_id") val serverId: String? = null,
     @SerializedName("device_id") val deviceId: String? = null,
-    val pubkey: String? = null,
+    @SerializedName("pubkey") val pubkey: String? = null,
     @SerializedName("assigned_ip") val assignedIp: String = "",
-    val status: String = "",
+    @SerializedName("status") val status: String = "",
     @SerializedName("shield_preset") val shieldPreset: String = "standard",
     @SerializedName("created_at") val createdAt: Long = 0,
     @SerializedName("expires_at") val expiresAt: Long? = null,

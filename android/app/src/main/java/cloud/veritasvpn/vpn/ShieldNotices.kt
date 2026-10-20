@@ -206,6 +206,14 @@ fun ShieldBlocksPayload.toBlocks() = ShieldBlocks(today = today.toCounts(), week
 
 fun ShieldNoticePayload.toNotice() = ShieldServerNotice(id = id, domain = domain, category = category, at = at)
 
+/**
+ * A notice is consumed only after it was posted, or when there was nothing
+ * to post (banner-only rate limit). A failed post leaves the id unseen so
+ * the next poll retries the first notice instead of dropping it.
+ */
+fun shieldPollAccepted(plan: ShieldNoticePlan, posted: Boolean): Boolean =
+    plan.notification == null || posted
+
 fun noticeSentence(notices: List<ShieldServerNotice>): String {
     if (notices.isEmpty()) return ""
     if (notices.size > 1 || notices.any { it.category == "adult" && notices.size > 1 }) {

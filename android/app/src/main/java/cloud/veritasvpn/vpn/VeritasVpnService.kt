@@ -901,13 +901,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun startStatsPolling() {
         if (!sessionIntended()) return
-        if (statsJob?.isActive == true) return
-        statsJob = scope.launch {
-            while (sessionIntended()) {
-                broadcastStats()
-                delay(1_500)
+        if (statsJob?.isActive != true) {
+            statsJob = scope.launch {
+                while (sessionIntended()) {
+                    broadcastStats()
+                    delay(1_500)
+                }
             }
         }
+        // Reconnect, roam, and a later network change all come through here
+        // while stats are already running. A shield job that already stopped
+        // still has to start again. A live policy change is read on the next poll.
         startShieldPolling()
     }
 
@@ -1009,14 +1013,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 nowMs = System.currentTimeMillis(),
                 lastSentAtMs = lastSentAt,
             )
-            seen.clear()
-            seen.addAll(plan.seen)
-            shieldLastSentAt = plan.lastSentAtMs
-            lastShieldCount = peer.dnsBlockedCount
-            lastShieldBlocksJson = blocks?.let { ApiClient.gson.toJson(it) }
-            lastShieldBanner = plan.banner
             if (sessionIntended() && !controlSignedOut) {
-                plan.notification?.let { postShieldNotification(it) }
+                val posted = plan.notification?.let { postShieldNotification(it) } ?: true
+                if (shieldPollAccepted(plan, posted)) {
+                    seen.clear()
+                    seen.addAll(plan.seen)
+                    shieldLastSentAt = plan.lastSentAtMs
+                }
+                lastShieldCount = peer.dnsBlockedCount
+                lastShieldBlocksJson = blocks?.let { ApiClient.gson.toJson(it) }
+                lastShieldBanner = plan.banner
                 broadcastShieldUpdate()
             }
             ShieldPollOutcome.Ok
@@ -1039,31 +1045,41 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         sendBroadcast(intent)
     }
 
-    private fun postShieldNotification(notice: PreparedShieldNotice) {
-        val open = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(EXTRA_OPEN_SHIELD, true)
+    private fun postShieldNotification(notice: PreparedShieldNotice): Boolean {
+        val manager = getSystemService(NotificationManager::class.java) ?: return false
+        // The VPN foreground notification is exempt from POST_NOTIFICATIONS.
+        // This channel is not. A denied permission drops the post with no throw.
+        if (!manager.areNotificationsEnabled()) return false
+        return try {
+            val open = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_OPEN_SHIELD, true)
+            }
+            val pending = PendingIntent.getActivity(
+                this,
+                2,
+                open,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val builder = NotificationCompat.Builder(this, SHIELD_CHANNEL_ID)
+                .setContentTitle(notice.title)
+                .setContentText(notice.body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(notice.body))
+                .setSmallIcon(R.drawable.ic_stat_veritas)
+                .setContentIntent(pending)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            if (notice.redactOnLockScreen) {
+                builder.setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            }
+            manager.notify(SHIELD_NOTIFICATION_ID, builder.build())
+            true
+        } catch (e: Exception) {
+            Log.i(TAG, "shield notification not posted: ${e.javaClass.simpleName}")
+            false
         }
-        val pending = PendingIntent.getActivity(
-            this,
-            2,
-            open,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-        val builder = NotificationCompat.Builder(this, SHIELD_CHANNEL_ID)
-            .setContentTitle(notice.title)
-            .setContentText(notice.body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(notice.body))
-            .setSmallIcon(R.drawable.ic_stat_veritas)
-            .setContentIntent(pending)
-            .setAutoCancel(true)
-            .setOnlyAlertOnce(true)
-            .setCategory(NotificationCompat.CATEGORY_STATUS)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-        if (notice.redactOnLockScreen) {
-            builder.setVisibility(NotificationCompat.VISIBILITY_SECRET)
-        }
-        getSystemService(NotificationManager::class.java).notify(SHIELD_NOTIFICATION_ID, builder.build())
     }
 
     private fun broadcastStats() {
