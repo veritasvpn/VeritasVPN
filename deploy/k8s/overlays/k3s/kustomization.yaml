@@ -13,16 +13,16 @@ images:
     digest: sha256:d72c2a713b66d2b071d13dbb786605761195b9e4072bfae3ee19a4ac0945afd1
   - name: localhost:31500/wg-manager
     newName: localhost:31500/wg-manager
-    # Privacy-policy image running on the Dell (61f4bd8).
-    digest: sha256:ea7613f9dbb65107271c456ecbcc7fb24b752478185e9caf0695c4f42d6e3eab
+    # Shield notices: dns-notices ingest + peers shield fields (b63c330).
+    digest: sha256:95c7e5287fe14e61647320046df1fb864e32fc5b9c8ca70fbfa8f4796d90ede0
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
     # Play Billing image currently running on the Dell (98bb35b).
     digest: sha256:6a2ee667019f9e21c152556eb6cfe33c89d523cbb8e25e762a11effad5af608c
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    # Premium Shield per-peer policy incl. Block trackers (e506ecd).
-    digest: sha256:0b45e094e189a9b9fbd918cd91fc9b65257338cadbf26ab9117028cee5b60e0f
+    # Shield notices: blocked-name notice ring + flush (b63c330).
+    digest: sha256:dffe092ab4acdb3fa633888b95fb5da4c9109bb9d76d4e8bb3d013423ef9e379
   - name: localhost:31500/wstunnel
     newName: localhost:31500/wstunnel
     # Stealth tunnel image running on the Dell.
