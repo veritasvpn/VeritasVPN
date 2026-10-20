@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { egressHealthy, emptyCheck, messageFor, stepCheck, REPEAT_MS } from "./state.mjs";
+import {
+  egressHealthy,
+  emptyCheck,
+  isTlsHandshakeRecord,
+  messageFor,
+  stepCheck,
+  tlsClientHello,
+  REPEAT_MS,
+} from "./state.mjs";
 
 test("alerts on the second failure, then recovers once", () => {
   const first = stepCheck(emptyCheck(), false, 1_000);
@@ -59,6 +67,34 @@ test("egress accepts a fresh ok payload and rejects a stale or failed one", () =
   assert.equal(egressHealthy({ ok: true, checked_at: "2026-10-20T11:40:00Z" }, now), false);
   assert.equal(egressHealthy({ ok: false, checked_at: "2026-10-20T11:59:00Z" }, now), false);
   assert.equal(egressHealthy({ ok: true, timestamp: "not-a-time" }, now), false);
+});
+
+test("the stealth probe is a plain TCP connect plus an unverified handshake record", () => {
+  const hello = tlsClientHello();
+  assert.equal(hello[0], 0x16);
+  assert.equal((hello[3] << 8) | hello[4], hello.length - 5);
+  assert.equal(hello[5], 0x01);
+  assert.equal(isTlsHandshakeRecord(hello), true);
+  assert.equal(isTlsHandshakeRecord(new Uint8Array([0x16, 0x03, 0x03])), true);
+  assert.equal(isTlsHandshakeRecord(new Uint8Array([0x15, 0x03, 0x03])), false);
+  assert.equal(isTlsHandshakeRecord(new Uint8Array()), false);
+  assert.equal(isTlsHandshakeRecord(null), false);
+
+  const source = readFileSync(new URL("./index.js", import.meta.url), "utf8");
+  assert.match(source, /secureTransport:\s*"off"/);
+  assert.doesNotMatch(source, /secureTransport:\s*"on"/);
+  assert.match(source, /socket\.opened/);
+  assert.match(source, /tlsClientHello\(/);
+  assert.match(source, /isTlsHandshakeRecord\(/);
+});
+
+test("the other probes are unchanged", () => {
+  const source = readFileSync(new URL("./index.js", import.meta.url), "utf8");
+  assert.match(source, /fetchText\("https:\/\/veritasvpn\.cloud\/"\)/);
+  assert.match(source, /fetchText\("https:\/\/api\.veritasvpn\.cloud\/readyz"\)/);
+  assert.match(source, /fetchText\("https:\/\/api\.veritasvpn\.cloud\/api\/v1\/billing\/readyz"\)/);
+  assert.match(source, /fetchText\("https:\/\/api\.veritasvpn\.cloud\/api\/v1\/status\/egress"\)/);
+  assert.match(source, /results\.egress = egressHealthy\(body, nowMs\)/);
 });
 
 test("the worker does not put the public address in a Telegram message", () => {
