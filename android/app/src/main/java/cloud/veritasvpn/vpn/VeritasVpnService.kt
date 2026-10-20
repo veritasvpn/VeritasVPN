@@ -1292,7 +1292,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val hs = latestHandshakeMs()
         if (hs <= 0L) return false
         val age = System.currentTimeMillis() - hs
-        return age < HANDSHAKE_OK_AGE_MS
+        if (age >= HANDSHAKE_OK_AGE_MS) return false
+        // A timestamp with no received bytes is not a working tunnel.
+        return DeadPathRoam.workingSession(
+            handshakeFresh = true,
+            rxSinceAttempt = readBackendStats().first,
+        )
     }
 
     /**
@@ -1456,13 +1461,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             return
         }
         val target = EarlyUnderlay.bindTarget(earlyUnderlay)
+        // A fresh handshake only suppresses repeats for a bind target that is
+        // still addressed. A dead Wi-Fi handle must not hide mobile data.
+        val targetAlive = bindTargetAddressed(target)
         // Wi-Fi validation fires onCapabilities many times for one switch.
         // Cancelling the roam there turns userspace off again and resets the
         // re-provision count, so the handshake never finishes.
-        if (!forceHard && adaptJob?.isActive == true && target != null && target == activeRoamHandle) {
+        if (targetAlive && !forceHard && adaptJob?.isActive == true && target != null && target == activeRoamHandle) {
             return
         }
-        if (!forceHard && adaptJob?.isActive != true && target != null && target == activeRoamHandle &&
+        if (targetAlive && !forceHard && adaptJob?.isActive != true && target != null && target == activeRoamHandle &&
             handshakeOk()
         ) {
             return
@@ -1504,6 +1512,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         // An address is enough. Waiting for NET_CAPABILITY_VALIDATED stalls
         // Wi-Fi to cellular: those probes can be captured by the tunnel.
         // The callback network is used before it is the validated default.
+        // dataPlaneNetwork already ignores an early handle that has no address.
         val available = dataPlaneSnap()?.takeIf { ipv4Addresses(it.link).isNotEmpty() }
         val roam = UnderlayRoam.action(
             liveIdentity = available?.identity,
@@ -3638,6 +3647,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return isUsableUnderlay(caps)
     }
 
+    /** True when [handle] still has an address. A lost Wi-Fi handle is not alive. */
+    private fun bindTargetAddressed(handle: Long?): Boolean {
+        if (handle == null) return false
+        val early = earlyNetwork
+        if (early != null && early.networkHandle == handle && addressedUnderlay(early) != null) return true
+        val best = bestMatchingNetwork
+        if (best != null && best.networkHandle == handle && addressedUnderlay(best) != null) return true
+        val def = systemDefaultNetwork()
+        return def?.networkHandle == handle && addressedUnderlay(def) != null
+    }
+
     /** Unvalidated is still this same network — never the other transport. */
     private fun systemDefaultSnap(): UnderlaySnap? = snapshotUnderlay(systemDefaultNetwork())
 
@@ -4404,7 +4424,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     linkAttachedAtMs = roamArmedAtMs.takeIf { it > 0L } ?: now
                     underlayLostSeen = false
                     rxAtLinkAttach = currentRxAtLinkAttach(addressed)
-                    scheduleUnderlayAdapt()
+                    val recordedGone = !bindTargetAddressed(lastUnderlayIdentity?.toLongOrNull())
+                    val moved = DeadPathRoam.redial(
+                        DeadPathRoam.Attempt(
+                            recordedHandle = lastUnderlayIdentity,
+                            liveHandle = addressed.identity,
+                            liveReady = true,
+                            handshakeFresh = handshakeOk(),
+                            rxSinceAttempt = readBackendStats().first,
+                        ),
+                    )
+                    // The old handle can still look "current" after Wi-Fi is
+                    // gone. forceHard is what gets past the fresh-handshake guard.
+                    scheduleUnderlayAdapt(forceHard = moved && recordedGone)
                     lastStallCheckAtMs = now
                     val s = readBackendStats()
                     lastKnownRx = s.first
