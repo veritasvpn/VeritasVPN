@@ -1,0 +1,40 @@
+name: Deploy uptime worker
+
+# CLOUDFLARE_API_TOKEN needs Workers Scripts:Edit and Workers KV:Edit.
+# UPTIME_KV_NAMESPACE_ID is the id printed when the KV namespace is created.
+# Worker secrets (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, PUBLIC_IP,
+# TEST_ALERT_SECRET) are set on the worker, not in this workflow.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+    paths:
+      - "monitoring/uptime-worker/**"
+      - ".github/workflows/uptime-worker-deploy.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy uptime worker
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Deploy
+        working-directory: monitoring/uptime-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 368cad600fc530d1a254d3121850d5b9
+          UPTIME_KV_NAMESPACE_ID: ${{ secrets.UPTIME_KV_NAMESPACE_ID }}
+        run: |
+          set +x
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$UPTIME_KV_NAMESPACE_ID"
+          sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/${UPTIME_KV_NAMESPACE_ID}/" wrangler.toml
+          npx --yes wrangler@4.31.0 deploy

@@ -46,7 +46,12 @@ import cloud.veritasvpn.support.sanitizeError
 import cloud.veritasvpn.ui.AuthScreen
 import cloud.veritasvpn.ui.CircleDisconnect
 import cloud.veritasvpn.ui.SignInAgainSignal
+import cloud.veritasvpn.vpn.BlockedNetworkNotice
 import cloud.veritasvpn.vpn.ControlPlane
+import cloud.veritasvpn.vpn.MobileDataSettings
+import cloud.veritasvpn.vpn.StealthApply
+import cloud.veritasvpn.vpn.StealthMode
+import cloud.veritasvpn.vpn.ValidatedNetworks
 import cloud.veritasvpn.vpn.ProvisionRoute
 import cloud.veritasvpn.vpn.EndpointRefresh
 import cloud.veritasvpn.vpn.PeerCheckLog
@@ -248,6 +253,60 @@ class MainActivity : ComponentActivity() {
                 var appliedBypassApps by remember { mutableStateOf(VpnSettings.bypassApps(context)) }
                 var appliedStealthMode by remember { mutableStateOf(VpnSettings.stealthMode(context)) }
                 var transport by remember { mutableStateOf("") }
+                var blockedClock by remember { mutableStateOf(BlockedNetworkNotice.Clock()) }
+                var blockedDismissed by remember { mutableStateOf(false) }
+                var blockedStep by remember { mutableStateOf(BlockedNetworkNotice.Step()) }
+                var blockedAttemptStartedMs by remember { mutableLongStateOf(0L) }
+                LaunchedEffect(connecting, reconnecting) {
+                    if (connecting || reconnecting) {
+                        blockedAttemptStartedMs = System.currentTimeMillis()
+                        blockedClock = BlockedNetworkNotice.Clock()
+                    }
+                }
+                LaunchedEffect(
+                    connecting,
+                    reconnecting,
+                    connected,
+                    handshakeOk,
+                    handshakeMs,
+                    rxBytes,
+                    transport,
+                    stealthMode,
+                    blockedDismissed,
+                    blockedAttemptStartedMs,
+                ) {
+                    val live = connecting || reconnecting || (connected && !handshakeOk)
+                    if (!live) {
+                        blockedClock = BlockedNetworkNotice.Clock()
+                        blockedStep = BlockedNetworkNotice.Step()
+                        if (!connecting && !connected && !reconnecting) blockedDismissed = false
+                        return@LaunchedEffect
+                    }
+                    while (isActive) {
+                        val validated = withContext(Dispatchers.IO) {
+                            ValidatedNetworks.deviceHasInternet(context)
+                        }
+                        val sample = BlockedNetworkNotice.Sample(
+                            nowMs = System.currentTimeMillis(),
+                            connecting = connecting,
+                            reconnecting = reconnecting,
+                            connected = connected,
+                            handshakeOk = handshakeOk,
+                            handshakeMs = handshakeMs,
+                            attemptStartedMs = blockedAttemptStartedMs,
+                            rxBytes = rxBytes,
+                            networkValidated = validated,
+                            alreadyStealth = transport == "stealth" || stealthMode == StealthMode.STEALTH,
+                            dismissed = blockedDismissed,
+                            clock = blockedClock,
+                        )
+                        val step = BlockedNetworkNotice.advance(sample)
+                        blockedClock = step.clock
+                        blockedStep = step
+                        if (BlockedNetworkNotice.handshakeSucceeded(sample)) blockedDismissed = false
+                        delay(500)
+                    }
+                }
                 var billingStatus by remember { mutableStateOf<BillingStatus?>(null) }
                 var billingSettled by remember { mutableStateOf(false) }
                 var billingRefreshing by remember { mutableStateOf(false) }
@@ -1693,6 +1752,35 @@ class MainActivity : ComponentActivity() {
                         handshakeOk = handshakeOk,
                         lockdownEnabled = lockdownEnabled,
                         signInAgain = signInAgain,
+                        blockedNetwork = blockedStep,
+                        onDismissBlockedNetwork = { blockedDismissed = true },
+                        onSwitchToStealth = {
+                            val next = StealthApply.modeAfter(stealthMode, userTappedSwitch = true)
+                            VpnSettings.setStealthMode(context, next)
+                            stealthMode = next
+                            appliedStealthMode = next
+                            blockedAttemptStartedMs = System.currentTimeMillis()
+                            blockedClock = BlockedNetworkNotice.Clock()
+                            blockedDismissed = false
+                            context.startService(
+                                Intent(context, VeritasVpnService::class.java).apply {
+                                    action = VeritasVpnService.ACTION_APPLY_STEALTH
+                                },
+                            )
+                        },
+                        onUseMobileData = {
+                            val opened = runCatching {
+                                context.startActivity(MobileDataSettings.intent(Build.VERSION.SDK_INT))
+                            }.isSuccess
+                            if (!opened) {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS)
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                    )
+                                }
+                            }
+                        },
                     )
                 }
                 if (showReleaseLockdown) {

@@ -141,6 +141,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     @Volatile private var bestMatchingWatchRegistered = false
     private val underlayHandler = Handler(Looper.getMainLooper())
     @Volatile private var isReconnecting = false
+    @Volatile private var networkMayBeBlocking = false
+    private var reconnectEpisodeStartedMs = 0L
+    private var blockedClock = BlockedNetworkNotice.Clock()
+
+    /** Set only from the Switch to Stealth action, before any tunnel work. */
+    @Volatile private var userAskedStealth = false
     /** In-flight provisioning read. A newer default network supersedes it. */
     @Volatile private var endpointFlight: EndpointRefresh.Flight? = null
     @Volatile private var endpointCall: Call? = null
@@ -325,6 +331,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 return if (sessionIntended() || lockdownHoldActive) START_STICKY else START_NOT_STICKY
             }
             ACTION_CONNECT -> {
+                userAskedStealth = false
                 markSessionStarted()
                 tunnelReleased = false
                 holdInterface = false
@@ -349,6 +356,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 lastChosenEndpoint = null
                 lastRebindAtMs = 0L
                 isReconnecting = false
+                networkMayBeBlocking = false
+                reconnectEpisodeStartedMs = 0L
+                blockedClock = BlockedNetworkNotice.Clock()
                 lastStallRebindAtMs = 0L
                 stallBackoffMs = TunnelStall.MIN_REBIND_INTERVAL_MS
                 hardLoopStartedAtMs = 0L
@@ -390,6 +400,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         // disconnect uses keeps a late clear from being overwritten.
                         synchronized(tunnelOpLock) {
                             if (connectGen != sessionGeneration) return@launch
+                            val askedOnThisConnect = userAskedStealth ||
+                                VpnSettings.stealthMode(this@VeritasVpnService) == StealthMode.STEALTH
+                            val modeToStore = if (askedOnThisConnect) {
+                                StealthMode.STEALTH.stored()
+                            } else {
+                                stealthMode.ifBlank { StealthMode.AUTO.stored() }
+                            }
                             vpnStatePrefs().edit()
                                 .putString(KEY_CONFIG, config)
                                 .putString(KEY_UDP_CONFIG, config)
@@ -397,7 +414,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                                 .putString(KEY_ENDPOINT_WAN, endpointWan)
                                 .putString(KEY_STEALTH_ENDPOINT, stealthEndpoint)
                                 .putString(KEY_STEALTH_PREFIX, stealthPrefix)
-                                .putString(KEY_STEALTH_MODE, stealthMode.ifBlank { StealthMode.AUTO.stored() })
+                                .putString(KEY_STEALTH_MODE, modeToStore)
                                 .putBoolean(KEY_STEALTH_AVAILABLE, stealthAvailable)
                                 .putBoolean(KEY_RESUME_STEALTH, false)
                                 .apply()
@@ -487,6 +504,50 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                             broadcastState(false, if (sessionEndedByUser) null else friendlyError(e))
                             leaveForeground()
                         }
+                    }
+                }
+                return START_STICKY
+            }
+            ACTION_APPLY_STEALTH -> {
+                // User tapped Switch to Stealth. Nothing else may take this branch.
+                userAskedStealth = true
+                if (!sessionIntended()) return START_STICKY
+                val gen = sessionGeneration
+                scope.launch {
+                    synchronized(tunnelOpLock) {
+                        if (!sessionStillActive(gen)) return@launch
+                        vpnStatePrefs().edit()
+                            .putString(KEY_STEALTH_MODE, StealthMode.STEALTH.stored())
+                            .commit()
+                    }
+                    // A connect that already chose UDP must finish before the
+                    // rebind, or the two writes fight over the same tunnel.
+                    val inflight = transitionJob
+                    if (inflight != null && inflight.isActive) {
+                        try {
+                            inflight.join()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                        }
+                    }
+                    if (!sessionStillActive(gen)) return@launch
+                    if (usesStealth() && stealthTransport != null) return@launch
+                    var applied = false
+                    repeat(8) {
+                        if (!sessionStillActive(gen) || applied) return@launch
+                        val offer = currentOffer()
+                        val hasConfig = vpnStatePrefs().getString(KEY_UDP_CONFIG, null) != null ||
+                            vpnStatePrefs().getString(KEY_CONFIG, null) != null
+                        if (hasConfig && offer.usable()) {
+                            switchToStealth(gen, offer)
+                            applied = true
+                            return@launch
+                        }
+                        delay(250)
+                    }
+                    if (sessionStillActive(gen) && !currentOffer().usable()) {
+                        broadcastState(true, "Stealth is not available on the VPN node yet.")
                     }
                 }
                 return START_STICKY
@@ -1273,7 +1334,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val shown = if (controlSignedOut) {
             ControlPlane.SIGN_IN_AGAIN
         } else {
-            transportSuffix(if (isReconnecting) "Reconnecting…" else text)
+            transportSuffix(if (isReconnecting) BlockedNetworkNotice.reconnectingText(networkMayBeBlocking) else text)
         }
         val openIntent = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
@@ -1926,6 +1987,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 ?: prefs.getBoolean(KEY_STEALTH_AVAILABLE, false),
             stealthPrefix = advertised?.stealthPathPrefix ?: prefs.getString(KEY_STEALTH_PREFIX, null),
             ignoredPrevious = currentUdpEndpoint(),
+            serverPublicKey = advertised?.server?.publicKey,
         ) ?: return null
         return ChosenOffer(offer, choice.kind)
     }
@@ -1983,7 +2045,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         template: String,
         rebuildTun: Boolean,
     ): Installed? {
-        val liveConfig = EndpointSelector.replaceEndpoint(template, offer.serverEndpoint)
+        val keyed = ServerKeyConfig.withServerKey(template, offer.serverPublicKey)
+        val liveConfig = EndpointSelector.replaceEndpoint(keyed, offer.serverEndpoint)
         if (EndpointSelector.endpointFromConfig(liveConfig) != offer.serverEndpoint) return null
         val parsed = runCatching {
             Config.parse(ByteArrayInputStream(liveConfig.toByteArray(Charsets.UTF_8)))
@@ -2033,8 +2096,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 return null
             }
         }
-        val liveConfig = EndpointSelector.replaceEndpoint(template, local)
-        val udpConfig = EndpointSelector.replaceEndpoint(template, offer.serverEndpoint)
+        val keyed = ServerKeyConfig.withServerKey(template, offer.serverPublicKey)
+        val liveConfig = EndpointSelector.replaceEndpoint(keyed, local)
+        val udpConfig = EndpointSelector.replaceEndpoint(keyed, offer.serverEndpoint)
         val parsed = runCatching {
             Config.parse(ByteArrayInputStream(liveConfig.toByteArray(Charsets.UTF_8)))
         }.getOrNull() ?: return null
@@ -2637,7 +2701,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         cancelStealthWork()
         if (gen != sessionGeneration || !sessionIntended()) return Tunnel.State.DOWN
         val offer = currentOffer()
-        val mode = sessionMode()
+        val mode = if (userAskedStealth) StealthMode.STEALTH else sessionMode()
         val resumeStealth = vpnStatePrefs().getBoolean(KEY_RESUME_STEALTH, false)
         return when (StealthPlanner.initial(mode, offer, resumeStealth)) {
             InitialTransport.STEALTH_UNAVAILABLE ->
@@ -2836,8 +2900,22 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         // A successful return clears the line. Another attempt on the same
         // network keeps it, so the retry does not look like a silent wait.
         if (!reconnecting) reconnectNotice = null
+        if (reconnecting) {
+            if (reconnectEpisodeStartedMs == 0L) {
+                reconnectEpisodeStartedMs = System.currentTimeMillis()
+                blockedClock = BlockedNetworkNotice.Clock()
+            }
+        } else {
+            reconnectEpisodeStartedMs = 0L
+            blockedClock = BlockedNetworkNotice.Clock()
+            networkMayBeBlocking = false
+        }
         if (!sessionIntended()) return
-        val text = if (reconnecting) "Reconnecting…" else lastNotificationText
+        val text = if (reconnecting) {
+            BlockedNetworkNotice.reconnectingText(networkMayBeBlocking)
+        } else {
+            lastNotificationText
+        }
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
@@ -3836,8 +3914,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 val code = res.code
                 when (outcome) {
                     PeerCheckOutcome.Outcome.PEER_ALIVE -> {
+                        val advertisedKey = runCatching {
+                            ApiClient.parse<PeerEndpointView>(res)?.server?.publicKey
+                        }.getOrNull()
                         res.close()
-                        if (stillCurrent()) finish(outcome, code)
+                        if (stillCurrent()) {
+                            finish(outcome, code)
+                            applyAdvertisedServerKey(gen, advertisedKey)
+                        }
                     }
                     PeerCheckOutcome.Outcome.REFRESH_AND_RETRY -> {
                         res.close()
@@ -3857,9 +3941,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                                 val retry = ApiClient.get("/api/v1/wg/peers/$peerId", nextToken, httpClient = http)
                                 val retryOutcome = PeerCheckOutcome.map(retry.code)
                                 val retryCode = retry.code
+                                val retryKey = if (retryOutcome == PeerCheckOutcome.Outcome.PEER_ALIVE) {
+                                    runCatching {
+                                        ApiClient.parse<PeerEndpointView>(retry)?.server?.publicKey
+                                    }.getOrNull()
+                                } else {
+                                    null
+                                }
                                 retry.close()
                                 if (!stillCurrent()) return@launch
                                 finish(retryOutcome, retryCode)
+                                if (retryOutcome == PeerCheckOutcome.Outcome.PEER_ALIVE) {
+                                    applyAdvertisedServerKey(gen, retryKey)
+                                }
                             }
                             ControlRefresh.SignedOut -> {
                                 if (stillCurrent()) finish(PeerCheckOutcome.Outcome.SIGNED_OUT, 401)
@@ -4211,6 +4305,69 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return false
     }
 
+    /**
+     * A peer read advertised a different server public key. Rebuild the saved
+     * tunnel with that key and rebind. The mode and the network stay as they are.
+     */
+    private fun applyAdvertisedServerKey(gen: Long, advertised: String?) {
+        if (!sessionStillActive(gen) || controlSignedOut) return
+        val prefs = vpnStatePrefs()
+        val udp = prefs.getString(KEY_UDP_CONFIG, null)
+        val live = prefs.getString(KEY_CONFIG, null)
+        if (!ServerKeyConfig.needsRebuild(udp, live, advertised)) return
+        val nextUdp = udp?.let { ServerKeyConfig.withServerKey(it, advertised) }
+        val nextLive = (live ?: udp)?.let { ServerKeyConfig.withServerKey(it, advertised) } ?: return
+        val parsed = runCatching {
+            Config.parse(ByteArrayInputStream(nextLive.toByteArray(Charsets.UTF_8)))
+        }.getOrNull() ?: return
+        followSystemDefault()
+        if (!installUserspace(parsed, gen, rebuildTun = false) || !sessionStillActive(gen)) return
+        synchronized(tunnelOpLock) {
+            if (!sessionStillActive(gen)) return
+            val edit = vpnStatePrefs().edit().putString(KEY_CONFIG, nextLive)
+            if (nextUdp != null) edit.putString(KEY_UDP_CONFIG, nextUdp)
+            edit.apply()
+        }
+        Log.i(TAG, "server key refreshed")
+    }
+
+    /** Refresh the reconnecting notification once a network looks blocked. */
+    private fun noteBlockedNetwork() {
+        if (!isReconnecting || !sessionIntended() || controlSignedOut) {
+            if (networkMayBeBlocking || blockedClock.stallSinceMs != 0L) {
+                networkMayBeBlocking = false
+                blockedClock = BlockedNetworkNotice.Clock()
+            }
+            return
+        }
+        val stats = readBackendStats()
+        val step = BlockedNetworkNotice.advance(
+            BlockedNetworkNotice.Sample(
+                nowMs = System.currentTimeMillis(),
+                connecting = false,
+                reconnecting = true,
+                connected = true,
+                handshakeOk = false,
+                handshakeMs = stats.third,
+                attemptStartedMs = reconnectEpisodeStartedMs,
+                rxBytes = stats.first,
+                networkValidated = ValidatedNetworks.deviceHasInternet(this),
+                alreadyStealth = usesStealth(),
+                dismissed = false,
+                clock = blockedClock,
+            ),
+        )
+        blockedClock = step.clock
+        if (step.visible == networkMayBeBlocking) return
+        networkMayBeBlocking = step.visible
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(BlockedNetworkNotice.reconnectingText(step.visible)),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+        )
+    }
+
     private fun startHealthWatch() {
         if (healthJob?.isActive == true) return
         val initial = readBackendStats()
@@ -4223,6 +4380,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             while (sessionIntended()) {
                 delay(HEALTH_WATCH_MS)
                 if (!sessionIntended()) continue
+                noteBlockedNetwork()
                 if (controlSignedOut) continue
                 if (disconnectJob?.isActive == true) {
                     healthUnderlayWaitStartedAtMs = 0L
@@ -4422,6 +4580,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val CHANNEL_ID = "veritas_vpn"
         const val NOTIFICATION_ID = 1
         const val ACTION_CONNECT = "cloud.veritasvpn.CONNECT"
+        const val ACTION_APPLY_STEALTH = "cloud.veritasvpn.APPLY_STEALTH"
         const val ACTION_DISCONNECT = "cloud.veritasvpn.DISCONNECT"
         const val ACTION_AUTH_RESTORED = "cloud.veritasvpn.AUTH_RESTORED"
         const val ACTION_QUERY_STATE = "cloud.veritasvpn.QUERY_STATE"

@@ -32,7 +32,16 @@ import {
 } from "./billing";
 import { AUTH_API } from "./config";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
+import {
+  advanceBlocked,
+  BLOCKED_MESSAGE,
+  OTHER_NETWORK,
+  initialBlockedClock,
+  handshakeSucceeded,
+  type BlockedClock,
+} from "./blockedNetwork";
 import { SettingsDrawer, ShieldSettingsScreen, StealthSettingsScreen, TunnelSettingsScreen, type StealthChoice } from "./SettingsDrawer";
+import { modeAfterStealthTap, transportsForChoice } from "./stealthChoice";
 import { HelpSupport } from "./HelpSupport";
 import { choosePublicEndpoint, isRecordableError, readStoredLastError, sanitizeError, writeStoredLastError } from "./support";
 import { readShieldFlags, readShieldNoticePrefs, shieldRequest, writeShieldFlags, writeShieldNoticePrefs, type ShieldFlags } from "./shield";
@@ -253,27 +262,6 @@ function writeStealthChoice(choice: StealthChoice) {
   } catch {
     // ignore quota / private mode
   }
-}
-
-function errorText(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
-    return (err as { message: string }).message;
-  }
-  return "";
-}
-
-/** Auto may retry Stealth after a UDP handshake or egress failure. Auth, kill-switch, and user-cancel errors stay put. */
-function isAutoFallbackError(err: unknown): boolean {
-  if (err instanceof SessionExpiredError) return false;
-  const lower = errorText(err).toLowerCase();
-  if (
-    /kill switch|nftables|iptables|authorization|administrator|cancelled|canceled|dismissed|subscription|device limit|unavailable in this build|not bundled/.test(lower)
-  ) {
-    return false;
-  }
-  return /handshake|egress|validation|timed out|timeout|unreachable|connection failed|network/.test(lower);
 }
 
 function formatConnectError(err: unknown, wantedStealth: boolean): string {
@@ -775,6 +763,9 @@ function HomeStage({
   subscriptionChecked,
   subscriptionActive,
   transport,
+  blocked,
+  onSwitchToStealth,
+  onDismissBlocked,
   wgStats,
   dnsBlockedThisSession,
   dnsGateway,
@@ -793,6 +784,9 @@ function HomeStage({
   subscriptionChecked: boolean;
   subscriptionActive: boolean;
   transport: string;
+  blocked: { visible: boolean; offerStealth: boolean; suggestOtherNetwork: boolean };
+  onSwitchToStealth: () => void;
+  onDismissBlocked: () => void;
   wgStats: WgTransferStats | null;
   dnsBlockedThisSession: number | null;
   dnsGateway: string | null;
@@ -845,6 +839,20 @@ function HomeStage({
         </div>
       )}
       <HeroConnectControl phase={phase} onClick={onClick} />
+      {blocked.visible && (
+        <div className="blocked-network-card" role="status">
+          <p>{BLOCKED_MESSAGE}</p>
+          <p className="blocked-network-hint">{OTHER_NETWORK}</p>
+          <div className="blocked-network-actions">
+            {blocked.offerStealth && (
+              <button type="button" onClick={onSwitchToStealth}>Switch to Stealth</button>
+            )}
+          </div>
+          <button type="button" className="blocked-network-dismiss" onClick={onDismissBlocked}>
+            Dismiss
+          </button>
+        </div>
+      )}
       {connected && wgStats && (
         <div className="live-stats" aria-label="Live tunnel statistics">
           <span className="live-stats-label">LIVE STATS</span>
@@ -956,6 +964,12 @@ function App() {
   });
   const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
   const [stealthMode, setStealthMode] = useState<StealthChoice>(() => (isLinuxDesktop() ? readStealthChoice() : "udp"));
+  const [blockedDismissed, setBlockedDismissed] = useState(false);
+  const [blockedStep, setBlockedStep] = useState({ visible: false, offerStealth: false, suggestOtherNetwork: false });
+  const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
+  const blockedAttemptRef = useRef(0);
+  const blockedClockRef = useRef<BlockedClock>(initialBlockedClock());
+  const blockedDismissedRef = useRef(false);
   const [transport, setTransport] = useState<"" | "udp" | "stealth" | "switching">("");
   const [linuxDesktop] = useState(() => isLinuxDesktop());
   const [reconnectToApply, setReconnectToApply] = useState(false);
@@ -984,6 +998,7 @@ function App() {
   const connectingRef = useRef(connecting);
   const excludeLanRef = useRef(excludeLan);
   const stealthModeRef = useRef(stealthMode);
+  const pendingStealthApplyRef = useRef(false);
   const shieldFlagsRef = useRef(shieldFlags);
   const shieldWriteGen = useRef(0);
 
@@ -1432,6 +1447,7 @@ function App() {
 
     let createdPeerId = "";
     let triedStealth = choice === "stealth";
+    let usedStealth = false;
     try {
       // Drop any previous peer before registering a new one (reconnect + stale sessions).
       const priorPeer = peerIdRef.current;
@@ -1496,47 +1512,32 @@ function App() {
       if (!gatewayDns) {
         throw new Error("Server did not provide a DNS gateway; connect aborted to avoid unfiltered public DNS.");
       }
-      const attempts: boolean[] = choice === "stealth" ? [true] : choice === "auto" && stealthUsable ? [false, true] : [false];
-      let usedStealth = false;
-      let lastConnectError: unknown = null;
-      for (let attempt = 0; attempt < attempts.length; attempt += 1) {
-        const useStealth = attempts[attempt];
-        if (useStealth) triedStealth = true;
-        if (useStealth && attempt > 0) setTransport("switching");
-        setDiagEndpoint(choosePublicEndpoint(
-          peer.server_endpoint || "",
-          peer.server_endpoint_wan || "",
-          useStealth ? peer.stealth_endpoint || "" : "",
-          useStealth ? "stealth" : "udp",
-        ));
-        try {
-          const result = await invoke<ConnectResult>("connect_wireguard", {
-            config: {
-              private_key: keys.private_key,
-              address: peer.assigned_ip,
-              dns: gatewayDns,
-              server_public_key: peer.server_public_key,
-              endpoint: peer.server_endpoint,
-              endpoint_lan: peer.server_endpoint_lan || "",
-              endpoint_wan: peer.server_endpoint_wan || "",
-              allowed_ips: allowed,
-              peer_id: peer.peer_id,
-              preshared_key: peer.preshared_key || "",
-              stealth_endpoint: useStealth ? peer.stealth_endpoint || "" : "",
-              stealth_path_prefix: useStealth ? peer.stealth_path_prefix || "" : "",
-            },
-          });
-          if (!result.success) throw new Error(result.message || "WireGuard connection failed");
-          usedStealth = useStealth;
-          lastConnectError = null;
-          break;
-        } catch (err) {
-          lastConnectError = err;
-          const canFallback = attempt === 0 && attempts.length > 1 && isAutoFallbackError(err);
-          if (!canFallback) break;
-        }
-      }
-      if (lastConnectError) throw lastConnectError;
+      const useStealth = transportsForChoice(choice)[0] === true;
+      if (useStealth) triedStealth = true;
+      setDiagEndpoint(choosePublicEndpoint(
+        peer.server_endpoint || "",
+        peer.server_endpoint_wan || "",
+        useStealth ? peer.stealth_endpoint || "" : "",
+        useStealth ? "stealth" : "udp",
+      ));
+      const result = await invoke<ConnectResult>("connect_wireguard", {
+        config: {
+          private_key: keys.private_key,
+          address: peer.assigned_ip,
+          dns: gatewayDns,
+          server_public_key: peer.server_public_key,
+          endpoint: peer.server_endpoint,
+          endpoint_lan: peer.server_endpoint_lan || "",
+          endpoint_wan: peer.server_endpoint_wan || "",
+          allowed_ips: allowed,
+          peer_id: peer.peer_id,
+          preshared_key: peer.preshared_key || "",
+          stealth_endpoint: useStealth ? peer.stealth_endpoint || "" : "",
+          stealth_path_prefix: useStealth ? peer.stealth_path_prefix || "" : "",
+        },
+      });
+      if (!result.success) throw new Error(result.message || "WireGuard connection failed");
+      usedStealth = useStealth;
       setTransport(usedStealth ? "stealth" : "udp");
 
       connectPeerRef.current = "";
@@ -1569,8 +1570,15 @@ function App() {
       showStatus(message, isStickyStatusMessage(message));
       return false;
     } finally {
+      const applyStealth = pendingStealthApplyRef.current;
+      pendingStealthApplyRef.current = false;
       connectingRef.current = false;
       setConnecting(false);
+      if (applyStealth && stealthModeRef.current === "stealth" && !usedStealth && !userDisconnectedRef.current) {
+        window.setTimeout(() => {
+          void connectVpn({ isReconnect: true });
+        }, 0);
+      }
     }
   }, [user, deletePeer, linuxDesktop, showStatus, expireAndReturnToSignIn]);
 
@@ -1684,6 +1692,70 @@ function App() {
       }
     }, delay);
   }, [clearReconnectTimer, connectVpn, deletePeer]);
+
+  useEffect(() => {
+    blockedDismissedRef.current = blockedDismissed;
+  }, [blockedDismissed]);
+
+  useEffect(() => {
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+    return () => {
+      window.removeEventListener("online", up);
+      window.removeEventListener("offline", down);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (connecting || reconnecting) {
+      blockedAttemptRef.current = Date.now();
+      blockedClockRef.current = initialBlockedClock();
+    }
+  }, [connecting, reconnecting]);
+
+  useEffect(() => {
+    const session = connecting || reconnecting || connected;
+    if (!session) {
+      blockedClockRef.current = initialBlockedClock();
+      setBlockedStep({ visible: false, offerStealth: false, suggestOtherNetwork: false });
+      setBlockedDismissed(false);
+      return;
+    }
+    const tick = () => {
+      const now = Date.now();
+      const last = wgStats?.last_handshake_sec ?? 0;
+      const handshakeMs = last > 0 ? last * 1000 : 0;
+      const age = last > 0 ? Math.max(0, Math.floor(now / 1000) - last) : Number.POSITIVE_INFINITY;
+      const handshakeOk = last > 0 && age <= HANDSHAKE_HEALTHY_SEC;
+      const reading = {
+        nowMs: now,
+        connecting,
+        reconnecting,
+        connected,
+        handshakeOk,
+        handshakeMs,
+        attemptStartedMs: blockedAttemptRef.current,
+        rxBytes: wgStats?.rx_bytes ?? 0,
+        networkValidated: online,
+        alreadyStealth: stealthMode === "stealth" || transport === "stealth",
+        dismissed: blockedDismissedRef.current,
+        clock: blockedClockRef.current,
+      };
+      const step = advanceBlocked(reading);
+      blockedClockRef.current = step.clock;
+      setBlockedStep({
+        visible: step.visible,
+        offerStealth: step.offerStealth,
+        suggestOtherNetwork: step.suggestOtherNetwork,
+      });
+      if (handshakeSucceeded(reading)) setBlockedDismissed(false);
+    };
+    tick();
+    const id = window.setInterval(tick, 500);
+    return () => window.clearInterval(id);
+  }, [connecting, reconnecting, connected, wgStats, online, stealthMode, transport]);
 
   // Live WireGuard stats + auto-reconnect while connected
   useEffect(() => {
@@ -1878,6 +1950,38 @@ function App() {
     setStealthMode(next);
     setReconnectToApply(true);
   }, [linuxDesktop, stealthMode]);
+
+  const applyStealthNow = useCallback(() => {
+    const next = modeAfterStealthTap(stealthModeRef.current, true);
+    writeStealthChoice(next);
+    stealthModeRef.current = next;
+    setStealthMode(next);
+    setReconnectToApply(false);
+    userDisconnectedRef.current = false;
+    blockedAttemptRef.current = Date.now();
+    blockedClockRef.current = initialBlockedClock();
+    if (connectingRef.current) {
+      pendingStealthApplyRef.current = true;
+      return;
+    }
+    clearReconnectTimer();
+    reconnectingRef.current = false;
+    setReconnecting(true);
+    void connectVpn({ isReconnect: true }).then((ok) => {
+      if (ok) {
+        reconnectAttemptRef.current = 0;
+        reconnectingRef.current = false;
+        setReconnecting(false);
+        setStatusMsg("");
+      } else if (!userDisconnectedRef.current && subscriptionActiveRef.current) {
+        setStatusMsg("Reconnecting…");
+        void attemptReconnect();
+      } else {
+        reconnectingRef.current = false;
+        setReconnecting(false);
+      }
+    });
+  }, [clearReconnectTimer, connectVpn, attemptReconnect]);
 
   const handleSignOut = useCallback(() => {
     // Make the app unauthenticated first. Disconnecting the tunnel and deleting
@@ -2221,6 +2325,9 @@ function App() {
             subscriptionChecked={subscriptionChecked}
             subscriptionActive={subscriptionActive}
             transport={transport}
+            blocked={blockedStep}
+            onSwitchToStealth={applyStealthNow}
+            onDismissBlocked={() => setBlockedDismissed(true)}
             wgStats={wgStats}
             dnsBlockedThisSession={dnsBlockedThisSession}
             dnsGateway={dnsGateway}

@@ -1,0 +1,5 @@
+{
+  "name": "veritas-uptime-worker",
+  "private": true,
+  "type": "module"
+}

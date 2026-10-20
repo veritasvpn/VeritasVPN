@@ -559,31 +559,26 @@ func (a *Agent) getServerKey() (wgtypes.Key, string, error) {
 		keyPath = kf
 	}
 
-	data, err := os.ReadFile(keyPath)
-	if err == nil {
-		key, err := wgtypes.ParseKey(strings.TrimSpace(string(data)))
-		if err == nil {
-			return key, key.PublicKey().String(), nil
-		}
-		a.logger.Warn("Existing private key unparseable, generating new one",
+	key, generated, err := loadServerKey(keyPath, serverKeyFS{
+		read: os.ReadFile,
+		write: func(path string, body []byte) error {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				return err
+			}
+			return os.WriteFile(path, body, 0o600)
+		},
+	}, wgtypes.GeneratePrivateKey)
+	if err != nil {
+		a.logger.Error("WireGuard private key is unusable",
+			zap.String("path", keyPath),
+			zap.Error(err))
+		return wgtypes.Key{}, "", err
+	}
+	if generated {
+		a.logger.Warn("WireGuard private key file was missing; generated a new key",
 			zap.String("path", keyPath))
 	}
-
-	privKey, err := wgtypes.GeneratePrivateKey()
-	if err != nil {
-		return wgtypes.Key{}, "", fmt.Errorf("generate wg key: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(keyPath), 0700); err != nil {
-		a.logger.Warn("Failed to create key directory",
-			zap.String("path", filepath.Dir(keyPath)), zap.Error(err))
-	}
-	if err := os.WriteFile(keyPath, []byte(privKey.String()), 0600); err != nil {
-		a.logger.Warn("Failed to persist private key",
-			zap.String("path", keyPath), zap.Error(err))
-	}
-
-	return privKey, privKey.PublicKey().String(), nil
+	return key, key.PublicKey().String(), nil
 }
 
 func (a *Agent) setupFirewall() error {

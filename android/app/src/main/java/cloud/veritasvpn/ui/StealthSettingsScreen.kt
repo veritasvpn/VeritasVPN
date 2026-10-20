@@ -70,7 +70,7 @@ fun StealthSettingsScreen(
         Spacer(Modifier.height(10.dp))
         TransportChoice(
             title = "Auto",
-            subtitle = "Try UDP first. If that handshake does not complete, switch to Stealth without dropping Always-on VPN. Recommended.",
+            subtitle = "Uses UDP. If a network blocks it, the app suggests Stealth.",
             selected = stealthMode == StealthMode.AUTO,
             onClick = { onStealthModeChange(StealthMode.AUTO) }
         )

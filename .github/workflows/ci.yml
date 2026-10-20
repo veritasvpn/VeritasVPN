@@ -318,7 +318,7 @@ jobs:
           ! grep -RInP '<script(?![^>]*\bsrc=)' website --include='*.html'
           ! grep -RIn 'minlength="[0-9]"' website clients/browser-extension
       - name: Security regression tests
-        run: node --test website/functions/_lib/*.test.mjs scripts/verify-release-source.test.mjs
+        run: node --test website/functions/_lib/*.test.mjs scripts/verify-release-source.test.mjs monitoring/uptime-worker/src/state.test.mjs
       - name: Validate shell scripts
         run: |
           find deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n

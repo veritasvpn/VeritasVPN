@@ -82,7 +82,7 @@ object VpnSettings {
         prefs(context).edit().putBoolean(KEY_EXCLUDE_LAN, enabled).apply()
     }
 
-    /** Auto is the default: UDP first, then Stealth if the handshake does not complete. */
+    /** Auto uses UDP. If a network blocks it, the app suggests Stealth. It never switches on its own. */
     fun stealthMode(context: Context): StealthMode =
         StealthMode.fromStored(prefs(context).getString(KEY_STEALTH_MODE, null))
 
