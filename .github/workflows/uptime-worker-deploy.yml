@@ -1,6 +1,10 @@
 name: Deploy uptime worker
 
-# CLOUDFLARE_API_TOKEN needs Workers Scripts:Edit and Workers KV:Edit.
+# UPTIME_CLOUDFLARE_API_TOKEN is a production environment secret. It needs
+# Workers Scripts:Edit and Workers KV:Edit for the veritas-uptime Worker.
+# The production CLOUDFLARE_API_TOKEN is for other Workers and does not cover this one.
+# Wrangler still reads CLOUDFLARE_API_TOKEN; this job fills that variable from
+# UPTIME_CLOUDFLARE_API_TOKEN.
 # UPTIME_KV_NAMESPACE_ID is the id printed when the KV namespace is created.
 # Worker secrets (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, PUBLIC_IP,
 # TEST_ALERT_SECRET) are set on the worker, not in this workflow.
@@ -29,12 +33,15 @@ jobs:
       - name: Deploy
         working-directory: monitoring/uptime-worker
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.UPTIME_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 368cad600fc530d1a254d3121850d5b9
           UPTIME_KV_NAMESPACE_ID: ${{ secrets.UPTIME_KV_NAMESPACE_ID }}
         run: |
           set +x
-          test -n "$CLOUDFLARE_API_TOKEN"
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "UPTIME_CLOUDFLARE_API_TOKEN is required" >&2
+            exit 1
+          fi
           test -n "$UPTIME_KV_NAMESPACE_ID"
           sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/${UPTIME_KV_NAMESPACE_ID}/" wrangler.toml
           npx --yes wrangler@4.31.0 deploy
