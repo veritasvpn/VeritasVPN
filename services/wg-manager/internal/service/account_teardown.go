@@ -56,6 +56,9 @@ func (s *Service) TeardownAccount(ctx context.Context, accountID string) (int, e
 	if firstErr != nil {
 		return removed, fmt.Errorf("teardown incomplete (%d/%d peers removed): %w", removed, len(peers), firstErr)
 	}
+	if err := s.redis.DeleteAccountShieldDays(ctx, accountID, time.Now().UTC()); err != nil {
+		s.log.Warn("account shield counters not cleared", "account_hash", logging.HashIdentifier(accountID), "error", err)
+	}
 	return removed, nil
 }
 

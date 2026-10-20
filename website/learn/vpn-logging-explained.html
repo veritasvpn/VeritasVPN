@@ -53,7 +53,7 @@
         <a class="learn-back" href="/learn/">← All topics</a>
         <span class="learn-kicker">Protect</span>
         <h1>VPN logging explained</h1>
-        <p class="learn-meta">Updated 2026-09-04</p>
+        <p class="learn-meta">Updated 2026-10-19</p>
         <p class="learn-lede">“No logs” is meaningless until you know which events are stored, aggregated, or never written.</p>
         <div class="learn-prose">
 <h2>Categories of data</h2>
@@ -64,7 +64,7 @@
 <h2>Memory vs disk</h2>
 <p>Some providers process packets without writing destinations to durable storage. That is better—but still requires you to trust their code and operators. Memory can be forensically interesting after compromise; policies are not magic.</p>
 <h2>VeritasVPN stance</h2>
-<p>We aim for operational counts without query names in Prometheus, tunnel-IP keyed UI counters that clear with peers, and clear privacy policy language. Upstream DoH resolvers still see forwarded hostnames for non-blocked lookups. Read the <a href="/privacy.html">privacy policy</a> rather than a slogan.</p>
+<p>We aim for operational counts without query names in Prometheus, tunnel-IP session counters that clear with peers, and account category counts with no domain names kept for about eight days. A blocked name used for a notice is held in gateway memory for up to about 10 minutes and in a Redis cache for about two minutes, keyed by tunnel IP, then deleted. It is not written to disk. Upstream DoH resolvers still see forwarded hostnames for non-blocked lookups. Read the <a href="/privacy.html">privacy policy</a> rather than a slogan.</p>
         </div>
       <nav class="learn-related" aria-label="Related articles">
         <h2>Keep learning</h2>

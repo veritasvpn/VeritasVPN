@@ -4,7 +4,7 @@ description: DNS security layered on VeritasVPN. Premium toggles for malicious s
 category: protect
 slug: what-is-veritas-shield
 related: [what-is-protected-dns, what-is-dns, what-is-dns-leak, vpn-logging-explained]
-updated: 2026-10-05
+updated: 2026-10-19
 lede: Veritas Shield is the DNS security layer inside VeritasVPN. While the tunnel is up, lookups go through our gateway and threat feeds can NXDOMAIN dangerous names. Premium can turn malicious sites, trackers, ads, and adult sites on or off independently.
 ---
 
@@ -53,7 +53,7 @@ Changing a toggle updates DNS for the current connection. You do not need to reb
 
 ## Privacy
 
-We do not log query names. In-app blocked counts are keyed by your temporary tunnel IP for the session—not your public WAN IP. The toggles are stored with peer metadata so the gateway can apply them. Details: [Privacy Policy](/privacy.html).
+We do not keep a DNS query log. When Shield blocks a name, that name is held in gateway memory for up to about 10 minutes and in a Redis cache for about 2 minutes, keyed by your temporary tunnel IP, so the app can show a notice. It is not your public IP, it is not written to disk, and it is deleted when the peer is removed. Account block counts by category, with no names, are kept for about eight days. Session totals stay on the tunnel IP and clear with the peer. Prometheus keeps aggregate counts without query names. The toggles are stored with peer metadata so the gateway can apply them. Details: [Privacy Policy](/privacy.html).
 
 ## How to verify
 

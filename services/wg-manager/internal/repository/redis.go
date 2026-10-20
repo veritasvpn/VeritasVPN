@@ -2,11 +2,13 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/veritasvpn/services/wg-manager/internal/shieldstats"
 )
 
 type Redis struct {
@@ -118,6 +120,153 @@ func (r *Redis) ClearDNSBlockedCount(ctx context.Context, assignedIP string) err
 		return nil
 	}
 	return r.client.Del(ctx, dnsBlockedKey(assignedIP)).Err()
+}
+
+func dnsCategoryAbsKey(assignedIP string) string {
+	return "wg:dns_cat_abs:" + tunnelIP(assignedIP)
+}
+
+func dnsNoticeKey(assignedIP string) string {
+	return "wg:dns_notice:" + tunnelIP(assignedIP)
+}
+
+func dnsAccountDayKey(accountID, day string) string {
+	return "wg:dns_acct:" + strings.TrimSpace(accountID) + ":" + day
+}
+
+func tunnelIP(assignedIP string) string {
+	ip := strings.TrimSpace(assignedIP)
+	if i := strings.IndexByte(ip, '/'); i >= 0 {
+		ip = ip[:i]
+	}
+	return ip
+}
+
+// GetDNSCategoryAbs returns the last absolute per-category snapshot for a tunnel IP.
+// The boolean is false when the key is missing.
+func (r *Redis) GetDNSCategoryAbs(ctx context.Context, assignedIP string) (map[string]uint64, bool, error) {
+	vals, err := r.client.HGetAll(ctx, dnsCategoryAbsKey(assignedIP)).Result()
+	if err != nil {
+		return nil, false, err
+	}
+	if len(vals) == 0 {
+		return nil, false, nil
+	}
+	out := make(map[string]uint64, len(vals))
+	for cat, raw := range vals {
+		var n uint64
+		if _, err := fmt.Sscan(raw, &n); err != nil {
+			continue
+		}
+		out[cat] = n
+	}
+	return out, true, nil
+}
+
+// SetDNSCategoryAbs stores the absolute snapshot. TTL matches the session counter.
+func (r *Redis) SetDNSCategoryAbs(ctx context.Context, assignedIP string, counts map[string]uint64) error {
+	counts = shieldstats.Normalize(counts)
+	key := dnsCategoryAbsKey(assignedIP)
+	if len(counts) == 0 {
+		return r.client.Del(ctx, key).Err()
+	}
+	pipe := r.client.TxPipeline()
+	pipe.Del(ctx, key)
+	fields := make([]interface{}, 0, len(counts)*2)
+	for cat, n := range counts {
+		fields = append(fields, cat, n)
+	}
+	pipe.HSet(ctx, key, fields...)
+	pipe.Expire(ctx, key, shieldstats.AbsTTL)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// AddAccountCategoryCounts increments the UTC day bucket for an account. No names.
+func (r *Redis) AddAccountCategoryCounts(ctx context.Context, accountID, day string, delta map[string]uint64) error {
+	delta = shieldstats.Normalize(delta)
+	if accountID == "" || day == "" || len(delta) == 0 {
+		return nil
+	}
+	key := dnsAccountDayKey(accountID, day)
+	pipe := r.client.TxPipeline()
+	for cat, n := range delta {
+		pipe.HIncrBy(ctx, key, cat, int64(n))
+	}
+	pipe.Expire(ctx, key, shieldstats.DayTTL)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// AccountCategoryCounts reads one UTC day. Missing keys are an empty map.
+func (r *Redis) AccountCategoryCounts(ctx context.Context, accountID, day string) (map[string]uint64, error) {
+	vals, err := r.client.HGetAll(ctx, dnsAccountDayKey(accountID, day)).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]uint64, len(vals))
+	for cat, raw := range vals {
+		var n uint64
+		if _, err := fmt.Sscan(raw, &n); err != nil {
+			continue
+		}
+		out[cat] = n
+	}
+	return out, nil
+}
+
+// DeleteAccountShieldDays removes the recent day buckets for a deleted account.
+func (r *Redis) DeleteAccountShieldDays(ctx context.Context, accountID string, now time.Time) error {
+	if strings.TrimSpace(accountID) == "" {
+		return nil
+	}
+	days := shieldstats.UTCDays(now, 10)
+	keys := make([]string, len(days))
+	for i, day := range days {
+		keys[i] = dnsAccountDayKey(accountID, day)
+	}
+	return r.client.Del(ctx, keys...).Err()
+}
+
+// SetDNSNotices replaces the short-lived blocked-name buffer for a tunnel IP.
+func (r *Redis) SetDNSNotices(ctx context.Context, assignedIP string, notices []shieldstats.Notice) error {
+	key := dnsNoticeKey(assignedIP)
+	if len(notices) == 0 {
+		return r.client.Del(ctx, key).Err()
+	}
+	body, err := json.Marshal(notices)
+	if err != nil {
+		return err
+	}
+	return r.client.Set(ctx, key, body, shieldstats.NoticeTTL).Err()
+}
+
+// GetDNSNotices reads the buffer. A missing key is an empty list.
+func (r *Redis) GetDNSNotices(ctx context.Context, assignedIP string) ([]shieldstats.Notice, error) {
+	raw, err := r.client.Get(ctx, dnsNoticeKey(assignedIP)).Bytes()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var notices []shieldstats.Notice
+	if err := json.Unmarshal(raw, &notices); err != nil {
+		return nil, nil
+	}
+	return notices, nil
+}
+
+// ClearDNSShieldEphemeral removes tunnel-IP counter snapshots and the name buffer.
+func (r *Redis) ClearDNSShieldEphemeral(ctx context.Context, assignedIP string) error {
+	if tunnelIP(assignedIP) == "" {
+		return nil
+	}
+	return r.client.Del(ctx,
+		dnsBlockedKey(assignedIP),
+		dnsCategoryAbsKey(assignedIP),
+		dnsNoticeKey(assignedIP),
+	).Err()
 }
 
 // GetAccountSessionVersion returns the account-wide JWT revocation generation.
