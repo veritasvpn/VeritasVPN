@@ -4,8 +4,10 @@ import {
   CHECK_TIMEOUT_MS,
   egressHealthy,
   emptyCheck,
+  isTlsHandshakeRecord,
   messageFor,
   stepCheck,
+  tlsClientHello,
 } from "./state.mjs";
 
 const STATE_KEY = "checks";
@@ -15,18 +17,30 @@ async function fetchText(url) {
   return { ok: response.ok, text: await response.text() };
 }
 
+function withTimeout(promise) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("timeout")), CHECK_TIMEOUT_MS);
+    }),
+  ]);
+}
+
+// The listener certificate is self-signed, so this does not use a verified
+// TLS handshake. The socket is plain TCP. After it opens, one ClientHello
+// is enough: a handshake record means Stealth answered.
 async function checkStealth(ip) {
   if (!ip) return false;
   let socket;
   try {
-    socket = connect({ hostname: ip, port: 443 }, { secureTransport: "on" });
-    await Promise.race([
-      socket.opened,
-      new Promise((_, reject) => {
-        setTimeout(() => reject(new Error("timeout")), CHECK_TIMEOUT_MS);
-      }),
-    ]);
-    return true;
+    socket = connect({ hostname: ip, port: 443 }, { secureTransport: "off" });
+    await withTimeout(socket.opened);
+    const writer = socket.writable.getWriter();
+    await withTimeout(writer.write(tlsClientHello()));
+    const reader = socket.readable.getReader();
+    const { value, done } = await withTimeout(reader.read());
+    if (done) return false;
+    return isTlsHandshakeRecord(value);
   } catch {
     return false;
   } finally {

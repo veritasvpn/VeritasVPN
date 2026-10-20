@@ -1,6 +1,6 @@
 # Outside uptime worker
 
-The worker in `monitoring/uptime-worker/` runs on Cloudflare, outside the house network. Every minute it checks the website, API readiness, billing readiness, the egress status file, and a TLS connection to the Stealth port. It stores the last result in Workers KV and tells Telegram only after two failures in a row. When the check passes again it sends one recovery message. An alert that stays open is repeated every four hours.
+The worker in `monitoring/uptime-worker/` runs on Cloudflare, outside the house network. Every minute it checks the website, API readiness, billing readiness, the egress status file, and a plain TCP connection to the Stealth port. It stores the last result in Workers KV and tells Telegram only after two failures in a row. When the check passes again it sends one recovery message. An alert that stays open is repeated every four hours.
 
 Messages name the check. They do not include the node address.
 
@@ -60,7 +60,7 @@ curl --silent --show-error --output /dev/null --write-out "%{http_code}\n" \
 | readyz | `https://api.veritasvpn.cloud/readyz` |
 | billing | `https://api.veritasvpn.cloud/api/v1/billing/readyz` |
 | egress | `https://api.veritasvpn.cloud/api/v1/status/egress` must be JSON with `ok: true`. If `checked_at`, `timestamp`, or `updated_at` is present and older than 15 minutes, the check fails. |
-| stealth | TCP connect and TLS handshake to port 443 on `PUBLIC_IP`, from `cloudflare:sockets`. The address is not written into the alert. |
+| stealth | Plain TCP connect to port 443 on `PUBLIC_IP`, from `cloudflare:sockets` with `secureTransport: "off"`. The check succeeds once `socket.opened` resolves and the listener replies to a TLS ClientHello with a handshake record (first byte `0x16`). The certificate is not verified. The address is not written into the alert. |
 
 Each request times out after about 8 seconds.
 
