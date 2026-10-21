@@ -48,9 +48,16 @@ object DataPlaneHealth {
         tx: Long,
         rx: Long,
         config: ConfigCheck,
+        loopbackRelay: Boolean = false,
     ): String {
         if (config == ConfigCheck.MISMATCH) return "config-mismatch"
         if (!v4Present) return "no-socket"
+        // Stealth leaves the userspace sockets on loopback on purpose.
+        if (loopbackRelay) {
+            if (tx <= 0L) return "no-send"
+            if (rx <= 0L) return "no-reply"
+            return "no-handshake"
+        }
         if (!protectV4) return "protect-failed"
         if (bindAttempted && !bindV4) return "bind-failed"
         if (expectedHandle != null && (boundHandle == null || boundHandle == 0L)) return "unbound"

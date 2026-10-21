@@ -1,12 +1,6 @@
 package cloud.veritasvpn.vpn
 
-import cloud.veritasvpn.api.UserVisibleError
-import java.io.InterruptedIOException
-import java.net.ConnectException
 import java.net.Socket
-import java.net.SocketTimeoutException
-import java.net.UnknownHostException
-import javax.net.ssl.SSLException
 
 /**
  * How a Stealth TCP socket is pinned to the current underlay, and when a
@@ -29,9 +23,11 @@ object StealthDial {
     /** After the websocket is up, let WireGuard finish before a same-network redial. */
     const val OPEN_QUIET_MS = 5_000L
 
-    const val NO_NETWORK = "Stealth tcp: the current network is not available"
-    const val PROTECT_FAILED = "Stealth tcp: the tunnel could not release the socket"
-    const val BIND_FAILED = "Stealth tcp: the current network could not be used"
+    /** Shown on the status line and notification. The stage stays in diagnostics. */
+    const val USER_UNREACHABLE = "Stealth can't reach the server on this network"
+    const val NO_NETWORK = USER_UNREACHABLE
+    const val PROTECT_FAILED = USER_UNREACHABLE
+    const val BIND_FAILED = USER_UNREACHABLE
 
     class Failure(val stage: Stage, val userMessage: String) : java.io.IOException(userMessage)
 
@@ -97,40 +93,48 @@ object StealthDial {
     }
 
     fun userFacing(stage: Stage, error: Throwable): String {
-        if (error is Failure) return publish(error.userMessage) ?: fallback(stage)
-        val body = when (error) {
-            is SocketTimeoutException,
-            is InterruptedIOException,
-            -> "the server did not respond"
-            is UnknownHostException -> "the server address did not resolve"
-            is ConnectException -> "the server did not accept the connection"
-            is SSLException -> "the secure connection failed"
-            is UserVisibleError -> error.userMessage
-                .removePrefix("Stealth ")
-                .trim()
-                .ifBlank { "the connection failed" }
-            else -> "the connection failed"
-        }
-        return publish("Stealth ${wire(stage)}: $body") ?: fallback(stage)
-    }
-
-    /** User-facing stage, or the last safe error. Null once the upgrade is open. */
-    fun detail(stage: Stage?, lastError: String?): String? {
-        if (stage == null || stage == Stage.OPEN) return null
-        val err = publish(lastError)
-        if (!err.isNullOrEmpty()) return err
-        return wire(stage)
-    }
-
-    fun shortStage(stage: Stage?): String? = when (stage) {
-        Stage.TCP, Stage.TLS, Stage.UPGRADE -> wire(stage)
-        else -> null
+        // Stage and the exception stay out of the sentence. [detail] records
+        // the stage for diagnostics. [stage] selects that record at the call.
+        if (stage == Stage.OPEN) return USER_UNREACHABLE
+        if (error is Failure) return publish(error.userMessage) ?: USER_UNREACHABLE
+        return USER_UNREACHABLE
     }
 
     /**
-     * Reconnecting line. Direct mode (no Stealth detail) keeps the existing
-     * notice. A Stealth detail is shown while reconnecting or before the
-     * WireGuard handshake, including the stage.
+     * Diagnostics only. A bare stage while the upgrade is in progress, or
+     * `tcp: <safe error>` after a failure. Null once the upgrade is open.
+     */
+    fun detail(stage: Stage?, lastError: String?): String? {
+        if (stage == null || stage == Stage.OPEN) return null
+        val stageName = wire(stage)
+        val err = publish(lastError)
+        if (err.isNullOrEmpty() || isStageToken(err)) return stageName
+        val body = err.removePrefix("$stageName:").trim()
+        if (body.isEmpty() || isStageToken(body)) return stageName
+        return "$stageName: $body"
+    }
+
+    /**
+     * Sentence for the status line and notification. Null when [detail] is
+     * only a stage name (`tcp`, `tls`, `upgrade`).
+     */
+    fun userLine(detail: String?): String? {
+        val text = publish(detail) ?: return null
+        val body = STAGE_PREFIX.replace(text, "").trim()
+        if (body.isEmpty() || isStageToken(body)) return null
+        if (body.contains("tcp") || body.contains("tls") || body.contains("upgrade")) {
+            return USER_UNREACHABLE
+        }
+        return body
+    }
+
+    fun isStageToken(text: String): Boolean =
+        text == "tcp" || text == "tls" || text == "upgrade" || text == "open"
+
+    /**
+     * Direct mode (no Stealth detail) keeps the existing notice. Stealth
+     * shows a plain sentence, never the stage. The first connect says
+     * Connecting; a later attempt says Reconnecting.
      */
     fun statusLine(
         reconnecting: Boolean,
@@ -138,11 +142,16 @@ object StealthDial {
         notice: String?,
         stealthDetail: String?,
     ): String? {
-        val detail = publish(stealthDetail)
-        if (detail != null && (reconnecting || !handshakeOk)) {
-            return "Reconnecting… · $detail"
+        val friendly = userLine(stealthDetail)
+        val stageOnly = isStageDetail(stealthDetail)
+        if (friendly != null && (reconnecting || !handshakeOk)) {
+            val lead = if (reconnecting) "Reconnecting…" else "Connecting…"
+            return "$lead · $friendly"
         }
-        if (!reconnecting) return null
+        if (!reconnecting) {
+            if (!handshakeOk && stageOnly) return "Connecting…"
+            return null
+        }
         return EndpointRefresh.statusWhileReconnecting(notice)
     }
 
@@ -151,7 +160,7 @@ object StealthDial {
         val text = raw?.trim().orEmpty()
         if (text.isEmpty() || text.length > 160) return null
         if (text.any { it == '\n' || it == '\r' || it == '/' || it == '\\' }) return null
-        if (IPV4.containsMatchIn(text)) return null
+        if (IPV4.containsMatchIn(text) || IPV6.containsMatchIn(text)) return null
         val lower = text.lowercase()
         if (lower.contains("timeout") || lower.contains("timed out")) return null
         if (text.contains("Exception") || text.startsWith("java.")) return null
@@ -165,11 +174,24 @@ object StealthDial {
         Stage.OPEN -> "open"
     }
 
-    private fun fallback(stage: Stage) = "Stealth ${wire(stage)}: the connection failed"
+    private fun isStageDetail(detail: String?): Boolean {
+        val text = publish(detail) ?: return false
+        return isStageToken(text)
+    }
 
     private fun closeQuietly(socket: Socket) {
         runCatching { socket.close() }
     }
 
     private val IPV4 = Regex("""(?:\d{1,3}\.){3}\d{1,3}""")
+
+    /**
+     * Compressed and full IPv6, including a trailing IPv4 tail
+     * (`::ffff:192.0.2.1`, which [IPV4] also matches).
+     */
+    private val IPV6 = Regex(
+        """(?i)(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![0-9A-Fa-f:])""",
+    )
+
+    private val STAGE_PREFIX = Regex("""^(?:tcp|tls|upgrade|open)\s*:\s*""")
 }

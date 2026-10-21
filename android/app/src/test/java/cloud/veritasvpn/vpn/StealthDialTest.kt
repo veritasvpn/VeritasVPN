@@ -144,13 +144,14 @@ class StealthDialTest {
     }
 
     @Test
-    fun userFacingErrorKeepsTheStageAndDropsAddressesAndTimeouts() {
+    fun userFacingErrorIsPlainAndDiagnosticsKeepTheStage() {
         val message = StealthDial.userFacing(
             StealthDial.Stage.TCP,
             SocketTimeoutException("connect timed out to 203.0.113.10:443"),
         )
-        assertTrue(message.contains("tcp"))
-        assertTrue(message.contains("did not respond"))
+        assertEquals(StealthDial.USER_UNREACHABLE, message)
+        assertFalse(message.contains("tcp"))
+        assertFalse(message.contains("tls"))
         assertFalse(message.contains("203.0.113.10"))
         assertFalse(message.contains("timeout", ignoreCase = true))
         assertFalse(message.contains("timed out", ignoreCase = true))
@@ -159,16 +160,19 @@ class StealthDialTest {
             StealthDial.Stage.TLS,
             ConnectException("failed 198.51.100.8"),
         )
-        assertTrue(connect.startsWith("Stealth tls:"))
+        assertEquals(StealthDial.USER_UNREACHABLE, connect)
         assertFalse(connect.contains("198.51.100.8"))
+        val diag = StealthDial.detail(StealthDial.Stage.TCP, message)
+        assertEquals("tcp: ${StealthDial.USER_UNREACHABLE}", diag)
+        assertFalse(diag!!.contains("203.0.113.10"))
         assertNull(StealthDial.detail(StealthDial.Stage.OPEN, message))
-        assertEquals(message, StealthDial.detail(StealthDial.Stage.TCP, message))
+        assertEquals("tls", StealthDial.detail(StealthDial.Stage.TLS, null))
     }
 
     @Test
-    fun reconnectingLineShowsTheStageWithoutReplacingDirectMode() {
+    fun statusLineIsFriendlyAndFirstConnectSaysConnecting() {
         assertEquals(
-            "Reconnecting… · tcp",
+            "Reconnecting…",
             StealthDial.statusLine(
                 reconnecting = true,
                 handshakeOk = false,
@@ -177,14 +181,42 @@ class StealthDialTest {
             ),
         )
         assertEquals(
-            "Reconnecting… · Stealth tls: the secure connection failed",
+            "Connecting…",
             StealthDial.statusLine(
                 reconnecting = false,
+                handshakeOk = false,
+                notice = null,
+                stealthDetail = "tls",
+            ),
+        )
+        assertEquals(
+            "Connecting… · ${StealthDial.USER_UNREACHABLE}",
+            StealthDial.statusLine(
+                reconnecting = false,
+                handshakeOk = false,
+                notice = null,
+                stealthDetail = "tls: ${StealthDial.USER_UNREACHABLE}",
+            ),
+        )
+        assertEquals(
+            "Reconnecting… · ${StealthDial.USER_UNREACHABLE}",
+            StealthDial.statusLine(
+                reconnecting = true,
                 handshakeOk = false,
                 notice = null,
                 stealthDetail = "Stealth tls: the secure connection failed",
             ),
         )
+        val shown = StealthDial.statusLine(
+            true,
+            false,
+            null,
+            "Stealth tcp: the server did not respond",
+        )!!
+        assertFalse(shown.contains("tcp"))
+        assertFalse(shown.contains("tls"))
+        assertFalse(shown.contains("upgrade"))
+        assertFalse(shown.contains("timeout", ignoreCase = true))
         assertEquals(
             "Reconnecting…",
             StealthDial.statusLine(
@@ -204,9 +236,12 @@ class StealthDialTest {
         )
         assertNull(StealthDial.publish("connect timed out"))
         assertNull(StealthDial.publish("203.0.113.10 refused"))
-        assertFalse(
-            StealthDial.statusLine(true, false, null, "Stealth tcp: the server did not respond")!!
-                .contains("timeout", ignoreCase = true),
+        assertNull(StealthDial.publish("peer 2001:db8::1"))
+        assertNull(StealthDial.publish("from ::1"))
+        assertNull(StealthDial.publish("fe80::abcd"))
+        assertEquals(
+            StealthDial.USER_UNREACHABLE,
+            StealthDial.publish(StealthDial.USER_UNREACHABLE),
         )
     }
 
@@ -247,7 +282,9 @@ class StealthDialTest {
             val snapshot = synchronized(events) { events.toList() }
             assertEquals(listOf("protect", "bind"), snapshot.take(2))
             val error = waitForError(transport)
-            assertTrue(error.contains("tls"))
+            assertEquals(StealthDial.USER_UNREACHABLE, error)
+            assertFalse(error.contains("tls"))
+            assertTrue(StealthDial.detail(transport.stage, error)!!.contains("tls"))
             assertFalse(error.contains("127.0.0.1"))
             assertFalse(error.contains("timeout", ignoreCase = true))
             assertFalse(error.contains("timed out", ignoreCase = true))
@@ -280,8 +317,10 @@ class StealthDialTest {
             val error = waitForError(transport)
             Thread.sleep(500)
             assertFalse(accepted.get())
-            assertTrue(error.contains("tcp"))
+            assertEquals(StealthDial.USER_UNREACHABLE, error)
+            assertFalse(error.contains("tcp"))
             assertTrue(error.contains("network"))
+            assertTrue(StealthDial.detail(transport.stage, error)!!.startsWith("tcp"))
             assertFalse(error.contains("timeout", ignoreCase = true))
             assertFalse(transport.mayRedial(4L, System.currentTimeMillis()))
         } finally {
@@ -310,8 +349,15 @@ class StealthDialTest {
         assertTrue(watch.indexOf("stealthUpgradeInProgress") < watch.indexOf("applyResolved"))
         val reprovision = slice(code, "fun requestReprovision", "fun scheduleReprovisionRetry")
         assertTrue(reprovision.contains("stealthUpgradeInProgress"))
+        assertTrue(reprovision.contains("scheduleAfterUpgrade"))
         val fresh = slice(code, "fun escalateFreshTunnel", "fun handlePeerGone")
         assertTrue(fresh.indexOf("stealthUpgradeInProgress") < fresh.indexOf("handlePeerGone"))
+        assertTrue(fresh.contains("scheduleAfterUpgrade"))
+        val protect = slice(code, "fun protectBackendSockets", "fun protectAndBind")
+        assertTrue(protect.contains("loopbackRelay"))
+        assertTrue(protect.indexOf("loopbackRelay") < protect.indexOf("protectAndBind"))
+        assertFalse(code.contains("appendStealthStage"))
+        assertFalse(code.contains("shortStage"))
         val underlay = kotlinSource("StealthUnderlay.kt")
         assertTrue(underlay.contains("protectThenBind"))
         assertTrue(underlay.contains("network.bindSocket"))

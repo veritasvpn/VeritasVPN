@@ -78,6 +78,74 @@ class StealthProtocolTest {
     }
 
     @Test
+    fun serverBinaryFrameRoundTripsIncludingFragments() {
+        val payload = ByteArray(92) { (it + 7).toByte() }
+        val frame = WstunnelProtocol.encodeBinary(payload)
+        val split = WsFrameBuffer()
+        split.append(frame, 5)
+        assertNull(split.next())
+        split.append(frame.copyOfRange(5, frame.size))
+        val whole = split.next()
+        assertEquals(0x2, whole?.opcode)
+        assertTrue(payload.contentEquals(whole?.payload))
+
+        val mid = 40
+        val head = byteArrayOf(0x02, mid.toByte()) + payload.copyOfRange(0, mid)
+        val tailLen = payload.size - mid
+        val tail = byteArrayOf(0x80.toByte(), tailLen.toByte()) + payload.copyOfRange(mid, payload.size)
+        val fragmented = WsFrameBuffer()
+        fragmented.append(head)
+        assertNull(fragmented.next())
+        fragmented.append(tail)
+        val joined = fragmented.next()
+        assertEquals(0x2, joined?.opcode)
+        assertTrue(payload.contentEquals(joined?.payload))
+
+        val masked = ByteArray(6 + payload.size)
+        masked[0] = 0x82.toByte()
+        masked[1] = (0x80 or payload.size).toByte()
+        val mask = byteArrayOf(0x11, 0x22, 0x33, 0x44)
+        System.arraycopy(mask, 0, masked, 2, 4)
+        for (i in payload.indices) {
+            masked[6 + i] = (payload[i].toInt() xor mask[i % 4].toInt()).toByte()
+        }
+        val maskedParser = WsFrameBuffer()
+        maskedParser.append(masked)
+        val unmasked = maskedParser.next()
+        assertEquals(0x2, unmasked?.opcode)
+        assertTrue(payload.contentEquals(unmasked?.payload))
+    }
+
+    @Test
+    fun serverFrameIsDeliveredToTheWireGuardSocket() {
+        val transport = StealthTransport(
+            remoteHost = "127.0.0.1",
+            remotePort = 1,
+            pathPrefix = "abc123",
+            attachUnderlay = { 1L },
+        )
+        val wg = DatagramSocket(null)
+        try {
+            wg.reuseAddress = true
+            wg.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0))
+            wg.soTimeout = 2_000
+            transport.bindRelayForTest()
+            transport.notePeerForTest(InetAddress.getByName("127.0.0.1"), wg.localPort)
+            val payload = ByteArray(92) { (it + 3).toByte() }
+            val frame = WstunnelProtocol.encodeBinary(payload)
+            transport.appendServerBytesForTest(frame.copyOfRange(0, 4))
+            transport.appendServerBytesForTest(frame.copyOfRange(4, frame.size))
+            val reply = DatagramPacket(ByteArray(128), 128)
+            wg.receive(reply)
+            assertEquals(payload.size, reply.length)
+            assertTrue(payload.contentEquals(reply.data.copyOf(reply.length)))
+        } finally {
+            wg.close()
+            transport.stop()
+        }
+    }
+
+    @Test
     fun parserAcceptsMaskedPongAndSplitsAcrossAppends() {
         val payload = ByteArray(200) { it.toByte() }
         val frame = WstunnelProtocol.encodeBinary(payload)

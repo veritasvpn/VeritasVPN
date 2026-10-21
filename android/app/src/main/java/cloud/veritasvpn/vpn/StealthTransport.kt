@@ -335,6 +335,31 @@ class StealthTransport(
         runCatching { udpSocket.send(packet) }
     }
 
+    /** Binds the relay without dialing. Unit tests deliver server frames into it. */
+    internal fun bindRelayForTest() {
+        check(!udpSocket.isBound)
+        udpSocket.reuseAddress = true
+        udpSocket.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0))
+    }
+
+    internal fun notePeerForTest(address: InetAddress, port: Int) {
+        lastPeer = InetSocketAddress(address, port)
+    }
+
+    /**
+     * The same parser the read loop uses. Split TCP reads and continuation
+     * frames are reassembled, then a binary payload is written to the peer.
+     */
+    private val serverFramesForTest = WsFrameBuffer()
+
+    internal fun appendServerBytesForTest(data: ByteArray) {
+        serverFramesForTest.append(data)
+        while (true) {
+            val frame = serverFramesForTest.next() ?: return
+            if (frame.opcode == 0x2) deliverToWireGuard(frame.payload)
+        }
+    }
+
     private fun closeDialing() {
         val socket = synchronized(this) {
             val current = dialingSocket

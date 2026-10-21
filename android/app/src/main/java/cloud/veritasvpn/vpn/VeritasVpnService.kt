@@ -119,6 +119,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val bindV4: Boolean = false,
         val bindV6: Boolean = false,
         val boundHandle: Long? = null,
+        val loopbackRelay: Boolean = false,
         val config: DataPlaneHealth.ConfigCheck = DataPlaneHealth.ConfigCheck.UNREAD,
     )
 
@@ -167,6 +168,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var waitRecheckJob: Job? = null
     private var peerCheckJob: Job? = null
     private var reprovisionJob: Job? = null
+    private var upgradeGateJob: Job? = null
+    private var pendingFreshTunnel = false
+    private var pendingReprovision = false
     private var reprovisionBackoffMs = ReprovisionBackoff.INITIAL_MS
     private val reprovisionLock = Any()
     private var lastStatsLogAtMs = 0L
@@ -1346,7 +1350,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val shown = if (controlSignedOut) {
             ControlPlane.SIGN_IN_AGAIN
         } else {
-            appendStealthStage(
+            appendStealthUserLine(
                 transportSuffix(
                     if (isReconnecting) BlockedNetworkNotice.reconnectingText(networkMayBeBlocking) else text,
                 ),
@@ -3035,10 +3039,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         broadcastState(true, null)
     }
 
-    private fun appendStealthStage(text: String): String {
-        val stage = StealthDial.shortStage(stealthTransport?.stage) ?: return text
-        if (text.contains(stage)) return text
-        return "$text · $stage"
+    /** Plain Stealth sentence. The stage stays in the diagnostic log. */
+    private fun appendStealthUserLine(text: String): String {
+        val friendly = StealthDial.userLine(stealthDetail()) ?: return text
+        if (text.contains(friendly)) return text
+        return "$text · $friendly"
     }
 
     private fun Intent.putStealthDetail() {
@@ -3620,18 +3625,31 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 }
                 val v4 = socketFd("wgGetSocketV4", handle)
                 val v6 = socketFd("wgGetSocketV6", handle)
-                val mayBind = network != null &&
-                    TunnelRebuild.dataPlaneMayBind(expected, network.networkHandle)
-                val boundV4 = protectAndBind(v4, if (mayBind) network else null)
-                val boundV6 = protectAndBind(v6, if (mayBind) network else null)
-                val observed = readBoundHandle(v4) ?: readBoundHandle(v6)
-                val bound = observed ?: boundV4.handle ?: boundV6.handle
+                val endpoint = intendedEndpoint ?: lastChosenEndpoint
+                val loopback = stealthTransport != null || TunnelRebuild.loopbackRelay(endpoint)
                 val previous = dataPlaneStatus.config
                 val config = if (intendedEndpoint.isNullOrBlank()) {
                     previous
                 } else {
                     DataPlaneHealth.configCheck(readUserspaceConfig(handle), intendedEndpoint)
                 }
+                if (loopback) {
+                    // Leave the userspace sockets on loopback. Binding them to
+                    // the underlay delivers one handshake initiation and then
+                    // the socket fails, so the server's response never returns.
+                    return@runCatching DataPlaneStatus(
+                        v4Present = v4 >= 0,
+                        v6Present = v6 >= 0,
+                        loopbackRelay = true,
+                        config = config,
+                    )
+                }
+                val mayBind = network != null &&
+                    TunnelRebuild.dataPlaneMayBind(expected, network.networkHandle)
+                val boundV4 = protectAndBind(v4, if (mayBind) network else null)
+                val boundV6 = protectAndBind(v6, if (mayBind) network else null)
+                val observed = readBoundHandle(v4) ?: readBoundHandle(v6)
+                val bound = observed ?: boundV4.handle ?: boundV6.handle
                 DataPlaneStatus(
                     v4Present = v4 >= 0,
                     v6Present = v6 >= 0,
@@ -3718,6 +3736,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             tx = tx,
             rx = rx,
             config = status.config,
+            loopbackRelay = status.loopbackRelay,
         )
         val bound = status.boundHandle ?: 0L
         val line = "handshake fail err=$err protect4=${if (status.protectV4) 1 else 0} " +
@@ -3984,6 +4003,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             ReprovisionFlight.cancelCurrent()
             reprovisionJob?.cancel()
             reprovisionJob = null
+            upgradeGateJob?.cancel()
+            upgradeGateJob = null
+            pendingFreshTunnel = false
+            pendingReprovision = false
         }
         VpnSettings.clearReprovisionInProgressAt(this)
         resetRebuildStreak()
@@ -4167,6 +4190,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         synchronized(reprovisionLock) {
             reprovisionJob?.cancel()
             reprovisionJob = null
+            upgradeGateJob?.cancel()
+            upgradeGateJob = null
+            pendingFreshTunnel = false
+            pendingReprovision = false
         }
         reprovisionBackoffMs = ReprovisionBackoff.INITIAL_MS
         recoveryWakes.trySend(Unit)
@@ -4192,6 +4219,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (controlSignedOut) return
         if (stealthUpgradeInProgress()) {
             Log.i(TAG, "reprovision held for stealth upgrade")
+            scheduleAfterUpgrade(gen, fresh = false)
             return
         }
         val now = System.currentTimeMillis()
@@ -4256,14 +4284,54 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return true
     }
 
-    /** @return true when a retry owns the flight and the caller must not release it. */
+    /**
+     * The upgrade gate dropped this peer recreation. Run it when the gate
+     * opens instead of waiting for the next peer check.
+     */
+    private fun scheduleAfterUpgrade(gen: Long, fresh: Boolean) {
+        synchronized(reprovisionLock) {
+            if (fresh) pendingFreshTunnel = true else pendingReprovision = true
+            if (upgradeGateJob?.isActive == true) return
+            upgradeGateJob = scope.launch {
+                while (isActive && sessionStillActive(gen) && !controlSignedOut) {
+                    while (isActive && sessionStillActive(gen) && !controlSignedOut &&
+                        stealthUpgradeInProgress()
+                    ) {
+                        delay(250)
+                    }
+                    if (!sessionStillActive(gen) || controlSignedOut) return@launch
+                    val (doFresh, doReprovision) = synchronized(reprovisionLock) {
+                        if (stealthUpgradeInProgress()) {
+                            pendingFreshTunnel to pendingReprovision
+                        } else {
+                            val wanted = pendingFreshTunnel to pendingReprovision
+                            pendingFreshTunnel = false
+                            pendingReprovision = false
+                            wanted
+                        }
+                    }
+                    if (stealthUpgradeInProgress()) continue
+                    if (!doFresh && !doReprovision) return@launch
+                    if (doFresh) escalateFreshTunnel(gen) else requestReprovision(gen)
+                    val more = synchronized(reprovisionLock) {
+                        pendingFreshTunnel || pendingReprovision
+                    }
+                    if (!more) return@launch
+                }
+            }
+        }
+    }
+
     /**
      * New peer and a new tun on the current system default. Does not switch
      * network or mode. The roam loop keeps running when this does not handshake.
      */
     private suspend fun escalateFreshTunnel(gen: Long): Boolean {
         if (!sessionStillActive(gen) || controlSignedOut) return false
-        if (stealthUpgradeInProgress()) return false
+        if (stealthUpgradeInProgress()) {
+            scheduleAfterUpgrade(gen, fresh = true)
+            return false
+        }
         if (reprovisionJob?.isActive == true) return false
         val now = System.currentTimeMillis()
         val epoch = synchronized(reprovisionLock) {
