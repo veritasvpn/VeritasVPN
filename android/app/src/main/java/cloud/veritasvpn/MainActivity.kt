@@ -50,6 +50,7 @@ import cloud.veritasvpn.vpn.BlockedNetworkNotice
 import cloud.veritasvpn.vpn.ControlPlane
 import cloud.veritasvpn.vpn.MobileDataSettings
 import cloud.veritasvpn.vpn.StealthApply
+import cloud.veritasvpn.vpn.StealthDial
 import cloud.veritasvpn.vpn.StealthMode
 import cloud.veritasvpn.vpn.ValidatedNetworks
 import cloud.veritasvpn.vpn.ProvisionRoute
@@ -1007,11 +1008,19 @@ class MainActivity : ComponentActivity() {
                                         intent.getStringExtra(VeritasVpnService.EXTRA_TRANSPORT)
                                             ?.let { transport = it }
                                         handshakeOk = svcHandshakeOk
+                                        val stealthDetail = intent.getStringExtra(
+                                            VeritasVpnService.EXTRA_STEALTH_DETAIL,
+                                        )
                                         statusMsg = when {
                                             signInAgain -> ControlPlane.SIGN_IN_AGAIN
-                                            svcReconnecting -> EndpointRefresh.statusWhileReconnecting(error)
-                                            else -> null
+                                            else -> StealthDial.statusLine(
+                                                svcReconnecting,
+                                                svcHandshakeOk,
+                                                error,
+                                                stealthDetail,
+                                            )
                                         }
+                                        rememberStealthDetail(context, stealthDetail, lastError) { lastError = it }
                                     } else if (error != null && error.contains("revoked", ignoreCase = true)) {
                                         connected = false
                                         connecting = false
@@ -1029,11 +1038,16 @@ class MainActivity : ComponentActivity() {
                                         connecting = false
                                         reconnecting = svcReconnecting
                                         hardReconnectRequested = false
-                                        statusMsg = if (svcReconnecting) {
-                                            EndpointRefresh.statusWhileReconnecting(error)
-                                        } else {
-                                            null
-                                        }
+                                        val stealthDetail = intent.getStringExtra(
+                                            VeritasVpnService.EXTRA_STEALTH_DETAIL,
+                                        )
+                                        statusMsg = StealthDial.statusLine(
+                                            svcReconnecting,
+                                            handshakeOk,
+                                            error,
+                                            stealthDetail,
+                                        )
+                                        rememberStealthDetail(context, stealthDetail, lastError) { lastError = it }
                                     } else {
                                         connected = false
                                         connecting = false
@@ -1100,11 +1114,16 @@ class MainActivity : ComponentActivity() {
                                         reconnecting = svcReconnecting
                                         if (connected) {
                                             val notice = intent.getStringExtra(VeritasVpnService.EXTRA_ERROR)
-                                            statusMsg = if (svcReconnecting) {
-                                                EndpointRefresh.statusWhileReconnecting(notice)
-                                            } else {
-                                                null
-                                            }
+                                            val stealthDetail = intent.getStringExtra(
+                                                VeritasVpnService.EXTRA_STEALTH_DETAIL,
+                                            )
+                                            statusMsg = StealthDial.statusLine(
+                                                svcReconnecting,
+                                                handshakeOk,
+                                                notice,
+                                                stealthDetail,
+                                            )
+                                            rememberStealthDetail(context, stealthDetail, lastError) { lastError = it }
                                         }
                                     }
                                 }
@@ -2014,6 +2033,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun rememberStealthDetail(
+        context: Context,
+        detail: String?,
+        current: String,
+        assign: (String) -> Unit,
+    ) {
+        val safe = StealthDial.publish(detail) ?: return
+        if (safe == current) return
+        assign(safe)
+        VpnSettings.setLastError(context, safe)
     }
 
     override fun onNewIntent(intent: Intent) {

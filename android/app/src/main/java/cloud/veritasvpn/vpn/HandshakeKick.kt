@@ -41,4 +41,56 @@ object HandshakeKick {
         return key.equals("persistent_keepalive_interval", ignoreCase = true) ||
             key.equals("PersistentKeepalive", ignoreCase = true)
     }
+
+    /**
+     * One IPv4 UDP datagram written straight onto the tun. Stealth excludes this
+     * app from the VPN, so a socket send would not enter WireGuard. The
+     * destination is 240.0.0.1:9, which only exists to make userspace start
+     * a handshake.
+     */
+    fun tunTrigger(source: String): ByteArray? {
+        val src = ipv4(source) ?: return null
+        val packet = ByteArray(29)
+        packet[0] = 0x45
+        packet[3] = 29
+        packet[8] = 64
+        packet[9] = 17
+        src.copyInto(packet, 12)
+        packet[16] = 240.toByte()
+        packet[19] = 1
+        val sum = ipChecksum(packet)
+        packet[10] = (sum ushr 8).toByte()
+        packet[11] = sum.toByte()
+        packet[21] = 9
+        packet[23] = 9
+        packet[25] = 9
+        return packet
+    }
+
+    private fun ipv4(text: String): ByteArray? {
+        val parts = text.trim().split('.')
+        if (parts.size != 4) return null
+        val raw = ByteArray(4)
+        for (i in 0 until 4) {
+            val n = parts[i].toIntOrNull() ?: return null
+            if (n !in 0..255) return null
+            raw[i] = n.toByte()
+        }
+        return raw
+    }
+
+    private fun ipChecksum(header: ByteArray): Int {
+        var sum = 0
+        var i = 0
+        while (i < 20) {
+            if (i == 10) {
+                i += 2
+                continue
+            }
+            sum += ((header[i].toInt() and 0xFF) shl 8) or (header[i + 1].toInt() and 0xFF)
+            i += 2
+        }
+        while (sum ushr 16 != 0) sum = (sum and 0xFFFF) + (sum ushr 16)
+        return sum.inv() and 0xFFFF
+    }
 }

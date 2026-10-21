@@ -1,6 +1,8 @@
 module github.com/veritasvpn/services/veritas-agent
 
-go 1.26.0
+go 1.26.10
+
+toolchain go1.26.10
 
 require (
 	github.com/prometheus/client_golang v1.20.5

@@ -1,5 +1,6 @@
 package cloud.veritasvpn.vpn
 
+import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -135,9 +136,16 @@ object WstunnelProtocol {
         Base64.getUrlEncoder().withoutPadding().encodeToString(data)
 }
 
-/** Incremental websocket frame parser. Returns null until a full frame is buffered. */
+/**
+ * Incremental websocket frame parser. Returns null until a full message is
+ * buffered. Continuation frames are reassembled. A control frame between
+ * fragments is returned first. A 64-bit length that does not fit a datagram
+ * fails the parse instead of stalling the buffer.
+ */
 class WsFrameBuffer {
     private val buf = ArrayDeque<Byte>()
+    private val fragment = ByteArrayOutputStream()
+    private var fragmentOpcode: Int? = null
 
     data class Frame(val opcode: Int, val payload: ByteArray)
 
@@ -146,6 +154,37 @@ class WsFrameBuffer {
     }
 
     fun next(): Frame? {
+        while (true) {
+            val raw = pull() ?: return null
+            when (raw.opcode) {
+                0x0 -> {
+                    val started = fragmentOpcode ?: continue
+                    fragment.write(raw.payload)
+                    if (!raw.fin) continue
+                    val payload = fragment.toByteArray()
+                    fragment.reset()
+                    fragmentOpcode = null
+                    return Frame(started, payload)
+                }
+                0x1, 0x2 -> {
+                    if (!raw.fin) {
+                        fragmentOpcode = raw.opcode
+                        fragment.reset()
+                        fragment.write(raw.payload)
+                        continue
+                    }
+                    fragmentOpcode = null
+                    fragment.reset()
+                    return Frame(raw.opcode, raw.payload)
+                }
+                else -> return Frame(raw.opcode, raw.payload)
+            }
+        }
+    }
+
+    private data class Raw(val fin: Boolean, val opcode: Int, val payload: ByteArray)
+
+    private fun pull(): Raw? {
         if (buf.size < 2) return null
         val b0 = buf.elementAt(0).toInt() and 0xFF
         val b1 = buf.elementAt(1).toInt() and 0xFF
@@ -158,7 +197,16 @@ class WsFrameBuffer {
             len = ((buf.elementAt(2).toInt() and 0xFF) shl 8) or (buf.elementAt(3).toInt() and 0xFF)
             header = 4
         } else if (len == 127) {
-            return null
+            if (buf.size < 10) return null
+            var big = 0L
+            for (i in 2 until 10) {
+                big = (big shl 8) or (buf.elementAt(i).toLong() and 0xFF)
+            }
+            if (big < 0L || big > 65535L) {
+                throw IllegalArgumentException("stealth frame too large")
+            }
+            len = big.toInt()
+            header = 10
         }
         val maskLen = if (masked) 4 else 0
         val total = header + maskLen + len
@@ -170,6 +218,6 @@ class WsFrameBuffer {
             val byte = buf.removeFirst()
             payload[i] = if (mask != null) (byte.toInt() xor (mask[i % 4].toInt() and 0xFF)).toByte() else byte
         }
-        return Frame(opcode, payload)
+        return Raw(fin = (b0 and 0x80) != 0, opcode = opcode, payload = payload)
     }
 }

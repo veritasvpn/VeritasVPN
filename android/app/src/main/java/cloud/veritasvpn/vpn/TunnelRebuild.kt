@@ -108,6 +108,45 @@ object TunnelRebuild {
         systemDefaultHandle != null && targetHandle == systemDefaultHandle
 
     /**
+     * Stealth points WireGuard at the local relay. Those UDP sockets must stay
+     * on loopback. protect() plus bindSocket onto Wi-Fi or cellular lets the
+     * first datagram reach 127.0.0.1 and then the socket fails, so the
+     * handshake response and every later send never leave the phone.
+     * The underlay bind belongs on the Stealth TCP socket instead.
+     */
+    fun loopbackRelay(endpoint: String?): Boolean {
+        val host = relayHost(endpoint) ?: return false
+        return host == "127.0.0.1" ||
+            host == "::1" ||
+            host == "localhost" ||
+            host == "0:0:0:0:0:0:0:1"
+    }
+
+    /**
+     * Endpoint to remember after Stealth is abandoned and the UDP config is
+     * put back. A loopback relay address must not stay saved: the next socket
+     * refresh would leave the restored UDP tunnel unbound.
+     */
+    fun endpointToSaveAfterUdpRestore(restoredConfig: String): String? {
+        val endpoint = EndpointSelector.endpointFromConfig(restoredConfig).trim()
+        if (endpoint.isEmpty() || loopbackRelay(endpoint)) return null
+        return endpoint
+    }
+
+    private fun relayHost(endpoint: String?): String? {
+        val value = endpoint?.trim()?.lowercase() ?: return null
+        if (value.isEmpty()) return null
+        if (value.startsWith("[")) {
+            val end = value.indexOf(']')
+            if (end <= 1) return null
+            return value.substring(1, end)
+        }
+        val colon = value.lastIndexOf(':')
+        if (colon <= 0) return value
+        return value.substring(0, colon)
+    }
+
+    /**
      * Enough failed rebuilds on this handle to replace the peer and the tun.
      * A smaller count stays on socket swap and rebuild.
      */
