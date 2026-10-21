@@ -138,7 +138,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     @Volatile private var stealthTransport: StealthTransport? = null
     @Volatile private var lastStealthLogged: String? = null
     @Volatile private var activeTransport: String = ""
-    @Volatile private var lastNotificationText: String = "Connecting…"
+    @Volatile private var lastNotificationText: String = "Not connected"
     @Volatile private var stealthSwitching = false
     @Volatile private var stealthKickLogged = false
     private val stealthSwitchLock = Any()
@@ -311,13 +311,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         // API 36 kills the process if a foreground start does not call
         // startForeground promptly, including a null-intent Always-on restart
         // and the circle-tap disconnect. The type has to match the manifest.
-        enterForeground(
-            when (intent?.action) {
-                ACTION_DISCONNECT -> "Disconnected"
-                ACTION_CONNECT -> "Connecting…"
-                else -> lastNotificationText.ifBlank { "VeritasVPN" }
-            },
-        )
+        // Connecting only after a connect intent. A service start before that
+        // (Always-on, lockdown, a state query) matches the idle app: Not connected.
+        enterForeground(notificationForStart(intent?.action, lastNotificationText))
         // Completes the shared VpnService future used by GoBackend so the backend
         // reuses THIS instance instead of starting the library's base service.
         runCatching { super.onStartCommand(intent, flags, startId) }.onFailure { error ->
@@ -5343,6 +5339,24 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
         fun markSessionStarted() {
             sessionEndedByUser = false
+        }
+
+        /**
+         * Shade text for a service start. "Connecting…" is only for a connect
+         * that is underway. Anything else keeps the last real status, or
+         * "Not connected" when nothing has started.
+         */
+        fun notificationForStart(action: String?, remembered: String): String = when (action) {
+            ACTION_DISCONNECT -> "Disconnected"
+            ACTION_CONNECT -> "Connecting…"
+            else -> {
+                val text = remembered.trim()
+                if (text.isEmpty() || text == "Connecting…" || text.startsWith("Connecting…")) {
+                    "Not connected"
+                } else {
+                    text
+                }
+            }
         }
 
         fun hasSavedSession(context: Context): Boolean {

@@ -19,6 +19,32 @@ import java.util.concurrent.atomic.AtomicBoolean
 class StealthDialTest {
 
     @Test
+    fun repinProtectsAConnectedSocketAndDoesNotBindIt() {
+        val underlay = kotlinSource("StealthUnderlay.kt")
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .lineSequence()
+            .filterNot { it.trimStart().startsWith("//") }
+            .joinToString("\n")
+        val attach = slice(underlay, "fun attach", "fun repin")
+        assertTrue(attach.contains("protectThenBind"))
+        assertTrue(attach.contains("network.bindSocket"))
+        assertTrue(attach.indexOf("protectThenBind") < attach.indexOf("network.bindSocket"))
+        val repin = underlay.substring(underlay.indexOf("fun repin"))
+        assertFalse(repin.contains("bindSocket"))
+        assertTrue(repin.contains("return protect(socket)"))
+    }
+
+    @Test
+    fun stealthWriteLoopFlushesEveryFrame() {
+        val transport = kotlinSource("StealthTransport.kt")
+        val loop = slice(transport, "fun writeLoop", "fun readLoop")
+        val writes = Regex("""output\.write\(""").findAll(loop).count()
+        val flushes = Regex("""output\.flush\(\)""").findAll(loop).count()
+        assertEquals(writes, flushes)
+        assertTrue(writes >= 4)
+    }
+
+    @Test
     fun repinOfAMissingNetworkDoesNotCloseTheSocket() {
         val socket = Socket()
         try {
