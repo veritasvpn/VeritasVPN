@@ -53,6 +53,19 @@ func TestPeerCreatedLogHashesDeviceID(t *testing.T) {
 	if strings.Count(block, "logging.HashIdentifier(deviceID)") != 2 {
 		t.Fatalf("expected the log and the event to hash device id, block:\n%s", block)
 	}
+	// Hash keys contain these names as a prefix. Strip the hashed form, then
+	// the raw key must be gone.
+	stripped := strings.ReplaceAll(block, `"assigned_ip_hash"`, "")
+	stripped = strings.ReplaceAll(stripped, `"server_endpoint_hash"`, "")
+	if strings.Contains(stripped, `"assigned_ip"`) || strings.Contains(stripped, `"server_endpoint"`) {
+		t.Fatalf("peer created still records a raw address:\n%s", block)
+	}
+	if strings.Count(block, "logging.HashIdentifier(assignedIP)") != 2 {
+		t.Fatalf("expected the log and the event to hash assigned ip, block:\n%s", block)
+	}
+	if strings.Count(block, "logging.HashIdentifier(endpoint)") != 2 {
+		t.Fatalf("expected the log and the event to hash server endpoint, block:\n%s", block)
+	}
 }
 
 func TestPeerCountForLimit(t *testing.T) {

@@ -602,8 +602,8 @@ func TestGooglePlayRTDNResolvesHashFromStoredPurchase(t *testing.T) {
 			"subscriptionId":   "premium_monthly",
 		},
 	})
-	if err := play.ProcessNotification(context.Background(), early, "Bearer test"); err != nil {
-		t.Fatal(err)
+	if err := play.ProcessNotification(context.Background(), early, "Bearer test"); !errors.Is(err, ErrPlayAccountUnbound) {
+		t.Fatalf("unlinked hash was acknowledged: %v", err)
 	}
 	if len(store.subs) != 0 {
 		t.Fatalf("hash was used as an account id: %+v", store.subs)

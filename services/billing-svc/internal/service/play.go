@@ -13,7 +13,6 @@ import (
 	"github.com/veritasvpn/services/billing-svc/internal/model"
 	"github.com/veritasvpn/services/billing-svc/internal/provider"
 	"github.com/veritasvpn/services/billing-svc/internal/repository"
-	"go.uber.org/zap"
 )
 
 const maxPurchaseTokenLen = 4096
@@ -25,6 +24,9 @@ var (
 	ErrPlayUnknownProduct    = errors.New("unknown Google Play subscription product")
 	ErrPlayPurchaseNotFound  = errors.New("Google Play could not find that purchase")
 	ErrPlayRejected          = errors.New("Google Play rejected that purchase")
+	// Returned so the RTDN webhook is not HTTP 200. Pub/Sub must retry until
+	// the app's Verify call links the purchase to an account.
+	ErrPlayAccountUnbound = errors.New("google play purchase is not linked to an account yet")
 )
 
 // PlayStore is the persistence Play Billing needs. *repository.Postgres implements it.
@@ -135,12 +137,7 @@ func (p *PlayBilling) ProcessNotification(ctx context.Context, body []byte, auth
 		return err
 	}
 	if accountID == "" {
-		p.log.Warn("google play notification has no account binding",
-			zap.String("token_hash", logging.HashIdentifier(note.PurchaseToken)),
-			zap.Int("notification_type", note.Type),
-			zap.Bool("hashed_account", isPlayAccountHash(purchase.ObfuscatedAccountID)),
-		)
-		return nil
+		return ErrPlayAccountUnbound
 	}
 	_, err = p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke)
 	return err
@@ -230,10 +227,11 @@ func (p *PlayBilling) accountForPurchase(ctx context.Context, token, obfuscated 
 		}
 		return "", ErrPlayAccountMismatch
 	}
-	// A hash cannot be reversed into an Account ID. The app verify call binds
-	// it. Until then, do not create a subscription under the hash.
+	// A hash cannot be reversed into an Account ID. Leave the notification
+	// unacknowledged so the app's Verify call can link it. An empty binding
+	// with no stored row is the same: there is nothing to attribute.
 	if obfuscated == "" || isPlayAccountHash(obfuscated) {
-		return "", nil
+		return "", ErrPlayAccountUnbound
 	}
 	return obfuscated, nil
 }

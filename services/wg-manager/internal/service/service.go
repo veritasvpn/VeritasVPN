@@ -730,17 +730,17 @@ func (s *Service) CreatePeer(ctx context.Context, accountID, tier, publicKey, de
 		"account_hash", logging.HashIdentifier(accountID),
 		"device_hash", logging.HashIdentifier(deviceID),
 		"server_id", srv.ID,
-		"assigned_ip", assignedIP,
-		"server_endpoint", endpoint,
+		"assigned_ip_hash", logging.HashIdentifier(assignedIP),
+		"server_endpoint_hash", logging.HashIdentifier(endpoint),
 	)
 
 	s.publishEvent("peer.created", map[string]interface{}{
-		"peer_hash":       logging.HashIdentifier(peer.ID),
-		"account_hash":    logging.HashIdentifier(accountID),
-		"device_hash":     logging.HashIdentifier(deviceID),
-		"server_id":       srv.ID,
-		"assigned_ip":     assignedIP,
-		"server_endpoint": endpoint,
+		"peer_hash":            logging.HashIdentifier(peer.ID),
+		"account_hash":         logging.HashIdentifier(accountID),
+		"device_hash":          logging.HashIdentifier(deviceID),
+		"server_id":            srv.ID,
+		"assigned_ip_hash":     logging.HashIdentifier(assignedIP),
+		"server_endpoint_hash": logging.HashIdentifier(endpoint),
 	})
 
 	return &PeerConfig{

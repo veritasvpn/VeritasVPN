@@ -15,12 +15,12 @@ import javax.net.SocketFactory
 
 /**
  * Public-IP check after connect. The sockets are bound to the VPN network
- * and are never protected out of the tunnel. Stealth still excludes this
- * package from the tun so the carrier socket stays on the underlay; that
- * exclusion does not apply to a socket bound to the VPN network.
+ * and are never protected out of the tunnel. Stealth's carrier socket is
+ * pinned to the underlay on its own; this package stays inside the tun so
+ * this bind enters the VPN.
  *
  * If the VPN network is missing, the check is skipped. There is no fallback
- * onto the physical network.
+ * onto the physical network. The UI then shows Protected with no address.
  */
 object EgressProbe {
     val ENDPOINTS: List<String> = listOf(
@@ -36,6 +36,22 @@ object EgressProbe {
 
     /** The check must not leave on Wi-Fi or cellular. */
     fun allowsPhysicalFallback(): Boolean = false
+
+    /** Notification once the tunnel is up. No address when the check did not finish. */
+    fun statusText(egressIp: String?): String =
+        if (egressIp.isNullOrBlank()) "Protected" else "Connected · $egressIp"
+
+    /**
+     * Leaving Reconnecting must not keep that sentence. A later VPN-bound
+     * check replaces Protected with an address when the check learns one.
+     */
+    fun settledNotification(previous: String): String {
+        val head = previous.trim()
+        if (head.isEmpty() || head == "Connecting…" || head.startsWith("Reconnecting")) {
+            return "Protected"
+        }
+        return previous
+    }
 
     fun allowsHost(host: String): Boolean {
         return when (host.trim().lowercase()) {

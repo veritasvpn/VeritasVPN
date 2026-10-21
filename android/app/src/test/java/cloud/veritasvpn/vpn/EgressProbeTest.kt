@@ -83,7 +83,7 @@ class EgressProbeTest {
     }
 
     @Test
-    fun serviceBindsEgressToTheVpnAndKeepsStealthExclusion() {
+    fun serviceBindsEgressToTheVpnWithoutExcludingTheApp() {
         val service = kotlinSource("VeritasVpnService.kt")
         val race = slice(service, "fun raceEgressEndpoints", "fun vpnNetworkForProbe")
         assertTrue(race.indexOf("allowsPhysicalFallback()") < race.indexOf("vpnNetworkForProbe()"))
@@ -94,12 +94,33 @@ class EgressProbeTest {
         assertFalse(race.contains("ApiClient"))
         assertFalse(race.contains("protect("))
         val open = slice(service, "fun openInterface", "fun openLockdownHold")
-        assertTrue(open.contains("addDisallowedApplication(packageName)"))
+        assertFalse(open.contains("addDisallowedApplication(packageName)"))
+        assertTrue(open.contains("repinStealthCarrier()"))
+        assertTrue(open.indexOf("establish()") < open.indexOf("repinStealthCarrier()"))
+        assertTrue(service.contains("addDisallowedApplication(own)"))
         val watch = slice(service, "fun registerVpnNetworkWatch", "fun unregisterVpnNetworkWatch")
         assertTrue(watch.contains("registerNetworkCallback"))
         assertFalse(watch.contains("requestNetwork"))
         assertFalse(watch.contains("bindProcessToNetwork"))
         assertFalse(service.contains("logging-interceptor"))
+        val transport = kotlinSource("StealthTransport.kt")
+        assertTrue(transport.contains("output.flush()"))
+    }
+
+    @Test
+    fun failedProbeSaysProtectedAndDoesNotKeepReconnecting() {
+        assertEquals("Connected · 203.0.113.10", EgressProbe.statusText("203.0.113.10"))
+        assertEquals("Protected", EgressProbe.statusText(null))
+        assertEquals("Protected", EgressProbe.statusText("  "))
+        assertEquals("Protected", EgressProbe.settledNotification("Reconnecting…"))
+        assertEquals(
+            "Protected",
+            EgressProbe.settledNotification("Reconnecting… This network may be blocking VPN connections."),
+        )
+        assertEquals("Protected", EgressProbe.settledNotification("Connecting…"))
+        assertEquals("Connected · 203.0.113.10", EgressProbe.settledNotification("Connected · 203.0.113.10"))
+        assertFalse(EgressProbe.statusText(null).contains("Reconnecting"))
+        assertFalse(EgressProbe.statusText(null).contains("timeout", ignoreCase = true))
     }
 
     private fun slice(source: String, start: String, end: String): String {

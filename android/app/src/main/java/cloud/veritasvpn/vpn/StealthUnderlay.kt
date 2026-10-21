@@ -25,7 +25,9 @@ object StealthUnderlay {
      * protect and bind a socket that is already connected. Used after the tun
      * exists: the dial's pin can belong to the previous tunnel, and the new
      * tun then swallows every TCP segment after the one already in flight.
-     * Failure leaves the socket open; the app is also excluded from the tun.
+     * Failure leaves the socket open. The next write flushes the frame, and
+     * the caller pins again after the tun is up. This package stays inside
+     * the tun; only this socket is kept on the underlay.
      */
     fun repin(socket: Socket, network: Network?, protect: (Socket) -> Boolean): Boolean {
         if (network == null || socket.isClosed) return false

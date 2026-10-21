@@ -943,6 +943,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     establishNew = {
                         val pfd = super.establish() ?: return@replaceWhileHeld null
                         established = pfd
+                        // Routes are live before this returns. Re-pin the
+                        // Stealth carrier before its next segment is captured.
+                        // No-op when Stealth is not running.
+                        repinStealthCarrier()
                         runCatching { pfd.dup() }.getOrNull()
                     },
                     closePrevious = { newKeeper -> swapTunKeeper(newKeeper) },
@@ -1233,24 +1237,27 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return UserFacingError.toUserMessage(e, this)
     }
 
-    private suspend fun verifyTunnelEgress(): String {
+    private suspend fun verifyTunnelEgress(): String? {
         repeat(3) { attempt ->
             val egressIp = raceEgressEndpoints()
             if (egressIp != null) {
-                if (sessionIntended() && !isReconnecting) {
-                    ServiceCompat.startForeground(
-                        this,
-                        NOTIFICATION_ID,
-                        buildNotification("Connected · $egressIp"),
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                    )
-                }
+                publishEgressStatus(egressIp)
                 return egressIp
             }
             if (attempt < 2) delay(250)
         }
-        throw VpnError(
-            "Connected, but no traffic got through the VPN. Try again or switch server."
+        // No address, and no error text. The tunnel is already up.
+        publishEgressStatus(null)
+        return null
+    }
+
+    private fun publishEgressStatus(egressIp: String?) {
+        if (!sessionIntended() || isReconnecting) return
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(EgressProbe.statusText(egressIp)),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
         )
     }
 
@@ -1268,9 +1275,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 throw e
             } catch (e: Exception) {
                 // A transient egress probe failure must not tear down the
-                // WireGuard interface. The tunnel remains available and the
-                // next health check/connect cycle can validate it again.
-                Log.w(TAG, "Background egress validation did not complete", e)
+                // WireGuard interface or surface a raw error. Protected, with
+                // no address, matches the app while the tunnel stays up.
+                Log.w(TAG, "Background egress validation did not complete: ${e.javaClass.simpleName}")
+                if (generation != validationGeneration) return@launch
+                if (sessionGen != sessionGeneration || !sessionIntended()) return@launch
+                publishEgressStatus(null)
+                broadcastState(true, null)
             }
         }
     }
@@ -1304,8 +1315,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     }
 
     /**
-     * The tun's network, not the system default. In Stealth the default is
-     * the physical network because this package is excluded from the tun.
+     * The tun's network, not the system default. The egress socket is bound
+     * here and is never protected onto the underlay. Stealth's carrier is a
+     * different socket, pinned outside this network.
      */
     private suspend fun vpnNetworkForProbe(): Network? {
         repeat(8) { attempt ->
@@ -2063,7 +2075,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 InstallWatch(InstallOutcome.RETRY, nextFailed, armedAt)
             }
         }
-        logHardProbe(installed.liveConfig, installed.endpoint, snap)
+        logHardProbe(installed.endpoint, snap)
         protectBackendSockets()
         val handle = snap.network.networkHandle
         if (awaitFreshHandshake(gen, armedAt, handle)) {
@@ -2395,6 +2407,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      * that source address, the same way a fresh connect does.
      */
     private suspend fun fetchFreshEndpoint(expectedHandle: Long?): EndpointFetch {
+        val gen = sessionGeneration
         if (controlSignedOut || !sessionIntended() || disconnectJob?.isActive == true) {
             return EndpointFetch.Stop
         }
@@ -2471,8 +2484,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     // The peer is gone. One new peer is created here, including
                     // while a Stealth dial is held or the reprovision window is
                     // still open. A second 404 finds that create already running.
+                    // [gen] is the session that started this read. A newer
+                    // session must not inherit this 404.
+                    if (gen != sessionGeneration) return EndpointFetch.Stale
                     lastPeerOutcome = PeerCheckOutcome.Outcome.PEER_GONE
-                    requestReprovision(sessionGeneration, peerGone = true)
+                    requestReprovision(gen, peerGone = true)
                     return EndpointFetch.Stop
                 }
             }
@@ -2559,7 +2575,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 when (step) {
                     TunnelRebuild.RecoveryStep.STOP -> return false
                     TunnelRebuild.RecoveryStep.REPROVISION -> {
-                        requestReprovision(gen, peerGone = true)
+                        requestReprovision(gen)
                         return false
                     }
                     TunnelRebuild.RecoveryStep.RESET -> {
@@ -2622,7 +2638,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                             null
                         }
                         if (installed != null) {
-                            logHardProbe(installed.liveConfig, installed.endpoint, snap)
+                            logHardProbe(installed.endpoint, snap)
                         } else {
                             Log.w(TAG, "path-adapt full rebuild did not install")
                         }
@@ -2654,7 +2670,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                                 return true
                             }
                             TunnelRebuild.RecoveryStep.REPROVISION -> {
-                                requestReprovision(gen, peerGone = true)
+                                requestReprovision(gen)
                                 return false
                             }
                             TunnelRebuild.RecoveryStep.RESET -> {
@@ -2888,12 +2904,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         return recorded
     }
 
-    private fun logHardProbe(config: String, endpoint: String, snap: UnderlaySnap) {
+    private fun logHardProbe(endpoint: String, snap: UnderlaySnap) {
         val prefs = vpnStatePrefs()
         Log.i(
             TAG,
             ProbeDiagnostics.format(
-                keyPrefix = ProbeDiagnostics.publicKeyPrefix(config),
                 kind = ProbeDiagnostics.endpointKind(
                     endpoint,
                     prefs.getString(KEY_ENDPOINT_LAN, null),
@@ -2983,8 +2998,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             else -> {
                 followSystemDefault()
-                // Stealth rebuilds the tun so this app is excluded from it.
-                // A kept direct tun would swallow the loopback relay.
+                // Stealth replaces the tun because WireGuard's endpoint is the
+                // loopback relay. The carrier is re-pinned inside establish(),
+                // not by excluding this package from the tun.
                 val brought = applyBackendState(
                     Tunnel.State.UP,
                     parsed,
@@ -3014,8 +3030,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     /**
      * The stealth TCP socket was pinned before this tun existed. establish()
      * installs a new route, and every later segment from that socket is
-     * captured unless it is protected and bound again. The app is also
-     * excluded from the tun; this pin covers the socket directly.
+     * captured unless it is protected and bound again. Called from establish()
+     * and again once the tunnel is up. Only this socket stays on the underlay.
      */
     private fun repinStealthCarrier() {
         val carrier = stealthTransport?.carrierSocket() ?: return
@@ -3099,7 +3115,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             Config.parse(ByteArrayInputStream(restored.toByteArray(Charsets.UTF_8)))
         }.getOrNull() ?: return
         turnUserspaceOff()
-        // Drop the Stealth exclusion so Direct's kick packet enters the tun again.
+        // Rebuild the tun for the UDP endpoint. This app stays inside the tun.
         openInterface(parsed)
         if (rebindWithRetry(parsed, gen, recreateTun = false)) {
             synchronized(tunnelOpLock) {
@@ -3206,7 +3222,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val text = if (reconnecting) {
             BlockedNetworkNotice.reconnectingText(networkMayBeBlocking)
         } else {
-            lastNotificationText
+            // lastNotificationText is the reconnecting sentence while that
+            // flag was set. Republishing it left the shade on Reconnecting
+            // after the app had already moved to Protected.
+            EgressProbe.settledNotification(lastNotificationText)
         }
         ServiceCompat.startForeground(
             this,
@@ -3536,22 +3555,15 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             for (app in iface.excludedApplications) {
                 builder.addDisallowedApplication(app)
             }
-            // Stealth's WireGuard endpoint is 127.0.0.1, and the TLS socket
-            // lives in this process. While this app is inside the tun, the
-            // relay's reply and every TCP segment after the tun comes up are
-            // captured. Other apps stay on the tun.
+            // Stealth's WireGuard endpoint is 127.0.0.1. The TLS carrier is
+            // pinned to the underlay, re-pinned the moment this tun exists,
+            // and every frame is flushed. This package stays inside the tun
+            // so the egress check can bind to the VPN network. Excluding the
+            // package left that check on the underlay.
             val loopback = parsed.peers.any { peer ->
                 TunnelRebuild.loopbackRelay(peer.endpoint.orElse(null)?.toString())
             }
-            if (loopback &&
-                iface.includedApplications.isEmpty() &&
-                packageName !in iface.excludedApplications
-            ) {
-                builder.addDisallowedApplication(packageName)
-                traceStealth("stealth iface self=1")
-            } else if (loopback) {
-                traceStealth("stealth iface self=0")
-            }
+            if (loopback) traceStealth("stealth iface self=0")
             for (app in iface.includedApplications) {
                 builder.addAllowedApplication(app)
             }
@@ -3583,6 +3595,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             setUnderlyingNetworks(null)
             builder.setBlocking(true)
             val established = builder.establish() ?: return false
+            if (loopback) repinStealthCarrier()
             established.close()
             val host = iface.addresses
                 .firstOrNull { it.address is Inet4Address }
@@ -4623,12 +4636,30 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun requestReprovision(gen: Long, peerGone: Boolean = false) {
         if (controlSignedOut) return
         val upgradeHeld = stealthUpgradeInProgress()
-        if (!peerGone && upgradeHeld) {
-            Log.i(TAG, "reprovision held for stealth upgrade")
-            scheduleAfterUpgrade(gen, fresh = false)
-            return
-        }
         val now = System.currentTimeMillis()
+        val action = PeerGoneRecovery.action(
+            peerGone = peerGone,
+            upgradeHeld = upgradeHeld,
+            phase = ReprovisionFlight.currentPhase(),
+            persistedAtMs = VpnSettings.reprovisionInProgressAt(this),
+            nowMs = now,
+        )
+        when (action) {
+            PeerGoneRecovery.Action.DEFER -> {
+                if (upgradeHeld) {
+                    Log.i(TAG, "reprovision held for stealth upgrade")
+                    scheduleAfterUpgrade(gen, fresh = false)
+                } else {
+                    logReprovision("skipped", 0)
+                }
+                return
+            }
+            PeerGoneRecovery.Action.IN_FLIGHT -> {
+                logReprovision("skipped", 0)
+                return
+            }
+            PeerGoneRecovery.Action.CREATE -> Unit
+        }
         synchronized(reprovisionLock) {
             val epoch = ReprovisionFlight.tryClaim(
                 persistedAtMs = VpnSettings.reprovisionInProgressAt(this),
@@ -4720,7 +4751,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     }
                     if (stealthUpgradeInProgress()) continue
                     if (!doFresh && !doReprovision) return@launch
-                    if (doFresh) escalateFreshTunnel(gen) else requestReprovision(gen, peerGone = true)
+                    if (doFresh) escalateFreshTunnel(gen) else requestReprovision(gen)
                     val more = synchronized(reprovisionLock) {
                         pendingFreshTunnel || pendingReprovision
                     }

@@ -311,6 +311,11 @@ func (h *BillingHandler) writePlayError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, service.ErrPlayRTDNNotConfigured):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, service.ErrPlayAccountUnbound):
+		// Not 2xx: Pub/Sub retries instead of acknowledging a purchase that
+		// is not linked to an account yet. The message must not match the
+		// 400 keywords below.
+		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, service.ErrPlayAccountMismatch):
 		writeError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, service.ErrPlayUnknownProduct), errors.Is(err, service.ErrPlayPurchaseNotFound), errors.Is(err, service.ErrPlayRejected):

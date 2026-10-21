@@ -55,13 +55,15 @@ object ReprovisionFlight {
         if (peerGone) {
             return when (
                 PeerGoneRecovery.action(
+                    peerGone = true,
                     upgradeHeld = upgradeHeld,
                     phase = phase,
                     persistedAtMs = persistedAtMs,
                     nowMs = nowMs,
                 )
             ) {
-                PeerGoneRecovery.Action.IN_FLIGHT -> null
+                PeerGoneRecovery.Action.IN_FLIGHT,
+                PeerGoneRecovery.Action.DEFER -> null
                 PeerGoneRecovery.Action.CREATE -> claim(nowMs, persist)
             }
         }
@@ -101,6 +103,8 @@ object ReprovisionFlight {
         epoch += 1
         phase = Phase.IDLE
     }
+
+    fun currentPhase(): Phase = synchronized(lock) { phase }
 
     fun blocksActivity(persistedAtMs: Long, nowMs: Long): Boolean = synchronized(lock) {
         phase != Phase.IDLE || persistedBusy(persistedAtMs, nowMs)
