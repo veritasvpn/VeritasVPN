@@ -19,6 +19,19 @@ import java.util.concurrent.atomic.AtomicBoolean
 class StealthDialTest {
 
     @Test
+    fun repinOfAMissingNetworkDoesNotCloseTheSocket() {
+        val socket = Socket()
+        try {
+            assertFalse(StealthUnderlay.repin(socket, null) { true })
+            assertFalse(socket.isClosed)
+            socket.close()
+            assertFalse(StealthUnderlay.repin(socket, null) { true })
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
     fun protectRunsBeforeBindAndBindFailureDoesNotConnect() {
         val events = mutableListOf<String>()
         val socket = Socket()
@@ -376,6 +389,9 @@ class StealthDialTest {
         val underlay = kotlinSource("StealthUnderlay.kt")
         assertTrue(underlay.contains("protectThenBind"))
         assertTrue(underlay.contains("network.bindSocket"))
+        assertTrue(underlay.contains("fun repin"))
+        assertTrue(code.contains("stealth repin ok="))
+        assertTrue(code.contains("repinStealthCarrier()"))
         assertTrue(underlay.indexOf("network == null") < underlay.indexOf("protectThenBind"))
     }
 

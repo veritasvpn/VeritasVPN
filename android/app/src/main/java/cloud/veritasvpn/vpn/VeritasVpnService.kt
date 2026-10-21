@@ -2882,7 +2882,22 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
         }
         activeTransport = if (stealth) "stealth" else "udp"
+        if (stealth && state == Tunnel.State.UP) repinStealthCarrier()
         return state
+    }
+
+    /**
+     * The stealth TCP socket was pinned before this tun existed. establish()
+     * installs a new route, and every later segment from that socket is
+     * captured unless it is protected and bound again. The app is also
+     * excluded from the tun; this pin covers the socket directly.
+     */
+    private fun repinStealthCarrier() {
+        val carrier = stealthTransport?.carrierSocket() ?: return
+        val ok = StealthUnderlay.repin(carrier, dataPlaneNetwork()) { socket ->
+            protect(socket)
+        }
+        traceStealth("stealth repin ok=${if (ok) 1 else 0}")
     }
 
     private suspend fun switchToStealth(gen: Long, offer: StealthOffer) {
@@ -2930,6 +2945,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     .apply()
                 lastChosenEndpoint = local
             }
+            repinStealthCarrier()
             publishTransport("stealth")
             publishReconnecting(false)
             startBackgroundEgressValidation()
@@ -3261,9 +3277,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             for (app in iface.excludedApplications) {
                 builder.addDisallowedApplication(app)
             }
-            // Stealth's WireGuard endpoint is 127.0.0.1. While this app is
-            // inside the tun, the relay's reply to that socket is captured
-            // and never reaches userspace. Other apps stay on the tun.
+            // Stealth's WireGuard endpoint is 127.0.0.1, and the TLS socket
+            // lives in this process. While this app is inside the tun, the
+            // relay's reply and every TCP segment after the tun comes up are
+            // captured. Other apps stay on the tun.
             val loopback = parsed.peers.any { peer ->
                 TunnelRebuild.loopbackRelay(peer.endpoint.orElse(null)?.toString())
             }

@@ -63,6 +63,8 @@ class StealthTransport(
     private var supervisor: Thread? = null
     private var activeSocket: Socket? = null
     private var dialingSocket: Socket? = null
+    /** Plain TCP socket that was protect()'d and bound. TLS writes use its fd. */
+    private var carrier: Socket? = null
     @Volatile private var lastPeer: InetSocketAddress? = null
     @Volatile var lastError: String? = null
         private set
@@ -224,6 +226,7 @@ class StealthTransport(
             ssl.startHandshake()
             synchronized(this) {
                 if (dialingSocket === plain) dialingSocket = null
+                carrier = plain
             }
             return ssl
         } catch (e: Exception) {
@@ -321,12 +324,15 @@ class StealthTransport(
                 while (running.get() && gen == sessionGen.get()) {
                     val frame = control.poll() ?: break
                     output.write(frame)
+                    output.flush()
+                    noteFlush()
                     wrote = true
                     lastWriteAt = System.currentTimeMillis()
                 }
                 while (running.get() && gen == sessionGen.get()) {
                     val payload = outbound.poll() ?: break
                     output.write(WstunnelProtocol.encodeBinary(payload))
+                    output.flush()
                     noteOut(payload.size)
                     wrote = true
                     lastWriteAt = System.currentTimeMillis()
@@ -334,18 +340,16 @@ class StealthTransport(
                 val idleMs = System.currentTimeMillis() - lastWriteAt
                 if (!wrote && idleMs >= PING_EVERY_MS && running.get() && gen == sessionGen.get()) {
                     output.write(WstunnelProtocol.encodePing())
+                    output.flush()
                     notePing()
                     wrote = true
                     lastWriteAt = System.currentTimeMillis()
                 }
-                if (wrote) {
-                    output.flush()
-                    continue
-                }
+                if (wrote) continue
                 val payload = outbound.poll(WRITE_WAIT_MS, TimeUnit.MILLISECONDS) ?: continue
                 output.write(WstunnelProtocol.encodeBinary(payload))
-                noteOut(payload.size)
                 output.flush()
+                noteOut(payload.size)
                 lastWriteAt = System.currentTimeMillis()
             }
         } catch (e: Exception) {
@@ -508,6 +512,11 @@ class StealthTransport(
     private fun noteOut(bytes: Int) = bump {
         counts.out += 1
         counts.outBytes += bytes
+        counts.flush += 1
+    }
+
+    private fun noteFlush() = bump {
+        counts.flush += 1
     }
 
     private fun noteIn(bytes: Int) = bump {
@@ -535,6 +544,7 @@ class StealthTransport(
 
     private fun notePing() = bump {
         counts.ping += 1
+        counts.flush += 1
     }
 
     private fun noteOther() = bump {
@@ -567,10 +577,17 @@ class StealthTransport(
         runCatching { socket?.close() }
     }
 
+    /**
+     * The connected underlay socket, so the service can protect and bind it
+     * again after establish(). Null before the TLS handshake finishes.
+     */
+    internal fun carrierSocket(): Socket? = carrier
+
     private fun closeActiveSocket() {
         val socket = synchronized(this) {
             val current = activeSocket
             activeSocket = null
+            carrier = null
             current
         }
         runCatching { socket?.close() }
@@ -612,6 +629,7 @@ class StealthTransport(
         var miss = 0L
         var ping = 0L
         var other = 0L
+        var flush = 0L
         var loopback = 1
         var fam = 4
         var sport = 1
@@ -632,6 +650,7 @@ class StealthTransport(
             miss = miss,
             ping = ping,
             other = other,
+            flush = flush,
             loopback = loopback,
             fam = fam,
             sport = sport,
@@ -704,6 +723,7 @@ class StealthTransport(
             miss: Long,
             ping: Long,
             other: Long,
+            flush: Long,
             loopback: Int,
             fam: Int,
             sport: Int,
@@ -715,7 +735,7 @@ class StealthTransport(
             return listOf(
                 "stealth c2s udp=$udp ub=$udpBytes out=$out ob=$outBytes",
                 "stealth s2c in=$wsIn ib=$wsInBytes ok=$ok fail=$fail miss=$miss fam=$fam sport=$sport",
-                "stealth io ping=$ping other=$other loop=$loopback read=$readPart$errPart",
+                "stealth io ping=$ping other=$other loop=$loopback fl=$flush read=$readPart$errPart",
             )
         }
     }

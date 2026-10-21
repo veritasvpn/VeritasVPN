@@ -159,6 +159,59 @@ class StealthProtocolTest {
     }
 
     @Test(timeout = 20_000)
+    fun serverReceivesFiftyMixedClientDatagrams() {
+        val peer = FakeStealthPeer()
+        val transport = StealthTransport(
+            remoteHost = "127.0.0.1",
+            remotePort = peer.port,
+            pathPrefix = "abc123",
+            attachUnderlay = { 1L },
+        )
+        val wg = DatagramSocket(null)
+        try {
+            transport.start()
+            val openDeadline = System.currentTimeMillis() + 8_000
+            while (System.currentTimeMillis() < openDeadline && transport.stage != StealthDial.Stage.OPEN) {
+                if (!transport.lastError.isNullOrBlank()) break
+                Thread.sleep(20)
+            }
+            assertEquals(transport.lastError, StealthDial.Stage.OPEN, transport.stage)
+            wg.reuseAddress = true
+            wg.bind(InetSocketAddress(0))
+            val local = WstunnelProtocol.parseEndpoint(transport.localEndpoint)
+            assertNotNull(local)
+            val sent = mixedDatagrams(50)
+            assertTrue(sent.any { it.size > 125 })
+            assertTrue(sent.any { it.size > 1280 })
+            for (payload in sent) {
+                wg.send(
+                    DatagramPacket(
+                        payload,
+                        payload.size,
+                        InetAddress.getByName("127.0.0.1"),
+                        local!!.port,
+                    ),
+                )
+            }
+            val got = ArrayList<ByteArray>()
+            val deadline = System.currentTimeMillis() + 8_000
+            while (got.size < sent.size && System.currentTimeMillis() < deadline) {
+                val next = peer.fromClient.poll(200, TimeUnit.MILLISECONDS) ?: continue
+                got.add(next)
+            }
+            assertEquals("server got ${got.size} of ${sent.size}", sent.size, got.size)
+            for (i in sent.indices) {
+                assertEquals(sent[i].size, got[i].size)
+                assertTrue(sent[i].contentEquals(got[i]))
+            }
+        } finally {
+            wg.close()
+            transport.stop()
+            peer.close()
+        }
+    }
+
+    @Test(timeout = 20_000)
     fun relaysHandshakeSizedPacketsBothWaysWithoutASecondClientDatagram() {
         val peer = FakeStealthPeer()
         val lines = ArrayList<String>()
@@ -221,11 +274,18 @@ class StealthProtocolTest {
             wg.receive(backPacket)
             assertEquals(back.size, backPacket.length)
             assertTrue(back.contentEquals(backPacket.data.copyOf(backPacket.length)))
-            val stats = transport.relayStats()
-            assertTrue(stats.udp >= 2)
-            assertTrue(stats.out >= 2)
-            assertTrue(stats.wsIn >= 2)
-            assertTrue(stats.ok >= 2)
+            val statsDeadline = System.currentTimeMillis() + 1_000
+            var stats = transport.relayStats()
+            while (System.currentTimeMillis() < statsDeadline &&
+                (stats.udp < 2 || stats.out < 2 || stats.wsIn < 2 || stats.ok < 2)
+            ) {
+                Thread.sleep(10)
+                stats = transport.relayStats()
+            }
+            assertTrue(
+                "udp=${stats.udp} out=${stats.out} wsIn=${stats.wsIn} ok=${stats.ok} fail=${stats.fail} miss=${stats.miss}",
+                stats.udp >= 2 && stats.out >= 2 && stats.wsIn >= 2 && stats.ok >= 2,
+            )
             assertEquals(0L, stats.fail)
             assertEquals(0L, stats.miss)
             val traced = synchronized(lines) { lines.toList() }
@@ -253,6 +313,7 @@ class StealthProtocolTest {
             miss = Long.MAX_VALUE,
             ping = Long.MAX_VALUE,
             other = Long.MAX_VALUE,
+            flush = Long.MAX_VALUE,
             loopback = 0,
             fam = 4,
             sport = 1,
@@ -265,6 +326,7 @@ class StealthProtocolTest {
         assertTrue(lines[1].contains("fam=4"))
         assertTrue(lines[1].contains("sport=1"))
         assertTrue(lines[2].startsWith("stealth io "))
+        assertTrue(lines[2].contains("fl="))
         assertTrue(lines[2].contains("read=SocketTimeoutEx"))
         assertTrue(lines[2].contains("err=ClosedChannelExc"))
         lines.forEach { assertRelayLineIsSafe(it) }
@@ -441,20 +503,31 @@ class StealthProtocolTest {
             client = DatagramSocket(null)
             client.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0))
             client.soTimeout = 8_000
-            val payload = "hello-wg".toByteArray(Charsets.US_ASCII)
             val local = WstunnelProtocol.parseEndpoint(transport.localEndpoint)
             assertTrue(local != null)
-            client.send(
-                DatagramPacket(
-                    payload,
-                    payload.size,
-                    InetAddress.getByName("127.0.0.1"),
-                    local!!.port,
-                ),
-            )
-            val reply = DatagramPacket(ByteArray(64), 64)
-            client.receive(reply)
-            assertEquals("hello-wg", String(reply.data, 0, reply.length, Charsets.US_ASCII))
+            val sent = mixedDatagrams(50)
+            for (payload in sent) {
+                client.send(
+                    DatagramPacket(
+                        payload,
+                        payload.size,
+                        InetAddress.getByName("127.0.0.1"),
+                        local!!.port,
+                    ),
+                )
+            }
+            val got = ArrayList<ByteArray>()
+            val replyBuf = ByteArray(2048)
+            while (got.size < sent.size) {
+                val reply = DatagramPacket(replyBuf, replyBuf.size)
+                client.receive(reply)
+                got.add(reply.data.copyOf(reply.length))
+            }
+            assertEquals(sent.size, got.size)
+            for (i in sent.indices) {
+                assertEquals(sent[i].size, got[i].size)
+                assertTrue(sent[i].contentEquals(got[i]))
+            }
         } finally {
             running.set(false)
             client?.close()
@@ -470,6 +543,15 @@ class StealthProtocolTest {
      * Same gates as [RoamLog] and the support diagnostic ring: 160 characters,
      * no addresses, and only the characters those rings keep.
      */
+    private fun mixedDatagrams(count: Int): List<ByteArray> {
+        val base = intArrayOf(148, 1, 32, 125, 126, 127, 200, 512, 1279, 1280, 1281, 1400, 92, 64, 80)
+        return List(count) { index ->
+            ByteArray(base[index % base.size]) { offset ->
+                if (offset == 0) index.toByte() else (offset * 3 + index).toByte()
+            }
+        }
+    }
+
     private fun assertRelayLineIsSafe(line: String) {
         assertTrue(line.length <= 160)
         assertEquals(line, RoamLog.sanitize(line))
@@ -482,7 +564,7 @@ class StealthProtocolTest {
      * frame per datagram in both directions.
      */
     private class FakeStealthPeer : AutoCloseable {
-        val fromClient = ArrayBlockingQueue<ByteArray>(8)
+        val fromClient = ArrayBlockingQueue<ByteArray>(64)
         private val toClient = ArrayBlockingQueue<ByteArray>(8)
         private val server: SSLServerSocket = newServer()
         val port: Int = server.localPort
