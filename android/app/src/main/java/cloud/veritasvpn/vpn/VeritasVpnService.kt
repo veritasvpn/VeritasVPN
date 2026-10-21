@@ -2949,6 +2949,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                         .putString(KEY_CONFIG, restored)
                         .putBoolean(KEY_RESUME_STEALTH, false)
                         .apply()
+                    // The failed Stealth switch may already have saved 127.0.0.1.
+                    // Later refreshes call protectBackendSockets() with no
+                    // endpoint and would leave this UDP tunnel unbound.
+                    TunnelRebuild.endpointToSaveAfterUdpRestore(restored)?.let {
+                        lastChosenEndpoint = it
+                    }
                 }
             }
         }

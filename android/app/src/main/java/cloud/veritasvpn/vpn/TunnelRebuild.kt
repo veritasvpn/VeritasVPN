@@ -122,6 +122,17 @@ object TunnelRebuild {
             host == "0:0:0:0:0:0:0:1"
     }
 
+    /**
+     * Endpoint to remember after Stealth is abandoned and the UDP config is
+     * put back. A loopback relay address must not stay saved: the next socket
+     * refresh would leave the restored UDP tunnel unbound.
+     */
+    fun endpointToSaveAfterUdpRestore(restoredConfig: String): String? {
+        val endpoint = EndpointSelector.endpointFromConfig(restoredConfig).trim()
+        if (endpoint.isEmpty() || loopbackRelay(endpoint)) return null
+        return endpoint
+    }
+
     private fun relayHost(endpoint: String?): String? {
         val value = endpoint?.trim()?.lowercase() ?: return null
         if (value.isEmpty()) return null
