@@ -164,6 +164,8 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private var underlayWaitStartedAtMs = 0L
     private var hardLoopStartedAtMs = 0L
     private var stealthReconnectJob: Job? = null
+    /** One Stealth dial per underlay handle. Repeat callbacks read this and wait. */
+    private var stealthRoamMemory = StealthRoam.Memory()
     private var natKeepaliveJob: Job? = null
     private var handshakeBurstJob: Job? = null
     @Volatile private var userspaceInstalling = false
@@ -1483,9 +1485,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val targetAlive = bindTargetAddressed(target)
         // Wi-Fi validation fires onCapabilities many times for one switch.
         // Cancelling an adapt that is already running turns userspace off
-        // again, so the handshake never finishes. A dead target still starts
+        // again, so the handshake never finishes. Stealth keeps the dial that
+        // already owns this handle: cancelling it opens a second websocket.
+        // Direct mode still restarts a hard stall. A dead target still starts
         // a roam when nothing is in flight.
-        if (!forceHard && adaptJob?.isActive == true && target != null && target == activeRoamHandle) {
+        if (adaptJob?.isActive == true && target != null && target == activeRoamHandle &&
+            (!forceHard || usesStealth())
+        ) {
             return
         }
         if (targetAlive && !forceHard && adaptJob?.isActive != true && target != null && target == activeRoamHandle &&
@@ -2623,6 +2629,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         activeRoamHandle = Long.MIN_VALUE
         roamFailHandle = null
         roamFailRebuilds = 0
+        synchronized(stealthSwitchLock) {
+            stealthRoamMemory = StealthRoam.Memory()
+        }
     }
 
     /**
@@ -3024,8 +3033,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val transport = stealthTransport
         stealthTransport = null
         if (transport == null) return
-        // stop() closes the TLS socket and joins the reader. Callers include
-        // onStartCommand, so the close cannot run on this thread.
+        // onStartCommand runs on the main thread. Closing the socket there
+        // throws and kills the process, so that caller only schedules stop().
+        // A roam is already on the IO scope: close this socket before the
+        // replacement dial, or the server keeps the old tunnel.
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            socketCloseScope.launch(Dispatchers.IO) {
+                runCatching { transport.stop() }
+            }
+            return
+        }
+        transport.detach()
         socketCloseScope.launch(Dispatchers.IO) {
             runCatching { transport.stop() }
         }
@@ -3174,8 +3192,133 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (!forceHard && !isReconnecting && !underlayLostSeen && !handshakeStaleForLink &&
             live.identity == lastUnderlayIdentity && fp == lastUnderlayFingerprint
         ) return
-        Log.i(TAG, "path-adapt stealth re-resolve handle=${live.network.networkHandle}")
-        recoverWithFreshEndpoint(gen, live.network.networkHandle)
+        // The Direct recovery loop is the wrong tool here. It demands a
+        // handshake newer than the instant it starts, waits 1.2s, then closes
+        // the websocket and tries again. A Stealth tunnel that is already
+        // carrying bytes fails that test, so the client drops it every few
+        // seconds and the UI stays on Reconnecting.
+        val transport = stealthTransport
+        val stats = readBackendStats()
+        val action = synchronized(stealthSwitchLock) {
+            val step = StealthRoam.next(
+                stealthRoamMemory,
+                StealthRoam.Observation(
+                    liveHandle = live.network.networkHandle,
+                    boundHandle = transport?.boundNetworkHandle(),
+                    open = transport?.sessionOpen() == true,
+                    dialing = transport?.dialInProgress() == true,
+                    handshakeMs = stats.third,
+                    rx = stats.first,
+                    tx = stats.second,
+                    nowMs = System.currentTimeMillis(),
+                    force = forceHard,
+                ),
+            )
+            stealthRoamMemory = step.first
+            step.second
+        }
+        when (action) {
+            StealthRoam.Action.HEALTHY -> {
+                commitUnderlay(live)
+                if (isReconnecting) {
+                    traceStealth("stealth roam up=1")
+                    publishReconnecting(false)
+                }
+                reconnectNotice = null
+            }
+            StealthRoam.Action.WAIT -> {
+                val liveTransport = stealthTransport
+                if (isReconnecting ||
+                    liveTransport?.dialInProgress() == true ||
+                    liveTransport?.sessionOpen() != true
+                ) {
+                    scheduleStealthRecheck(gen)
+                }
+            }
+            StealthRoam.Action.DIAL -> {
+                traceStealth("stealth roam dial=1")
+                reconnectNotice = null
+                publishReconnecting(true)
+                dialStealthForRoam(gen, live)
+                scheduleStealthRecheck(gen)
+            }
+        }
+    }
+
+    /** Look again soon. Repeat observations do not open another websocket. */
+    private fun scheduleStealthRecheck(gen: Long) {
+        waitRecheckJob?.cancel()
+        waitRecheckJob = scope.launch {
+            delay(EndpointRefresh.HANDSHAKE_POLL_MS)
+            if (gen == sessionGeneration && sessionIntended() && disconnectJob?.isActive != true) {
+                scheduleUnderlayAdapt(forceHard = false)
+            }
+        }
+    }
+
+    /**
+     * One websocket on [live]. The same host keeps the relay port, so
+     * WireGuard is left running and its counters are not reset. A different
+     * host replaces the transport once and rebinds userspace once.
+     */
+    private fun dialStealthForRoam(gen: Long, live: UnderlaySnap) {
+        if (!sessionStillActive(gen)) return
+        val chosen = offerForUnderlay(live, advertised = null) ?: return
+        val stealthEp = EndpointRefresh.freshEndpoint(chosen.offer.stealthEndpoint) ?: return
+        val parsedEp = WstunnelProtocol.parseEndpoint(stealthEp) ?: return
+        val prefix = chosen.offer.stealthPrefix
+            ?: vpnStatePrefs().getString(KEY_STEALTH_PREFIX, null)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return
+        val stealthOffer = StealthOffer(endpoint = stealthEp, pathPrefix = prefix, available = true)
+        if (!stealthOffer.usable()) return
+        val transport = stealthTransport
+        if (transport != null && transport.targets(parsedEp.host, parsedEp.port, prefix)) {
+            followSystemDefault()
+            transport.reconnect()
+            return
+        }
+        val local = try {
+            startStealth(stealthOffer)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "stealth roam dial failed: ${e.javaClass.simpleName}")
+            return
+        }
+        if (!sessionStillActive(gen)) return
+        val template = vpnStatePrefs().getString(KEY_UDP_CONFIG, null)
+            ?: vpnStatePrefs().getString(KEY_CONFIG, null)
+            ?: return
+        val liveConfig = BackendConfig.select(
+            vpnStatePrefs().getString(KEY_CONFIG, null),
+            EndpointSelector.replaceEndpoint(template, local),
+            chosen.offer.serverPublicKey,
+        )
+        val udpConfig = BackendConfig.select(
+            vpnStatePrefs().getString(KEY_UDP_CONFIG, null),
+            EndpointSelector.replaceEndpoint(template, chosen.offer.serverEndpoint),
+            chosen.offer.serverPublicKey,
+        )
+        val parsed = runCatching {
+            Config.parse(ByteArrayInputStream(liveConfig.toByteArray(Charsets.UTF_8)))
+        }.getOrNull() ?: return
+        followSystemDefault()
+        if (!rebindWithRetry(parsed, gen, recreateTun = false)) return
+        synchronized(tunnelOpLock) {
+            if (!sessionStillActive(gen)) return
+            vpnStatePrefs().edit()
+                .putString(KEY_CONFIG, liveConfig)
+                .putString(KEY_UDP_CONFIG, udpConfig)
+                .putString(KEY_STEALTH_ENDPOINT, stealthEp)
+                .putString(KEY_STEALTH_PREFIX, prefix)
+                .apply()
+            lastChosenEndpoint = local
+        }
+        // Userspace just restarted, so the counters the dial observed are gone.
+        synchronized(stealthSwitchLock) {
+            stealthRoamMemory = stealthRoamMemory.copy(baselineRx = 0L, baselineTx = 0L)
+        }
+        publishTransport("stealth")
     }
 
     private fun rebindWithRetry(parsed: Config, gen: Long, recreateTun: Boolean = false): Boolean {

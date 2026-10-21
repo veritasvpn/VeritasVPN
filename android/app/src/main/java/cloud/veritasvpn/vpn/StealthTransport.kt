@@ -71,6 +71,8 @@ class StealthTransport(
     @Volatile var stage: StealthDial.Stage? = null
         private set
     @Volatile private var dialing = false
+    /** True while [reconnect] or [detach] owns the session, so the supervisor does not dial a second one. */
+    @Volatile private var replacing = false
     @Volatile private var attemptStartedAtMs = 0L
     @Volatile private var openedAtMs = 0L
     @Volatile private var boundHandle: Long? = null
@@ -84,6 +86,12 @@ class StealthTransport(
 
     fun targets(host: String, port: Int, pathPrefix: String): Boolean =
         remoteHost == host && remotePort == port && this.pathPrefix == pathPrefix
+
+    fun boundNetworkHandle(): Long? = boundHandle
+
+    fun dialInProgress(): Boolean = dialing
+
+    fun sessionOpen(): Boolean = stage == StealthDial.Stage.OPEN && !dialing
 
     fun mayRedial(currentHandle: Long?, nowMs: Long): Boolean = StealthDial.mayRedial(
         stage = stage,
@@ -105,17 +113,28 @@ class StealthTransport(
         Thread({ udpLoop() }, "veritas-stealth-udp").also { it.isDaemon = true; it.start() }
         supervisor = Thread({
             while (running.get()) {
+                while (replacing && running.get()) {
+                    try {
+                        Thread.sleep(20)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+                if (!running.get() || Thread.currentThread().isInterrupted) break
                 if (!dialing) beginAttempt(keepBoundHandle = true)
+                var superseded = false
                 try {
                     runSession()
                 } catch (_: SessionSuperseded) {
                     // reconnect() closed this dial. The next loop binds again.
+                    superseded = true
                 } catch (e: Exception) {
                     val failed = stage ?: StealthDial.Stage.TCP
                     lastError = StealthDial.userFacing(failed, e)
                 }
                 closeActiveSocket()
-                if (running.get()) {
+                if (running.get() && !superseded && !replacing) {
                     try {
                         Thread.sleep(400)
                     } catch (_: InterruptedException) {
@@ -127,21 +146,38 @@ class StealthTransport(
         }, "veritas-stealth").also { it.isDaemon = true; it.start() }
     }
 
-    /** Drop the TLS session so the next dial follows the current underlay. */
+    /**
+     * Drop the TLS session so the next dial follows the current underlay.
+     * One caller, one new session: the supervisor waits until this returns.
+     */
     fun reconnect() {
-        sessionGen.incrementAndGet()
-        beginAttempt(keepBoundHandle = false)
-        closeDialing()
-        closeActiveSocket()
-        control.clear()
+        replacing = true
+        try {
+            closeSession(sendClose = stage == StealthDial.Stage.OPEN)
+            beginAttempt(keepBoundHandle = false)
+        } finally {
+            replacing = false
+        }
+    }
+
+    /**
+     * Close the TCP socket on the caller. [stop] joins the threads afterwards,
+     * so a replacement tunnel is not dialed while this one is still up.
+     */
+    fun detach() {
+        replacing = true
+        try {
+            // Leave the writer running until the close frame is flushed.
+            closeSession(sendClose = stage == StealthDial.Stage.OPEN)
+            running.set(false)
+        } finally {
+            replacing = false
+            dialing = false
+        }
     }
 
     fun stop() {
-        running.set(false)
-        dialing = false
-        sessionGen.incrementAndGet()
-        closeDialing()
-        closeActiveSocket()
+        detach()
         runCatching { v6Channel?.close() }
         v6Channel = null
         runCatching { udpChannel.close() }
@@ -150,6 +186,30 @@ class StealthTransport(
         supervisor?.join(1_500)
         supervisor = null
         outbound.clear()
+    }
+
+    /**
+     * A websocket close goes out on the writer thread before the TCP socket
+     * is dropped. Writing it here would be a second writer on the TLS socket.
+     */
+    private fun closeSession(sendClose: Boolean) {
+        if (sendClose) {
+            val frame = WstunnelProtocol.encodeClose()
+            if (!control.offer(frame)) {
+                control.poll()
+                control.offer(frame)
+            }
+            try {
+                Thread.sleep(CLOSE_FLUSH_MS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+        sessionGen.incrementAndGet()
+        closeDialing()
+        closeActiveSocket()
+        control.clear()
+        stage = StealthDial.Stage.TCP
     }
 
     private fun beginAttempt(keepBoundHandle: Boolean) {
@@ -703,6 +763,9 @@ class StealthTransport(
     companion object {
         /** How long the writer waits for the next WireGuard datagram. */
         private const val WRITE_WAIT_MS = 50L
+
+        /** Long enough for the writer to leave [WRITE_WAIT_MS] and flush a close frame. */
+        private const val CLOSE_FLUSH_MS = 80L
         private const val PING_EVERY_MS = 30_000L
         private const val LOG_EVERY_MS = 1_000L
 

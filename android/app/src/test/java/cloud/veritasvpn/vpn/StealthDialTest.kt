@@ -395,6 +395,33 @@ class StealthDialTest {
         assertTrue(underlay.indexOf("network == null") < underlay.indexOf("protectThenBind"))
     }
 
+    @Test
+    fun stealthNetworkChangeDialsOnceAndClosesTheOldTunnel() {
+        val service = kotlinSource("VeritasVpnService.kt")
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .lineSequence()
+            .filterNot { it.trimStart().startsWith("//") }
+            .joinToString("\n")
+        val adapt = slice(service, "fun adaptWhileStealth", "fun scheduleStealthRecheck")
+        assertTrue(adapt.contains("StealthRoam.next"))
+        assertFalse(adapt.contains("recoverWithFreshEndpoint"))
+        assertTrue(adapt.contains("stealth roam dial="))
+        assertTrue(adapt.contains("stealth roam up="))
+        val schedule = slice(service, "fun scheduleUnderlayAdapt", "adaptJob = scope.launch")
+        assertTrue(schedule.contains("usesStealth()"))
+        assertTrue(schedule.indexOf("usesStealth()") < schedule.indexOf("adaptJob?.cancel()"))
+        val dial = slice(service, "fun dialStealthForRoam", "fun rebindWithRetry")
+        assertTrue(dial.indexOf("transport.reconnect()") < dial.indexOf("startStealth"))
+        val transport = kotlinSource("StealthTransport.kt")
+        val close = slice(transport, "fun closeSession", "fun beginAttempt")
+        assertTrue(close.contains("encodeClose"))
+        assertTrue(close.indexOf("encodeClose") < close.indexOf("sessionGen.incrementAndGet"))
+        val stop = slice(service, "fun stopStealthTransport", "fun cancelStealthWork")
+        assertTrue(stop.contains("transport.detach()"))
+        assertTrue(stop.contains("Looper.myLooper()"))
+        assertEquals(2, Regex("""\.bindSocket\(""").findAll(service).count())
+    }
+
     private fun waitForError(transport: StealthTransport): String {
         val deadline = System.currentTimeMillis() + 3_000L
         while (System.currentTimeMillis() < deadline) {
