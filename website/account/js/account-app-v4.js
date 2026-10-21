@@ -419,6 +419,25 @@ function renderDownloads() {
   `;
 }
 
+function activePlaySubscription(status) {
+  return Boolean(status?.is_premium) && status?.payment_method === 'google_play';
+}
+
+function playSubscriptionUrl(status) {
+  const packageName = 'cloud.veritasvpn';
+  const sku = status?.plan_id;
+  if (sku === 'premium_monthly' || sku === 'premium_annual') {
+    return `https://play.google.com/store/account/subscriptions?sku=${encodeURIComponent(sku)}&package=${packageName}`;
+  }
+  return `https://play.google.com/store/account/subscriptions?package=${packageName}`;
+}
+
+function playDeletionNote() {
+  if (!activePlaySubscription(billingStatus)) return '';
+  const url = playSubscriptionUrl(billingStatus);
+  return `<p>Deleting this account does not cancel your Google Play subscription. Google can keep charging you until you cancel it in Google Play. <a href="${url}" rel="noopener noreferrer">Manage subscription in Google Play</a></p>`;
+}
+
 function renderAccount(user) {
   const isAnonymous = !user.email;
 
@@ -458,7 +477,9 @@ function renderAccount(user) {
       <div class="account-card account-danger-card">
         <div>
           <strong>This action cannot be undone.</strong>
-          <p>Your Account ID, email sign-in, and access to VeritasVPN will no longer work.</p>
+          <p>Your Account ID, email sign-in, and access to VeritasVPN will no longer work. In the live database we delete the account, sessions, VPN peers, the subscription row, and payment records.</p>
+          <p>Encrypted backups can keep a copy for about 3 months. BTCPay invoices tagged with the Account ID are not deleted.</p>
+          ${playDeletionNote()}
         </div>
         <button type="button" class="btn account-delete-button" data-action="delete-account">Delete my account</button>
       </div>
@@ -634,7 +655,10 @@ async function onAction(action, btn) {
       return;
     }
     if (action === 'delete-account') {
-      if (!confirm('Delete your account permanently? This cannot be undone.')) return;
+      const playNote = activePlaySubscription(billingStatus)
+        ? '\n\nThis does not cancel your Google Play subscription. Cancel it in Google Play or charges can continue.'
+        : '';
+      if (!confirm(`Delete your account permanently? This cannot be undone.${playNote}`)) return;
       const { password, turnstileToken } = await confirmSensitiveAction('Confirm account deletion');
       btn.disabled = true;
       btn.textContent = 'Deleting account…';
@@ -736,11 +760,15 @@ onAuthStateChanged(async (user) => {
       window.clearTimeout(billingPollTimer);
       billingPollTimer = null;
     }
-    const requestedRoute = route().replace(/^\//, '');
-    const next = ['subscription', 'downloads', 'account', 'security', 'devices'].includes(requestedRoute) ? requestedRoute : 'account';
-    window.location.replace(`/?signin=1&next=${encodeURIComponent(next)}`);
+    if (boot) boot.hidden = true;
+    const pub = document.getElementById('accountPublic');
+    if (pub) pub.hidden = false;
     return;
   }
+
+  const signedInPublic = document.getElementById('accountPublic');
+  if (signedInPublic) signedInPublic.hidden = true;
+  if (boot) boot.hidden = false;
 
   emailEl.textContent = user.email || user.account_id;
 

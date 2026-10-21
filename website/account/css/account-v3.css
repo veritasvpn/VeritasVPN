@@ -16,8 +16,50 @@
     var(--bg-primary);
 }
 
-.account-boot[hidden] {
+.account-boot[hidden],
+.account-shell[hidden],
+.account-public[hidden] {
   display: none;
+}
+
+.account-public {
+  min-height: 100vh;
+  padding: 48px 20px 72px;
+  background: var(--bg-primary, #070b12);
+  color: var(--text-primary, #f4f7fb);
+}
+
+.account-public-inner {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.account-public h1 {
+  margin: 28px 0 12px;
+  font-size: clamp(28px, 4vw, 40px);
+}
+
+.account-public h2 {
+  margin: 28px 0 8px;
+  font-size: 20px;
+}
+
+.account-public p,
+.account-public li {
+  color: var(--text-secondary, #9aa4b2);
+  line-height: 1.55;
+}
+
+.account-public ul {
+  padding-left: 1.2rem;
+}
+
+.account-public a {
+  color: var(--accent, #00d2ff);
+}
+
+.account-public .btn {
+  margin-top: 8px;
 }
 
 .account-boot img {

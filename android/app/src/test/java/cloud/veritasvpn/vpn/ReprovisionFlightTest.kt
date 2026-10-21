@@ -46,6 +46,35 @@ class ReprovisionFlightTest {
     }
 
     @Test
+    fun peerGoneRetriesOnceUnderTheFlightWindow() {
+        val now = 30_000L
+        assertEquals(
+            ReprovisionFlight.Decision.SKIP,
+            ReprovisionFlight.decide(ReprovisionFlight.Phase.IDLE, persistedAtMs = 1_000L, nowMs = now),
+        )
+        assertNull(ReprovisionFlight.tryClaim(1_000L, now, replaceWaiting = true) { })
+        val persisted = mutableListOf<Long>()
+        val epoch = ReprovisionFlight.tryClaim(
+            persistedAtMs = 1_000L,
+            nowMs = now,
+            replaceWaiting = true,
+            peerGone = true,
+            upgradeHeld = true,
+        ) { persisted += it }
+        assertTrue(epoch != null)
+        assertEquals(listOf(now), persisted)
+        assertNull(
+            ReprovisionFlight.tryClaim(
+                persistedAtMs = 1_000L,
+                nowMs = now + 1_000L,
+                replaceWaiting = true,
+                peerGone = true,
+                upgradeHeld = true,
+            ) { },
+        )
+    }
+
+    @Test
     fun recentPersistedClaimBlocksARestartedProcess() {
         assertEquals(
             ReprovisionFlight.Decision.SKIP,

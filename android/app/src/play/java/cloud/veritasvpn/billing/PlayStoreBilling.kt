@@ -154,7 +154,7 @@ class PlayStoreBilling(
                                 .build(),
                         ),
                     )
-                    .setObfuscatedAccountId(accountId)
+                    .setObfuscatedAccountId(PlayAccountHash.obfuscatedAccountId(accountId))
                     .build()
                 val launched = client.launchBillingFlow(activity, flow)
                 if (launched.responseCode != BillingClient.BillingResponseCode.OK) {

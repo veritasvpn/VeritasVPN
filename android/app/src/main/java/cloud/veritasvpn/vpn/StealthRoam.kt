@@ -45,14 +45,17 @@ object StealthRoam {
     fun next(memory: Memory, observation: Observation): Pair<Memory, Action> {
         val live = observation.liveHandle ?: return memory to Action.WAIT
         val onNetwork = observation.boundHandle != null && observation.boundHandle == live
-        val bytesMoving = observation.rx > memory.baselineRx || observation.tx > memory.baselineTx
+        // Transmit growth alone is not a live tunnel: WireGuard keeps sending
+        // into a socket the server never answers. Received bytes or a fresh
+        // handshake are.
+        val received = observation.rx > memory.baselineRx
         val handshakeAge = if (observation.handshakeMs > 0L) {
             observation.nowMs - observation.handshakeMs
         } else {
             Long.MAX_VALUE
         }
         val handshakeFresh = handshakeAge in 0..HANDSHAKE_FRESH_MS
-        if (onNetwork && observation.open && !observation.dialing && (bytesMoving || handshakeFresh)) {
+        if (onNetwork && observation.open && !observation.dialing && (received || handshakeFresh)) {
             return memory.copy(
                 issuedHandle = live,
                 issuedAtMs = observation.nowMs,
@@ -73,11 +76,12 @@ object StealthRoam {
 
         val moved = observation.boundHandle != null && observation.boundHandle != live
         val unbound = observation.boundHandle == null && !observation.dialing
+        // An open socket can still be dead. The gap above keeps this to one
+        // dial per network, so a stall wake cannot flap.
         val stalled = observation.force &&
-            !bytesMoving &&
+            !received &&
             !handshakeFresh &&
-            !observation.dialing &&
-            !observation.open
+            !observation.dialing
         if (moved || unbound || stalled) {
             return memory.copy(
                 issuedHandle = live,

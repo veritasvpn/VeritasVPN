@@ -5,8 +5,10 @@ package cloud.veritasvpn.vpn
  *
  * RUNNING rejects a second attempt. WAITING is the backoff after a failure;
  * a new peer-gone result cancels that wait and starts one attempt. IDLE with
- * a recent persisted timestamp still rejects, so a restarted process does not
- * create a second peer while the first attempt's window is open.
+ * a recent persisted timestamp still rejects an ordinary claim, so a restarted
+ * process does not create a second peer while the first attempt's window is
+ * open. A peer-gone claim is the exception: the window does not swallow the
+ * one create that follows a 404 or 410.
  */
 object ReprovisionFlight {
     const val WINDOW_MS = 60_000L
@@ -46,8 +48,23 @@ object ReprovisionFlight {
         persistedAtMs: Long,
         nowMs: Long,
         replaceWaiting: Boolean,
+        peerGone: Boolean = false,
+        upgradeHeld: Boolean = false,
         persist: (Long) -> Unit,
     ): Int? = synchronized(lock) {
+        if (peerGone) {
+            return when (
+                PeerGoneRecovery.action(
+                    upgradeHeld = upgradeHeld,
+                    phase = phase,
+                    persistedAtMs = persistedAtMs,
+                    nowMs = nowMs,
+                )
+            ) {
+                PeerGoneRecovery.Action.IN_FLIGHT -> null
+                PeerGoneRecovery.Action.CREATE -> claim(nowMs, persist)
+            }
+        }
         when (val decision = decide(phase, persistedAtMs, nowMs)) {
             Decision.SKIP -> null
             Decision.REPLACE_WAITING -> {

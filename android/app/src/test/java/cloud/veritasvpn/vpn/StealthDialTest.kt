@@ -93,6 +93,23 @@ class StealthDialTest {
     }
 
     @Test
+    fun failedDialReleasesTheUpgradeHold() {
+        val now = 100_000L
+        assertTrue(
+            StealthDial.mayRedial(
+                stage = StealthDial.Stage.TCP,
+                dialing = true,
+                attemptStartedAtMs = now - 1_000L,
+                openedAtMs = 0L,
+                boundHandle = 10L,
+                currentHandle = 10L,
+                nowMs = now,
+                attemptFailed = true,
+            ),
+        )
+    }
+
+    @Test
     fun sameNetworkUpgradeIsNotRedialedUntilTheBudget() {
         val now = 100_000L
         assertFalse(
@@ -335,7 +352,7 @@ class StealthDialTest {
             assertTrue(error.contains("network"))
             assertTrue(StealthDial.detail(transport.stage, error)!!.startsWith("tcp"))
             assertFalse(error.contains("timeout", ignoreCase = true))
-            assertFalse(transport.mayRedial(4L, System.currentTimeMillis()))
+            assertTrue(transport.mayRedial(4L, System.currentTimeMillis()))
         } finally {
             transport.stop()
             server.close()

@@ -102,7 +102,7 @@ func (p *PlayBilling) Verify(ctx context.Context, accountID, productID, purchase
 	if err != nil {
 		return nil, err
 	}
-	if purchase.ObfuscatedAccountID == "" || purchase.ObfuscatedAccountID != accountID {
+	if !playAccountMatches(accountID, purchase.ObfuscatedAccountID) {
 		return nil, ErrPlayAccountMismatch
 	}
 	return p.apply(ctx, accountID, productID, purchaseToken, purchase, false)
@@ -130,22 +130,17 @@ func (p *PlayBilling) ProcessNotification(ctx context.Context, body []byte, auth
 	if err != nil {
 		return err
 	}
-	accountID := purchase.ObfuscatedAccountID
-	if accountID == "" {
-		accountID, err = p.store.PaymentAccount(ctx, note.PurchaseToken)
-		if err != nil {
-			return err
-		}
+	accountID, err := p.accountForPurchase(ctx, note.PurchaseToken, purchase.ObfuscatedAccountID)
+	if err != nil {
+		return err
 	}
 	if accountID == "" {
 		p.log.Warn("google play notification has no account binding",
 			zap.String("token_hash", logging.HashIdentifier(note.PurchaseToken)),
 			zap.Int("notification_type", note.Type),
+			zap.Bool("hashed_account", isPlayAccountHash(purchase.ObfuscatedAccountID)),
 		)
 		return nil
-	}
-	if purchase.ObfuscatedAccountID != "" && purchase.ObfuscatedAccountID != accountID {
-		return ErrPlayAccountMismatch
 	}
 	_, err = p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke)
 	return err
@@ -222,8 +217,29 @@ func (p *PlayBilling) emit(event, accountID, planID string, periodDays int, peri
 	}
 }
 
+func (p *PlayBilling) accountForPurchase(ctx context.Context, token, obfuscated string) (string, error) {
+	stored, err := p.store.PaymentAccount(ctx, token)
+	if err != nil {
+		return "", err
+	}
+	stored = strings.TrimSpace(stored)
+	obfuscated = strings.TrimSpace(obfuscated)
+	if stored != "" {
+		if obfuscated == "" || playAccountMatches(stored, obfuscated) {
+			return stored, nil
+		}
+		return "", ErrPlayAccountMismatch
+	}
+	// A hash cannot be reversed into an Account ID. The app verify call binds
+	// it. Until then, do not create a subscription under the hash.
+	if obfuscated == "" || isPlayAccountHash(obfuscated) {
+		return "", nil
+	}
+	return obfuscated, nil
+}
+
 func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token string, purchase *provider.SubscriptionPurchase, sub *model.Subscription, existing *model.PaymentRecord, forceRevoke bool) (*model.PaymentRecord, string, bool, bool, PlayVerifyResult, error) {
-	if purchase.ObfuscatedAccountID != "" && purchase.ObfuscatedAccountID != accountID {
+	if purchase.ObfuscatedAccountID != "" && !playAccountMatches(accountID, purchase.ObfuscatedAccountID) {
 		return nil, "", false, false, PlayVerifyResult{}, ErrPlayAccountMismatch
 	}
 	line, err := selectPlayLine(purchase, requestedProduct)

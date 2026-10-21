@@ -81,8 +81,13 @@ object StealthDial {
         boundHandle: Long?,
         currentHandle: Long?,
         nowMs: Long,
+        attemptFailed: Boolean = false,
     ): Boolean {
         if (boundHandle != null && currentHandle != null && boundHandle != currentHandle) return true
+        // A failed dial is not an upgrade still in progress. Holding the
+        // roam until the budget ends left peer-gone recovery waiting on a
+        // socket that will never open.
+        if (attemptFailed) return true
         if (stage == Stage.OPEN) {
             if (openedAtMs <= 0L) return true
             return nowMs - openedAtMs >= OPEN_QUIET_MS

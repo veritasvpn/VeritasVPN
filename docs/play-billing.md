@@ -57,7 +57,7 @@ For each base plan:
 3. A free trial or intro offer is optional. The app uses the base-plan offer (the offer with no offer id) when one exists.
 4. Turn on a grace period and account hold if you want those states. The server already updates entitlements when Google reports them.
 
-The app sets `obfuscatedAccountId` to the Veritas account id (32 hex characters) when the purchase starts. The server rejects a token that is bound to a different account.
+The app sets `obfuscatedAccountId` to a 64-character HMAC-SHA256 of the Account ID (domain separator `veritasvpn-play-account-v1`, shared with billing-svc). That value is not the Account ID and cannot be used to sign in. The server accepts that hash and, for purchases already stored by older app versions, the raw Account ID. It rejects a token bound to a different account. Real-time notifications for a hashed purchase resolve the account from the stored purchase token; the hash is not used as an account id. billing-svc does not cancel or revoke the Play subscription when the account is deleted.
 
 ## Free trials
 
