@@ -21,9 +21,15 @@ import javax.net.ssl.X509TrustManager
 
 /**
  * Local UDP listener that carries WireGuard datagrams to the node's wstunnel
- * server over TLS. WireGuard's endpoint is [localEndpoint]; only this socket
- * leaves the device, and only after [protectSocket] (the same escape the
- * WireGuard UDP socket uses under Always-on lockdown).
+ * server over TLS. WireGuard's endpoint is [localEndpoint]. Only this socket
+ * leaves the device.
+ *
+ * Each dial creates a plain socket, then [attachUnderlay] protect()s it and
+ * bind()s it to the underlay resolved at that moment. The socket connects
+ * with a timeout and is wrapped in a trust-all SSLSocket. protect() alone
+ * can stamp a stale VPN netId, so a missing network or a failed bind fails
+ * the dial and the supervisor retries. [reconnect] closes the in-flight
+ * socket so the next dial binds to the network that is current then.
  *
  * The TLS certificate is not verified. wstunnel's server certificate is
  * generated in-process, and the Linux client leaves certificate verification
@@ -33,7 +39,7 @@ class StealthTransport(
     private val remoteHost: String,
     private val remotePort: Int,
     private val pathPrefix: String,
-    private val protectSocket: (Socket) -> Boolean,
+    private val attachUnderlay: (Socket) -> Long?,
 ) {
     private val running = AtomicBoolean(false)
     private val sessionGen = AtomicInteger(0)
@@ -41,9 +47,16 @@ class StealthTransport(
     private val udpSocket = DatagramSocket(null)
     private var supervisor: Thread? = null
     private var activeSocket: Socket? = null
+    private var dialingSocket: Socket? = null
     @Volatile private var lastPeer: InetSocketAddress? = null
     @Volatile var lastError: String? = null
         private set
+    @Volatile var stage: StealthDial.Stage? = null
+        private set
+    @Volatile private var dialing = false
+    @Volatile private var attemptStartedAtMs = 0L
+    @Volatile private var openedAtMs = 0L
+    @Volatile private var boundHandle: Long? = null
 
     val localEndpoint: String
         get() = "127.0.0.1:${udpSocket.localPort}"
@@ -51,25 +64,33 @@ class StealthTransport(
     fun targets(host: String, port: Int, pathPrefix: String): Boolean =
         remoteHost == host && remotePort == port && this.pathPrefix == pathPrefix
 
+    fun mayRedial(currentHandle: Long?, nowMs: Long): Boolean = StealthDial.mayRedial(
+        stage = stage,
+        dialing = dialing,
+        attemptStartedAtMs = attemptStartedAtMs,
+        openedAtMs = openedAtMs,
+        boundHandle = boundHandle,
+        currentHandle = currentHandle,
+        nowMs = nowMs,
+    )
+
     fun start() {
         if (running.getAndSet(true)) return
+        beginAttempt(keepBoundHandle = false)
         udpSocket.reuseAddress = true
         udpSocket.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0))
         udpSocket.soTimeout = 0
         Thread({ udpLoop() }, "veritas-stealth-udp").also { it.isDaemon = true; it.start() }
         supervisor = Thread({
             while (running.get()) {
+                if (!dialing) beginAttempt(keepBoundHandle = true)
                 try {
                     runSession()
+                } catch (_: SessionSuperseded) {
+                    // reconnect() closed this dial. The next loop binds again.
                 } catch (e: Exception) {
-                    lastError = (e as? cloud.veritasvpn.api.UserVisibleError)?.userMessage ?: when (e) {
-                        is java.net.SocketTimeoutException,
-                        is java.io.InterruptedIOException -> EndpointRefresh.GIVE_UP_MESSAGE
-                        is java.net.UnknownHostException -> "Could not resolve server address"
-                        is java.net.ConnectException -> "Could not connect to server"
-                        is javax.net.ssl.SSLException -> "Secure connection failed"
-                        else -> e.javaClass.simpleName
-                    }
+                    val failed = stage ?: StealthDial.Stage.TCP
+                    lastError = StealthDial.userFacing(failed, e)
                 }
                 closeActiveSocket()
                 if (running.get()) {
@@ -87,12 +108,16 @@ class StealthTransport(
     /** Drop the TLS session so the next dial follows the current underlay. */
     fun reconnect() {
         sessionGen.incrementAndGet()
+        beginAttempt(keepBoundHandle = false)
+        closeDialing()
         closeActiveSocket()
     }
 
     fun stop() {
         running.set(false)
+        dialing = false
         sessionGen.incrementAndGet()
+        closeDialing()
         closeActiveSocket()
         runCatching { udpSocket.close() }
         supervisor?.interrupt()
@@ -101,11 +126,20 @@ class StealthTransport(
         outbound.clear()
     }
 
+    private fun beginAttempt(keepBoundHandle: Boolean) {
+        stage = StealthDial.Stage.TCP
+        dialing = true
+        openedAtMs = 0L
+        attemptStartedAtMs = System.currentTimeMillis()
+        if (!keepBoundHandle) boundHandle = null
+    }
+
     private fun runSession() {
         val endpoint = WstunnelProtocol.Endpoint(remoteHost, remotePort)
         val path = WstunnelProtocol.upgradePath(pathPrefix)
         val gen = sessionGen.incrementAndGet()
-        val tcp = openTls(endpoint)
+        stage = StealthDial.Stage.TCP
+        val tcp = openTls(endpoint, gen)
         synchronized(this) { activeSocket = tcp }
         if (!running.get() || gen != sessionGen.get()) {
             tcp.close()
@@ -113,7 +147,12 @@ class StealthTransport(
         }
         val input = tcp.getInputStream()
         val output = tcp.getOutputStream()
+        stage = StealthDial.Stage.UPGRADE
         handshake(endpoint, path, input, output)
+        tcp.soTimeout = 0
+        stage = StealthDial.Stage.OPEN
+        dialing = false
+        openedAtMs = System.currentTimeMillis()
         lastError = null
         val reader = Thread({
             readLoop(input, output, gen)
@@ -135,20 +174,57 @@ class StealthTransport(
         writer.join(1_000)
     }
 
-    private fun openTls(endpoint: WstunnelProtocol.Endpoint): SSLSocket {
+    private fun openTls(endpoint: WstunnelProtocol.Endpoint, gen: Int): SSLSocket {
+        val plain = Socket()
+        plain.tcpNoDelay = true
+        var ssl: SSLSocket? = null
+        synchronized(this) { dialingSocket = plain }
+        try {
+            if (!running.get() || gen != sessionGen.get()) throw SessionSuperseded()
+            val handle = attachUnderlay(plain)
+            if (handle == null) {
+                throw StealthDial.Failure(StealthDial.Stage.TCP, StealthDial.NO_NETWORK)
+            }
+            boundHandle = handle
+            if (!running.get() || gen != sessionGen.get()) throw SessionSuperseded()
+            plain.connect(
+                InetSocketAddress(endpoint.host, endpoint.port),
+                StealthDial.CONNECT_TIMEOUT_MS,
+            )
+            stage = StealthDial.Stage.TLS
+            ssl = wrapTls(plain, endpoint)
+            ssl.soTimeout = StealthDial.CONNECT_TIMEOUT_MS
+            ssl.startHandshake()
+            synchronized(this) {
+                if (dialingSocket === plain) dialingSocket = null
+            }
+            return ssl
+        } catch (e: Exception) {
+            synchronized(this) {
+                if (dialingSocket === plain) dialingSocket = null
+            }
+            runCatching { ssl?.close() }
+            runCatching { plain.close() }
+            if (e is SessionSuperseded || gen != sessionGen.get() || !running.get()) {
+                throw SessionSuperseded()
+            }
+            throw e
+        }
+    }
+
+    private fun wrapTls(plain: Socket, endpoint: WstunnelProtocol.Endpoint): SSLSocket {
         val context = SSLContext.getInstance("TLS")
         context.init(null, arrayOf<TrustManager>(trustAll), SecureRandom())
-        val socket = context.socketFactory.createSocket() as SSLSocket
-        if (!protectSocket(socket)) {
-            socket.close()
-            throw VeritasVpnService.VpnError("Stealth couldn't start. Try again.")
-        }
+        val socket = context.socketFactory.createSocket(
+            plain,
+            endpoint.host,
+            endpoint.port,
+            true,
+        ) as SSLSocket
+        socket.useClientMode = true
         val params = socket.sslParameters
         params.endpointIdentificationAlgorithm = null
         socket.sslParameters = params
-        socket.soTimeout = 0
-        socket.connect(InetSocketAddress(endpoint.host, endpoint.port), 10_000)
-        socket.startHandshake()
         return socket
     }
 
@@ -259,6 +335,15 @@ class StealthTransport(
         runCatching { udpSocket.send(packet) }
     }
 
+    private fun closeDialing() {
+        val socket = synchronized(this) {
+            val current = dialingSocket
+            dialingSocket = null
+            current
+        }
+        runCatching { socket?.close() }
+    }
+
     private fun closeActiveSocket() {
         val socket = synchronized(this) {
             val current = activeSocket
@@ -289,6 +374,8 @@ class StealthTransport(
         }
         return null
     }
+
+    private class SessionSuperseded : Exception()
 
     private val trustAll = object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit

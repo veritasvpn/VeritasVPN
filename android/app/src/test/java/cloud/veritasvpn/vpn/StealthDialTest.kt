@@ -1,0 +1,349 @@
+package cloud.veritasvpn.vpn
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+import java.net.ConnectException
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.SocketTimeoutException
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+
+class StealthDialTest {
+
+    @Test
+    fun protectRunsBeforeBindAndBindFailureDoesNotConnect() {
+        val events = mutableListOf<String>()
+        val socket = Socket()
+        try {
+            StealthDial.protectThenBind(
+                socket,
+                protect = {
+                    events += "protect"
+                    true
+                },
+                bind = {
+                    events += "bind"
+                    throw java.io.IOException("bind")
+                },
+            )
+            throw AssertionError("bind failure must not return")
+        } catch (e: StealthDial.Failure) {
+            assertEquals(StealthDial.Stage.TCP, e.stage)
+            assertEquals(StealthDial.BIND_FAILED, e.userMessage)
+        }
+        assertEquals(listOf("protect", "bind"), events)
+        assertTrue(socket.isClosed)
+        assertFalse(StealthDial.BIND_FAILED.contains("timeout", ignoreCase = true))
+    }
+
+    @Test
+    fun dialFailsWhenNoNetworkAndDoesNotProtectOrBind() {
+        val events = mutableListOf<String>()
+        val socket = Socket()
+        try {
+            StealthDial.dial(
+                socket,
+                networkAvailable = false,
+                protect = {
+                    events += "protect"
+                    true
+                },
+                bind = { events += "bind" },
+            )
+            throw AssertionError("missing network must not return a socket")
+        } catch (e: StealthDial.Failure) {
+            assertEquals(StealthDial.NO_NETWORK, e.userMessage)
+        }
+        assertTrue(events.isEmpty())
+        assertTrue(socket.isClosed)
+    }
+
+    @Test
+    fun underlayAttachWithNoNetworkDoesNotProtect() {
+        val socket = Socket()
+        var protected = false
+        val handle = StealthUnderlay.attach(socket, null) {
+            protected = true
+            true
+        }
+        assertNull(handle)
+        assertFalse(protected)
+        socket.close()
+    }
+
+    @Test
+    fun sameNetworkUpgradeIsNotRedialedUntilTheBudget() {
+        val now = 100_000L
+        assertFalse(
+            StealthDial.mayRedial(
+                stage = StealthDial.Stage.TLS,
+                dialing = true,
+                attemptStartedAtMs = now - 1_000L,
+                openedAtMs = 0L,
+                boundHandle = 10L,
+                currentHandle = 10L,
+                nowMs = now,
+            ),
+        )
+        assertTrue(
+            StealthDial.mayRedial(
+                stage = StealthDial.Stage.TLS,
+                dialing = true,
+                attemptStartedAtMs = now - StealthDial.UPGRADE_BUDGET_MS,
+                openedAtMs = 0L,
+                boundHandle = 10L,
+                currentHandle = 10L,
+                nowMs = now,
+            ),
+        )
+    }
+
+    @Test
+    fun networkChangeRedialsImmediatelyAndOpenStaysQuiet() {
+        assertTrue(
+            StealthDial.mayRedial(
+                stage = StealthDial.Stage.TCP,
+                dialing = true,
+                attemptStartedAtMs = 1_000L,
+                openedAtMs = 0L,
+                boundHandle = 10L,
+                currentHandle = 20L,
+                nowMs = 1_500L,
+            ),
+        )
+        assertFalse(
+            StealthDial.mayRedial(
+                stage = StealthDial.Stage.OPEN,
+                dialing = false,
+                attemptStartedAtMs = 0L,
+                openedAtMs = 5_000L,
+                boundHandle = 10L,
+                currentHandle = 10L,
+                nowMs = 5_000L + StealthDial.OPEN_QUIET_MS - 1L,
+            ),
+        )
+        assertTrue(
+            StealthDial.mayRedial(
+                stage = StealthDial.Stage.OPEN,
+                dialing = false,
+                attemptStartedAtMs = 0L,
+                openedAtMs = 5_000L,
+                boundHandle = 10L,
+                currentHandle = 20L,
+                nowMs = 5_100L,
+            ),
+        )
+    }
+
+    @Test
+    fun userFacingErrorKeepsTheStageAndDropsAddressesAndTimeouts() {
+        val message = StealthDial.userFacing(
+            StealthDial.Stage.TCP,
+            SocketTimeoutException("connect timed out to 203.0.113.10:443"),
+        )
+        assertTrue(message.contains("tcp"))
+        assertTrue(message.contains("did not respond"))
+        assertFalse(message.contains("203.0.113.10"))
+        assertFalse(message.contains("timeout", ignoreCase = true))
+        assertFalse(message.contains("timed out", ignoreCase = true))
+        assertFalse(message.contains("Exception"))
+        val connect = StealthDial.userFacing(
+            StealthDial.Stage.TLS,
+            ConnectException("failed 198.51.100.8"),
+        )
+        assertTrue(connect.startsWith("Stealth tls:"))
+        assertFalse(connect.contains("198.51.100.8"))
+        assertNull(StealthDial.detail(StealthDial.Stage.OPEN, message))
+        assertEquals(message, StealthDial.detail(StealthDial.Stage.TCP, message))
+    }
+
+    @Test
+    fun reconnectingLineShowsTheStageWithoutReplacingDirectMode() {
+        assertEquals(
+            "Reconnecting… · tcp",
+            StealthDial.statusLine(
+                reconnecting = true,
+                handshakeOk = false,
+                notice = null,
+                stealthDetail = "tcp",
+            ),
+        )
+        assertEquals(
+            "Reconnecting… · Stealth tls: the secure connection failed",
+            StealthDial.statusLine(
+                reconnecting = false,
+                handshakeOk = false,
+                notice = null,
+                stealthDetail = "Stealth tls: the secure connection failed",
+            ),
+        )
+        assertEquals(
+            "Reconnecting…",
+            StealthDial.statusLine(
+                reconnecting = true,
+                handshakeOk = false,
+                notice = null,
+                stealthDetail = null,
+            ),
+        )
+        assertNull(
+            StealthDial.statusLine(
+                reconnecting = false,
+                handshakeOk = true,
+                notice = null,
+                stealthDetail = "tcp",
+            ),
+        )
+        assertNull(StealthDial.publish("connect timed out"))
+        assertNull(StealthDial.publish("203.0.113.10 refused"))
+        assertFalse(
+            StealthDial.statusLine(true, false, null, "Stealth tcp: the server did not respond")!!
+                .contains("timeout", ignoreCase = true),
+        )
+    }
+
+    @Test
+    fun transportConnectsOnlyAfterProtectAndBind() {
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val accepted = CountDownLatch(1)
+        val acceptThread = Thread {
+            runCatching {
+                val client = server.accept()
+                client.getOutputStream().write(byteArrayOf(0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x2F))
+                client.close()
+                accepted.countDown()
+            }
+        }
+        acceptThread.isDaemon = true
+        acceptThread.start()
+        val events = Collections.synchronizedList(mutableListOf<String>())
+        val transport = StealthTransport(
+            remoteHost = "127.0.0.1",
+            remotePort = server.localPort,
+            pathPrefix = "abc123",
+            attachUnderlay = { socket ->
+                StealthDial.protectThenBind(
+                    socket,
+                    protect = {
+                        events += "protect"
+                        true
+                    },
+                    bind = { events += "bind" },
+                )
+                7L
+            },
+        )
+        try {
+            transport.start()
+            assertTrue(accepted.await(3, TimeUnit.SECONDS))
+            val snapshot = synchronized(events) { events.toList() }
+            assertEquals(listOf("protect", "bind"), snapshot.take(2))
+            val error = waitForError(transport)
+            assertTrue(error.contains("tls"))
+            assertFalse(error.contains("127.0.0.1"))
+            assertFalse(error.contains("timeout", ignoreCase = true))
+            assertFalse(error.contains("timed out", ignoreCase = true))
+        } finally {
+            transport.stop()
+            server.close()
+        }
+    }
+
+    @Test
+    fun transportDoesNotConnectWhenAttachHasNoNetwork() {
+        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val accepted = AtomicBoolean(false)
+        val acceptThread = Thread {
+            runCatching {
+                server.accept()
+                accepted.set(true)
+            }
+        }
+        acceptThread.isDaemon = true
+        acceptThread.start()
+        val transport = StealthTransport(
+            remoteHost = "127.0.0.1",
+            remotePort = server.localPort,
+            pathPrefix = "abc123",
+            attachUnderlay = { null },
+        )
+        try {
+            transport.start()
+            val error = waitForError(transport)
+            Thread.sleep(500)
+            assertFalse(accepted.get())
+            assertTrue(error.contains("tcp"))
+            assertTrue(error.contains("network"))
+            assertFalse(error.contains("timeout", ignoreCase = true))
+            assertFalse(transport.mayRedial(4L, System.currentTimeMillis()))
+        } finally {
+            transport.stop()
+            server.close()
+        }
+    }
+
+    @Test
+    fun serviceBindsStealthOnEachDialAndDoesNotRedialDuringUpgrade() {
+        val service = kotlinSource("VeritasVpnService.kt")
+        val code = service
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .lineSequence()
+            .filterNot { it.trimStart().startsWith("//") }
+            .joinToString("\n")
+        assertEquals(2, Regex("""\.bindSocket\(""").findAll(code).count())
+        val start = slice(code, "fun startStealth", "fun stopStealthTransport")
+        assertTrue(start.contains("StealthUnderlay.attach"))
+        assertTrue(start.contains("dataPlaneNetwork()"))
+        assertTrue(start.indexOf("attachUnderlay") < start.indexOf("dataPlaneNetwork()"))
+        assertFalse(start.contains("protectSocket"))
+        val apply = slice(code, "fun applyStealthResolved", "fun rememberFreshAdvertisement")
+        assertTrue(apply.indexOf("mayRedial") < apply.indexOf("transport.reconnect()"))
+        val watch = slice(code, "fun installAndWatch", "fun endpointAcceptable")
+        assertTrue(watch.indexOf("stealthUpgradeInProgress") < watch.indexOf("applyResolved"))
+        val reprovision = slice(code, "fun requestReprovision", "fun scheduleReprovisionRetry")
+        assertTrue(reprovision.contains("stealthUpgradeInProgress"))
+        val fresh = slice(code, "fun escalateFreshTunnel", "fun handlePeerGone")
+        assertTrue(fresh.indexOf("stealthUpgradeInProgress") < fresh.indexOf("handlePeerGone"))
+        val underlay = kotlinSource("StealthUnderlay.kt")
+        assertTrue(underlay.contains("protectThenBind"))
+        assertTrue(underlay.contains("network.bindSocket"))
+        assertTrue(underlay.indexOf("network == null") < underlay.indexOf("protectThenBind"))
+    }
+
+    private fun waitForError(transport: StealthTransport): String {
+        val deadline = System.currentTimeMillis() + 3_000L
+        while (System.currentTimeMillis() < deadline) {
+            val error = transport.lastError
+            if (!error.isNullOrBlank()) return error
+            Thread.sleep(40)
+        }
+        throw AssertionError("stealth dial did not report an error")
+    }
+
+    private fun slice(source: String, start: String, end: String): String {
+        val from = source.indexOf(start)
+        val to = source.indexOf(end, from + start.length)
+        assertTrue("$start … $end", from >= 0 && to > from)
+        return source.substring(from, to)
+    }
+
+    private fun kotlinSource(name: String): String {
+        val roots = listOf(
+            File("src/main/java"),
+            File("app/src/main/java"),
+            File("android/app/src/main/java"),
+        )
+        val file = roots.firstNotNullOfOrNull { root ->
+            root.walk().firstOrNull { it.isFile && it.name == name }
+        } ?: error("$name not found from ${File(".").absolutePath}")
+        return file.readText()
+    }
+}

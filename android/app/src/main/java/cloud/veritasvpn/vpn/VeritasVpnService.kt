@@ -133,6 +133,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     /** The held tun disallows this app, so sign-up is not blackholed with everyone else. */
     @Volatile private var lockdownHoldActive = false
     @Volatile private var stealthTransport: StealthTransport? = null
+    @Volatile private var lastStealthLogged: String? = null
     @Volatile private var activeTransport: String = ""
     @Volatile private var lastNotificationText: String = "Connecting…"
     @Volatile private var stealthSwitching = false
@@ -1178,6 +1179,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 .putExtra(EXTRA_SIGN_IN_AGAIN, controlSignedOut)
                 .apply {
                     if (isReconnecting) putExtra(EXTRA_ERROR, reconnectNotice.orEmpty())
+                    putStealthDetail()
                 }
         )
     }
@@ -1269,6 +1271,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val shownError = EndpointRefresh.displayStatus(error)
             ?: if (isReconnecting) reconnectNotice else null
         if (shownError != null) intent.putExtra(EXTRA_ERROR, shownError)
+        intent.putStealthDetail()
         intent.putExtra(EXTRA_SIGN_IN_AGAIN, controlSignedOut)
         if (egressIp != null) intent.putExtra(EXTRA_EGRESS_IP, egressIp)
         if (activeTransport.isNotEmpty()) intent.putExtra(EXTRA_TRANSPORT, activeTransport)
@@ -1343,7 +1346,11 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val shown = if (controlSignedOut) {
             ControlPlane.SIGN_IN_AGAIN
         } else {
-            transportSuffix(if (isReconnecting) BlockedNetworkNotice.reconnectingText(networkMayBeBlocking) else text)
+            appendStealthStage(
+                transportSuffix(
+                    if (isReconnecting) BlockedNetworkNotice.reconnectingText(networkMayBeBlocking) else text,
+                ),
+            )
         }
         val openIntent = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
@@ -1891,6 +1898,31 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (!sessionStillActive(gen)) {
             return InstallWatch(InstallOutcome.STOPPED, failedSocketSwaps, roamArmedAtMs)
         }
+        if (stealthUpgradeInProgress()) {
+            val armedAt = System.currentTimeMillis()
+            linkAttachedAtMs = armedAt
+            publishReconnecting(true)
+            RoamLog.record("stealth upgrade")
+            val handle = snap.network.networkHandle
+            if (awaitFreshHandshake(gen, armedAt, handle)) {
+                if (!sessionStillActive(gen)) {
+                    return InstallWatch(InstallOutcome.STOPPED, failedSocketSwaps, armedAt)
+                }
+                commitUnderlay(snap)
+                publishReconnecting(false)
+                RoamLog.record("handshake ok")
+                Log.i(TAG, "path-adapt handshake ok handle=$handle stealth=upgrade")
+                return InstallWatch(InstallOutcome.HANDSHOOK, failedSocketSwaps, armedAt)
+            }
+            if (!sessionStillActive(gen) || controlSignedOut) {
+                return InstallWatch(InstallOutcome.STOPPED, failedSocketSwaps, armedAt)
+            }
+            if (!roamTargetStill(handle)) {
+                return InstallWatch(InstallOutcome.STALE, 0, armedAt)
+            }
+            // The upgrade is still running. Do not count a failed swap or rebuild.
+            return InstallWatch(InstallOutcome.RETRY, failedSocketSwaps, armedAt)
+        }
         val install = RoamRecovery.installAfterFailedSwaps(failedSocketSwaps)
         val rebuildTun = install == RoamRecovery.Install.FULL_REBUILD
         var nextFailed = failedSocketSwaps
@@ -2034,6 +2066,17 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         if (isReconnecting) broadcastState(true, shown)
     }
 
+    /**
+     * The TLS upgrade has not finished and the underlay is unchanged.
+     * A roam must not close the socket or create a peer during that window.
+     * A new underlay handle returns false so the next dial can bind to it.
+     */
+    private fun stealthUpgradeInProgress(): Boolean {
+        val transport = stealthTransport ?: return false
+        if (!usesStealth()) return false
+        return !transport.mayRedial(dataPlaneNetwork()?.networkHandle, System.currentTimeMillis())
+    }
+
     private fun usesStealth(): Boolean = EndpointRefresh.selectedTransport(
         modeStored = vpnStatePrefs().getString(KEY_STEALTH_MODE, null),
         resumeStealth = vpnStatePrefs().getBoolean(KEY_RESUME_STEALTH, false),
@@ -2100,6 +2143,15 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val stealthOffer = StealthOffer(endpoint = stealthEp, pathPrefix = prefix, available = true)
         if (!stealthOffer.usable()) return null
         val transport = stealthTransport
+        if (transport != null && transport.targets(parsedEp.host, parsedEp.port, prefix) &&
+            !transport.mayRedial(dataPlaneNetwork()?.networkHandle, System.currentTimeMillis())
+        ) {
+            // The TLS upgrade has not finished on this underlay. Rebinding
+            // userspace here calls transport.reconnect() and closes the socket.
+            RoamLog.record("stealth upgrade")
+            val stored = vpnStatePrefs().getString(KEY_CONFIG, null)
+            if (!stored.isNullOrBlank()) return Installed(stored, transport.localEndpoint)
+        }
         val local = if (transport != null && transport.targets(parsedEp.host, parsedEp.port, prefix)) {
             followSystemDefault()
             transport.reconnect()
@@ -2908,7 +2960,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             remoteHost = endpoint.host,
             remotePort = endpoint.port,
             pathPrefix = offer.pathPrefix,
-            protectSocket = { socket -> protect(socket) },
+            attachUnderlay = { socket ->
+                // Resolved on this dial, not when the transport was built.
+                StealthUnderlay.attach(socket, dataPlaneNetwork()) { candidate ->
+                    protect(candidate)
+                }
+            },
         )
         transport.start()
         stealthTransport = transport
@@ -2976,6 +3033,32 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
         )
         broadcastState(true, null)
+    }
+
+    private fun appendStealthStage(text: String): String {
+        val stage = StealthDial.shortStage(stealthTransport?.stage) ?: return text
+        if (text.contains(stage)) return text
+        return "$text · $stage"
+    }
+
+    private fun Intent.putStealthDetail() {
+        val detail = stealthDetail()
+        noteStealthProgress(detail)
+        if (!detail.isNullOrBlank()) putExtra(EXTRA_STEALTH_DETAIL, detail)
+    }
+
+    private fun stealthDetail(): String? {
+        val transport = stealthTransport ?: return null
+        if (activeTransport != "stealth" && activeTransport != "switching") return null
+        return StealthDial.detail(transport.stage, transport.lastError)
+    }
+
+    private fun noteStealthProgress(detail: String?) {
+        if (detail.isNullOrBlank() || detail == lastStealthLogged) return
+        lastStealthLogged = detail
+        Log.i(TAG, "stealth $detail")
+        RoamLog.record("stealth $detail")
+        DiagnosticLog.record("stealth $detail")
     }
 
     private fun transportSuffix(text: String): String {
@@ -4107,6 +4190,10 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun requestReprovision(gen: Long) {
         if (controlSignedOut) return
+        if (stealthUpgradeInProgress()) {
+            Log.i(TAG, "reprovision held for stealth upgrade")
+            return
+        }
         val now = System.currentTimeMillis()
         synchronized(reprovisionLock) {
             val epoch = ReprovisionFlight.tryClaim(
@@ -4176,6 +4263,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
      */
     private suspend fun escalateFreshTunnel(gen: Long): Boolean {
         if (!sessionStillActive(gen) || controlSignedOut) return false
+        if (stealthUpgradeInProgress()) return false
         if (reprovisionJob?.isActive == true) return false
         val now = System.currentTimeMillis()
         val epoch = synchronized(reprovisionLock) {
@@ -4715,6 +4803,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         const val EXTRA_HANDSHAKE_MS = "handshake_ms"
         const val EXTRA_RECONNECTING = "reconnecting"
         const val EXTRA_HANDSHAKE_OK = "handshake_ok"
+        const val EXTRA_STEALTH_DETAIL = "stealth_detail"
         const val EXTRA_NEEDS_VPN_CONSENT = "needs_vpn_consent"
         const val EXTRA_OPEN_SHIELD = "open_shield"
         const val EXTRA_DNS_BLOCKED = "dns_blocked"

@@ -213,7 +213,7 @@ class StealthProtocolTest {
                 remoteHost = "127.0.0.1",
                 remotePort = wssPort,
                 pathPrefix = "abc123",
-                protectSocket = { true },
+                attachUnderlay = { 1L },
             )
             transport.start()
             client = DatagramSocket(null)
