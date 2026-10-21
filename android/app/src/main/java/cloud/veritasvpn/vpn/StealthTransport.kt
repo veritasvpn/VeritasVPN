@@ -224,6 +224,9 @@ class StealthTransport(
         val endpoint = WstunnelProtocol.Endpoint(remoteHost, remotePort)
         val path = WstunnelProtocol.upgradePath(pathPrefix)
         val gen = sessionGen.incrementAndGet()
+        // The previous socket's close is a SocketException on that session.
+        // This session starts clean so later io lines do not keep the old read status.
+        noteRead("up", gen)
         stage = StealthDial.Stage.TCP
         val tcp = openTls(endpoint, gen)
         synchronized(this) { activeSocket = tcp }
@@ -413,7 +416,7 @@ class StealthTransport(
                 lastWriteAt = System.currentTimeMillis()
             }
         } catch (e: Exception) {
-            noteEnd(e.javaClass.simpleName)
+            noteRead(e.javaClass.simpleName, gen)
         } finally {
             sessionGen.compareAndSet(gen, gen + 1)
             closeActiveSocket()
@@ -428,7 +431,7 @@ class StealthTransport(
             while (running.get() && gen == sessionGen.get()) {
                 val n = input.read(scratch)
                 if (n < 0) {
-                    noteEnd("eof")
+                    noteRead("eof", gen)
                     break
                 }
                 if (n == 0) continue
@@ -448,7 +451,7 @@ class StealthTransport(
                             }
                         }
                         0x8 -> {
-                            noteEnd("close")
+                            noteRead("close", gen)
                             return
                         }
                         else -> noteOther()
@@ -456,7 +459,7 @@ class StealthTransport(
                 }
             }
         } catch (e: Exception) {
-            noteEnd(e.javaClass.simpleName)
+            noteRead(e.javaClass.simpleName, gen)
         } finally {
             sessionGen.compareAndSet(gen, gen + 1)
             closeActiveSocket()
@@ -611,8 +614,20 @@ class StealthTransport(
         counts.other += 1
     }
 
-    private fun noteEnd(reason: String) = bump(force = true) {
-        counts.read = reason.take(16)
+    /**
+     * Read status for [gen] only. A roam closes the old socket after the
+     * generation has already moved, and that SocketException must not become
+     * the status of the session that replaced it.
+     */
+    private fun noteRead(reason: String, gen: Int) {
+        val line = synchronized(counts) {
+            if (gen != sessionGen.get()) return@synchronized null
+            counts.read = reason.take(16)
+            counts.dirty = false
+            counts.loggedAt = System.currentTimeMillis()
+            counts.lines()
+        } ?: return
+        line.forEach { runCatching { trace(it) } }
     }
 
     private fun bump(force: Boolean = false, change: () -> Unit) {

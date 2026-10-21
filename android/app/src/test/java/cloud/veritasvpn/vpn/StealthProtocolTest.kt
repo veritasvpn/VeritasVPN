@@ -159,6 +159,47 @@ class StealthProtocolTest {
     }
 
     @Test(timeout = 20_000)
+    fun readStatusFollowsTheSessionAfterReconnect() {
+        val peer = FakeStealthPeer()
+        val lines = ArrayList<String>()
+        val transport = StealthTransport(
+            remoteHost = "127.0.0.1",
+            remotePort = peer.port,
+            pathPrefix = "abc123",
+            attachUnderlay = { 1L },
+            trace = { line -> synchronized(lines) { lines.add(line) } },
+        )
+        val wg = DatagramSocket(null)
+        try {
+            transport.start()
+            assertEquals(null, awaitOpen(transport))
+            wg.reuseAddress = true
+            wg.bind(InetSocketAddress(0))
+            val local = WstunnelProtocol.parseEndpoint(transport.localEndpoint)
+            assertNotNull(local)
+            sendDatagram(wg, local!!.port, byteArrayOf(1))
+            val before = synchronized(lines) { lines.size }
+            transport.reconnect()
+            assertEquals(null, awaitOpen(transport))
+            Thread.sleep(1_100)
+            sendDatagram(wg, WstunnelProtocol.parseEndpoint(transport.localEndpoint)!!.port, byteArrayOf(2))
+            val deadline = System.currentTimeMillis() + 3_000
+            var fresh = emptyList<String>()
+            while (System.currentTimeMillis() < deadline) {
+                fresh = synchronized(lines) { lines.drop(before).filter { it.startsWith("stealth io ") } }
+                if (fresh.any { it.contains("read=up") }) break
+                Thread.sleep(40)
+            }
+            assertTrue(fresh.toString(), fresh.any { it.contains("read=up") })
+            assertTrue(fresh.toString(), fresh.none { it.contains("SocketException") })
+        } finally {
+            wg.close()
+            transport.stop()
+            peer.close()
+        }
+    }
+
+    @Test(timeout = 20_000)
     fun serverReceivesFiftyMixedClientDatagrams() {
         val peer = FakeStealthPeer()
         val transport = StealthTransport(
@@ -584,11 +625,17 @@ class StealthProtocolTest {
         }
 
         private fun run() {
-            val socket = try {
-                server.accept() as SSLSocket
-            } catch (_: Exception) {
-                return
+            while (!Thread.currentThread().isInterrupted) {
+                val socket = try {
+                    server.accept() as SSLSocket
+                } catch (_: Exception) {
+                    return
+                }
+                serve(socket)
             }
+        }
+
+        private fun serve(socket: SSLSocket) {
             socket.use { tls ->
                 tls.soTimeout = 5_000
                 val input = tls.inputStream
@@ -692,6 +739,26 @@ class StealthProtocolTest {
                 InetAddress.getByName("127.0.0.1"),
             ) as SSLServerSocket
         }
+    }
+
+    private fun awaitOpen(transport: StealthTransport): String? {
+        val deadline = System.currentTimeMillis() + 8_000
+        while (System.currentTimeMillis() < deadline && transport.stage != StealthDial.Stage.OPEN) {
+            if (!transport.lastError.isNullOrBlank()) return transport.lastError
+            Thread.sleep(20)
+        }
+        return if (transport.stage == StealthDial.Stage.OPEN) null else transport.lastError ?: "not open"
+    }
+
+    private fun sendDatagram(wg: DatagramSocket, port: Int, payload: ByteArray) {
+        wg.send(
+            DatagramPacket(
+                payload,
+                payload.size,
+                InetAddress.getByName("127.0.0.1"),
+                port,
+            ),
+        )
     }
 
     private fun assertFails(block: () -> Unit) {
