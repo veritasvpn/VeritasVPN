@@ -5,7 +5,6 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.SocketTimeoutException
 import java.net.StandardProtocolFamily
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
@@ -33,16 +32,13 @@ import javax.net.ssl.X509TrustManager
  * the dial and the supervisor retries. [reconnect] closes the in-flight
  * socket so the next dial binds to the network that is current then.
  *
- * One thread reads and writes the TLS socket. Android's TLS stack is not
- * safe when those overlap, and a stuck write would leave the websocket open
- * while WireGuard's later packets never leave. The UDP side is a channel
- * with separate send and receive locks: a [java.net.DatagramSocket] holds
- * one lock for the whole blocking receive, so the handshake response could
- * not be written back until WireGuard sent another datagram.
- *
- * Replies always go to 127.0.0.1 and the port WireGuard sent from. The relay
- * is bound to loopback, and that is the address the userspace socket can
- * receive on.
+ * The TLS socket has one reader and one writer. The reader never writes, so
+ * a short read timeout is not used: Android's TLS stack can discard a
+ * record when a read times out, which drops the handshake response while
+ * the websocket stays open. The UDP side is a channel bound to 127.0.0.1.
+ * Send and receive do not share a lock. A reply is sent from that bound
+ * port to the same family and port WireGuard sent from, which is the source
+ * userspace WireGuard is listening on.
  *
  * The TLS certificate is not verified. wstunnel's server certificate is
  * generated in-process, and the Linux client leaves certificate verification
@@ -58,7 +54,11 @@ class StealthTransport(
     private val running = AtomicBoolean(false)
     private val sessionGen = AtomicInteger(0)
     private val outbound = ArrayBlockingQueue<ByteArray>(64)
+    private val control = ArrayBlockingQueue<ByteArray>(32)
     private val udpChannel: DatagramChannel = DatagramChannel.open(StandardProtocolFamily.INET)
+    private var v6Channel: DatagramChannel? = null
+    private var boundPort: Int = 0
+    private var v6BoundPort: Int = 0
     private val ipv4Loopback: InetAddress = InetAddress.getByName("127.0.0.1")
     private var supervisor: Thread? = null
     private var activeSocket: Socket? = null
@@ -99,6 +99,7 @@ class StealthTransport(
         udpChannel.socket().reuseAddress = true
         udpChannel.bind(InetSocketAddress(ipv4Loopback, 0))
         udpChannel.configureBlocking(true)
+        boundPort = (udpChannel.localAddress as? InetSocketAddress)?.port ?: 0
         Thread({ udpLoop() }, "veritas-stealth-udp").also { it.isDaemon = true; it.start() }
         supervisor = Thread({
             while (running.get()) {
@@ -130,6 +131,7 @@ class StealthTransport(
         beginAttempt(keepBoundHandle = false)
         closeDialing()
         closeActiveSocket()
+        control.clear()
     }
 
     fun stop() {
@@ -138,7 +140,10 @@ class StealthTransport(
         sessionGen.incrementAndGet()
         closeDialing()
         closeActiveSocket()
+        runCatching { v6Channel?.close() }
+        v6Channel = null
         runCatching { udpChannel.close() }
+        control.clear()
         supervisor?.interrupt()
         supervisor?.join(1_500)
         supervisor = null
@@ -168,18 +173,22 @@ class StealthTransport(
         val output = tcp.getOutputStream()
         stage = StealthDial.Stage.UPGRADE
         handshake(endpoint, path, input, output)
-        // Short waits so queued WireGuard datagrams are written while the
-        // peer is quiet. One thread owns the TLS socket for both directions.
-        tcp.soTimeout = IO_WAIT_MS
+        // Blocking reads. A short timeout on Android's TLS stack can drop the
+        // handshake response and leave this websocket open.
+        tcp.soTimeout = 0
+        tcp.keepAlive = true
         stage = StealthDial.Stage.OPEN
         dialing = false
         openedAtMs = System.currentTimeMillis()
         lastError = null
-        val io = Thread({
-            ioLoop(input, output, gen)
-        }, "veritas-stealth-io").also { it.isDaemon = true; it.start() }
+        val writer = Thread({
+            writeLoop(output, gen)
+        }, "veritas-stealth-wr").also { it.isDaemon = true; it.start() }
+        val reader = Thread({
+            readLoop(input, gen)
+        }, "veritas-stealth-rd").also { it.isDaemon = true; it.start() }
         while (running.get() && gen == sessionGen.get() && !tcp.isClosed) {
-            if (!io.isAlive) break
+            if (!reader.isAlive || !writer.isAlive) break
             try {
                 Thread.sleep(200)
             } catch (_: InterruptedException) {
@@ -188,7 +197,8 @@ class StealthTransport(
         }
         sessionGen.compareAndSet(gen, gen + 1)
         runCatching { tcp.close() }
-        io.join(1_000)
+        reader.join(1_000)
+        writer.join(1_000)
     }
 
     private fun openTls(endpoint: WstunnelProtocol.Endpoint, gen: Int): SSLSocket {
@@ -300,17 +310,20 @@ class StealthTransport(
     }
 
     /**
-     * Reads and writes the websocket on one thread. A server frame is turned
-     * back into a UDP datagram before the next read, so a handshake response
-     * is not stuck behind a blocking receive.
+     * Writes the websocket only. The reader never touches [output], so Android's
+     * TLS stack is not asked to read and write on one thread or to abort a read.
      */
-    private fun ioLoop(input: InputStream, output: OutputStream, gen: Int) {
-        val parser = WsFrameBuffer()
-        val scratch = ByteArray(4096)
+    private fun writeLoop(output: OutputStream, gen: Int) {
         var lastWriteAt = System.currentTimeMillis()
         try {
             while (running.get() && gen == sessionGen.get()) {
                 var wrote = false
+                while (running.get() && gen == sessionGen.get()) {
+                    val frame = control.poll() ?: break
+                    output.write(frame)
+                    wrote = true
+                    lastWriteAt = System.currentTimeMillis()
+                }
                 while (running.get() && gen == sessionGen.get()) {
                     val payload = outbound.poll() ?: break
                     output.write(WstunnelProtocol.encodeBinary(payload))
@@ -325,13 +338,31 @@ class StealthTransport(
                     wrote = true
                     lastWriteAt = System.currentTimeMillis()
                 }
-                if (wrote) output.flush()
-                val n = try {
-                    input.read(scratch)
-                } catch (_: SocketTimeoutException) {
-                    flushCounts()
+                if (wrote) {
+                    output.flush()
                     continue
                 }
+                val payload = outbound.poll(WRITE_WAIT_MS, TimeUnit.MILLISECONDS) ?: continue
+                output.write(WstunnelProtocol.encodeBinary(payload))
+                noteOut(payload.size)
+                output.flush()
+                lastWriteAt = System.currentTimeMillis()
+            }
+        } catch (e: Exception) {
+            noteEnd(e.javaClass.simpleName)
+        } finally {
+            sessionGen.compareAndSet(gen, gen + 1)
+            closeActiveSocket()
+        }
+    }
+
+    /** Blocking read. A binary frame is written back to WireGuard before the next read. */
+    private fun readLoop(input: InputStream, gen: Int) {
+        val parser = WsFrameBuffer()
+        val scratch = ByteArray(4096)
+        try {
+            while (running.get() && gen == sessionGen.get()) {
+                val n = input.read(scratch)
                 if (n < 0) {
                     noteEnd("eof")
                     break
@@ -346,9 +377,11 @@ class StealthTransport(
                             deliverToWireGuard(frame.payload)
                         }
                         0x9 -> {
-                            output.write(WstunnelProtocol.encodePong(frame.payload))
-                            output.flush()
-                            lastWriteAt = System.currentTimeMillis()
+                            val pong = WstunnelProtocol.encodePong(frame.payload)
+                            if (!control.offer(pong)) {
+                                control.poll()
+                                control.offer(pong)
+                            }
                         }
                         0x8 -> {
                             noteEnd("close")
@@ -372,15 +405,56 @@ class StealthTransport(
             noteMiss()
             return
         }
-        val loopback = peer.address.isLoopbackAddress
-        val packet = ByteBuffer.wrap(payload)
+        val fam = familyCode(peer.address)
+        val loopback = peer.address.isLoopbackAddress || fam == 4 && isMappedLoopback(peer.address)
+        val channel = if (fam == 6) v6Relay() else udpChannel
+        if (channel == null) {
+            noteFail("v6", loopback, fam)
+            return
+        }
+        val dest = if (fam == 6) {
+            InetSocketAddress(InetAddress.getByName("::1"), peer.port)
+        } else {
+            InetSocketAddress(ipv4Loopback, peer.port)
+        }
         try {
-            val sent = udpChannel.send(packet, InetSocketAddress(ipv4Loopback, peer.port))
-            if (sent == payload.size) noteOk(loopback) else noteFail("short", loopback)
+            val sent = channel.send(ByteBuffer.wrap(payload), dest)
+            val sport = if (fam == 6) v6BoundPort == boundPort && boundPort != 0 else boundPort != 0
+            if (sent == payload.size) noteOk(loopback, fam, sport) else noteFail("short", loopback, fam)
         } catch (e: Exception) {
-            noteFail(e.javaClass.simpleName, loopback)
+            noteFail(e.javaClass.simpleName, loopback, fam)
         }
     }
+
+    /** IPv6 replies have to leave ::1 or the v6 WireGuard socket never sees them. */
+    private fun v6Relay(): DatagramChannel? {
+        v6Channel?.let { return it }
+        val channel = try {
+            DatagramChannel.open(StandardProtocolFamily.INET6)
+        } catch (_: Exception) {
+            return null
+        }
+        return try {
+            channel.socket().reuseAddress = true
+            val loopback6 = InetAddress.getByName("::1")
+            try {
+                val port = if (boundPort in 1..65535) boundPort else 0
+                channel.bind(InetSocketAddress(loopback6, port))
+            } catch (_: Exception) {
+                channel.bind(InetSocketAddress(loopback6, 0))
+            }
+            channel.configureBlocking(true)
+            v6BoundPort = (channel.localAddress as? InetSocketAddress)?.port ?: 0
+            v6Channel = channel
+            channel
+        } catch (_: Exception) {
+            runCatching { channel.close() }
+            null
+        }
+    }
+
+    /** The datagram socket the service can pin to lo. Same fd the channel sends on. */
+    internal fun relaySocket(): java.net.DatagramSocket = udpChannel.socket()
 
     /** Binds the relay without dialing. Unit tests deliver server frames into it. */
     internal fun bindRelayForTest() {
@@ -388,6 +462,7 @@ class StealthTransport(
         udpChannel.socket().reuseAddress = true
         udpChannel.bind(InetSocketAddress(ipv4Loopback, 0))
         udpChannel.configureBlocking(true)
+        boundPort = (udpChannel.localAddress as? InetSocketAddress)?.port ?: 0
     }
 
     internal fun notePeerForTest(address: InetAddress, port: Int) {
@@ -427,6 +502,7 @@ class StealthTransport(
         counts.udp += 1
         counts.udpBytes += bytes
         counts.loopback = if (loopback) 1 else 0
+        counts.fam = familyCode(lastPeer?.address)
     }
 
     private fun noteOut(bytes: Int) = bump {
@@ -439,15 +515,18 @@ class StealthTransport(
         counts.wsInBytes += bytes
     }
 
-    private fun noteOk(loopback: Boolean) = bump {
+    private fun noteOk(loopback: Boolean, fam: Int, fromBoundPort: Boolean) = bump {
         counts.ok += 1
         counts.loopback = if (loopback) 1 else 0
+        counts.fam = fam
+        counts.sport = if (fromBoundPort) 1 else 0
     }
 
-    private fun noteFail(kind: String, loopback: Boolean) = bump(force = true) {
+    private fun noteFail(kind: String, loopback: Boolean, fam: Int = 0) = bump(force = true) {
         counts.fail += 1
         counts.err = kind.take(16)
         counts.loopback = if (loopback) 1 else 0
+        if (fam != 0) counts.fam = fam
     }
 
     private fun noteMiss() = bump(force = true) {
@@ -472,18 +551,6 @@ class StealthTransport(
             counts.dirty = true
             val now = System.currentTimeMillis()
             if (!force && now - counts.loggedAt < LOG_EVERY_MS) return@synchronized null
-            counts.dirty = false
-            counts.loggedAt = now
-            counts.lines()
-        } ?: return
-        line.forEach { runCatching { trace(it) } }
-    }
-
-    private fun flushCounts() {
-        val line = synchronized(counts) {
-            if (!counts.dirty) return@synchronized null
-            val now = System.currentTimeMillis()
-            if (now - counts.loggedAt < LOG_EVERY_MS) return@synchronized null
             counts.dirty = false
             counts.loggedAt = now
             counts.lines()
@@ -546,6 +613,8 @@ class StealthTransport(
         var ping = 0L
         var other = 0L
         var loopback = 1
+        var fam = 4
+        var sport = 1
         var read = "up"
         var err = ""
         var dirty = false
@@ -564,9 +633,33 @@ class StealthTransport(
             ping = ping,
             other = other,
             loopback = loopback,
+            fam = fam,
+            sport = sport,
             read = read,
             err = err,
         )
+    }
+
+    private fun familyCode(address: InetAddress?): Int {
+        if (address == null) return 0
+        if (address is java.net.Inet4Address) return 4
+        if (isMappedLoopback(address) || isMappedV4(address)) return 4
+        if (address is java.net.Inet6Address) return 6
+        return 0
+    }
+
+    private fun isMappedV4(address: InetAddress): Boolean {
+        if (address !is java.net.Inet6Address) return false
+        val raw = address.address
+        if (raw.size != 16) return false
+        for (i in 0 until 10) if (raw[i] != 0.toByte()) return false
+        return raw[10] == 0xff.toByte() && raw[11] == 0xff.toByte()
+    }
+
+    private fun isMappedLoopback(address: InetAddress): Boolean {
+        if (!isMappedV4(address)) return false
+        val raw = address.address
+        return raw[12] == 127.toByte()
     }
 
     internal data class RelayStats(
@@ -589,8 +682,8 @@ class StealthTransport(
     }
 
     companion object {
-        /** How long a quiet websocket read waits before queued datagrams are written. */
-        private const val IO_WAIT_MS = 40
+        /** How long the writer waits for the next WireGuard datagram. */
+        private const val WRITE_WAIT_MS = 50L
         private const val PING_EVERY_MS = 30_000L
         private const val LOG_EVERY_MS = 1_000L
 
@@ -612,6 +705,8 @@ class StealthTransport(
             ping: Long,
             other: Long,
             loopback: Int,
+            fam: Int,
+            sport: Int,
             read: String,
             err: String,
         ): List<String> {
@@ -619,7 +714,7 @@ class StealthTransport(
             val errPart = if (err.isEmpty()) "" else " err=${err.take(16)}"
             return listOf(
                 "stealth c2s udp=$udp ub=$udpBytes out=$out ob=$outBytes",
-                "stealth s2c in=$wsIn ib=$wsInBytes ok=$ok fail=$fail miss=$miss",
+                "stealth s2c in=$wsIn ib=$wsInBytes ok=$ok fail=$fail miss=$miss fam=$fam sport=$sport",
                 "stealth io ping=$ping other=$other loop=$loopback read=$readPart$errPart",
             )
         }

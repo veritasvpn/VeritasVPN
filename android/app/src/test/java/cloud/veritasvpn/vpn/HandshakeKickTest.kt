@@ -34,6 +34,22 @@ class HandshakeKickTest {
     }
 
     @Test
+    fun tunTriggerIsAnIpv4UdpDatagramToTheDiscardAddress() {
+        val packet = HandshakeKick.tunTrigger("10.8.0.2")
+        assertTrue(packet != null)
+        val raw = packet!!
+        assertEquals(29, raw.size)
+        assertEquals(0x45, raw[0].toInt() and 0xFF)
+        assertEquals(17, raw[9].toInt() and 0xFF)
+        assertEquals(10, raw[12].toInt() and 0xFF)
+        assertEquals(8, raw[13].toInt() and 0xFF)
+        assertEquals(240, raw[16].toInt() and 0xFF)
+        assertEquals(1, raw[19].toInt() and 0xFF)
+        assertEquals(9, raw[23].toInt() and 0xFF)
+        assertEquals(null, HandshakeKick.tunTrigger("not-an-ip"))
+    }
+
+    @Test
     fun strippedKeepaliveRetransmitsInsideTheHandshakeWatch() {
         val delays = HandshakeKick.retransmitDelaysMs()
         assertEquals(listOf(250L, 500L, 750L, 1_000L, 1_250L, 1_500L, 1_750L, 2_000L), delays)

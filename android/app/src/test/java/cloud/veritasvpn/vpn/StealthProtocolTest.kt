@@ -201,6 +201,8 @@ class StealthProtocolTest {
             wg.receive(reply)
             assertEquals(response.size, reply.length)
             assertTrue(response.contentEquals(reply.data.copyOf(reply.length)))
+            assertEquals(local.port, reply.port)
+            assertTrue(reply.address.isLoopbackAddress)
             val data = ByteArray(64) { (it + 3).toByte() }
             wg.send(
                 DatagramPacket(
@@ -252,12 +254,16 @@ class StealthProtocolTest {
             ping = Long.MAX_VALUE,
             other = Long.MAX_VALUE,
             loopback = 0,
+            fam = 4,
+            sport = 1,
             read = "SocketTimeoutException",
             err = "ClosedChannelException",
         )
         assertEquals(3, lines.size)
         assertTrue(lines[0].startsWith("stealth c2s "))
         assertTrue(lines[1].startsWith("stealth s2c "))
+        assertTrue(lines[1].contains("fam=4"))
+        assertTrue(lines[1].contains("sport=1"))
         assertTrue(lines[2].startsWith("stealth io "))
         assertTrue(lines[2].contains("read=SocketTimeoutEx"))
         assertTrue(lines[2].contains("err=ClosedChannelExc"))

@@ -139,6 +139,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     @Volatile private var activeTransport: String = ""
     @Volatile private var lastNotificationText: String = "Connecting…"
     @Volatile private var stealthSwitching = false
+    @Volatile private var stealthKickLogged = false
     private val stealthSwitchLock = Any()
     @Volatile private var bestMatchingNetwork: Network? = null
     @Volatile private var bestMatchingWatchRegistered = false
@@ -2857,7 +2858,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             else -> {
                 followSystemDefault()
-                val brought = applyBackendState(Tunnel.State.UP, parsed, gen, replaceTun = freshTun)
+                // Stealth rebuilds the tun so this app is excluded from it.
+                // A kept direct tun would swallow the loopback relay.
+                val brought = applyBackendState(
+                    Tunnel.State.UP,
+                    parsed,
+                    gen,
+                    replaceTun = freshTun || stealth,
+                )
                 followSystemDefault()
                 brought
             }
@@ -2902,6 +2910,12 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 null,
             )
             val parsed = Config.parse(ByteArrayInputStream(live.toByteArray(Charsets.UTF_8)))
+            turnUserspaceOff()
+            if (!openInterface(parsed)) {
+                Log.w(TAG, "Stealth tun rebuild failed; restoring the UDP tunnel")
+                restoreUdpTunnel(udpConfig, gen)
+                return
+            }
             if (!rebindWithRetry(parsed, gen, recreateTun = false)) {
                 Log.w(TAG, "Stealth rebind did not stick; restoring the UDP tunnel")
                 restoreUdpTunnel(udpConfig, gen)
@@ -2943,6 +2957,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
         val parsed = runCatching {
             Config.parse(ByteArrayInputStream(restored.toByteArray(Charsets.UTF_8)))
         }.getOrNull() ?: return
+        turnUserspaceOff()
+        // Drop the Stealth exclusion so Direct's kick packet enters the tun again.
+        openInterface(parsed)
         if (rebindWithRetry(parsed, gen, recreateTun = false)) {
             synchronized(tunnelOpLock) {
                 if (gen == sessionGeneration && sessionIntended()) {
@@ -2980,6 +2997,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             trace = { line -> traceStealth(line) },
         )
         transport.start()
+        stealthKickLogged = false
+        val pinned = pinRelayToLoopback(transport.relaySocket())
+        traceStealth("stealth relay lo=${if (pinned) 1 else 0}")
         stealthTransport = transport
         return transport.localEndpoint
     }
@@ -3240,6 +3260,21 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             val iface = parsed.getInterface()
             for (app in iface.excludedApplications) {
                 builder.addDisallowedApplication(app)
+            }
+            // Stealth's WireGuard endpoint is 127.0.0.1. While this app is
+            // inside the tun, the relay's reply to that socket is captured
+            // and never reaches userspace. Other apps stay on the tun.
+            val loopback = parsed.peers.any { peer ->
+                TunnelRebuild.loopbackRelay(peer.endpoint.orElse(null)?.toString())
+            }
+            if (loopback &&
+                iface.includedApplications.isEmpty() &&
+                packageName !in iface.excludedApplications
+            ) {
+                builder.addDisallowedApplication(packageName)
+                traceStealth("stealth iface self=1")
+            } else if (loopback) {
+                traceStealth("stealth iface self=0")
             }
             for (app in iface.includedApplications) {
                 builder.addAllowedApplication(app)
@@ -3564,6 +3599,14 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun kickHandshakePacket() {
         if (userspaceInstalling) return
         if (!sessionIntended() || disconnectJob?.isActive == true) return
+        if (stealthTransport != null) {
+            val wrote = writeTunTrigger()
+            if (!stealthKickLogged) {
+                stealthKickLogged = true
+                traceStealth("stealth kick tun=${if (wrote) 1 else 0}")
+            }
+            if (wrote) return
+        }
         Thread {
             runCatching {
                 DatagramSocket().use { socket ->
@@ -3577,6 +3620,16 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             name = "wg-handshake-kick"
             start()
         }
+    }
+
+    /** Write one datagram onto the tun so WireGuard handshakes without this app being routed. */
+    private fun writeTunTrigger(): Boolean {
+        val keeper = tunKeeper ?: return false
+        val source = currentInterfaceAddress ?: return false
+        val packet = HandshakeKick.tunTrigger(source) ?: return false
+        return runCatching {
+            Os.write(keeper.fileDescriptor, packet, 0, packet.size)
+        }.isSuccess
     }
 
     private fun armNatKeepalive() {
@@ -3642,20 +3695,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     DataPlaneHealth.configCheck(readUserspaceConfig(handle), intendedEndpoint)
                 }
                 if (loopback) {
-                    // Leave the userspace sockets on loopback. Binding them to
-                    // the underlay delivers one handshake initiation and then
-                    // the socket fails, so the server's response never returns.
-                    // UDP_GRO and a stale route error do the same after that
-                    // first datagram. Pin the fd to lo when the platform allows
-                    // it, and turn GRO off before the kick.
+                    // Leave the Go sockets as wireguard-go bound them (0.0.0.0
+                    // and [::], same port). Do not protect, bindSocket, set
+                    // UDP_GRO, or SO_BINDTODEVICE: those calls either pin the
+                    // fd to the underlay or reject the reply. Only a queued
+                    // socket error is cleared, so the next send is not failed
+                    // by a stale errno.
                     val tuned4 = prepareLoopbackSocket(v4)
                     val tuned6 = prepareLoopbackSocket(v6)
                     if (!dataPlaneStatus.loopbackRelay) {
+                        val soerr = listOf(tuned4, tuned6).firstOrNull { it >= 0 } ?: -1
                         traceStealth(
                             "stealth dataplane loopback=1 v4=${if (v4 >= 0) 1 else 0} " +
-                                "v6=${if (v6 >= 0) 1 else 0} " +
-                                "lo=${if (tuned4.lo || tuned6.lo) 1 else 0} " +
-                                "gro=${if (tuned4.gro || tuned6.gro) 1 else 0}",
+                                "v6=${if (v6 >= 0) 1 else 0} soerr=$soerr tune=0",
                         )
                     }
                     return@runCatching DataPlaneStatus(
@@ -3699,31 +3751,36 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
     private fun socketFd(nativeName: String, handle: Int): Int =
         runCatching { goNative(nativeName, Integer.TYPE).invoke(null, handle) as Int }.getOrDefault(-1)
 
-    private data class LoopbackTune(val lo: Boolean, val gro: Boolean)
-
     /**
-     * Userspace WireGuard enables UDP_GRO. On this path the peer is
-     * 127.0.0.1, and a GRO socket has been observed to accept one datagram
-     * and then fail the next send. Clear a queued socket error, turn GRO
-     * off, and prefer the loopback device. The byte and read calls are not
-     * in the public stub, so they go through reflection and may no-op.
+     * Read and clear SO_ERROR. wireguard-go on Android does not enable
+     * UDP_GRO (that code is Linux-only). SO_BINDTODEVICE on this fd can
+     * succeed and then drop the handshake response, so it is not set.
+     * Returns the pending errno, or -1 when the fd or the read is missing.
      * Direct mode never calls this.
      */
-    private fun prepareLoopbackSocket(fd: Int): LoopbackTune {
-        if (fd < 0) return LoopbackTune(lo = false, gro = false)
+    private fun prepareLoopbackSocket(fd: Int): Int {
+        if (fd < 0) return -1
         val raw = rawFileDescriptor(fd)
-        runCatching {
+        val pending = runCatching {
             Os::class.java.getMethod(
                 "getsockoptInt",
                 FileDescriptor::class.java,
                 Int::class.javaPrimitiveType,
                 Int::class.javaPrimitiveType,
-            ).invoke(null, raw, OsConstants.SOL_SOCKET, OsConstants.SO_ERROR)
-        }
-        val gro = runCatching {
-            Os.setsockoptInt(raw, OsConstants.IPPROTO_UDP, UDP_GRO, 0)
-        }.isSuccess
-        val lo = runCatching {
+            ).invoke(null, raw, OsConstants.SOL_SOCKET, OsConstants.SO_ERROR) as Int
+        }.getOrDefault(-1)
+        return pending
+    }
+
+    /**
+     * Pin the relay socket to lo. The reply has to leave the loopback device.
+     * A failure is logged and the tun exclusion still keeps the packet local.
+     * Closing the returned dup does not close the channel.
+     */
+    private fun pinRelayToLoopback(socket: DatagramSocket): Boolean {
+        val pfd = runCatching { ParcelFileDescriptor.fromDatagramSocket(socket) }.getOrNull()
+            ?: return false
+        return try {
             val name = ByteArray(16)
             "lo".toByteArray(Charsets.US_ASCII).copyInto(name)
             Os::class.java.getMethod(
@@ -3732,9 +3789,13 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                 Int::class.javaPrimitiveType,
                 Int::class.javaPrimitiveType,
                 ByteArray::class.java,
-            ).invoke(null, raw, OsConstants.SOL_SOCKET, OsConstants.SO_BINDTODEVICE, name)
-        }.isSuccess
-        return LoopbackTune(lo = lo, gro = gro)
+            ).invoke(null, pfd.fileDescriptor, OsConstants.SOL_SOCKET, OsConstants.SO_BINDTODEVICE, name)
+            true
+        } catch (_: Exception) {
+            false
+        } finally {
+            runCatching { pfd.close() }
+        }
     }
 
     private fun traceStealth(line: String) {
@@ -4902,9 +4963,6 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             return null
         }
-
-        /** linux/udp.h UDP_GRO. Not in OsConstants. Off for the loopback relay. */
-        private const val UDP_GRO = 104
 
         const val TUNNEL_NAME = "veritas"
         const val CHANNEL_ID = "veritas_vpn"
