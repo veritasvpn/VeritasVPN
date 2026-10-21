@@ -2,17 +2,28 @@ package cloud.veritasvpn.vpn
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
+import java.io.InputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.SocketTimeoutException
+import java.security.KeyStore
+import java.security.SecureRandom
 import java.util.Base64
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.SSLSocket
 
 class StealthProtocolTest {
 
@@ -114,6 +125,143 @@ class StealthProtocolTest {
         val unmasked = maskedParser.next()
         assertEquals(0x2, unmasked?.opcode)
         assertTrue(payload.contentEquals(unmasked?.payload))
+    }
+
+    @Test
+    fun serverFrameIsDeliveredWhenTheSourceIsNotLoopback() {
+        val transport = StealthTransport(
+            remoteHost = "127.0.0.1",
+            remotePort = 1,
+            pathPrefix = "abc123",
+            attachUnderlay = { 1L },
+        )
+        val wg = DatagramSocket(null)
+        try {
+            wg.reuseAddress = true
+            wg.bind(InetSocketAddress(0))
+            wg.soTimeout = 2_000
+            transport.bindRelayForTest()
+            transport.notePeerForTest(InetAddress.getByName("203.0.113.10"), wg.localPort)
+            val payload = ByteArray(92) { (it + 5).toByte() }
+            transport.appendServerBytesForTest(WstunnelProtocol.encodeBinary(payload))
+            val reply = DatagramPacket(ByteArray(128), 128)
+            wg.receive(reply)
+            assertEquals(payload.size, reply.length)
+            assertTrue(payload.contentEquals(reply.data.copyOf(reply.length)))
+            val stats = transport.relayStats()
+            assertEquals(1, stats.ok)
+            assertEquals(0, stats.fail)
+            assertFalse(stats.loopback)
+        } finally {
+            wg.close()
+            transport.stop()
+        }
+    }
+
+    @Test(timeout = 20_000)
+    fun relaysHandshakeSizedPacketsBothWaysWithoutASecondClientDatagram() {
+        val peer = FakeStealthPeer()
+        val lines = ArrayList<String>()
+        val transport = StealthTransport(
+            remoteHost = "127.0.0.1",
+            remotePort = peer.port,
+            pathPrefix = "abc123",
+            attachUnderlay = { 1L },
+            trace = { line -> synchronized(lines) { lines.add(line) } },
+        )
+        val wg = DatagramSocket(null)
+        try {
+            transport.start()
+            val deadline = System.currentTimeMillis() + 8_000
+            while (System.currentTimeMillis() < deadline && transport.stage != StealthDial.Stage.OPEN) {
+                if (!transport.lastError.isNullOrBlank()) break
+                Thread.sleep(20)
+            }
+            assertEquals(transport.lastError, StealthDial.Stage.OPEN, transport.stage)
+            wg.reuseAddress = true
+            wg.bind(InetSocketAddress(0))
+            wg.soTimeout = 4_000
+            val local = WstunnelProtocol.parseEndpoint(transport.localEndpoint)
+            assertNotNull(local)
+            val initiation = ByteArray(148) { (it + 1).toByte() }
+            wg.send(
+                DatagramPacket(
+                    initiation,
+                    initiation.size,
+                    InetAddress.getByName("127.0.0.1"),
+                    local!!.port,
+                ),
+            )
+            val forwarded = peer.fromClient.poll(4, TimeUnit.SECONDS)
+            assertNotNull(forwarded)
+            assertTrue(initiation.contentEquals(forwarded!!))
+            val response = ByteArray(92) { (it + 9).toByte() }
+            peer.sendToClient(response)
+            val reply = DatagramPacket(ByteArray(256), 256)
+            wg.receive(reply)
+            assertEquals(response.size, reply.length)
+            assertTrue(response.contentEquals(reply.data.copyOf(reply.length)))
+            val data = ByteArray(64) { (it + 3).toByte() }
+            wg.send(
+                DatagramPacket(
+                    data,
+                    data.size,
+                    InetAddress.getByName("127.0.0.1"),
+                    local.port,
+                ),
+            )
+            val forwardedData = peer.fromClient.poll(4, TimeUnit.SECONDS)
+            assertNotNull(forwardedData)
+            assertTrue(data.contentEquals(forwardedData!!))
+            val back = ByteArray(80) { (it + 5).toByte() }
+            peer.sendToClient(back)
+            val backPacket = DatagramPacket(ByteArray(256), 256)
+            wg.receive(backPacket)
+            assertEquals(back.size, backPacket.length)
+            assertTrue(back.contentEquals(backPacket.data.copyOf(backPacket.length)))
+            val stats = transport.relayStats()
+            assertTrue(stats.udp >= 2)
+            assertTrue(stats.out >= 2)
+            assertTrue(stats.wsIn >= 2)
+            assertTrue(stats.ok >= 2)
+            assertEquals(0L, stats.fail)
+            assertEquals(0L, stats.miss)
+            val traced = synchronized(lines) { lines.toList() }
+            assertTrue(traced.any { it.startsWith("stealth c2s ") })
+            assertTrue(traced.any { it.startsWith("stealth s2c ") && it.contains("ok=") })
+            traced.forEach { assertRelayLineIsSafe(it) }
+        } finally {
+            wg.close()
+            transport.stop()
+            peer.close()
+        }
+    }
+
+    @Test
+    fun relayCountersStayInTheDiagnosticRingAtMaxValues() {
+        val lines = StealthTransport.stealthRelayLines(
+            udp = Long.MAX_VALUE,
+            udpBytes = Long.MAX_VALUE,
+            out = Long.MAX_VALUE,
+            outBytes = Long.MAX_VALUE,
+            wsIn = Long.MAX_VALUE,
+            wsInBytes = Long.MAX_VALUE,
+            ok = Long.MAX_VALUE,
+            fail = Long.MAX_VALUE,
+            miss = Long.MAX_VALUE,
+            ping = Long.MAX_VALUE,
+            other = Long.MAX_VALUE,
+            loopback = 0,
+            read = "SocketTimeoutException",
+            err = "ClosedChannelException",
+        )
+        assertEquals(3, lines.size)
+        assertTrue(lines[0].startsWith("stealth c2s "))
+        assertTrue(lines[1].startsWith("stealth s2c "))
+        assertTrue(lines[2].startsWith("stealth io "))
+        assertTrue(lines[2].contains("read=SocketTimeoutEx"))
+        assertTrue(lines[2].contains("err=ClosedChannelExc"))
+        lines.forEach { assertRelayLineIsSafe(it) }
     }
 
     @Test
@@ -229,7 +377,7 @@ class StealthProtocolTest {
     @Test
     fun echoesUdpThroughBundledWstunnelWhenPresent() {
         val bin = File(System.getenv("VERITAS_WSTUNNEL_BIN") ?: "/tmp/wstunnel")
-        assumeTrue("wstunnel binary not available", bin.canExecute())
+        assumeTrue("wstunnel binary not available", bin.isFile && bin.canExecute())
         val echo = DatagramSocket(null)
         echo.reuseAddress = true
         try {
@@ -309,6 +457,152 @@ class StealthProtocolTest {
             server.destroy()
             server.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
             if (server.isAlive) server.destroyForcibly()
+        }
+    }
+
+    /**
+     * Same gates as [RoamLog] and the support diagnostic ring: 160 characters,
+     * no addresses, and only the characters those rings keep.
+     */
+    private fun assertRelayLineIsSafe(line: String) {
+        assertTrue(line.length <= 160)
+        assertEquals(line, RoamLog.sanitize(line))
+        assertFalse(Regex("""(?:\d{1,3}\.){3}\d{1,3}""").containsMatchIn(line))
+        assertTrue(line.all { it.isLetterOrDigit() || it == ' ' || it in "=._\$:-" })
+    }
+
+    /**
+     * In-process wstunnel stand-in: TLS, the HTTP upgrade, then one binary
+     * frame per datagram in both directions.
+     */
+    private class FakeStealthPeer : AutoCloseable {
+        val fromClient = ArrayBlockingQueue<ByteArray>(8)
+        private val toClient = ArrayBlockingQueue<ByteArray>(8)
+        private val server: SSLServerSocket = newServer()
+        val port: Int = server.localPort
+        private val thread = Thread(this::run, "fake-stealth").also {
+            it.isDaemon = true
+            it.start()
+        }
+
+        fun sendToClient(payload: ByteArray) {
+            toClient.put(payload)
+        }
+
+        override fun close() {
+            thread.interrupt()
+            runCatching { server.close() }
+            thread.join(1_000)
+        }
+
+        private fun run() {
+            val socket = try {
+                server.accept() as SSLSocket
+            } catch (_: Exception) {
+                return
+            }
+            socket.use { tls ->
+                tls.soTimeout = 5_000
+                val input = tls.inputStream
+                val output = tls.outputStream
+                val headers = readHeaders(input)
+                val key = headerValue(headers, "sec-websocket-key") ?: return
+                val accept = WstunnelProtocol.acceptKey(key)
+                output.write(
+                    buildString {
+                        append("HTTP/1.1 101 Switching Protocols\r\n")
+                        append("Upgrade: websocket\r\n")
+                        append("Connection: Upgrade\r\n")
+                        append("Sec-WebSocket-Accept: $accept\r\n")
+                        append("\r\n")
+                    }.toByteArray(Charsets.US_ASCII),
+                )
+                output.flush()
+                tls.soTimeout = 40
+                val parser = WsFrameBuffer()
+                val scratch = ByteArray(4096)
+                while (!Thread.currentThread().isInterrupted) {
+                    while (true) {
+                        val payload = toClient.poll() ?: break
+                        output.write(WstunnelProtocol.encodeBinary(payload))
+                        output.flush()
+                    }
+                    val n = try {
+                        input.read(scratch)
+                    } catch (_: SocketTimeoutException) {
+                        continue
+                    } catch (_: Exception) {
+                        return
+                    }
+                    if (n < 0) return
+                    if (n == 0) continue
+                    parser.append(scratch, n)
+                    while (true) {
+                        val frame = parser.next() ?: break
+                        if (frame.opcode == 0x2) fromClient.offer(frame.payload.copyOf())
+                    }
+                }
+            }
+        }
+
+        private fun readHeaders(input: InputStream): String {
+            val out = StringBuilder()
+            while (out.length < 16_384) {
+                val b = try {
+                    input.read()
+                } catch (_: SocketTimeoutException) {
+                    continue
+                }
+                if (b < 0) break
+                out.append(b.toChar())
+                if (out.endsWith("\r\n\r\n")) break
+            }
+            return out.toString()
+        }
+
+        private fun headerValue(headers: String, name: String): String? {
+            for (line in headers.split("\r\n")) {
+                val idx = line.indexOf(':')
+                if (idx <= 0) continue
+                if (line.substring(0, idx).trim().equals(name, ignoreCase = true)) {
+                    return line.substring(idx + 1).trim()
+                }
+            }
+            return null
+        }
+
+        private fun newServer(): SSLServerSocket {
+            val dir = java.nio.file.Files.createTempDirectory("stealth-relay")
+            val store = dir.resolve("relay.p12").toFile()
+            val bundled = File(System.getProperty("java.home"), "bin/keytool")
+            val tool = if (bundled.canExecute()) bundled.absolutePath else "keytool"
+            val proc = ProcessBuilder(
+                tool,
+                "-genkeypair",
+                "-alias", "relay",
+                "-keyalg", "RSA",
+                "-keysize", "2048",
+                "-storetype", "PKCS12",
+                "-keystore", store.absolutePath,
+                "-storepass", "changeit",
+                "-keypass", "changeit",
+                "-dname", "CN=localhost",
+                "-validity", "1",
+                "-noprompt",
+            ).redirectErrorStream(true).start()
+            val log = proc.inputStream.readBytes()
+            check(proc.waitFor() == 0) { "keytool failed: ${String(log)}" }
+            val keys = KeyStore.getInstance("PKCS12")
+            store.inputStream().use { keys.load(it, "changeit".toCharArray()) }
+            val factory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+            factory.init(keys, "changeit".toCharArray())
+            val context = SSLContext.getInstance("TLS")
+            context.init(factory.keyManagers, null, SecureRandom())
+            return context.serverSocketFactory.createServerSocket(
+                0,
+                50,
+                InetAddress.getByName("127.0.0.1"),
+            ) as SSLServerSocket
         }
     }
 

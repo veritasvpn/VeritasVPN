@@ -17,6 +17,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import java.io.FileDescriptor
+import android.system.Os
 import android.system.OsConstants
 import android.util.Log
 import java.net.DatagramPacket
@@ -2976,6 +2977,7 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     protect(candidate)
                 }
             },
+            trace = { line -> traceStealth(line) },
         )
         transport.start()
         stealthTransport = transport
@@ -3643,6 +3645,19 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
                     // Leave the userspace sockets on loopback. Binding them to
                     // the underlay delivers one handshake initiation and then
                     // the socket fails, so the server's response never returns.
+                    // UDP_GRO and a stale route error do the same after that
+                    // first datagram. Pin the fd to lo when the platform allows
+                    // it, and turn GRO off before the kick.
+                    val tuned4 = prepareLoopbackSocket(v4)
+                    val tuned6 = prepareLoopbackSocket(v6)
+                    if (!dataPlaneStatus.loopbackRelay) {
+                        traceStealth(
+                            "stealth dataplane loopback=1 v4=${if (v4 >= 0) 1 else 0} " +
+                                "v6=${if (v6 >= 0) 1 else 0} " +
+                                "lo=${if (tuned4.lo || tuned6.lo) 1 else 0} " +
+                                "gro=${if (tuned4.gro || tuned6.gro) 1 else 0}",
+                        )
+                    }
                     return@runCatching DataPlaneStatus(
                         v4Present = v4 >= 0,
                         v6Present = v6 >= 0,
@@ -3683,6 +3698,50 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
 
     private fun socketFd(nativeName: String, handle: Int): Int =
         runCatching { goNative(nativeName, Integer.TYPE).invoke(null, handle) as Int }.getOrDefault(-1)
+
+    private data class LoopbackTune(val lo: Boolean, val gro: Boolean)
+
+    /**
+     * Userspace WireGuard enables UDP_GRO. On this path the peer is
+     * 127.0.0.1, and a GRO socket has been observed to accept one datagram
+     * and then fail the next send. Clear a queued socket error, turn GRO
+     * off, and prefer the loopback device. The byte and read calls are not
+     * in the public stub, so they go through reflection and may no-op.
+     * Direct mode never calls this.
+     */
+    private fun prepareLoopbackSocket(fd: Int): LoopbackTune {
+        if (fd < 0) return LoopbackTune(lo = false, gro = false)
+        val raw = rawFileDescriptor(fd)
+        runCatching {
+            Os::class.java.getMethod(
+                "getsockoptInt",
+                FileDescriptor::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+            ).invoke(null, raw, OsConstants.SOL_SOCKET, OsConstants.SO_ERROR)
+        }
+        val gro = runCatching {
+            Os.setsockoptInt(raw, OsConstants.IPPROTO_UDP, UDP_GRO, 0)
+        }.isSuccess
+        val lo = runCatching {
+            val name = ByteArray(16)
+            "lo".toByteArray(Charsets.US_ASCII).copyInto(name)
+            Os::class.java.getMethod(
+                "setsockoptBytes",
+                FileDescriptor::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                ByteArray::class.java,
+            ).invoke(null, raw, OsConstants.SOL_SOCKET, OsConstants.SO_BINDTODEVICE, name)
+        }.isSuccess
+        return LoopbackTune(lo = lo, gro = gro)
+    }
+
+    private fun traceStealth(line: String) {
+        Log.i(TAG, line)
+        RoamLog.record(line)
+        DiagnosticLog.record(line)
+    }
 
     private fun protectAndBind(fd: Int, network: Network?): BoundSocket {
         if (fd < 0) return BoundSocket(protectedOk = false, boundOk = false, handle = null)
@@ -4843,6 +4902,9 @@ class VeritasVpnService : GoBackend.VpnService(), Tunnel {
             }
             return null
         }
+
+        /** linux/udp.h UDP_GRO. Not in OsConstants. Off for the loopback relay. */
+        private const val UDP_GRO = 104
 
         const val TUNNEL_NAME = "veritas"
         const val CHANNEL_ID = "veritas_vpn"
