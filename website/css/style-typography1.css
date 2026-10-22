@@ -1676,6 +1676,7 @@ body.auth-modal-open { overflow: hidden; }
    The file's transparent padding is the required clear space (one quarter of the badge height).
    The white plate is a solid background so the black badge stays legible on this dark site. */
 a.play-badge{display:block;width:200px;max-width:100%;margin:2px;flex:0 0 auto;align-self:flex-start;justify-self:start;background:#fff;line-height:0}
+.install-steps > .hero-actions{position:relative;margin-top:22px}
 a.play-badge--lg{width:240px}
 .installer-hero-action a.play-badge{align-self:center;justify-self:center}
 a.play-badge img{display:block;width:100%;height:auto;border:0;border-radius:0;filter:none;box-shadow:none;transform:none}

@@ -40,6 +40,7 @@ test("Play badge artwork is the unmodified official English asset", async () => 
     "website/index.html",
     "website/downloads.html",
     "website/install/android.html",
+    "website/install/chrome.html",
     "website/account/js/account-app-v4.js",
   ];
   for (const path of pages) {
