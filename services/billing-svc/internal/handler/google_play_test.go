@@ -34,3 +34,20 @@ func TestGooglePlayEndpointsAreDisabledUntilConfigured(t *testing.T) {
 		t.Fatalf("verify without a session status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestUnboundPlayPurchaseIsNotAcknowledged(t *testing.T) {
+	log, err := logging.New("error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := service.New(log, nil, nil, nil, nil, nil, service.BillingConfig{})
+	h := NewBillingHandler(log, svc, nil, nil, "https://veritasvpn.cloud/account/", false)
+	rec := httptest.NewRecorder()
+	h.writePlayError(rec, service.ErrPlayAccountUnbound)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "invalid") {
+		t.Fatalf("unbound purchase was classified as a client error: %s", rec.Body.String())
+	}
+}

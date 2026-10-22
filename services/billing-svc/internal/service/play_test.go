@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -455,12 +456,12 @@ func TestPlayTrialConversion(t *testing.T) {
 		ObfuscatedAccountID: "acc-1",
 		State:               "SUBSCRIPTION_STATE_ACTIVE",
 		LineItems: []provider.PlayLineItem{{
-			ProductID: "premium_monthly",
-			Expiry:    expiry,
-			InTrial:   false,
-			HasPrice:  true,
+			ProductID:  "premium_monthly",
+			Expiry:     expiry,
+			InTrial:    false,
+			HasPrice:   true,
 			PriceCents: 300,
-			Currency:  "usd",
+			Currency:   "usd",
 		}},
 	}
 	client.purchase = paidPurchase
@@ -498,12 +499,12 @@ func TestPlayPlainRenewal(t *testing.T) {
 		ObfuscatedAccountID: "acc-1",
 		State:               "SUBSCRIPTION_STATE_ACTIVE",
 		LineItems: []provider.PlayLineItem{{
-			ProductID: "premium_monthly",
-			Expiry:    expiry,
-			InTrial:   false,
-			HasPrice:  true,
+			ProductID:  "premium_monthly",
+			Expiry:     expiry,
+			InTrial:    false,
+			HasPrice:   true,
 			PriceCents: 300,
-			Currency:  "usd",
+			Currency:   "usd",
 		}},
 	}
 	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: purchase}
@@ -528,6 +529,107 @@ func TestPlayPlainRenewal(t *testing.T) {
 	}
 	if _, ok := gotPayload["converted"]; ok {
 		t.Fatalf("converted flag should not be set for plain renewal: %+v", gotPayload)
+	}
+}
+
+func TestObfuscatedPlayAccountIDMatchesAndroidVector(t *testing.T) {
+	got := obfuscatedPlayAccountID("acc-1")
+	if got != "7032575faa823e04f6009640a1f6def620fbdbbd33201375babbc25d7537fc7d" || len(got) != 64 {
+		t.Fatalf("hash = %s", got)
+	}
+	if obfuscatedPlayAccountID(" acc-1 ") != got {
+		t.Fatal("hash should ignore surrounding space")
+	}
+	if !playAccountMatches("acc-1", got) || !playAccountMatches("acc-1", strings.ToUpper(got)) {
+		t.Fatal("hash should match the account")
+	}
+	if !playAccountMatches("acc-1", "acc-1") {
+		t.Fatal("legacy raw account id should still match")
+	}
+	if playAccountMatches("acc-1", obfuscatedPlayAccountID("other")) || playAccountMatches("acc-1", "") {
+		t.Fatal("unrelated or empty binding matched")
+	}
+	if !isPlayAccountHash(got) || isPlayAccountHash("acc-1") {
+		t.Fatal("hash detection")
+	}
+}
+
+func TestGooglePlayVerifyAcceptsHashAndLegacyRawID(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	expiry := now.Add(30 * 24 * time.Hour)
+	store := newMemPlayStore()
+	hash := obfuscatedPlayAccountID("acc-1")
+	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: activePurchase(hash, "premium_monthly", expiry, "SUBSCRIPTION_STATE_ACTIVE")}
+	play := NewPlayBilling(testLog(t), store, client, nil, func(string, map[string]interface{}) {})
+	play.now = func() time.Time { return now }
+	result, err := play.Verify(context.Background(), "acc-1", "premium_monthly", "token-hash")
+	if err != nil || !result.IsPremium {
+		t.Fatalf("hashed verify = %+v err=%v", result, err)
+	}
+	if _, ok := store.subs[hash]; ok {
+		t.Fatal("subscription was stored under the hash")
+	}
+	if store.subs["acc-1"] == nil || store.subs["acc-1"].Tier != model.TierPremium {
+		t.Fatalf("sub = %+v", store.subs["acc-1"])
+	}
+
+	legacy := newMemPlayStore()
+	legacyClient := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: activePurchase("acc-1", "premium_monthly", expiry, "SUBSCRIPTION_STATE_ACTIVE")}
+	legacyPlay := NewPlayBilling(testLog(t), legacy, legacyClient, nil, func(string, map[string]interface{}) {})
+	legacyPlay.now = func() time.Time { return now }
+	if _, err := legacyPlay.Verify(context.Background(), "acc-1", "premium_monthly", "token-raw"); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.subs["acc-1"] == nil || !legacy.subs["acc-1"].CurrentPeriodEnd.Equal(expiry) {
+		t.Fatal("legacy raw account id was rejected")
+	}
+}
+
+func TestGooglePlayRTDNResolvesHashFromStoredPurchase(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	expiry := now.Add(30 * 24 * time.Hour)
+	hash := obfuscatedPlayAccountID("acc-1")
+	store := newMemPlayStore()
+	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: activePurchase(hash, "premium_monthly", expiry, "SUBSCRIPTION_STATE_ACTIVE")}
+	play := NewPlayBilling(testLog(t), store, client, allowPush{}, func(string, map[string]interface{}) {})
+	play.now = func() time.Time { return now }
+
+	early := pubSubBody(t, map[string]any{
+		"packageName": "cloud.veritasvpn",
+		"subscriptionNotification": map[string]any{
+			"notificationType": 4,
+			"purchaseToken":    "token-hash",
+			"subscriptionId":   "premium_monthly",
+		},
+	})
+	if err := play.ProcessNotification(context.Background(), early, "Bearer test"); !errors.Is(err, ErrPlayAccountUnbound) {
+		t.Fatalf("unlinked hash was acknowledged: %v", err)
+	}
+	if len(store.subs) != 0 {
+		t.Fatalf("hash was used as an account id: %+v", store.subs)
+	}
+
+	if _, err := play.Verify(context.Background(), "acc-1", "premium_monthly", "token-hash"); err != nil {
+		t.Fatal(err)
+	}
+	renewed := expiry.Add(30 * 24 * time.Hour)
+	client.purchase = activePurchase(hash, "premium_monthly", renewed, "SUBSCRIPTION_STATE_ACTIVE")
+	body := pubSubBody(t, map[string]any{
+		"packageName": "cloud.veritasvpn",
+		"subscriptionNotification": map[string]any{
+			"notificationType": 2,
+			"purchaseToken":    "token-hash",
+			"subscriptionId":   "premium_monthly",
+		},
+	})
+	if err := play.ProcessNotification(context.Background(), body, "Bearer test"); err != nil {
+		t.Fatal(err)
+	}
+	if !store.subs["acc-1"].CurrentPeriodEnd.Equal(renewed) {
+		t.Fatalf("end = %s", store.subs["acc-1"].CurrentPeriodEnd)
+	}
+	if _, ok := store.subs[hash]; ok {
+		t.Fatal("renewal created a subscription for the hash")
 	}
 }
 

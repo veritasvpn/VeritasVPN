@@ -279,16 +279,18 @@ class EndpointRefreshTest {
         assertTrue(EndpointRefresh.keepsPrivateEndpoint(lan, listOf("192.168.0.10")))
         assertTrue(EndpointRefresh.keepsPrivateEndpoint(wan, cellular))
 
+        // The server advertised the public endpoint. Sharing the node /24
+        // does not make this the node LAN, so the stored LAN address stays unused.
         val stillHome = EndpointRefresh.chooseForUnderlay(
             advertised = wan,
             lan = lan,
             wan = wan,
             underlayIpv4s = listOf("192.168.0.10"),
         )
-        assertEquals(lan, stillHome?.udpEndpoint)
-        assertEquals("LAN", stillHome?.kind)
+        assertEquals(wan, stillHome?.udpEndpoint)
+        assertEquals("public", stillHome?.kind)
 
-        assertFalse(
+        assertTrue(
             EndpointRefresh.endpointFitsUnderlay(
                 installed = wan,
                 advertised = null,
@@ -317,16 +319,16 @@ class EndpointRefreshTest {
         val wan = "203.0.113.10:443"
         val home = listOf("192.168.0.10")
 
-        // Stored public choice from cellular, and the peer read may still
-        // advertise that public endpoint. The home /24 installs the LAN one.
+        // A public server_endpoint stays public. The home /24 is not proof
+        // that this Wi-Fi is the node LAN.
         val stored = EndpointRefresh.chooseForUnderlay(
             advertised = wan,
             lan = lan,
             wan = wan,
             underlayIpv4s = home,
         )
-        assertEquals(lan, stored?.udpEndpoint)
-        assertEquals("LAN", stored?.kind)
+        assertEquals(wan, stored?.udpEndpoint)
+        assertEquals("public", stored?.kind)
 
         // The peer read on the home LAN returns a private server_endpoint,
         // even when the stored LAN field was blank.
@@ -352,7 +354,7 @@ class EndpointRefreshTest {
                 underlayIpv4s = home,
             ),
         )
-        assertTrue(
+        assertFalse(
             EndpointRefresh.endpointFitsUnderlay(
                 installed = lan,
                 advertised = wan,
@@ -380,6 +382,72 @@ class EndpointRefreshTest {
                 wan = wan,
                 underlayIpv4s = listOf("192.168.1.20"),
             )?.udpEndpoint,
+        )
+    }
+
+    @Test
+    fun sameSlash24DoesNotSelectLanUnlessThisReadAdvertisedIt() {
+        val lan = "192.168.1.10:51820"
+        val wan = "203.0.113.10:443"
+        val cafe = listOf("192.168.1.57")
+
+        val advertisedWan = EndpointRefresh.chooseForUnderlay(
+            advertised = wan,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = cafe,
+        )
+        assertEquals(wan, advertisedWan?.udpEndpoint)
+        assertEquals("public", advertisedWan?.kind)
+
+        val noRead = EndpointRefresh.chooseForUnderlay(
+            advertised = null,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = cafe,
+        )
+        assertEquals(wan, noRead?.udpEndpoint)
+        assertEquals("public", noRead?.kind)
+
+        val advertisedLan = EndpointRefresh.chooseForUnderlay(
+            advertised = lan,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = cafe,
+        )
+        assertEquals(lan, advertisedLan?.udpEndpoint)
+        assertEquals("LAN", advertisedLan?.kind)
+
+        val stealthWan = EndpointRefresh.chooseForUnderlay(
+            advertised = wan,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = cafe,
+            stealth = true,
+            stealthEndpoint = "192.168.1.10:8443",
+        )
+        assertEquals(wan, stealthWan?.udpEndpoint)
+        assertEquals("203.0.113.10:8443", stealthWan?.stealthEndpoint)
+
+        val stealthLan = EndpointRefresh.chooseForUnderlay(
+            advertised = lan,
+            lan = lan,
+            wan = wan,
+            underlayIpv4s = cafe,
+            stealth = true,
+            stealthEndpoint = "203.0.113.10:8443",
+        )
+        assertEquals(lan, stealthLan?.udpEndpoint)
+        assertEquals("192.168.1.10:8443", stealthLan?.stealthEndpoint)
+
+        assertTrue(
+            EndpointRefresh.endpointFitsUnderlay(
+                installed = wan,
+                advertised = wan,
+                lan = lan,
+                wan = wan,
+                underlayIpv4s = cafe,
+            ),
         )
     }
 

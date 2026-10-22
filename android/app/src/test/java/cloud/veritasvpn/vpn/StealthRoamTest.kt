@@ -138,6 +138,47 @@ class StealthRoamTest {
     }
 
     @Test
+    fun txOnlyGrowthCountsAsDeadAndCanRedialWhileTheSocketIsOpen() {
+        val issued = StealthRoam.Memory(
+            issuedHandle = CELL,
+            issuedAtMs = T0,
+            baselineRx = 1_000,
+            baselineTx = 1_000,
+            dials = 1,
+        )
+        val duringGap = StealthRoam.next(
+            issued,
+            observation(
+                live = CELL,
+                bound = CELL,
+                open = true,
+                handshakeMs = 0,
+                rx = 1_000,
+                tx = 50_000,
+                now = T0 + 10_000,
+                force = true,
+            ),
+        )
+        assertEquals(StealthRoam.Action.WAIT, duringGap.second)
+        assertEquals(1, duringGap.first.dials)
+        val later = StealthRoam.next(
+            issued,
+            observation(
+                live = CELL,
+                bound = CELL,
+                open = true,
+                handshakeMs = 0,
+                rx = 1_000,
+                tx = 80_000,
+                now = T0 + StealthRoam.SAME_NETWORK_GAP_MS + 1,
+                force = true,
+            ),
+        )
+        assertEquals(StealthRoam.Action.DIAL, later.second)
+        assertEquals(2, later.first.dials)
+    }
+
+    @Test
     fun aDeadTunnelCanBeRedialedOnceTheGapHasPassed() {
         val issued = StealthRoam.Memory(
             issuedHandle = CELL,

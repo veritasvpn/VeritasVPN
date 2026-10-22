@@ -47,7 +47,9 @@ spec:
             - -c
             - |
               set -eu
+              # WARN logs the rejected upgrade path, which includes the stealth prefix.
               exec /usr/local/bin/wstunnel server \
+                --log-lvl error \
                 --restrict-http-upgrade-path-prefix "$STEALTH_PATH_PREFIX" \
                 --restrict-to 127.0.0.1:51820 \
                 "wss://0.0.0.0:${STEALTH_LISTEN_PORT}"

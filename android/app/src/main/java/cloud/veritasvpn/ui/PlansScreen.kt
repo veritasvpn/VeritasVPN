@@ -326,11 +326,16 @@ fun AccountScreen(
         Text("Delete account", color = Paper, fontSize = 17.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
         Text(
-            "Permanently deletes this account, signs you out, and removes the data we store for it. This cannot be undone.",
+            "Permanently deletes this account, signs you out, and removes the account, sessions, and VPN peers from the live service. Encrypted backups can keep a copy for about 3 months. This cannot be undone.",
             color = PaperMuted,
             fontSize = 13.sp,
             lineHeight = 19.sp
         )
+        val activePlaySubscription = PlanEntitlement.activeGooglePlaySubscription(playBilling, billingStatus)
+        if (activePlaySubscription) {
+            Spacer(Modifier.height(12.dp))
+            PlaySubscriptionDeletionNotice(onManageSubscription)
+        }
         if (!showDeleteConfirmation) {
             Spacer(Modifier.height(12.dp))
             OutlinedButton(
@@ -351,6 +356,10 @@ fun AccountScreen(
             ) {
                 Text("Delete this account?", color = Paper, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Spacer(Modifier.height(6.dp))
+                if (activePlaySubscription) {
+                    PlaySubscriptionDeletionNotice(onManageSubscription)
+                    Spacer(Modifier.height(12.dp))
+                }
                 Text(
                     if (requiresPassword) {
                         "Enter your password to confirm. You will be signed out of this device."
@@ -432,6 +441,24 @@ fun AccountScreen(
         Spacer(Modifier.height(24.dp))
     }
     }
+    }
+}
+
+@Composable
+private fun PlaySubscriptionDeletionNotice(onManageSubscription: () -> Unit) {
+    Text(
+        "Deleting this account does not cancel your Google Play subscription. Google can keep charging you until you cancel it in Google Play.",
+        color = WarningOrange,
+        fontSize = 13.sp,
+        lineHeight = 19.sp,
+    )
+    Spacer(Modifier.height(10.dp))
+    OutlinedButton(
+        onClick = onManageSubscription,
+        modifier = Modifier.fillMaxWidth(),
+        border = BorderStroke(1.dp, LineStrong),
+    ) {
+        Text("Manage subscription in Google Play", color = Paper, fontWeight = FontWeight.Bold)
     }
 }
 

@@ -190,22 +190,6 @@ object ApiClient {
         return fastClient.newCall(request).await()
     }
 
-    suspend fun getText(url: String, timeoutSeconds: Long = 5): String {
-        val request = Request.Builder().url(url).get().build()
-        val validationClient = client.newBuilder()
-            .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
-            .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
-            .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
-            .build()
-        return executeWithRetry({ request }, validationClient, retryOnTimeout = false).use { response ->
-            if (!response.isSuccessful) {
-                throw IOException("HTTP " + response.code + " during VPN egress validation")
-            }
-            response.body?.string()?.trim()?.takeIf { it.isNotEmpty() }
-                ?: throw IOException("Empty VPN egress validation response")
-        }
-    }
-
     private suspend fun executeWithRetry(
         requestFactory: () -> Request,
         httpClient: OkHttpClient = client,

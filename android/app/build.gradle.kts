@@ -38,8 +38,8 @@ android {
         targetSdk = 36
         // Google Play requires a new monotonically increasing version code for
         // every uploaded release artifact.
-        versionCode = 82
-        versionName = "0.2.98"
+        versionCode = 83
+        versionName = "0.2.99"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -110,7 +110,6 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("com.caverock:androidsvg-aar:1.4")
 

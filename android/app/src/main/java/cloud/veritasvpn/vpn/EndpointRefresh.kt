@@ -79,11 +79,13 @@ object EndpointRefresh {
     /**
      * Endpoint to install for the network the phone is on now.
      *
-     * A private LAN endpoint is kept only when an underlay address shares its
-     * /24. Leaving that LAN installs the public endpoint, including when the
-     * server still advertises the LAN address because the read left over the
-     * old network or through the tunnel. The previous private endpoint is
-     * never a fallback, and no port is invented.
+     * LAN is used only when this network's latest peer read or registration
+     * returned that private address as [advertised] (`server_endpoint`) and an
+     * underlay address shares its /24. A stored LAN field is not enough: cafe
+     * and home Wi-Fi often use the same 192.168.0.0/24, and that is not the
+     * node LAN. With no fresh read, the public endpoint is installed. A stale
+     * private advertisement from the previous network is not used once this
+     * underlay has left that /24. No port is invented.
      */
     data class UnderlayChoice(
         val udpEndpoint: String,
@@ -93,36 +95,34 @@ object EndpointRefresh {
 
     fun chooseForUnderlay(
         advertised: String?,
-        lan: String?,
+        @Suppress("UNUSED_PARAMETER") lan: String?,
         wan: String?,
         underlayIpv4s: List<String>,
         stealth: Boolean = false,
         stealthEndpoint: String? = null,
     ): UnderlayChoice? {
         val advertisedEp = blankToNull(advertised)
-        val storedLan = blankToNull(lan)
-        // Known LAN first, then a private server_endpoint from this network's
-        // peer read. The first one this underlay can reach wins. A public
-        // address is not a fallback while that LAN endpoint is reachable.
-        val privateCandidates = LinkedHashSet<String>()
-        storedLan?.takeIf { isPrivateEndpoint(it) }?.let { privateCandidates.add(it) }
-        advertisedEp?.takeIf { isPrivateEndpoint(it) }?.let { privateCandidates.add(it) }
-        val matchingLan = privateCandidates.firstOrNull { ep ->
-            val host = EndpointSelector.host(ep)
-            underlayIpv4s.any { EndpointSelector.sameIpv4Slash24(it, host) }
-        }
         val wanEp = blankToNull(wan)?.takeUnless { isPrivateEndpoint(it) }
             ?: advertisedEp?.takeUnless { isPrivateEndpoint(it) }
-        val nodeLan = storedLan?.takeIf { isPrivateEndpoint(it) }
-            ?: advertisedEp?.takeIf { isPrivateEndpoint(it) }
-        val onLan = matchingLan != null
-        val udp = matchingLan ?: wanEp
+        // The server's server_endpoint for this read, not a stored LAN field
+        // and not a /24 guess. The stored field stays on the signature so a
+        // caller can still pass the last provision without it winning.
+        val advertisedLan = advertisedEp?.takeIf { isPrivateEndpoint(it) }
+        val onAdvertisedLan = advertisedLan != null && underlayIpv4s.any {
+            EndpointSelector.sameIpv4Slash24(it, EndpointSelector.host(advertisedLan))
+        }
+        val udp = if (onAdvertisedLan) advertisedLan else wanEp
         if (udp == null) return null
         if (!stealth) {
             val kind = if (isPrivateEndpoint(udp)) "LAN" else "public"
             return UnderlayChoice(udp, null, kind)
         }
-        val chosenStealth = chooseStealth(blankToNull(stealthEndpoint), nodeLan, wanEp, onLan) ?: return null
+        val chosenStealth = chooseStealth(
+            blankToNull(stealthEndpoint),
+            advertisedLan,
+            wanEp,
+            onAdvertisedLan,
+        ) ?: return null
         return UnderlayChoice(udp, chosenStealth, "stealth")
     }
 
@@ -134,7 +134,9 @@ object EndpointRefresh {
 
     /**
      * The installed endpoint may stay only when it is the one [chooseForUnderlay]
-     * would install. A public endpoint is not acceptable on the node LAN.
+     * would install. A public handshake is acceptable when that choice is the
+     * public endpoint, including on a Wi-Fi that happens to share the node /24.
+     * A stored LAN address does not make the public endpoint unacceptable.
      */
     fun endpointFitsUnderlay(
         installed: String?,
@@ -155,7 +157,7 @@ object EndpointRefresh {
             stealthEndpoint = stealthEndpoint,
         ) ?: return true
         val wanted = if (stealth) choice.stealthEndpoint else choice.udpEndpoint
-        if (wanted.isNullOrBlank() || !isPrivateEndpoint(wanted)) return true
+        if (wanted.isNullOrBlank()) return true
         return !endpointChanged(installed, wanted)
     }
 
@@ -183,10 +185,11 @@ object EndpointRefresh {
         if (!isPrivateEndpoint(stealth)) return stealth
         val wanHost = wan?.let { EndpointSelector.host(it) }?.takeUnless { EndpointSelector.isRfc1918(it) }
             ?: return null
-        if (lan != null && EndpointSelector.host(stealth) == EndpointSelector.host(lan)) {
-            return withHost(stealth, wanHost)
-        }
-        return null
+        // A private Stealth host is the node LAN only while [onLan] is true.
+        // Anywhere else, including a different network in the same /24, dial
+        // the public host. Dropping the socket here would leave Reconnecting
+        // with no carrier.
+        return withHost(stealth, wanHost)
     }
 
     private fun isPrivateEndpoint(endpoint: String): Boolean =

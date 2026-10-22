@@ -1,6 +1,7 @@
 package service
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,42 @@ func TestStripCIDR(t *testing.T) {
 	}
 	if got := stripCIDR("10.0.0.2"); got != "10.0.0.2" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestPeerCreatedLogHashesDeviceID(t *testing.T) {
+	body, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(body)
+	start := strings.Index(src, `s.log.Info("peer created"`)
+	if start < 0 {
+		t.Fatal("peer created log not found")
+	}
+	end := strings.Index(src[start:], "return &PeerConfig{")
+	if end < 0 {
+		t.Fatal("peer created block not found")
+	}
+	block := src[start : start+end]
+	if strings.Contains(block, `"device_id"`) {
+		t.Fatal("peer created still records the raw device id")
+	}
+	if strings.Count(block, "logging.HashIdentifier(deviceID)") != 2 {
+		t.Fatalf("expected the log and the event to hash device id, block:\n%s", block)
+	}
+	// Hash keys contain these names as a prefix. Strip the hashed form, then
+	// the raw key must be gone.
+	stripped := strings.ReplaceAll(block, `"assigned_ip_hash"`, "")
+	stripped = strings.ReplaceAll(stripped, `"server_endpoint_hash"`, "")
+	if strings.Contains(stripped, `"assigned_ip"`) || strings.Contains(stripped, `"server_endpoint"`) {
+		t.Fatalf("peer created still records a raw address:\n%s", block)
+	}
+	if strings.Count(block, "logging.HashIdentifier(assignedIP)") != 2 {
+		t.Fatalf("expected the log and the event to hash assigned ip, block:\n%s", block)
+	}
+	if strings.Count(block, "logging.HashIdentifier(endpoint)") != 2 {
+		t.Fatalf("expected the log and the event to hash server endpoint, block:\n%s", block)
 	}
 }
 

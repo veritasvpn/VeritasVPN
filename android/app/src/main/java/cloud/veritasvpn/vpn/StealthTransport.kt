@@ -71,6 +71,8 @@ class StealthTransport(
     @Volatile var stage: StealthDial.Stage? = null
         private set
     @Volatile private var dialing = false
+    /** Set when the dial throws. Cleared only by a new armed attempt or an open socket. */
+    @Volatile private var attemptFailed = false
     /** True while [reconnect] or [detach] owns the session, so the supervisor does not dial a second one. */
     @Volatile private var replacing = false
     @Volatile private var attemptStartedAtMs = 0L
@@ -101,6 +103,7 @@ class StealthTransport(
         boundHandle = boundHandle,
         currentHandle = currentHandle,
         nowMs = nowMs,
+        attemptFailed = attemptFailed,
     )
 
     fun start() {
@@ -122,7 +125,7 @@ class StealthTransport(
                     }
                 }
                 if (!running.get() || Thread.currentThread().isInterrupted) break
-                if (!dialing) beginAttempt(keepBoundHandle = true)
+                if (!dialing) beginAttempt(keepBoundHandle = true, armHold = !attemptFailed)
                 var superseded = false
                 try {
                     runSession()
@@ -132,6 +135,11 @@ class StealthTransport(
                 } catch (e: Exception) {
                     val failed = stage ?: StealthDial.Stage.TCP
                     lastError = StealthDial.userFacing(failed, e)
+                    // The upgrade hold covers a dial that is still running.
+                    // A thrown dial is finished, so peer-gone and the roam
+                    // must not wait out the budget on this socket.
+                    attemptFailed = true
+                    dialing = false
                 }
                 closeActiveSocket()
                 if (running.get() && !superseded && !replacing) {
@@ -212,11 +220,12 @@ class StealthTransport(
         stage = StealthDial.Stage.TCP
     }
 
-    private fun beginAttempt(keepBoundHandle: Boolean) {
+    private fun beginAttempt(keepBoundHandle: Boolean, armHold: Boolean = true) {
         stage = StealthDial.Stage.TCP
         dialing = true
         openedAtMs = 0L
         attemptStartedAtMs = System.currentTimeMillis()
+        if (armHold) attemptFailed = false
         if (!keepBoundHandle) boundHandle = null
     }
 
@@ -244,6 +253,7 @@ class StealthTransport(
         tcp.keepAlive = true
         stage = StealthDial.Stage.OPEN
         dialing = false
+        attemptFailed = false
         openedAtMs = System.currentTimeMillis()
         lastError = null
         val writer = Thread({

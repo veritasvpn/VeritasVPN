@@ -5,11 +5,41 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Account — VeritasVPN</title>
   <link rel="stylesheet" href="/css/style-typography1.css">
-  <link rel="stylesheet" href="/account/css/account-v3.css?v=7">
+  <link rel="stylesheet" href="/account/css/account-v3.css?v=8">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
 </head>
 <body class="account-app">
-  <div class="account-boot" id="accountBoot" role="status" aria-live="polite">
+  <main class="account-public" id="accountPublic">
+    <div class="account-public-inner">
+      <a href="/" class="account-brand">
+        <img src="/assets/logo-mark.png" alt="" width="32" height="32">
+        <span>Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <h1 id="delete-account">Delete your VeritasVPN account</h1>
+      <p>You can ask us to delete your account from this page, from the apps, or by email. You do not have to be signed in to read these steps.</p>
+      <h2>How to delete</h2>
+      <ul>
+        <li>Android app: open Account, then Delete account, then confirm. An email account confirms with the password. An Account ID account confirms with the security check.</li>
+        <li>Linux app: Account, then Delete account, then confirm.</li>
+        <li>Website: <a href="/?signin=1&amp;next=account">sign in</a>, open Account, then Delete my account. Email accounts confirm with the password. Account ID accounts confirm with the security check.</li>
+        <li>Email: write to <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a> and include the Account ID. Account ID accounts have no email on file, so the message has to include that ID. We delete what we control.</li>
+      </ul>
+      <h2>What is deleted</h2>
+      <p>In the live database we delete the account, sign-in sessions, VPN peers, the subscription row, and payment records. You are signed out. This cannot be undone.</p>
+      <h2>What is kept, and for how long</h2>
+      <ul>
+        <li>Encrypted database backups until they expire: 7 daily, 4 weekly, and 3 monthly copies. Monthly copies are removed after about 93 days (about 3 months). Encrypted copies in Cloudflare R2 are removed after 60 days. We do not restore a deleted account into the live service except to recover from an incident.</li>
+        <li>BTCPay invoices tagged with the Account ID stay on the self-hosted BTCPay server. Account deletion does not delete them. The Google Play app does not use BTCPay.</li>
+      </ul>
+      <h2>Google Play subscriptions</h2>
+      <p>Deleting the account does not cancel a Google Play subscription. Google can keep charging you until you cancel it in Google Play.</p>
+      <p><a href="https://play.google.com/store/account/subscriptions?package=cloud.veritasvpn" rel="noopener noreferrer">Manage your Google Play subscription</a></p>
+      <p><a class="btn btn-primary" href="/?signin=1&amp;next=account">Sign in to delete this account</a></p>
+      <p><a href="/privacy.html#delete-account">Privacy policy — deletion</a></p>
+    </div>
+  </main>
+
+  <div class="account-boot" id="accountBoot" role="status" aria-live="polite" hidden>
     <img src="/assets/logo-mark.png" alt="" width="52" height="52">
     <div class="account-boot-spinner" aria-hidden="true"></div>
     <h1>Loading your account</h1>
@@ -73,6 +103,6 @@
     </div>
   </div>
 
-  <script type="module" src="/account/js/account-app-v4.js?v=17"></script>
+  <script type="module" src="/account/js/account-app-v4.js?v=18"></script>
 </body>
 </html>

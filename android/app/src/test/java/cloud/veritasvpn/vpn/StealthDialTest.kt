@@ -19,6 +19,32 @@ import java.util.concurrent.atomic.AtomicBoolean
 class StealthDialTest {
 
     @Test
+    fun repinProtectsAConnectedSocketAndDoesNotBindIt() {
+        val underlay = kotlinSource("StealthUnderlay.kt")
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .lineSequence()
+            .filterNot { it.trimStart().startsWith("//") }
+            .joinToString("\n")
+        val attach = slice(underlay, "fun attach", "fun repin")
+        assertTrue(attach.contains("protectThenBind"))
+        assertTrue(attach.contains("network.bindSocket"))
+        assertTrue(attach.indexOf("protectThenBind") < attach.indexOf("network.bindSocket"))
+        val repin = underlay.substring(underlay.indexOf("fun repin"))
+        assertFalse(repin.contains("bindSocket"))
+        assertTrue(repin.contains("return protect(socket)"))
+    }
+
+    @Test
+    fun stealthWriteLoopFlushesEveryFrame() {
+        val transport = kotlinSource("StealthTransport.kt")
+        val loop = slice(transport, "fun writeLoop", "fun readLoop")
+        val writes = Regex("""output\.write\(""").findAll(loop).count()
+        val flushes = Regex("""output\.flush\(\)""").findAll(loop).count()
+        assertEquals(writes, flushes)
+        assertTrue(writes >= 4)
+    }
+
+    @Test
     fun repinOfAMissingNetworkDoesNotCloseTheSocket() {
         val socket = Socket()
         try {
@@ -90,6 +116,23 @@ class StealthDialTest {
         assertNull(handle)
         assertFalse(protected)
         socket.close()
+    }
+
+    @Test
+    fun failedDialReleasesTheUpgradeHold() {
+        val now = 100_000L
+        assertTrue(
+            StealthDial.mayRedial(
+                stage = StealthDial.Stage.TCP,
+                dialing = true,
+                attemptStartedAtMs = now - 1_000L,
+                openedAtMs = 0L,
+                boundHandle = 10L,
+                currentHandle = 10L,
+                nowMs = now,
+                attemptFailed = true,
+            ),
+        )
     }
 
     @Test
@@ -335,7 +378,7 @@ class StealthDialTest {
             assertTrue(error.contains("network"))
             assertTrue(StealthDial.detail(transport.stage, error)!!.startsWith("tcp"))
             assertFalse(error.contains("timeout", ignoreCase = true))
-            assertFalse(transport.mayRedial(4L, System.currentTimeMillis()))
+            assertTrue(transport.mayRedial(4L, System.currentTimeMillis()))
         } finally {
             transport.stop()
             server.close()
@@ -376,7 +419,9 @@ class StealthDialTest {
         assertFalse(protect.contains("UDP_GRO"))
         val open = slice(code, "fun openInterface", "fun openLockdownHold")
         assertTrue(open.contains("loopbackRelay"))
-        assertTrue(open.contains("addDisallowedApplication(packageName)"))
+        assertFalse(open.contains("addDisallowedApplication(packageName)"))
+        assertTrue(open.contains("repinStealthCarrier()"))
+        assertTrue(open.indexOf("establish()") < open.indexOf("repinStealthCarrier()"))
         val kick = slice(code, "fun kickHandshakePacket", "fun armNatKeepalive")
         assertTrue(kick.contains("writeTunTrigger"))
         assertTrue(kick.contains("stealth kick tun="))

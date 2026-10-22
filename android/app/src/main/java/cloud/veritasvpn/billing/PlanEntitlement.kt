@@ -12,6 +12,16 @@ import java.time.format.DateTimeFormatter
  * build does not ask Google Play.
  */
 object PlanEntitlement {
+    /**
+     * An active Google Play subscription on the Play build. Deleting the
+     * account does not cancel it. The direct build has no Play management UI.
+     */
+    fun activeGooglePlaySubscription(playBilling: Boolean, status: BillingStatus?): Boolean {
+        if (!playBilling || status == null) return false
+        if (!status.paymentMethod.equals("google_play", ignoreCase = true)) return false
+        return grantsPremium(status)
+    }
+
     fun grantsPremium(status: BillingStatus?, nowMs: Long = System.currentTimeMillis()): Boolean {
         if (status == null) return false
         if (status.isPremium) return true

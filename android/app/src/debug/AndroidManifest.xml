@@ -5,5 +5,13 @@
             android:name=".ui.CircleDisconnectHarnessActivity"
             android:exported="false"
             android:theme="@style/Theme.VeritasVPN" />
+        <!-- Debug builds only. Release source sets do not merge this receiver. -->
+        <receiver
+            android:name=".vpn.DebugLanSeedReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="cloud.veritasvpn.DEBUG_SEED_LAN" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

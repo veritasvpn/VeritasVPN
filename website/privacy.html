@@ -48,7 +48,7 @@
   <main class="legal-page">
     <div class="container">
       <h1>Privacy Policy</h1>
-      <p class="legal-meta">Effective date: October 7, 2026. Published at https://veritasvpn.cloud/privacy.html.</p>
+      <p class="legal-meta">Effective date: October 21, 2026. Published at https://veritasvpn.cloud/privacy.html.</p>
 
       <div class="legal-notice">
         This policy describes how VeritasVPN actually handles personal data. It is written
@@ -58,9 +58,8 @@
 
       <h2>1. Who we are</h2>
       <p>
-        VeritasVPN is operated by Juan Pablo Alan García Vacchetta, a sole proprietor doing
-        business as VERITAS ARK (RUC 5111281-7), Asunción, Paraguay. The published address
-        is Asunción, Paraguay. The Google Play developer name is Veritas Ark.
+        VeritasVPN is operated from Asunción, Paraguay. The controller location
+        published in this policy is Asunción, Paraguay.
       </p>
       <p>
         VeritasVPN is the controller of personal data described in this policy for the
@@ -130,15 +129,17 @@
       <ul>
         <li>WireGuard public key and a preshared key used to operate the tunnel</li>
         <li>Assigned tunnel IP, server, status, and create time</li>
+        <li>A random per-install device ID. The app creates it on the device. It is stored with the peer so one account can have one peer per install, up to the plan's device limit. It is not an IMEI, Android ID, advertising ID, or MAC address. Logs and internal events store a short hash of it, not the raw value</li>
         <li>Device name, platform, model, OS version, and client version</li>
         <li>Last handshake time</li>
         <li>Veritas Shield toggles</li>
       </ul>
       <p>
         Android sends the manufacturer and model as the device model. The Linux app
-        may send the computer hostname as the device model. These fields are display
-        data for your account. They are not used as a hardware identifier such as an
-        IMEI, Android ID, or MAC address.
+        may send the computer hostname as the device model. The name, model, and OS
+        version are display data for your account. The per-install device ID is also
+        how the service enforces the device limit. None of these is a hardware
+        identifier such as an IMEI, Android ID, or MAC address.
       </p>
       <p>
         Your real public IP may be read in memory to choose a LAN or WAN endpoint for
@@ -165,6 +166,11 @@
         <li>
           Google Play app: Google Play Billing. Google processes the payment. We
           receive purchase and subscription status, not your full card details.
+          The app sends Google a one-way hash of the Account ID so the purchase
+          can be matched to the account. That hash is not the Account ID and
+          cannot be used to sign in. Purchases started before this change may
+          still be matched using the Account ID that was sent with them.
+          Deleting the account does not cancel the Google Play subscription.
         </li>
         <li>
           Website and Linux app: self-hosted BTCPay, paid in Bitcoin. We store the
@@ -196,7 +202,8 @@
         <li>The IP check on /check returns the request IP and coarse Cloudflare edge metadata for that page view. We do not build a profile from it. If coordinates are present, your browser loads OpenStreetMap tiles.</li>
         <li>The DNS leak test resolves short-lived names through edns.ip-api.com. We do not operate that DNS authority and we do not store those query names.</li>
         <li>The breach check sends the email you type to our edge function and then to XposedOrNot. We do not store that email.</li>
-        <li>The Linux app contacts api.ipify.org to test whether the tunnel has working public egress. We do not store the address ipify returns.</li>
+        <li>After the Android app connects, it asks api.ipify.org, ifconfig.me, and icanhazip.com for the public address seen through the VPN. Those requests are bound to the VPN network. They are not sent on the network outside the tunnel, including in Stealth mode. We do not store the address they return. The app can show it as the VPN address.</li>
+        <li>The Linux app contacts api.ipify.org to test whether the tunnel has working public egress. It does not contact ifconfig.me or icanhazip.com. We do not store the address ipify returns.</li>
         <li>The Chrome extension asks ipwho.is for an approximate location so its network map can draw a pin, and it can contact api.ipify.org. The result stays in the extension on your device. The extension proxies browser traffic; it does not log destination sites on our servers.</li>
       </ul>
 
@@ -219,11 +226,13 @@
       <p>We do not sell personal data. We use these processors and recipients:</p>
       <ul>
         <li><strong>Cloudflare</strong> — website hosting (Pages), Tunnel in front of the origin, Turnstile, R2 backup storage, and DNS-over-HTTPS (1.1.1.1) for names Veritas Shield forwards</li>
-        <li><strong>Google</strong> — DNS-over-HTTPS (dns.google) as the other Shield upstream; Google Play Billing for the Play app; Google Fonts requests from some download pages</li>
+        <li><strong>Google</strong> — DNS-over-HTTPS (dns.google) as the other Shield upstream; Google Play Billing for the Play app, including a one-way hash of the Account ID on new purchases; Google Fonts requests from some download pages</li>
         <li><strong>Resend</strong> — verification and password-reset email</li>
         <li><strong>The mailbox provider for contact@veritasvpn.cloud</strong> — messages you send us</li>
         <li><strong>BTCPay</strong> — self-hosted by us, for Bitcoin invoices on the website and Linux app</li>
-        <li><strong>api.ipify.org</strong> — egress check from the Linux app, and optionally the extension</li>
+        <li><strong>api.ipify.org</strong> — egress check from the Android app and the Linux app, and optionally the extension</li>
+        <li><strong>ifconfig.me</strong> — egress check from the Android app</li>
+        <li><strong>icanhazip.com</strong> — egress check from the Android app</li>
         <li><strong>ipwho.is</strong> — approximate location for the Chrome extension map</li>
         <li><strong>edns.ip-api.com</strong> — DNS leak test on the website</li>
         <li><strong>XposedOrNot</strong> — breach-check lookup</li>
@@ -261,7 +270,7 @@
         <li><strong>Refresh-token hashes</strong> — 7 days, or until you sign out or delete the account</li>
         <li><strong>Verification and reset token hashes</strong> — 1 hour and 20 minutes</li>
         <li><strong>Unverified email accounts</strong> — 72 hours</li>
-        <li><strong>Active peers and device metadata</strong> — while the peer is pending or active</li>
+        <li><strong>Active peers and device metadata</strong> — while the peer is pending or active. This includes the random per-install device ID</li>
         <li><strong>Removed peers</strong> — 30 days after removal, then deleted. This includes device metadata, keys, tunnel IP, and last handshake time</li>
         <li><strong>Payment rows in our database</strong> — for the life of the account, including failed Bitcoin attempts after they are marked failed at 4 days. Account deletion hard-deletes them</li>
         <li><strong>BTCPay invoices</strong> — kept on the self-hosted BTCPay server. Account deletion does not delete them</li>
@@ -271,7 +280,7 @@
         <li><strong>Blocked names for a notice</strong> — gateway memory for up to about 10 minutes, and a Redis cache for about 2 minutes, keyed by the tunnel IP. Not written to disk. Deleted when the peer is removed. Not a query log and not your public IP</li>
         <li><strong>Prometheus</strong> — 21 days of aggregate metrics, without query names or your real IP</li>
         <li><strong>Database backups</strong> — the postgres backup script keeps 7 daily, 4 weekly, and 3 monthly copies (monthly copies are removed after about 93 days). Encrypted copies uploaded to Cloudflare R2 are removed after 60 days. Single-node recovery snapshots are removed after 35 days</li>
-        <li><strong>Application container logs</strong> — Docker json-file rotation, 10 MB per file, 3 files. Connect logs do not include your real public IP</li>
+        <li><strong>Application container logs</strong> — Docker json-file rotation, 10 MB per file, 3 files. Connect logs do not include your real public IP. The peer-created log and internal event store a short hash of the per-install device ID, not the raw value</li>
         <li><strong>Origin nginx and ingress access logs</strong> — disabled. They are not written to our disks. Cloudflare may still retain edge logs under Cloudflare’s own policies. We do not keep a separate access-log archive</li>
       </ul>
       <p>
@@ -281,23 +290,36 @@
         to reopen the account.
       </p>
 
-      <h2>8. Deletion</h2>
-      <p>You can delete your account yourself:</p>
+      <h2 id="delete-account">8. Deletion</h2>
+      <p>
+        You can delete your account yourself. The public page
+        <a href="https://veritasvpn.cloud/account">https://veritasvpn.cloud/account</a>
+        explains this before you sign in.
+      </p>
       <ul>
-        <li>On the web: <a href="https://veritasvpn.cloud/account">https://veritasvpn.cloud/account</a></li>
+        <li>On the web: sign in at <a href="https://veritasvpn.cloud/account">https://veritasvpn.cloud/account</a>, open Account, then Delete my account</li>
         <li>In the Android app and the Linux app: Account, then Delete account, then confirm</li>
         <li>In the Chrome extension: open Delete account, which links to the same account page</li>
+        <li>By email: write to <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a> and include the Account ID. Account ID accounts have no email on file, so the message has to include that ID</li>
       </ul>
       <p>
         Email accounts confirm with the password. Account ID accounts confirm with
         the Cloudflare security check. Deletion signs you out and clears the local
         session. In our live database we delete the account, sessions, peers,
-        subscription row, and payment records. Backup copies follow the periods in
-        section 7. BTCPay invoices tagged with the account ID are not deleted.
+        subscription row, and payment records.
       </p>
+      <p>We still keep:</p>
+      <ul>
+        <li>Encrypted database backups until they expire. Monthly copies are removed after about 93 days (about 3 months). Encrypted copies in Cloudflare R2 are removed after 60 days. See section 7. We do not restore a deleted account into the live service except to recover from an incident.</li>
+        <li>BTCPay invoices tagged with the Account ID, on the self-hosted BTCPay server. The Google Play app does not use BTCPay.</li>
+      </ul>
       <p>
-        You can also email contact@veritasvpn.cloud. We will delete what we control,
-        subject to the backup and BTCPay limits above.
+        Deleting the account does not cancel a Google Play subscription. Google can
+        keep charging the Play account until you cancel in Google Play. Open
+        <a href="https://play.google.com/store/account/subscriptions?package=cloud.veritasvpn">Google Play subscription management</a>.
+        The Android app shows the same warning, and a button to that page, when the
+        account has an active Play subscription. We do not cancel or revoke the
+        Play subscription from our servers when the account is deleted.
       </p>
 
       <h2>9. Your rights</h2>
@@ -419,7 +441,7 @@
 
       <h2>18. Contact</h2>
       <p>
-        Juan Pablo Alan García Vacchetta, doing business as VERITAS ARK, Asunción, Paraguay.<br />
+        Asunción, Paraguay<br />
         <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a><br />
         <a href="/contact.html">Contact page</a>
       </p>
