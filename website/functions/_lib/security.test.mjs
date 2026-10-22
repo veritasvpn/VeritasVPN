@@ -8,7 +8,9 @@ const {rateLimit, verifyTurnstile, boundedJSON} = await import('data:text/javasc
 test('limiter fails closed and authenticates each attempt', async () => {
  const req=new Request('https://veritasvpn.cloud/',{headers:{'CF-Connecting-IP':'192.0.2.1'}});
  const env={TOOLS_RATE_LIMIT_SECRET:'a'.repeat(64)};
- assert.equal((await rateLimit(req,{}, {bucket:'check-ip'})).status,503);
+ const missing=await rateLimit(req,{}, {bucket:'check-ip'});
+ assert.equal(missing.status,503);
+ assert.equal(missing.headers.get('X-Veritas-Limiter-Status'),'configuration');
  const original=globalThis.fetch;
  try {
   let count=0;
@@ -21,9 +23,12 @@ test('limiter fails closed and authenticates each attempt', async () => {
   const results=await Promise.all(Array.from({length:50},()=>rateLimit(req,env,{bucket:'check-ip'})));
   assert.equal(results.filter(r=>r===null).length,10);
   globalThis.fetch=async()=>{throw new Error('timeout')};
-  assert.equal((await rateLimit(req,env,{bucket:'check-ip'})).status,503);
+  assert.equal((await rateLimit(req,env,{bucket:'check-ip'})).headers.get('X-Veritas-Limiter-Status'),'transport');
   globalThis.fetch=async()=>new Response(null,{status:401});
-  assert.equal((await rateLimit(req,env,{bucket:'check-ip'})).status,503);
+  const rejected=await rateLimit(req,env,{bucket:'check-ip'});
+  assert.equal(rejected.status,503);
+  assert.equal(rejected.headers.get('X-Veritas-Limiter-Status'),'upstream-401');
+  assert.doesNotMatch(await rejected.text(), /192\.0\.2\.1|a{64}/);
  } finally {globalThis.fetch=original}
 });
 test('missing challenge secret never succeeds',async()=>assert.equal((await verifyTurnstile({},'arbitrary','192.0.2.1')).ok,false));
