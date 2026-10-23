@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,10 @@ import (
 const (
 	blocklistFetchTimeout = 20 * time.Second
 	categoryStatePrefix   = "# veritas-shield-category:"
+	// feedStatePrefix marks a per-feed cache section. The rest of the line is
+	// "<category> <url>" so one dead feed can be restored without dropping
+	// every other category. Older files only have categoryStatePrefix.
+	feedStatePrefix = "# veritas-shield-feed:"
 
 	// ProtectedDNSTestDomain is a harmless, reserved name in the malware
 	// category. It returns NXDOMAIN when Block malicious sites is on (the
@@ -38,16 +43,22 @@ type Observer interface {
 	DNSBlocklistRefreshed(domains int, at time.Time)
 	DNSBlocklistCategorySizes(byCategory map[string]int)
 	DNSBlocklistRefreshFailed()
+	// DNSBlocklistFeedHealth reports the latest refresh. failed is how many
+	// feeds in that category did not return domains. degraded is true when
+	// every configured feed for that category failed (cache may still be
+	// serving). Categories with no configured feed are omitted.
+	DNSBlocklistFeedHealth(failed map[string]int, degraded map[string]bool)
 }
 
 type noopObserver struct{}
 
-func (noopObserver) DNSQuery(bool)                            {}
-func (noopObserver) DNSBlockedCategory(string)                {}
-func (noopObserver) DNSUpstreamFailure()                      {}
-func (noopObserver) DNSBlocklistRefreshed(int, time.Time)     {}
-func (noopObserver) DNSBlocklistCategorySizes(map[string]int) {}
-func (noopObserver) DNSBlocklistRefreshFailed()               {}
+func (noopObserver) DNSQuery(bool)                                          {}
+func (noopObserver) DNSBlockedCategory(string)                              {}
+func (noopObserver) DNSUpstreamFailure()                                    {}
+func (noopObserver) DNSBlocklistRefreshed(int, time.Time)                   {}
+func (noopObserver) DNSBlocklistCategorySizes(map[string]int)               {}
+func (noopObserver) DNSBlocklistRefreshFailed()                             {}
+func (noopObserver) DNSBlocklistFeedHealth(map[string]int, map[string]bool) {}
 
 type Blocklist struct {
 	categories   []string
@@ -61,6 +72,17 @@ type Blocklist struct {
 	mu          sync.RWMutex
 	domains     map[string]string // domain → category (first enabled category wins)
 	lastSuccess time.Time
+
+	// feedCache is the last non-empty download for each source URL.
+	// legacyCache is a pre-per-feed state file, keyed by category, used only
+	// when that category's URLs have no feedCache entry yet.
+	feedCache   map[string]feedCacheEntry
+	legacyCache map[string]map[string]struct{}
+}
+
+type feedCacheEntry struct {
+	category string
+	domains  map[string]struct{}
 }
 
 // NewBlocklist builds a Shield blocklist. Prefer NewShieldBlocklist.
@@ -118,6 +140,8 @@ func NewShieldBlocklist(categories []string, urls map[string][]string, statePath
 		log:          log,
 		observer:     observer,
 		domains:      domains,
+		feedCache:    map[string]feedCacheEntry{},
+		legacyCache:  map[string]map[string]struct{}{},
 	}
 }
 
@@ -174,54 +198,146 @@ func (b *Blocklist) refresh(parent context.Context) {
 	next := make(map[string]string)
 	addBuiltInProtectionDomains(next)
 	byCategory := map[string]int{}
-	loadedSources := 0
+	fresh := map[string]int{}
+	failed := map[string]int{}
+	nextCache := make(map[string]feedCacheEntry, totalFeeds)
+	legacyUsed := map[string]bool{}
 
 	for _, cat := range b.categories {
 		for _, source := range b.sources[cat] {
-			request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+			parsed, err := b.fetchFeedDomains(ctx, source)
 			if err != nil {
+				failed[cat]++
+				b.logError("DNS blocklist feed failed",
+					zap.String("category", cat),
+					zap.String("source", source),
+					zap.Error(err),
+				)
+				if restored, ok := b.cachedFeedDomains(cat, source, legacyUsed); ok {
+					byCategory[cat] += mergeFeedDomains(next, restored, cat)
+					nextCache[source] = feedCacheEntry{category: cat, domains: restored}
+					b.logError("DNS blocklist feed is serving its last good copy",
+						zap.String("category", cat),
+						zap.String("source", source),
+						zap.Int("domains", len(restored)),
+					)
+				}
 				continue
 			}
-			request.Header.Set("User-Agent", "VeritasVPN-Shield/1.0")
-			response, err := b.client.Do(request)
-			if err != nil {
-				b.log.Warn("DNS blocklist source unavailable", zap.String("category", cat), zap.Error(err))
-				continue
-			}
-			if response.StatusCode != http.StatusOK {
-				response.Body.Close()
-				b.log.Warn("DNS blocklist source returned non-success status", zap.String("category", cat), zap.Int("status", response.StatusCode))
-				continue
-			}
-			added, err := parseBlocklistCategory(response.Body, next, cat)
-			response.Body.Close()
-			if err != nil {
-				b.log.Warn("DNS blocklist source could not be parsed", zap.String("category", cat), zap.Error(err))
-				continue
-			}
-			if added > 0 {
-				loadedSources++
-				byCategory[cat] += added
-			}
+			fresh[cat]++
+			byCategory[cat] += mergeFeedDomains(next, parsed, cat)
+			nextCache[source] = feedCacheEntry{category: cat, domains: parsed}
 		}
 	}
 
-	if loadedSources == 0 {
+	degraded := map[string]bool{}
+	freshTotal := 0
+	for _, cat := range b.categories {
+		if len(b.sources[cat]) == 0 {
+			continue
+		}
+		freshTotal += fresh[cat]
+		degraded[cat] = fresh[cat] == 0
+	}
+	b.observer.DNSBlocklistFeedHealth(failed, degraded)
+
+	if freshTotal == 0 {
 		b.observer.DNSBlocklistRefreshFailed()
-		b.log.Warn("Veritas Shield blocklist refresh failed; retaining the last known-good policy")
+		if len(nextCache) == 0 {
+			b.logError("Veritas Shield blocklist refresh failed; retaining the last known-good policy")
+			return
+		}
+		// Keep the previous success timestamp so a total outage still looks stale.
+		b.feedCache = nextCache
+		b.mu.Lock()
+		b.domains = next
+		b.mu.Unlock()
+		b.observer.DNSBlocklistCategorySizes(byCategory)
+		b.logError("Veritas Shield blocklist refresh failed; serving per-feed cached copies",
+			zap.Any("by_category", byCategory),
+		)
 		return
 	}
 
+	b.feedCache = nextCache
+	b.legacyCache = map[string]map[string]struct{}{}
 	now := time.Now().UTC()
 	b.replace(next, byCategory, now)
-	if err := b.writeState(next); err != nil {
-		b.log.Warn("persist DNS blocklist cache failed", zap.Error(err))
+	if err := b.writeState(); err != nil {
+		b.logWarn("persist DNS blocklist cache failed", zap.Error(err))
 	}
-	b.log.Info("Veritas Shield blocklist refreshed",
+	b.logInfo("Veritas Shield blocklist refreshed",
 		zap.Int("domains", len(next)),
-		zap.Int("sources", loadedSources),
+		zap.Int("sources", freshTotal),
 		zap.Any("by_category", byCategory),
+		zap.Any("degraded", degraded),
 	)
+}
+
+func (b *Blocklist) cachedFeedDomains(category, source string, legacyUsed map[string]bool) (map[string]struct{}, bool) {
+	if entry, ok := b.feedCache[source]; ok && entry.category == category && len(entry.domains) > 0 {
+		return entry.domains, true
+	}
+	if legacyUsed[category] || len(b.legacyCache[category]) == 0 {
+		return nil, false
+	}
+	legacyUsed[category] = true
+	return b.legacyCache[category], true
+}
+
+func (b *Blocklist) fetchFeedDomains(ctx context.Context, source string) (map[string]struct{}, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("User-Agent", "VeritasVPN-Shield/1.0")
+	response, err := b.client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", response.StatusCode)
+	}
+	parsed := make(map[string]struct{})
+	added, err := parseBlocklist(response.Body, parsed)
+	if err != nil {
+		return nil, err
+	}
+	if added == 0 {
+		return nil, fmt.Errorf("feed contained no domains")
+	}
+	return parsed, nil
+}
+
+func mergeFeedDomains(target map[string]string, domains map[string]struct{}, category string) int {
+	added := 0
+	for domain := range domains {
+		if _, exists := target[domain]; exists {
+			continue
+		}
+		target[domain] = category
+		added++
+	}
+	return added
+}
+
+func (b *Blocklist) logError(msg string, fields ...interface{}) {
+	if b.log != nil {
+		b.log.Error(msg, fields...)
+	}
+}
+
+func (b *Blocklist) logWarn(msg string, fields ...interface{}) {
+	if b.log != nil {
+		b.log.Warn(msg, fields...)
+	}
+}
+
+func (b *Blocklist) logInfo(msg string, fields ...interface{}) {
+	if b.log != nil {
+		b.log.Info(msg, fields...)
+	}
 }
 
 func parseBlocklist(body io.Reader, target map[string]struct{}) (int, error) {
@@ -346,21 +462,51 @@ func (b *Blocklist) loadState() error {
 
 	domains := make(map[string]string)
 	byCategory := map[string]int{}
+	feeds := map[string]feedCacheEntry{}
+	legacy := map[string]map[string]struct{}{}
 	currentCat := CategoryMalware
+	currentSource := ""
+	feedSection := false
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, feedStatePrefix) {
+			cat, source, ok := parseFeedStateHeader(line)
+			if !ok {
+				feedSection = false
+				currentSource = ""
+				continue
+			}
+			currentCat = cat
+			currentSource = source
+			feedSection = true
+			if _, exists := feeds[source]; !exists {
+				feeds[source] = feedCacheEntry{category: cat, domains: map[string]struct{}{}}
+			}
+			continue
+		}
 		if strings.HasPrefix(line, categoryStatePrefix) {
 			currentCat = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, categoryStatePrefix)))
 			if _, ok := knownCategories[currentCat]; !ok {
 				currentCat = CategoryMalware
+			}
+			if !feedSection {
+				currentSource = ""
 			}
 			continue
 		}
 		domain := domainFromBlocklistLine(line)
 		if domain == "" {
 			continue
+		}
+		if feedSection && currentSource != "" {
+			feeds[currentSource].domains[domain] = struct{}{}
+		} else {
+			if legacy[currentCat] == nil {
+				legacy[currentCat] = map[string]struct{}{}
+			}
+			legacy[currentCat][domain] = struct{}{}
 		}
 		if _, exists := domains[domain]; exists {
 			continue
@@ -371,6 +517,8 @@ func (b *Blocklist) loadState() error {
 	if err := scanner.Err(); err != nil {
 		return err
 	}
+	b.feedCache = feeds
+	b.legacyCache = legacy
 	addBuiltInProtectionDomains(domains)
 	if len(domains) == 0 {
 		return fmt.Errorf("cached DNS blocklist is empty")
@@ -380,7 +528,7 @@ func (b *Blocklist) loadState() error {
 		return err
 	}
 	b.replace(domains, byCategory, info.ModTime().UTC())
-	b.log.Info("loaded cached Veritas Shield blocklist", zap.Int("domains", len(domains)), zap.Any("by_category", byCategory))
+	b.logInfo("loaded cached Veritas Shield blocklist", zap.Int("domains", len(domains)), zap.Any("by_category", byCategory))
 	return nil
 }
 
@@ -398,7 +546,36 @@ func addBuiltInProtectionDomains(domains map[string]string) {
 	}
 }
 
-func (b *Blocklist) writeState(domains map[string]string) error {
+func parseFeedStateHeader(line string) (category, source string, ok bool) {
+	rest := strings.TrimSpace(strings.TrimPrefix(line, feedStatePrefix))
+	category, source, found := strings.Cut(rest, " ")
+	category = strings.ToLower(strings.TrimSpace(category))
+	source = strings.TrimSpace(source)
+	if !found || source == "" {
+		return "", "", false
+	}
+	if _, known := knownCategories[category]; !known {
+		return "", "", false
+	}
+	return category, source, true
+}
+
+func (b *Blocklist) categoryRank(category string) int {
+	for i, cat := range b.categories {
+		if cat == category {
+			return i
+		}
+	}
+	order := []string{CategoryMalware, CategoryPhishing, CategoryScam, CategoryCrypto, CategoryTrackers, CategoryAds, CategoryAdult}
+	for i, cat := range order {
+		if cat == category {
+			return 100 + i
+		}
+	}
+	return 1000
+}
+
+func (b *Blocklist) writeState() error {
 	if b.statePath == "" {
 		return nil
 	}
@@ -412,33 +589,38 @@ func (b *Blocklist) writeState(domains map[string]string) error {
 	}
 	writer := bufio.NewWriter(file)
 
-	byCat := map[string][]string{}
-	for domain, cat := range domains {
-		byCat[cat] = append(byCat[cat], domain)
+	type item struct {
+		source string
+		entry  feedCacheEntry
 	}
-	order := append([]string(nil), b.categories...)
-	for _, extra := range []string{CategoryMalware, CategoryPhishing, CategoryScam, CategoryCrypto, CategoryTrackers, CategoryAds, CategoryAdult} {
-		found := false
-		for _, c := range order {
-			if c == extra {
-				found = true
-				break
-			}
-		}
-		if !found {
-			order = append(order, extra)
-		}
-	}
-	for _, cat := range order {
-		list := byCat[cat]
-		if len(list) == 0 {
+	items := make([]item, 0, len(b.feedCache))
+	for source, entry := range b.feedCache {
+		if entry.category == "" || len(entry.domains) == 0 {
 			continue
 		}
-		if _, err := writer.WriteString(categoryStatePrefix + cat + "\n"); err != nil {
+		items = append(items, item{source: source, entry: entry})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].entry.category != items[j].entry.category {
+			return b.categoryRank(items[i].entry.category) < b.categoryRank(items[j].entry.category)
+		}
+		return items[i].source < items[j].source
+	})
+	for _, it := range items {
+		if _, err := writer.WriteString(feedStatePrefix + it.entry.category + " " + it.source + "\n"); err != nil {
 			file.Close()
 			return err
 		}
-		for _, domain := range list {
+		if _, err := writer.WriteString(categoryStatePrefix + it.entry.category + "\n"); err != nil {
+			file.Close()
+			return err
+		}
+		domains := make([]string, 0, len(it.entry.domains))
+		for domain := range it.entry.domains {
+			domains = append(domains, domain)
+		}
+		sort.Strings(domains)
+		for _, domain := range domains {
 			if _, err := writer.WriteString(domain + "\n"); err != nil {
 				file.Close()
 				return err

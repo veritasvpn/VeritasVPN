@@ -30,7 +30,15 @@ var DefaultShieldCategories = []string{
 // files (not unified ad/malware lists) so a domain is not labeled adult just
 // because it appeared in a combined feed.
 var defaultCategoryURLs = map[string][]string{
-	CategoryMalware:  {"https://urlhaus.abuse.ch/downloads/hostfile/"},
+	// HaGeZi Threat Intelligence Feeds, mini, one domain per line.
+	// The jsDelivr URL and the GitHub origin are the same list, so one host
+	// dying does not empty the category. URLhaus public downloads now return
+	// HTTP 410, and abuse.ch's terms no longer allow unlicensed commercial use.
+	// GPL-3.0: fetched at runtime and not shipped in this repo.
+	CategoryMalware: {
+		"https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/wildcard/tif.mini-onlydomains.txt",
+		"https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif.mini-onlydomains.txt",
+	},
 	CategoryPhishing: {"https://phishing.army/download/phishing_army_blocklist_extended.txt"},
 	// CERT Polska domain blocklist — phishing/malware/scam mix used for scam coverage.
 	CategoryScam:   {"https://hole.cert.pl/domains/domains.txt"},

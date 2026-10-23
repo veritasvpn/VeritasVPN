@@ -387,6 +387,13 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "VeritasVPN DNS blocklist refresh has been failing while the agent is up"
+      - alert: DNSBlocklistCategoryDegraded
+        expr: veritas_agent_dns_blocklist_category_degraded == 1
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Veritas Shield {{ $labels.category }} feed is not refreshing"
+          description: "Every configured feed for this category failed. The agent is serving the last cached copy, or the category is empty aside from built-in names. See veritas_agent_dns_blocklist_feed_failures_total and the agent log."
       - alert: DNSUpstreamsFailing
         expr: increase(veritas_agent_dns_upstream_failures_total[10m]) > 5
         for: 5m
