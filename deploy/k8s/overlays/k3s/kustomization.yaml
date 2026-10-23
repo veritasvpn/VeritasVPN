@@ -21,8 +21,8 @@ images:
     digest: sha256:18d6c3270624dfb2b1ef1359bfdfa350532c52a53bd559a58dba1f825e1c50ce
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
-    # Shield notices: blocked-name notice ring + flush (b63c330).
-    digest: sha256:dffe092ab4acdb3fa633888b95fb5da4c9109bb9d76d4e8bb3d013423ef9e379
+    # Shield malware feed with disk-backed per-feed cache under 512Mi (5486bb8).
+    digest: sha256:743398ebb8880ede76c7d91b832c5f0730942c37d5a3c356783f726afd922a21
   - name: localhost:31500/wstunnel
     newName: localhost:31500/wstunnel
     # Stealth tunnel image running on the Dell.
