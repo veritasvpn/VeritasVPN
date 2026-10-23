@@ -346,8 +346,17 @@ func TestMalwareFeedSamplesLandInMalwareCategory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(cached), feedStatePrefix+"malware "+srv.URL+"/mirror-a\n") {
-		t.Fatalf("state file missing per-feed header:\n%s", cached)
+	if !strings.Contains(string(cached), categoryStatePrefix+"malware\n") || !strings.Contains(string(cached), "agenttesla.com\n") {
+		t.Fatalf("merged state file missing malware names:\n%s", cached)
+	}
+	for _, mirror := range []string{"/mirror-a", "/mirror-b"} {
+		feed, err := os.ReadFile(b.feedCachePath(srv.URL + mirror))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(feed), "agenttesla.com\n") {
+			t.Fatalf("per-feed cache %s missing sample:\n%s", mirror, feed)
+		}
 	}
 
 	reloaded := NewShieldBlocklist([]string{CategoryMalware}, nil, b.statePath, time.Hour, nil, testLogger(t))
@@ -356,9 +365,6 @@ func TestMalwareFeedSamplesLandInMalwareCategory(t *testing.T) {
 	}
 	if cat, ok := reloaded.BlockedCategory("agenttesla.com"); !ok || cat != CategoryMalware {
 		t.Fatalf("reloaded category=%q ok=%v", cat, ok)
-	}
-	if len(reloaded.feedCache) != 2 {
-		t.Fatalf("reloaded feed cache = %d", len(reloaded.feedCache))
 	}
 }
 
@@ -412,8 +418,12 @@ func TestRefreshKeepsCachedMalwareWhenThatFeedFails(t *testing.T) {
 	if !refreshed.After(time.Unix(100, 0)) {
 		t.Fatal("a sibling feed succeeding should record a refresh")
 	}
-	if _, ok := b.feedCache[gone.URL]; !ok {
-		t.Fatal("failed feed should keep a per-url cache for the next outage")
+	feed, err := os.ReadFile(b.feedCachePath(gone.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(feed), "cached-malware.example\n") {
+		t.Fatalf("failed feed should keep a per-url cache file:\n%s", feed)
 	}
 }
 
@@ -431,7 +441,7 @@ func TestRefreshEmptyFeedUsesPerFeedCache(t *testing.T) {
 	obs := &healthObserver{}
 	b := NewShieldBlocklist([]string{CategoryMalware}, map[string][]string{
 		CategoryMalware: {srv.URL},
-	}, "", time.Hour, obs, testLogger(t))
+	}, filepath.Join(t.TempDir(), "blocklist.txt"), time.Hour, obs, testLogger(t))
 	b.client = srv.Client()
 	b.refresh(context.Background())
 	b.refresh(context.Background())
@@ -510,7 +520,12 @@ func TestLiveMalwareFeedContainsKnownDomains(t *testing.T) {
 		b := NewShieldBlocklist([]string{CategoryMalware}, nil, "", time.Hour, nil, testLogger(t))
 		merged := map[string]string{}
 		addBuiltInProtectionDomains(merged)
-		mergeFeedDomains(merged, parsed, CategoryMalware)
+		for domain := range parsed {
+			if _, exists := merged[domain]; exists {
+				continue
+			}
+			merged[domain] = CategoryMalware
+		}
 		b.replace(merged, map[string]int{CategoryMalware: n}, time.Now().UTC())
 		for _, domain := range malwareFeedSamples {
 			if cat, ok := b.BlockedCategory(domain); !ok || cat != CategoryMalware {

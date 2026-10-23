@@ -3,11 +3,15 @@ package dns
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -20,9 +24,8 @@ import (
 const (
 	blocklistFetchTimeout = 20 * time.Second
 	categoryStatePrefix   = "# veritas-shield-category:"
-	// feedStatePrefix marks a per-feed cache section. The rest of the line is
-	// "<category> <url>" so one dead feed can be restored without dropping
-	// every other category. Older files only have categoryStatePrefix.
+	// feedStatePrefix marks a per-feed cache file (and older combined state
+	// files). The rest of the line is "<category> <url>".
 	feedStatePrefix = "# veritas-shield-feed:"
 
 	// ProtectedDNSTestDomain is a harmless, reserved name in the malware
@@ -72,17 +75,6 @@ type Blocklist struct {
 	mu          sync.RWMutex
 	domains     map[string]string // domain → category (first enabled category wins)
 	lastSuccess time.Time
-
-	// feedCache is the last non-empty download for each source URL.
-	// legacyCache is a pre-per-feed state file, keyed by category, used only
-	// when that category's URLs have no feedCache entry yet.
-	feedCache   map[string]feedCacheEntry
-	legacyCache map[string]map[string]struct{}
-}
-
-type feedCacheEntry struct {
-	category string
-	domains  map[string]struct{}
 }
 
 // NewBlocklist builds a Shield blocklist. Prefer NewShieldBlocklist.
@@ -140,8 +132,6 @@ func NewShieldBlocklist(categories []string, urls map[string][]string, statePath
 		log:          log,
 		observer:     observer,
 		domains:      domains,
-		feedCache:    map[string]feedCacheEntry{},
-		legacyCache:  map[string]map[string]struct{}{},
 	}
 }
 
@@ -195,17 +185,32 @@ func (b *Blocklist) refresh(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, blocklistFetchTimeout*time.Duration(totalFeeds))
 	defer cancel()
 
-	next := make(map[string]string)
+	// One new map. The previous policy stays in b.domains until this one is
+	// ready, so queries keep working. Per-feed copies live on disk; holding
+	// them as maps beside this one (and the live policy) exceeded the 512Mi
+	// cgroup. Two merged maps peak around 400Mi RSS; a porn-sized side map
+	// on top of that pushed past 512Mi.
+	//
+	// Hint from the live policy so the replacement does not rehash while that
+	// policy is still resident. A grow keeps the old and new bucket arrays
+	// until the next GC, on top of the two live maps.
+	b.mu.RLock()
+	hint := len(b.domains)
+	b.mu.RUnlock()
+	if hint < 64 {
+		hint = 64
+	}
+	next := make(map[string]string, hint)
 	addBuiltInProtectionDomains(next)
 	byCategory := map[string]int{}
 	fresh := map[string]int{}
 	failed := map[string]int{}
-	nextCache := make(map[string]feedCacheEntry, totalFeeds)
-	legacyUsed := map[string]bool{}
+	restored := map[string]int{}
 
 	for _, cat := range b.categories {
+		var failedSources []string
 		for _, source := range b.sources[cat] {
-			parsed, err := b.fetchFeedDomains(ctx, source)
+			_, added, err := b.fetchInto(ctx, source, cat, next)
 			if err != nil {
 				failed[cat]++
 				b.logError("DNS blocklist feed failed",
@@ -213,45 +218,61 @@ func (b *Blocklist) refresh(parent context.Context) {
 					zap.String("source", source),
 					zap.Error(err),
 				)
-				if restored, ok := b.cachedFeedDomains(cat, source, legacyUsed); ok {
-					byCategory[cat] += mergeFeedDomains(next, restored, cat)
-					nextCache[source] = feedCacheEntry{category: cat, domains: restored}
+				n, ok := b.restoreFeedFile(source, cat, next)
+				if ok {
+					byCategory[cat] += n
+					restored[cat]++
 					b.logError("DNS blocklist feed is serving its last good copy",
 						zap.String("category", cat),
 						zap.String("source", source),
-						zap.Int("domains", len(restored)),
+						zap.Int("domains", n),
 					)
+					continue
 				}
+				failedSources = append(failedSources, source)
 				continue
 			}
 			fresh[cat]++
-			byCategory[cat] += mergeFeedDomains(next, parsed, cat)
-			nextCache[source] = feedCacheEntry{category: cat, domains: parsed}
+			byCategory[cat] += added
+		}
+		if fresh[cat] == 0 && restored[cat] == 0 && len(b.sources[cat]) > 0 {
+			n := b.restoreLegacyCategory(cat, next)
+			if n > 0 {
+				byCategory[cat] += n
+				restored[cat] += n
+				for _, source := range failedSources {
+					if err := b.copyLegacyCategoryToFeed(cat, source); err != nil {
+						b.logWarn("persist per-feed blocklist cache failed", zap.String("category", cat), zap.String("source", source), zap.Error(err))
+					}
+				}
+			}
 		}
 	}
 
 	degraded := map[string]bool{}
 	freshTotal := 0
+	restoredTotal := 0
 	for _, cat := range b.categories {
 		if len(b.sources[cat]) == 0 {
 			continue
 		}
 		freshTotal += fresh[cat]
+		restoredTotal += restored[cat]
 		degraded[cat] = fresh[cat] == 0
 	}
 	b.observer.DNSBlocklistFeedHealth(failed, degraded)
 
 	if freshTotal == 0 {
 		b.observer.DNSBlocklistRefreshFailed()
-		if len(nextCache) == 0 {
+		if restoredTotal == 0 {
 			b.logError("Veritas Shield blocklist refresh failed; retaining the last known-good policy")
 			return
 		}
 		// Keep the previous success timestamp so a total outage still looks stale.
-		b.feedCache = nextCache
 		b.mu.Lock()
 		b.domains = next
 		b.mu.Unlock()
+		b.releaseReplacedPolicy()
 		b.observer.DNSBlocklistCategorySizes(byCategory)
 		b.logError("Veritas Shield blocklist refresh failed; serving per-feed cached copies",
 			zap.Any("by_category", byCategory),
@@ -259,11 +280,10 @@ func (b *Blocklist) refresh(parent context.Context) {
 		return
 	}
 
-	b.feedCache = nextCache
-	b.legacyCache = map[string]map[string]struct{}{}
 	now := time.Now().UTC()
 	b.replace(next, byCategory, now)
-	if err := b.writeState(); err != nil {
+	b.releaseReplacedPolicy()
+	if err := b.writeState(next); err != nil {
 		b.logWarn("persist DNS blocklist cache failed", zap.Error(err))
 	}
 	b.logInfo("Veritas Shield blocklist refreshed",
@@ -274,52 +294,230 @@ func (b *Blocklist) refresh(parent context.Context) {
 	)
 }
 
-func (b *Blocklist) cachedFeedDomains(category, source string, legacyUsed map[string]bool) (map[string]struct{}, bool) {
-	if entry, ok := b.feedCache[source]; ok && entry.category == category && len(entry.domains) > 0 {
-		return entry.domains, true
-	}
-	if legacyUsed[category] || len(b.legacyCache[category]) == 0 {
-		return nil, false
-	}
-	legacyUsed[category] = true
-	return b.legacyCache[category], true
+// releaseReplacedPolicy returns the previous policy's heap to the OS. The
+// next refresh would otherwise keep those idle spans and add another full
+// map on top of them.
+func (b *Blocklist) releaseReplacedPolicy() {
+	runtime.GC()
+	debug.FreeOSMemory()
 }
 
-func (b *Blocklist) fetchFeedDomains(ctx context.Context, source string) (map[string]struct{}, error) {
+func (b *Blocklist) fetchInto(ctx context.Context, source, category string, next map[string]string) (parsed, added int, err error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
 	if err != nil {
-		return nil, err
+		return 0, 0, err
 	}
 	request.Header.Set("User-Agent", "VeritasVPN-Shield/1.0")
 	response, err := b.client.Do(request)
 	if err != nil {
-		return nil, err
+		return 0, 0, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d", response.StatusCode)
+		return 0, 0, fmt.Errorf("status %d", response.StatusCode)
 	}
-	parsed := make(map[string]struct{})
-	added, err := parseBlocklist(response.Body, parsed)
+	parsed, added, err = b.scanInto(response.Body, category, next, b.feedCachePath(source))
 	if err != nil {
-		return nil, err
+		return parsed, added, err
 	}
-	if added == 0 {
-		return nil, fmt.Errorf("feed contained no domains")
+	if parsed == 0 {
+		return 0, 0, fmt.Errorf("feed contained no domains")
 	}
-	return parsed, nil
+	return parsed, added, nil
 }
 
-func mergeFeedDomains(target map[string]string, domains map[string]struct{}, category string) int {
-	added := 0
-	for domain := range domains {
-		if _, exists := target[domain]; exists {
-			continue
-		}
-		target[domain] = category
-		added++
+func (b *Blocklist) restoreFeedFile(source, category string, next map[string]string) (added int, ok bool) {
+	path := b.feedCachePath(source)
+	if path == "" {
+		return 0, false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer file.Close()
+	parsed, added, err := scanMerge(file, category, next, nil, false)
+	if err != nil || parsed == 0 {
+		return 0, false
+	}
+	return added, true
+}
+
+// restoreLegacyCategory streams a pre-per-feed state file and keeps only this
+// category. Used when a feed has never been cached on disk.
+func (b *Blocklist) restoreLegacyCategory(category string, next map[string]string) int {
+	if b.statePath == "" {
+		return 0
+	}
+	file, err := os.Open(b.statePath)
+	if err != nil {
+		return 0
+	}
+	defer file.Close()
+	_, added, err := scanMerge(file, category, next, nil, true)
+	if err != nil {
+		b.logWarn("read cached DNS blocklist category failed", zap.String("category", category), zap.Error(err))
+		return 0
 	}
 	return added
+}
+
+func (b *Blocklist) copyLegacyCategoryToFeed(category, source string) error {
+	path := b.feedCachePath(source)
+	if path == "" || b.statePath == "" {
+		return nil
+	}
+	file, err := os.Open(b.statePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	temporary := path + ".tmp"
+	out, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	writer := bufio.NewWriter(out)
+	if _, err := writer.WriteString(feedStatePrefix + category + " " + source + "\n"); err != nil {
+		out.Close()
+		os.Remove(temporary)
+		return err
+	}
+	if _, _, err := scanMerge(file, category, nil, writer, true); err != nil {
+		out.Close()
+		os.Remove(temporary)
+		return err
+	}
+	if err := writer.Flush(); err != nil {
+		out.Close()
+		os.Remove(temporary)
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		os.Remove(temporary)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(temporary)
+		return err
+	}
+	return os.Rename(temporary, path)
+}
+
+// feedCachePath is a file of hostnames for one source URL. Empty when the
+// blocklist is not persisting state. The names are not kept in memory.
+func (b *Blocklist) feedCachePath(source string) string {
+	if b.statePath == "" || source == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(source))
+	return filepath.Join(filepath.Dir(b.statePath), "feeds", hex.EncodeToString(sum[:])+".txt")
+}
+
+// scanInto merges hostnames into next. When cachePath is set, the feed's own
+// names are also written there so a later failure can be streamed back.
+func (b *Blocklist) scanInto(body io.Reader, category string, next map[string]string, cachePath string) (parsed, added int, err error) {
+	var cache *os.File
+	var writer *bufio.Writer
+	temporary := ""
+	if cachePath != "" {
+		if err := os.MkdirAll(filepath.Dir(cachePath), 0700); err != nil {
+			return 0, 0, err
+		}
+		temporary = cachePath + ".tmp"
+		cache, err = os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+		if err != nil {
+			return 0, 0, err
+		}
+		writer = bufio.NewWriter(cache)
+		if _, err := writer.WriteString(categoryStatePrefix + category + "\n"); err != nil {
+			cache.Close()
+			os.Remove(temporary)
+			return 0, 0, err
+		}
+	}
+	parsed, added, err = scanMerge(body, category, next, writer, false)
+	if cache != nil {
+		closeErr := writer.Flush()
+		if err == nil {
+			err = closeErr
+		}
+		if syncErr := cache.Sync(); err == nil {
+			err = syncErr
+		}
+		if closeErr = cache.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil || parsed == 0 {
+			os.Remove(temporary)
+			if err == nil && parsed == 0 {
+				return 0, added, nil
+			}
+			return parsed, added, err
+		}
+		if err = os.Rename(temporary, cachePath); err != nil {
+			os.Remove(temporary)
+			// The names are already in next. Keep the refresh; the next
+			// successful download will retry the file.
+			b.logWarn("persist per-feed blocklist cache failed", zap.String("category", category), zap.Error(err))
+			err = nil
+		}
+	}
+	return parsed, added, err
+}
+
+// scanMerge reads hostnames. When respectSections is set, only domains under
+// category's section of a combined state file are used. Otherwise every
+// hostname is assigned to category (a single feed, or that feed's cache file).
+// next may be nil to write names without inserting them.
+func scanMerge(body io.Reader, category string, next map[string]string, writer *bufio.Writer, respectSections bool) (parsed, added int, err error) {
+	current := CategoryMalware
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 4096), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if respectSections {
+			if strings.HasPrefix(line, feedStatePrefix) {
+				if cat, _, ok := parseFeedStateHeader(line); ok {
+					current = cat
+				}
+				continue
+			}
+			if strings.HasPrefix(line, categoryStatePrefix) {
+				cat := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, categoryStatePrefix)))
+				if _, ok := knownCategories[cat]; ok {
+					current = cat
+				}
+				continue
+			}
+			if current != category {
+				continue
+			}
+		}
+		domain := domainFromBlocklistLine(line)
+		if domain == "" {
+			continue
+		}
+		parsed++
+		if writer != nil {
+			if _, err = writer.WriteString(domain + "\n"); err != nil {
+				return parsed, added, err
+			}
+		}
+		if next == nil {
+			continue
+		}
+		if _, exists := next[domain]; exists {
+			continue
+		}
+		next[domain] = category
+		added++
+	}
+	return parsed, added, scanner.Err()
 }
 
 func (b *Blocklist) logError(msg string, fields ...interface{}) {
@@ -462,27 +660,14 @@ func (b *Blocklist) loadState() error {
 
 	domains := make(map[string]string)
 	byCategory := map[string]int{}
-	feeds := map[string]feedCacheEntry{}
-	legacy := map[string]map[string]struct{}{}
 	currentCat := CategoryMalware
-	currentSource := ""
-	feedSection := false
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 4096), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, feedStatePrefix) {
-			cat, source, ok := parseFeedStateHeader(line)
-			if !ok {
-				feedSection = false
-				currentSource = ""
-				continue
-			}
-			currentCat = cat
-			currentSource = source
-			feedSection = true
-			if _, exists := feeds[source]; !exists {
-				feeds[source] = feedCacheEntry{category: cat, domains: map[string]struct{}{}}
+			if cat, _, ok := parseFeedStateHeader(line); ok {
+				currentCat = cat
 			}
 			continue
 		}
@@ -491,22 +676,11 @@ func (b *Blocklist) loadState() error {
 			if _, ok := knownCategories[currentCat]; !ok {
 				currentCat = CategoryMalware
 			}
-			if !feedSection {
-				currentSource = ""
-			}
 			continue
 		}
 		domain := domainFromBlocklistLine(line)
 		if domain == "" {
 			continue
-		}
-		if feedSection && currentSource != "" {
-			feeds[currentSource].domains[domain] = struct{}{}
-		} else {
-			if legacy[currentCat] == nil {
-				legacy[currentCat] = map[string]struct{}{}
-			}
-			legacy[currentCat][domain] = struct{}{}
 		}
 		if _, exists := domains[domain]; exists {
 			continue
@@ -517,8 +691,6 @@ func (b *Blocklist) loadState() error {
 	if err := scanner.Err(); err != nil {
 		return err
 	}
-	b.feedCache = feeds
-	b.legacyCache = legacy
 	addBuiltInProtectionDomains(domains)
 	if len(domains) == 0 {
 		return fmt.Errorf("cached DNS blocklist is empty")
@@ -560,22 +732,7 @@ func parseFeedStateHeader(line string) (category, source string, ok bool) {
 	return category, source, true
 }
 
-func (b *Blocklist) categoryRank(category string) int {
-	for i, cat := range b.categories {
-		if cat == category {
-			return i
-		}
-	}
-	order := []string{CategoryMalware, CategoryPhishing, CategoryScam, CategoryCrypto, CategoryTrackers, CategoryAds, CategoryAdult}
-	for i, cat := range order {
-		if cat == category {
-			return 100 + i
-		}
-	}
-	return 1000
-}
-
-func (b *Blocklist) writeState() error {
+func (b *Blocklist) writeState(domains map[string]string) error {
 	if b.statePath == "" {
 		return nil
 	}
@@ -589,38 +746,34 @@ func (b *Blocklist) writeState() error {
 	}
 	writer := bufio.NewWriter(file)
 
-	type item struct {
-		source string
-		entry  feedCacheEntry
+	byCat := map[string][]string{}
+	for domain, cat := range domains {
+		byCat[cat] = append(byCat[cat], domain)
 	}
-	items := make([]item, 0, len(b.feedCache))
-	for source, entry := range b.feedCache {
-		if entry.category == "" || len(entry.domains) == 0 {
+	order := append([]string(nil), b.categories...)
+	for _, extra := range []string{CategoryMalware, CategoryPhishing, CategoryScam, CategoryCrypto, CategoryTrackers, CategoryAds, CategoryAdult} {
+		found := false
+		for _, c := range order {
+			if c == extra {
+				found = true
+				break
+			}
+		}
+		if !found {
+			order = append(order, extra)
+		}
+	}
+	for _, cat := range order {
+		list := byCat[cat]
+		if len(list) == 0 {
 			continue
 		}
-		items = append(items, item{source: source, entry: entry})
-	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].entry.category != items[j].entry.category {
-			return b.categoryRank(items[i].entry.category) < b.categoryRank(items[j].entry.category)
-		}
-		return items[i].source < items[j].source
-	})
-	for _, it := range items {
-		if _, err := writer.WriteString(feedStatePrefix + it.entry.category + " " + it.source + "\n"); err != nil {
+		sort.Strings(list)
+		if _, err := writer.WriteString(categoryStatePrefix + cat + "\n"); err != nil {
 			file.Close()
 			return err
 		}
-		if _, err := writer.WriteString(categoryStatePrefix + it.entry.category + "\n"); err != nil {
-			file.Close()
-			return err
-		}
-		domains := make([]string, 0, len(it.entry.domains))
-		for domain := range it.entry.domains {
-			domains = append(domains, domain)
-		}
-		sort.Strings(domains)
-		for _, domain := range domains {
+		for _, domain := range list {
 			if _, err := writer.WriteString(domain + "\n"); err != nil {
 				file.Close()
 				return err
