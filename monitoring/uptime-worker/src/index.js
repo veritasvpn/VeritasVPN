@@ -1,12 +1,11 @@
 import { connect } from "cloudflare:sockets";
 import {
-  CHECKS,
   CHECK_TIMEOUT_MS,
+  advanceChecks,
+  commitUptimeState,
   egressHealthy,
-  emptyCheck,
   isTlsHandshakeRecord,
   messageFor,
-  stepCheck,
   tlsClientHello,
 } from "./state.mjs";
 
@@ -104,15 +103,12 @@ async function runChecks(env) {
   const now = Date.now();
   const previous = await loadState(env);
   const probes = await probe(env, now);
-  const next = { ...previous };
-  for (const check of CHECKS) {
-    const decision = stepCheck(previous[check] || emptyCheck(), probes[check] === true, now);
-    next[check] = decision.next;
-    if (decision.send) {
-      await sendTelegram(env, messageFor(check, decision.send));
-    }
+  const { next, sends } = advanceChecks(previous, probes, now);
+  for (const send of sends) {
+    await sendTelegram(env, messageFor(send.check, send.kind));
   }
-  await env.UPTIME_STATE.put(STATE_KEY, JSON.stringify(next));
+  // Telegram first, then KV. An unchanged snapshot is not written.
+  await commitUptimeState(env.UPTIME_STATE, STATE_KEY, previous, next);
 }
 
 async function testAlert(request, env) {
