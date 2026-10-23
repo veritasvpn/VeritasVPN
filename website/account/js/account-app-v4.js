@@ -409,11 +409,12 @@ function renderDownloads() {
           <p>Full-device protection with the .deb or AppImage release.</p>
           <span class="btn btn-primary btn-sm">Download for Linux</span>
         </a>
-        <a class="download-tile" href="/install/android.html">
+        <article class="download-tile">
           <h3>Android</h3>
-          <p>Full-device WireGuard protection for Android phones and tablets.</p>
-          <span class="btn btn-primary btn-sm">Download for Android</span>
-        </a>
+          <p>Full-device WireGuard protection for Android phones and tablets. Google Play is the recommended install.</p>
+          <a class="play-badge" href="https://play.google.com/store/apps/details?id=cloud.veritasvpn" target="_blank" rel="noopener"><img src="/assets/google-play-badge.png" alt="Get it on Google Play" width="646" height="250"></a>
+          <a class="install-notes-link" href="/install/android.html">Installation steps</a>
+        </article>
       </div>
     </section>
   `;

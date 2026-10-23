@@ -9,7 +9,7 @@ The Play App Bundle sells Premium only through Google Play Billing. The website 
 | Google Play | `play` | Google Play Billing only | `app-play-release.aab` |
 | Website / sideload | `direct` | BTCPay, same as before | `app-direct-release.apk` |
 
-`release.yml` publishes the direct APK as `veritasvpn-android.apk` and the play bundle as `veritasvpn-android.aab`. The website pin stays on the APK. Do not upload the direct APK to Play, and do not offer the Play bundle as the website download.
+`release.yml` publishes the direct APK as `veritasvpn-android.apk` and the play bundle as `veritasvpn-android.aab`. The website pin stays on the APK. The site’s primary Android button links to the Play listing (`https://play.google.com/store/apps/details?id=cloud.veritasvpn`). The direct APK remains the sideload link on the Android install page. Do not upload the direct APK to Play, and do not offer the Play bundle as the website download.
 
 Both flavors use application id `cloud.veritasvpn`. They are not side-by-side installs.
 
