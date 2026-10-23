@@ -48,13 +48,23 @@
   <main class="legal-page">
     <div class="container">
       <h1>Privacy Policy</h1>
-      <p class="legal-meta">Effective date: October 21, 2026. Published at https://veritasvpn.cloud/privacy.html.</p>
+      <p class="legal-meta">Effective date: October 21, 2026. Published at https://veritasvpn.cloud/privacy.html. <a href="#no-logs">No-logs policy</a>.</p>
 
       <div class="legal-notice">
         This policy describes how VeritasVPN actually handles personal data. It is written
         for users and for app-store review. It is not a substitute for legal advice. An
         EU/UK Article 27 representative has not been appointed; that is an open item for counsel.
       </div>
+
+      <h2 id="no-logs">No-logs policy</h2>
+      <ul>
+        <li>We do not store browsing history, a log of the DNS names you look up, the contents of your VPN traffic, or your real public IP address when you connect.</li>
+        <li>When a peer is created, the log and the internal event store a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint. They do not store those values in the clear, and they do not store your real public IP.</li>
+        <li>The Stealth listener is started at error log level, on the VPN node and in the cluster, so a rejected connection does not record the stealth path. Error lines can still be written. This is not a browsing log.</li>
+        <li>We do keep an email address if you register with one. Email is optional. An anonymous Account ID has no email. We keep that Account ID, and we keep purchase history, for the life of the account.</li>
+        <li>Shield per-category block counts are optional. They are kept, with no domain names, for an account that uses Veritas Shield. A free account cannot connect, so those counts are not kept for it.</li>
+        <li>Crash logs and diagnostics are optional. They stay on the device unless you turn sharing on and send the report yourself, from your own email app. The report can include crash lines. We do not receive it unless you send that email. It does not include WireGuard keys or session tokens.</li>
+      </ul>
 
       <h2>1. Who we are</h2>
       <p>
@@ -280,7 +290,7 @@
         <li><strong>Blocked names for a notice</strong> — gateway memory for up to about 10 minutes, and a Redis cache for about 2 minutes, keyed by the tunnel IP. Not written to disk. Deleted when the peer is removed. Not a query log and not your public IP</li>
         <li><strong>Prometheus</strong> — 21 days of aggregate metrics, without query names or your real IP</li>
         <li><strong>Database backups</strong> — the postgres backup script keeps 7 daily, 4 weekly, and 3 monthly copies (monthly copies are removed after about 93 days). Encrypted copies uploaded to Cloudflare R2 are removed after 60 days. Single-node recovery snapshots are removed after 35 days</li>
-        <li><strong>Application container logs</strong> — Docker json-file rotation, 10 MB per file, 3 files. Connect logs do not include your real public IP. The peer-created log and internal event store a short hash of the per-install device ID, not the raw value</li>
+        <li><strong>Application container logs</strong> — Docker json-file rotation, 10 MB per file, 3 files. Connect logs do not include your real public IP. The peer-created log and internal event store a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint, not the raw values</li>
         <li><strong>Origin nginx and ingress access logs</strong> — disabled. They are not written to our disks. Cloudflare may still retain edge logs under Cloudflare’s own policies. We do not keep a separate access-log archive</li>
       </ul>
       <p>
