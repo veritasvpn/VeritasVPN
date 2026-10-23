@@ -10,8 +10,17 @@ export function classifyPeerCheck(status: number | null | undefined, networkErro
 }
 
 /**
- * One automatic recreate per connection. A latched session waits for a new
- * handshake or a user connect. Anything except a real peer-gone waits.
+ * The latch stays until this peer answers 200 or the user connects.
+ * A newer handshake does not release it: a recreated peer that still 404s
+ * must not be created again.
+ */
+export function peerGoneLatchHeld(latched: boolean, peerAlive: boolean, userConnect: boolean): boolean {
+  if (!latched || userConnect || peerAlive) return false;
+  return true;
+}
+
+/**
+ * One automatic recreate per connection. Anything except a real peer-gone waits.
  */
 export function peerGoneAction(
   peerGone: boolean,

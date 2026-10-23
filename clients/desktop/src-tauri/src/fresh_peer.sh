@@ -154,6 +154,98 @@ print(one("stealth_endpoint"))
   )
 }
 
+fresh_backoff_seconds() {
+  case "${1:-}" in
+    0) printf '30' ;;
+    1) printf '60' ;;
+    2) printf '120' ;;
+    *) printf '300' ;;
+  esac
+}
+
+# Prints "read STEP" when a fresh peer read is due, or "skip".
+# STEP is the value to store after that read. A new network stores 0.
+fresh_due() {
+  local stored_net="$1" stored_at="$2" stored_step="$3" live="$4" now="$5" wait=300 next=0
+  [[ "$stored_at" =~ ^[0-9]+$ ]] || stored_at=0
+  [[ "$stored_step" =~ ^[0-9]+$ ]] || stored_step=0
+  [[ "$now" =~ ^[0-9]+$ ]] || now=0
+  if [[ -z "$stored_net" || "$stored_net" != "$live" ]]; then
+    printf 'read 0\n'
+    return 0
+  fi
+  wait="$(fresh_backoff_seconds "$stored_step")"
+  if (( now - stored_at >= wait )); then
+    next="$stored_step"
+    if (( next < 3 )); then
+      next=$((next + 1))
+    fi
+    printf 'read %s\n' "$next"
+  else
+    printf 'skip\n'
+  fi
+}
+
+fresh_state_file() {
+  [[ -n "${STATE_DIR:-}" ]] || return 1
+  printf '%s/fresh-read' "$STATE_DIR"
+}
+
+fresh_state_value() {
+  local key="$1" file=""
+  file="$(fresh_state_file 2>/dev/null || true)"
+  [[ -n "$file" && -f "$file" && ! -L "$file" ]] || return 0
+  awk -F= -v wanted="$key" '$1 == wanted { print substr($0, index($0, "=") + 1); exit }' "$file" 2>/dev/null || true
+}
+
+save_fresh_state() {
+  local net="$1" at="$2" step="$3" ep="$4" stealth="$5" file="" tmp=""
+  file="$(fresh_state_file 2>/dev/null || true)" || return 0
+  [[ "$net" =~ ^[A-Za-z0-9_.:|-]{1,80}$ ]] || return 0
+  [[ "$at" =~ ^[0-9]+$ ]] || at=0
+  [[ "$step" =~ ^[0-9]+$ ]] || step=0
+  [[ "$ep" =~ ^[A-Za-z0-9.-]+:[0-9]{1,5}$ ]] || ep=""
+  [[ "$stealth" =~ ^[A-Za-z0-9.-]+:[0-9]{1,5}$ ]] || stealth=""
+  tmp="$(mktemp)"
+  chmod 600 "$tmp" 2>/dev/null || true
+  printf 'network=%s\nat=%s\nstep=%s\nep=%s\nstealth=%s\n' "$net" "$at" "$step" "$ep" "$stealth" > "$tmp"
+  mv "$tmp" "$file" || { rm -f "$tmp"; return 0; }
+  chmod 600 "$file" 2>/dev/null || true
+}
+
+# One fresh read per network change, then 30s, 60s, 120s, and 5 minute gaps.
+# A skip reuses the cached endpoints for this network. A failed read clears them.
+maybe_fresh_lines() {
+  local gw="${1:-}" gif="${2:-}" live="${1}|${2}"
+  local stored_net="" stored_at="" stored_step="" stored_ep="" stored_stealth=""
+  local now="" decision="" next="" lines="" code="" ep="" st=""
+  stored_net="$(fresh_state_value network)"
+  stored_at="$(fresh_state_value at)"
+  stored_step="$(fresh_state_value step)"
+  stored_ep="$(fresh_state_value ep)"
+  stored_stealth="$(fresh_state_value stealth)"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  read -r decision next < <(fresh_due "$stored_net" "$stored_at" "$stored_step" "$live" "$now")
+  if [[ "$decision" == skip ]]; then
+    [[ "$stored_ep" =~ ^[A-Za-z0-9.-]+:[0-9]{1,5}$ ]] || stored_ep=""
+    [[ "$stored_stealth" =~ ^[A-Za-z0-9.-]+:[0-9]{1,5}$ ]] || stored_stealth=""
+    printf '200\n%s\n%s\n' "$stored_ep" "$stored_stealth"
+    return 0
+  fi
+  [[ "$next" =~ ^[0-9]+$ ]] || next=0
+  lines="$(read_fresh_lines "$gw" "$gif" || true)"
+  code="$(printf '%s\n' "$lines" | sed -n '1p')"
+  ep="$(printf '%s\n' "$lines" | sed -n '2p')"
+  st="$(printf '%s\n' "$lines" | sed -n '3p')"
+  [[ "$code" =~ ^[0-9]+$ ]] || code=0
+  if [[ "$code" != 200 ]]; then
+    ep=""
+    st=""
+  fi
+  save_fresh_state "$live" "$now" "$next" "$ep" "$st"
+  printf '%s\n%s\n%s\n' "$code" "$ep" "$st"
+}
+
 peer_check_main() {
   local gw="" gif="" lines="" status=""
   [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]] || { printf '0\n'; return 0; }
