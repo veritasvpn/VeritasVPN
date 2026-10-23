@@ -154,6 +154,33 @@ NEW_SRC="192.168.0.10"
 apply_endpoint_choice
 assert_eq "$CHOOSE_IP" "192.168.0.6" "fresh private read on its /24 is kept"
 
+# shellcheck disable=SC1091
+source "$ROOT/fresh_peer.sh"
+assert_eq "$(fresh_due "" 0 0 "gw|eth0" 1000)" "read 0" "new network reads immediately"
+assert_eq "$(fresh_due "gw|eth0" 1000 0 "gw|eth0" 1029)" "skip" "same network waits 30s"
+assert_eq "$(fresh_due "gw|eth0" 1000 0 "gw|eth0" 1030)" "read 1" "30s read stores step 1"
+assert_eq "$(fresh_due "gw|eth0" 1000 1 "gw|eth0" 1059)" "skip" "step 1 waits 60s"
+assert_eq "$(fresh_due "gw|eth0" 1000 1 "gw|eth0" 1060)" "read 2" "60s read stores step 2"
+assert_eq "$(fresh_due "gw|eth0" 1000 2 "gw|eth0" 1119)" "skip" "step 2 waits 120s"
+assert_eq "$(fresh_due "gw|eth0" 1000 2 "gw|eth0" 1120)" "read 3" "120s read stores step 3"
+assert_eq "$(fresh_due "gw|eth0" 1000 3 "gw|eth0" 1299)" "skip" "step 3 waits 5 min"
+assert_eq "$(fresh_due "gw|eth0" 1000 3 "gw|eth0" 1300)" "read 3" "later reads stay at 5 min"
+assert_eq "$(fresh_due "gw|eth0" 1000 3 "other|eth1" 1001)" "read 0" "network change reads immediately"
+
+# shellcheck disable=SC1091
+source "$ROOT/recover_swap.sh"
+routes="$(recovery_route_lines "10.7.0.2/32" "0.0.0.0/0,10.8.0.0/24,::/0")"
+assert_eq "$(printf '%s\n' "$routes" | sed -n '1p')" "0.0.0.0/1" "full tunnel first half"
+assert_eq "$(printf '%s\n' "$routes" | sed -n '2p')" "128.0.0.0/1" "full tunnel second half"
+assert_eq "$(printf '%s\n' "$routes" | sed -n '3p')" "10.8.0.0/24" "other allowed range"
+assert_eq "$(printf '%s\n' "$routes" | sed -n '4p')" "::/1" "ipv6 first half"
+assert_eq "$(printf '%s\n' "$routes" | sed -n '5p')" "8000::/1" "ipv6 second half"
+if printf '%s\n' "$routes" | grep -q '^0.0.0.0/0$'; then
+  fail "recovery installs a literal default route"
+fi
+empty_routes="$(recovery_route_lines "10.7.0.2/32" "")"
+assert_eq "$empty_routes" "" "empty allowed list adds no route"
+
 bash -n "$ROOT/endpoint_choice.sh"
 bash -n "$ROOT/fresh_peer.sh"
 bash -n "$ROOT/stealth_apply.sh"
@@ -184,8 +211,26 @@ fi
 if grep -q 'LAN_HOST=' "$lib" && grep -q 'LAN_HOST=' <(sed -n '/<<'"'"'SOFT_PATH'"'"'/,/^SOFT_PATH$/p' "$lib"); then
   fail "path-adapt still carries the dead LAN host"
 fi
-
+if grep -q '10.0.0.0/24' "$ROOT/recover_swap.sh"; then
+  fail "recovery hardcodes the tunnel subnet"
+fi
+if ! grep -q 'systemd-run' "$ROOT/recover_swap.sh"; then
+  fail "recovery exception has no systemd expiry"
+fi
+if ! grep -q 'expire-after' "$ROOT/recover_swap.sh"; then
+  fail "recovery exception has no sleep fallback"
+fi
+if ! grep -q 'maybe_fresh_lines' "$lib"; then
+  fail "path-adapt does not gate the fresh read"
+fi
 app="$ROOT/../../src/App.tsx"
+if grep -q 'last_handshake_sec > latchedAtSecRef' "$app"; then
+  fail "handshake clears the peer-gone latch"
+fi
+if ! grep -q 'RECOVERY_REQUEST_MS = 10_000' "$app"; then
+  fail "recovery requests have no 10s deadline"
+fi
+
 python3 - "$app" <<'PY'
 import pathlib, sys
 text = pathlib.Path(sys.argv[1]).read_text()

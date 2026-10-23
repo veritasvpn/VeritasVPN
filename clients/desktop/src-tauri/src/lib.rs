@@ -467,6 +467,7 @@ fn b64_key_to_hex(b64: &str) -> Result<String, String> {
 
 #[tauri::command]
 async fn connect_wireguard(app: AppHandle, config: WgTunnelConfig) -> ConnectResult {
+    let _ = tauri::async_runtime::spawn_blocking(close_recovery_exception_quiet).await;
     if let Err(message) = config.validate() {
         return ConnectResult {
             success: false,
@@ -681,6 +682,7 @@ async fn disconnect_wireguard(app: AppHandle, soft: Option<bool>) -> ConnectResu
         stop_network_switch_watcher();
     }
     let result = tauri::async_runtime::spawn_blocking(move || {
+        close_recovery_exception_quiet();
         if soft {
             let _guard = SoftElevatedGuard::enter();
             bring_down_wireguard(&app)
@@ -1197,9 +1199,15 @@ fn recovery_open_blocking() -> bool {
     }
 }
 
-fn recovery_close_blocking() {
+fn close_recovery_exception_quiet() {
     let _ = run_recover_helper(&["close"]);
-    network_switch::recovery_lock_release();
+}
+
+fn recovery_close_blocking(release_lock: bool) {
+    close_recovery_exception_quiet();
+    if release_lock {
+        network_switch::recovery_lock_release();
+    }
 }
 
 /// Open a scoped API exception without touching the kill switch. Serialized
@@ -1213,10 +1221,42 @@ async fn recovery_open() -> ConnectResult {
 }
 
 /// Remove only the temporary API exception opened for recovery.
+/// `release_lock` is true for the close that pairs with recovery_open.
+/// Startup, connect, and disconnect pass false so they cannot drop an
+/// in-flight path-adapt lock they did not take.
 #[tauri::command]
-async fn recovery_close() -> ConnectResult {
-    let _ = tauri::async_runtime::spawn_blocking(recovery_close_blocking).await;
+async fn recovery_close(release_lock: Option<bool>) -> ConnectResult {
+    let release = release_lock.unwrap_or(true);
+    let _ = tauri::async_runtime::spawn_blocking(move || recovery_close_blocking(release)).await;
     recover_result(true)
+}
+
+fn recovery_allowed_field(allowed: &[String]) -> Result<String, String> {
+    let parts: Vec<String> = if allowed.is_empty() {
+        vec!["0.0.0.0/0".to_string(), "::/0".to_string()]
+    } else {
+        allowed
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    let parts = if parts.is_empty() {
+        vec!["0.0.0.0/0".to_string(), "::/0".to_string()]
+    } else {
+        parts
+    };
+    for part in &parts {
+        if part.len() > 64
+            || !part.contains('/')
+            || !part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b':' | b'/'))
+        {
+            return Err("could not store the tunnel config".into());
+        }
+    }
+    Ok(parts.join(","))
 }
 
 fn write_recover_request(config: &WgTunnelConfig) -> Result<(), String> {
@@ -1238,6 +1278,7 @@ fn write_recover_request(config: &WgTunnelConfig) -> Result<(), String> {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let allowed_field = recovery_allowed_field(&config.allowed_ips)?;
     let mut wg_conf = format!(
         "[Interface]\nPrivateKey = {}\n\n[Peer]\nPublicKey = {}\nEndpoint = {}\nPersistentKeepalive = 25\nAllowedIPs = {allowed_joined}\n",
         config.private_key.trim(),
@@ -1258,7 +1299,7 @@ fn write_recover_request(config: &WgTunnelConfig) -> Result<(), String> {
         config.dns.trim()
     };
     let request = format!(
-        "address={}\nendpoint={}\nendpoint_wan={}\nendpoint_lan={}\nstealth_remote={}\nstealth_prefix={}\ndns={}\nfresh_ep={}\nfresh_stealth={}\n",
+        "address={}\nendpoint={}\nendpoint_wan={}\nendpoint_lan={}\nstealth_remote={}\nstealth_prefix={}\ndns={}\nfresh_ep={}\nfresh_stealth={}\nallowed={allowed_field}\n",
         config.address.trim(),
         config.endpoint.trim(),
         config.endpoint_wan.trim(),
@@ -2715,7 +2756,7 @@ esac
 FRESH_EP=""
 FRESH_STEALTH=""
 STEALTH_BOUND_NOW=""
-_fresh="$(read_fresh_lines "$NEW_GW" "$NEW_GW_IF" || true)"
+_fresh="$(maybe_fresh_lines "$NEW_GW" "$NEW_GW_IF" || true)"
 FRESH_EP="$(printf '%s\n' "$_fresh" | sed -n '2p')"
 FRESH_STEALTH="$(printf '%s\n' "$_fresh" | sed -n '3p')"
 apply_endpoint_choice
@@ -3713,16 +3754,28 @@ mod security_tests {
         };
         let path_adapt = heredoc("SOFT_PATH");
         assert!(path_adapt.contains("apply_endpoint_choice"));
+        assert!(path_adapt.contains("maybe_fresh_lines"));
         assert!(path_adapt.contains("maybe_restart_stealth"));
         assert!(!path_adapt.contains("CHOOSE_IP=\"$LAN_HOST\""));
         assert!(!path_adapt.contains("LAN_HOST="));
         check("veritas-path-adapt-syntax.sh", &path_adapt);
         let recover = heredoc("RECOVER_SWAP");
         assert!(recover.contains("recovery_main"));
+        assert!(recover.contains("systemd-run"));
+        assert!(recover.contains("expire-after"));
+        assert!(!recover.contains("10.0.0.0/24"));
         assert!(!recover.contains("nft delete table"));
         assert!(!recover.contains("cleanup_killswitch"));
         assert!(!recover.contains("ip route del blackhole"));
         check("veritas-recover-syntax.sh", &recover);
+    }
+
+    #[test]
+    fn recovery_allowed_field_keeps_cidr_charset() {
+        let field = recovery_allowed_field(&["0.0.0.0/0".into(), "::/0".into()]).unwrap();
+        assert_eq!(field, "0.0.0.0/0,::/0");
+        assert_eq!(recovery_allowed_field(&[]).unwrap(), "0.0.0.0/0,::/0");
+        assert!(recovery_allowed_field(&["10.0.0.0/24;id".into()]).is_err());
     }
 
     #[test]
@@ -3757,6 +3810,10 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .setup(|_app| {
+            tauri::async_runtime::spawn_blocking(close_recovery_exception_quiet);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             secure_credential_set,
             secure_credential_get,

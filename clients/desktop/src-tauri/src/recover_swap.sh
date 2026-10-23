@@ -4,6 +4,11 @@
 
 recovery_uid() {
   local uid=""
+  if [[ -n "${RECOVERY_UID_FORCE:-}" ]]; then
+    [[ "$RECOVERY_UID_FORCE" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "$RECOVERY_UID_FORCE"
+    return 0
+  fi
   [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]] || return 1
   uid="$(id -u "$SUDO_USER" 2>/dev/null || true)"
   [[ "$uid" =~ ^[0-9]+$ ]] || return 1
@@ -93,13 +98,14 @@ recovery_state_file() {
 }
 
 write_recover_state() {
-  local file="" tmp=""
+  local file="" tmp="" token="${8:-}"
+  [[ -z "$token" || "$token" =~ ^[0-9a-f]{16,64}$ ]] || return 1
   file="$(recovery_state_file)" || return 1
   tmp="$(mktemp)"
   chmod 600 "$tmp" 2>/dev/null || true
-  printf 'pin_action=%s\napi_ip=%s\nvia=%s\ndev=%s\nold_via=%s\nold_dev=%s\nold_src=%s\n' \
-    "$1" "$2" "$3" "$4" "$5" "$6" "$7" > "$tmp"
-  mv "$tmp" "$file"
+  printf 'pin_action=%s\napi_ip=%s\nvia=%s\ndev=%s\nold_via=%s\nold_dev=%s\nold_src=%s\ntoken=%s\n' \
+    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$token" > "$tmp"
+  mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
   chmod 600 "$file" 2>/dev/null || true
 }
 
@@ -111,7 +117,7 @@ recovery_state_value() {
 }
 
 recovery_mark_pin_kept() {
-  local pin="" api_ip="" via="" dev="" old_via="" old_dev="" old_src=""
+  local pin="" api_ip="" via="" dev="" old_via="" old_dev="" old_src="" token=""
   pin="$(recovery_state_value pin_action)"
   [[ "$pin" == added || "$pin" == replaced ]] || return 0
   api_ip="$(recovery_state_value api_ip)"
@@ -121,17 +127,83 @@ recovery_mark_pin_kept() {
   old_via="$(recovery_state_value old_via)"
   old_dev="$(recovery_state_value old_dev)"
   old_src="$(recovery_state_value old_src)"
-  write_recover_state "kept" "$api_ip" "$via" "$dev" "$old_via" "$old_dev" "$old_src" || true
+  token="$(recovery_state_value token)"
+  write_recover_state "kept" "$api_ip" "$via" "$dev" "$old_via" "$old_dev" "$old_src" "$token" || true
+}
+
+recovery_undo_pin() {
+  local pin="$1" api_ip="$2" via="$3" dev="$4" old_via="$5" old_dev="$6" old_src="$7"
+  recovery_is_ipv4 "$api_ip" || return 0
+  recovery_is_ipv4 "$via" || via=""
+  recovery_valid_iface "$dev" || dev=""
+  recovery_is_ipv4 "$old_via" || old_via=""
+  recovery_valid_iface "$old_dev" || old_dev=""
+  recovery_is_ipv4 "$old_src" || old_src=""
+  if [[ "$pin" == added && -n "$via" && -n "$dev" ]]; then
+    ip route del "$api_ip/32" via "$via" dev "$dev" >/dev/null 2>&1 || true
+  elif [[ "$pin" == replaced ]]; then
+    ip route replace "$api_ip/32" ${old_via:+via "$old_via"} ${old_dev:+dev "$old_dev"} ${old_src:+src "$old_src"} >/dev/null 2>&1 || true
+  fi
+}
+
+recovery_close_body() {
+  local pin="" api_ip="" via="" dev="" old_via="" old_dev="" old_src="" file=""
+  pin="$(recovery_state_value pin_action)"
+  api_ip="$(recovery_state_value api_ip)"
+  via="$(recovery_state_value via)"
+  dev="$(recovery_state_value dev)"
+  old_via="$(recovery_state_value old_via)"
+  old_dev="$(recovery_state_value old_dev)"
+  old_src="$(recovery_state_value old_src)"
+  delete_comment_rules "veritas-recovery"
+  recovery_undo_pin "$pin" "$api_ip" "$via" "$dev" "$old_via" "$old_dev" "$old_src"
+  file="$(recovery_state_file 2>/dev/null || true)"
+  [[ -n "$file" ]] && rm -f "$file"
+}
+
+recovery_new_token() {
+  local token=""
+  if command -v od >/dev/null 2>&1; then
+    token="$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)"
+  fi
+  if [[ ! "$token" =~ ^[0-9a-f]{16}$ ]] && command -v python3 >/dev/null 2>&1; then
+    token="$(python3 -c 'import os; print(os.urandom(8).hex())' 2>/dev/null || true)"
+  fi
+  [[ "$token" =~ ^[0-9a-f]{16,64}$ ]] || return 1
+  printf '%s' "$token"
+}
+
+schedule_recovery_expiry() {
+  local uid="$1" token="$2" unit=""
+  [[ "$uid" =~ ^[0-9]+$ ]] || return 1
+  [[ "$token" =~ ^[0-9a-f]{16,64}$ ]] || return 1
+  unit="veritasvpn-recover-$token"
+  if command -v systemd-run >/dev/null 2>&1; then
+    if systemd-run --quiet --collect --unit="$unit" --on-active=60s "$0" expire "$uid" "$token" >/dev/null 2>&1; then
+      return 0
+    fi
+    if systemd-run --quiet --unit="$unit" --on-active=60s "$0" expire "$uid" "$token" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  command -v setsid >/dev/null 2>&1 || return 1
+  setsid nohup "$0" expire-after "$uid" "$token" >/dev/null 2>&1 &
+  [[ "$!" =~ ^[0-9]+$ ]]
 }
 
 recovery_open() {
   local api_ip="" endpoint_ip="" gw="" gif="" old_via="" old_dev="" old_src="" pin="none"
+  local token="" uid=""
+  # A previous exception must not outlive this open. Close it before the new pin.
+  recovery_close_body
   api_ip="$(recovery_meta_value api_ip)"
   endpoint_ip="$(recovery_meta_value endpoint_ip)"
   recovery_is_ipv4 "$api_ip" || return 1
   read -r gw gif < <(detect_underlay_pair || true)
   recovery_is_ipv4 "$gw" || return 1
   recovery_valid_iface "$gif" || return 1
+  uid="$(recovery_uid)" || return 1
+  token="$(recovery_new_token)" || return 1
   if [[ "$api_ip" != "$endpoint_ip" ]]; then
     read -r old_via old_dev old_src < <(ip -4 route show "$api_ip/32" 2>/dev/null | awk 'NR==1 {
       via=""; dev=""; src=""
@@ -147,61 +219,115 @@ recovery_open() {
     recovery_valid_iface "$old_dev" || old_dev=""
     recovery_is_ipv4 "$old_src" || old_src=""
     if [[ -z "$old_dev" && -z "$old_via" ]]; then
-      ip route add "$api_ip/32" via "$gw" dev "$gif" >/dev/null 2>&1 || return 1
+      if ! ip route add "$api_ip/32" via "$gw" dev "$gif" >/dev/null 2>&1; then
+        return 1
+      fi
       pin="added"
     elif [[ "$old_via" == "$gw" && "$old_dev" == "$gif" ]]; then
       pin="kept"
     else
-      ip route replace "$api_ip/32" via "$gw" dev "$gif" >/dev/null 2>&1 || return 1
+      if ! ip route replace "$api_ip/32" via "$gw" dev "$gif" >/dev/null 2>&1; then
+        return 1
+      fi
       pin="replaced"
     fi
   fi
-  write_recover_state "$pin" "$api_ip" "$gw" "$gif" "$old_via" "$old_dev" "$old_src" || return 1
+  if ! write_recover_state "$pin" "$api_ip" "$gw" "$gif" "$old_via" "$old_dev" "$old_src" "$token"; then
+    recovery_undo_pin "$pin" "$api_ip" "$gw" "$gif" "$old_via" "$old_dev" "$old_src"
+    return 1
+  fi
   insert_recovery_accept "$api_ip"
+  if ! schedule_recovery_expiry "$uid" "$token"; then
+    recovery_close_body
+    return 1
+  fi
   printf 'ok\n'
 }
 
+# An empty token closes whatever exception is current. A token closes only
+# the exception that stored it, so a stale 60s timer cannot remove a newer one.
 recovery_close() {
-  local pin="" api_ip="" via="" dev="" old_via="" old_dev="" old_src="" file=""
-  pin="$(recovery_state_value pin_action)"
-  api_ip="$(recovery_state_value api_ip)"
-  via="$(recovery_state_value via)"
-  dev="$(recovery_state_value dev)"
-  old_via="$(recovery_state_value old_via)"
-  old_dev="$(recovery_state_value old_dev)"
-  old_src="$(recovery_state_value old_src)"
-  delete_comment_rules "veritas-recovery"
-  recovery_is_ipv4 "$api_ip" || api_ip=""
-  recovery_is_ipv4 "$via" || via=""
-  recovery_valid_iface "$dev" || dev=""
-  recovery_is_ipv4 "$old_via" || old_via=""
-  recovery_valid_iface "$old_dev" || old_dev=""
-  recovery_is_ipv4 "$old_src" || old_src=""
-  if [[ "$pin" == added && -n "$api_ip" && -n "$via" && -n "$dev" ]]; then
-    ip route del "$api_ip/32" via "$via" dev "$dev" >/dev/null 2>&1 || true
-  elif [[ "$pin" == replaced && -n "$api_ip" ]]; then
-    ip route replace "$api_ip/32" ${old_via:+via "$old_via"} ${old_dev:+dev "$old_dev"} ${old_src:+src "$old_src"} >/dev/null 2>&1 || true
+  local token="${1:-}" current=""
+  if [[ -n "$token" ]]; then
+    [[ "$token" =~ ^[0-9a-f]{16,64}$ ]] || { printf 'ok\n'; return 0; }
+    current="$(recovery_state_value token)"
+    if [[ "$token" != "$current" ]]; then
+      printf 'ok\n'
+      return 0
+    fi
   fi
-  file="$(recovery_state_file 2>/dev/null || true)"
-  [[ -n "$file" ]] && rm -f "$file"
+  recovery_close_body
   printf 'ok\n'
+}
+
+recovery_expire() {
+  local uid="${1:-}" token="${2:-}"
+  [[ "$uid" =~ ^[0-9]+$ ]] || { printf 'ok\n'; return 0; }
+  [[ "$token" =~ ^[0-9a-f]{16,64}$ ]] || { printf 'ok\n'; return 0; }
+  RECOVERY_UID_FORCE="$uid"
+  recovery_close "$token"
+}
+
+recovery_expire_after() {
+  sleep 60
+  recovery_expire "$@"
+}
+
+recovery_cidr_ok() {
+  [[ "$1" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}$ ]]
+}
+
+# Prints one CIDR per line. A full-tunnel default becomes two halves so the
+# blackhole default underneath stays in place. The interface address is not a route.
+recovery_route_lines() {
+  local address="$1" allowed="$2" token=""
+  : "$address"
+  local IFS=','
+  for token in $allowed; do
+    token="${token#"${token%%[![:space:]]*}"}"
+    token="${token%"${token##*[![:space:]]}"}"
+    [[ -n "$token" ]] || continue
+    recovery_cidr_ok "$token" || continue
+    if [[ "$token" == "0.0.0.0/0" ]]; then
+      printf '%s\n' "0.0.0.0/1" "128.0.0.0/1"
+    elif [[ "$token" == "::/0" ]]; then
+      printf '%s\n' "::/1" "8000::/1"
+    else
+      printf '%s\n' "$token"
+    fi
+  done
+}
+
+recovery_install_routes() {
+  local address="$1" allowed="$2" cidr=""
+  while IFS= read -r cidr; do
+    [[ -n "$cidr" ]] || continue
+    recovery_cidr_ok "$cidr" || continue
+    if [[ "$cidr" == *:* ]]; then
+      ip -6 route replace "$cidr" dev veritas0 >/dev/null 2>&1 || true
+    else
+      ip route replace "$cidr" dev veritas0 >/dev/null 2>&1 || true
+    fi
+  done < <(recovery_route_lines "$address" "$allowed")
 }
 
 recovery_update_meta() {
-  local dir="" meta="" tmp="" bound=""
+  local dir="" meta="" tmp="" bound="" dns="${1:-}"
   dir="$(recovery_state_dir)" || return 0
   meta="$dir/iface.meta"
   [[ -f "$meta" && ! -L "$meta" ]] || return 0
   bound="${STEALTH_BOUND_NOW:-}"
+  [[ "$dns" =~ ^[0-9A-Fa-f:.]+$ ]] || dns=""
   tmp="$(mktemp)"
-  awk -v epip="${CHOOSE_IP:-}" -v ep="${CHOOSE_EP:-}" -v stealth="${STEALTH_REMOTE:-}" -v prefix="${STEALTH_PREFIX:-}" -v bound="$bound" '
+  awk -v epip="${CHOOSE_IP:-}" -v ep="${CHOOSE_EP:-}" -v stealth="${STEALTH_REMOTE:-}" -v prefix="${STEALTH_PREFIX:-}" -v bound="$bound" -v dns="$dns" '
     function emit(k, v) { print k "=" v }
-    BEGIN { epip_set=0; ep_set=0; st_set=0; px_set=0; bd_set=0 }
+    BEGIN { epip_set=0; ep_set=0; st_set=0; px_set=0; bd_set=0; dns_set=0 }
     /^endpoint_ip=/ { emit("endpoint_ip", epip); epip_set=1; next }
     /^endpoint=/ { emit("endpoint", ep); ep_set=1; next }
     /^stealth_remote=/ { emit("stealth_remote", stealth); st_set=1; next }
     /^stealth_prefix=/ { emit("stealth_prefix", prefix); px_set=1; next }
     /^stealth_bound=/ { emit("stealth_bound", bound); bd_set=1; next }
+    /^dns=/ { if (dns != "") { emit("dns", dns); dns_set=1; next } print; next }
     { print }
     END {
       if (!epip_set) emit("endpoint_ip", epip)
@@ -209,6 +335,7 @@ recovery_update_meta() {
       if (!st_set) emit("stealth_remote", stealth)
       if (!px_set) emit("stealth_prefix", prefix)
       if (!bd_set && bound != "") emit("stealth_bound", bound)
+      if (!dns_set && dns != "") emit("dns", dns)
     }
   ' "$meta" > "$tmp"
   mv "$tmp" "$meta"
@@ -243,7 +370,6 @@ recovery_apply() {
   [[ "$dns" =~ ^[0-9A-Fa-f:.]+$ ]] || return 1
   [[ -z "$fresh_ep" ]] || recovery_valid_ep "$fresh_ep" || fresh_ep=""
   [[ -z "$fresh_stealth" ]] || recovery_valid_ep "$fresh_stealth" || fresh_stealth=""
-  : "$dns"
 
   dir="$(recovery_state_dir)" || return 1
   STATE_DIR="$dir"
@@ -289,9 +415,13 @@ recovery_apply() {
       wg set veritas0 peer "$peer" endpoint "$CHOOSE_EP" >/dev/null 2>&1 || true
     fi
   fi
-  ip route replace 10.0.0.0/24 dev veritas0 >/dev/null 2>&1 || true
-  ip route replace 0.0.0.0/1 dev veritas0 >/dev/null 2>&1 || true
-  ip route replace 128.0.0.0/1 dev veritas0 >/dev/null 2>&1 || true
+  recovery_install_routes "$address" "$(recovery_request_value allowed)"
+  if [[ -w /etc/resolv.conf ]]; then
+    echo "nameserver $dns" > /etc/resolv.conf
+  elif command -v resolvectl >/dev/null 2>&1; then
+    resolvectl dns "$gif" "$dns" >/dev/null 2>&1 || true
+    resolvectl flush-caches >/dev/null 2>&1 || true
+  fi
 
   old_ip="$(recovery_meta_value endpoint_ip)"
   if recovery_is_ipv4 "$old_ip" && [[ "$old_ip" != "$CHOOSE_IP" && "$old_ip" != "127.0.0.1" ]]; then
@@ -323,7 +453,7 @@ recovery_apply() {
     rm -f "$STATE_DIR/wstunnel.pid"
   fi
 
-  recovery_update_meta
+  recovery_update_meta "$dns"
   recovery_mark_pin_kept
   recovery_close >/dev/null
   printf 'ok\n'
@@ -332,7 +462,9 @@ recovery_apply() {
 recovery_main() {
   case "${1:-}" in
     open) recovery_open ;;
-    close) recovery_close ;;
+    close) recovery_close "${2:-}" ;;
+    expire) recovery_expire "${2:-}" "${3:-}" ;;
+    expire-after) recovery_expire_after "${2:-}" "${3:-}" ;;
     apply)
       if ! recovery_apply; then
         recovery_close >/dev/null || true

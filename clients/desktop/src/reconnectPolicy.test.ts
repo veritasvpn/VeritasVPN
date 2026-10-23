@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyPeerCheck, displayStatus, peerGoneAction } from "./reconnectPolicy";
+import { classifyPeerCheck, displayStatus, peerGoneAction, peerGoneLatchHeld } from "./reconnectPolicy";
 
 describe("peer check", () => {
   it("treats only 404 and 410 as peer gone", () => {
@@ -34,6 +34,15 @@ describe("peer-gone create", () => {
     expect(peerGoneAction(true, false, true)).toBe("latched");
     expect(peerGoneAction(true, true, true)).toBe("latched");
     expect(peerGoneAction(false, false, true)).toBe("ignore");
+  });
+
+  it("does not recreate again after a handshake when the new peer still 404s", () => {
+    let latched = true;
+    latched = peerGoneLatchHeld(latched, false, false);
+    expect(latched).toBe(true);
+    expect(peerGoneAction(true, false, latched)).toBe("latched");
+    expect(peerGoneLatchHeld(true, true, false)).toBe(false);
+    expect(peerGoneLatchHeld(true, false, true)).toBe(false);
   });
 });
 
