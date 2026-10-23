@@ -1,10 +1,18 @@
 package dns
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/veritasvpn/lib/logging"
 )
 
 func TestBlocklistParsesHostsAndAdblockFormats(t *testing.T) {
@@ -234,6 +242,281 @@ func TestForwarderAppliesFlagsPerPeerWithoutReconnect(t *testing.T) {
 	f.ApplyPeerShield([]string{"10.0.0.8/32"}, "", &ShieldPolicy{Explicit: true, BlockAds: true, BlockMalicious: true, BlockTrackers: true})
 	if _, ok := f.shouldBlock("10.0.0.8", "ads.example"); ok {
 		t.Fatal("allowlist must win over an enabled ads category")
+	}
+}
+
+// malwareFeedSamples are names present in the HaGeZi TIF mini feed on 2026-10-23.
+// The unit tests serve them locally. TestLiveMalwareFeedContainsKnownDomains
+// checks the published feed when VERITAS_MALWARE_FEED_LIVE=1.
+var malwareFeedSamples = []string{
+	"agenttesla.com",
+	"amos-malware.ru",
+	"payload-delivery.online",
+	"0dayexploits.net",
+}
+
+type healthObserver struct {
+	noopObserver
+	refreshFailed int
+	failed        map[string]int
+	degraded      map[string]bool
+	refreshed     int
+}
+
+func (o *healthObserver) DNSBlocklistRefreshFailed() { o.refreshFailed++ }
+
+func (o *healthObserver) DNSBlocklistFeedHealth(failed map[string]int, degraded map[string]bool) {
+	o.failed = failed
+	o.degraded = degraded
+}
+
+func (o *healthObserver) DNSBlocklistRefreshed(int, time.Time) { o.refreshed++ }
+
+func testLogger(t *testing.T) *logging.Logger {
+	t.Helper()
+	log, err := logging.New("error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return log
+}
+
+func TestDefaultMalwareFeedsAreHaGeZiMirrors(t *testing.T) {
+	t.Setenv("DNS_SHIELD_CATEGORIES", "")
+	t.Setenv("DNS_BLOCKLIST_URLS", "")
+	t.Setenv("DNS_BLOCKLIST_URLS_MALWARE", "")
+	_, urls := LoadShieldSourcesFromEnv()
+	got := urls[CategoryMalware]
+	if len(got) != 2 {
+		t.Fatalf("malware feeds = %#v", got)
+	}
+	for _, raw := range got {
+		if !strings.HasPrefix(raw, "https://") {
+			t.Fatalf("malware feed must be https, got %q", raw)
+		}
+		if strings.Contains(raw, "urlhaus.abuse.ch") {
+			t.Fatalf("dead URLhaus download must not be configured, got %q", raw)
+		}
+		if !strings.Contains(raw, "tif.mini-onlydomains.txt") {
+			t.Fatalf("expected HaGeZi TIF mini domains feed, got %q", raw)
+		}
+	}
+	if got[0] == got[1] {
+		t.Fatal("malware feeds should be two mirrors, not the same URL twice")
+	}
+}
+
+func TestMalwareFeedSamplesLandInMalwareCategory(t *testing.T) {
+	body := "# Title: HaGeZi's Threat Intelligence Feeds\n" + strings.Join(malwareFeedSamples, "\n") + "\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("User-Agent") != "VeritasVPN-Shield/1.0" {
+			http.Error(w, "bad user agent", http.StatusBadRequest)
+			return
+		}
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+
+	obs := &healthObserver{}
+	b := NewShieldBlocklist([]string{CategoryMalware}, map[string][]string{
+		CategoryMalware: {srv.URL + "/mirror-a", srv.URL + "/mirror-b"},
+	}, t.TempDir()+"/blocklist.txt", time.Hour, obs, testLogger(t))
+	b.client = srv.Client()
+	b.refresh(context.Background())
+
+	for _, domain := range malwareFeedSamples {
+		cat, ok := b.BlockedCategory(domain)
+		if !ok || cat != CategoryMalware {
+			t.Fatalf("%s category=%q ok=%v", domain, cat, ok)
+		}
+		if cat, ok := b.BlockedCategory("cdn." + domain); !ok || cat != CategoryMalware {
+			t.Fatalf("subdomain of %s category=%q ok=%v", domain, cat, ok)
+		}
+	}
+	if obs.refreshFailed != 0 || obs.refreshed != 1 {
+		t.Fatalf("refreshFailed=%d refreshed=%d", obs.refreshFailed, obs.refreshed)
+	}
+	if obs.degraded[CategoryMalware] {
+		t.Fatal("two live mirrors must not mark malware degraded")
+	}
+	if obs.failed[CategoryMalware] != 0 {
+		t.Fatalf("duplicate mirror must not count as a feed failure: %#v", obs.failed)
+	}
+	cached, err := os.ReadFile(b.statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cached), feedStatePrefix+"malware "+srv.URL+"/mirror-a\n") {
+		t.Fatalf("state file missing per-feed header:\n%s", cached)
+	}
+
+	reloaded := NewShieldBlocklist([]string{CategoryMalware}, nil, b.statePath, time.Hour, nil, testLogger(t))
+	if err := reloaded.loadState(); err != nil {
+		t.Fatal(err)
+	}
+	if cat, ok := reloaded.BlockedCategory("agenttesla.com"); !ok || cat != CategoryMalware {
+		t.Fatalf("reloaded category=%q ok=%v", cat, ok)
+	}
+	if len(reloaded.feedCache) != 2 {
+		t.Fatalf("reloaded feed cache = %d", len(reloaded.feedCache))
+	}
+}
+
+func TestRefreshKeepsCachedMalwareWhenThatFeedFails(t *testing.T) {
+	gone := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "gone", http.StatusGone)
+	}))
+	t.Cleanup(gone.Close)
+	phish := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "fresh-phish.example")
+	}))
+	t.Cleanup(phish.Close)
+
+	state := filepath.Join(t.TempDir(), "blocklist.txt")
+	legacy := "# veritas-shield-category:malware\ncached-malware.example\nagenttesla.com\n"
+	if err := os.WriteFile(state, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	obs := &healthObserver{}
+	b := NewShieldBlocklist([]string{CategoryMalware, CategoryPhishing}, map[string][]string{
+		CategoryMalware:  {gone.URL},
+		CategoryPhishing: {phish.URL},
+	}, state, time.Hour, obs, testLogger(t))
+	b.client = &http.Client{Timeout: 5 * time.Second}
+	if err := b.loadState(); err != nil {
+		t.Fatal(err)
+	}
+	obs.refreshed = 0
+	b.mu.Lock()
+	b.lastSuccess = time.Unix(100, 0).UTC()
+	b.mu.Unlock()
+	b.refresh(context.Background())
+
+	for _, domain := range []string{"cached-malware.example", "agenttesla.com"} {
+		if cat, ok := b.BlockedCategory(domain); !ok || cat != CategoryMalware {
+			t.Fatalf("cached %s category=%q ok=%v", domain, cat, ok)
+		}
+	}
+	if cat, ok := b.BlockedCategory("fresh-phish.example"); !ok || cat != CategoryPhishing {
+		t.Fatalf("phishing category=%q ok=%v", cat, ok)
+	}
+	if !obs.degraded[CategoryMalware] || obs.degraded[CategoryPhishing] {
+		t.Fatalf("degraded=%v", obs.degraded)
+	}
+	if obs.failed[CategoryMalware] != 1 || obs.refreshFailed != 0 || obs.refreshed != 1 {
+		t.Fatalf("failed=%v refreshFailed=%d refreshed=%d", obs.failed, obs.refreshFailed, obs.refreshed)
+	}
+	b.mu.RLock()
+	refreshed := b.lastSuccess
+	b.mu.RUnlock()
+	if !refreshed.After(time.Unix(100, 0)) {
+		t.Fatal("a sibling feed succeeding should record a refresh")
+	}
+	if _, ok := b.feedCache[gone.URL]; !ok {
+		t.Fatal("failed feed should keep a per-url cache for the next outage")
+	}
+}
+
+func TestRefreshEmptyFeedUsesPerFeedCache(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			fmt.Fprintln(w, "agenttesla.com")
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	obs := &healthObserver{}
+	b := NewShieldBlocklist([]string{CategoryMalware}, map[string][]string{
+		CategoryMalware: {srv.URL},
+	}, "", time.Hour, obs, testLogger(t))
+	b.client = srv.Client()
+	b.refresh(context.Background())
+	b.refresh(context.Background())
+	if cat, ok := b.BlockedCategory("agenttesla.com"); !ok || cat != CategoryMalware {
+		t.Fatalf("empty feed dropped the cached domain category=%q ok=%v", cat, ok)
+	}
+	if !obs.degraded[CategoryMalware] || obs.failed[CategoryMalware] != 1 {
+		t.Fatalf("degraded=%v failed=%v", obs.degraded, obs.failed)
+	}
+	if obs.refreshFailed != 1 {
+		t.Fatalf("total failure should increment refresh failures, got %d", obs.refreshFailed)
+	}
+}
+
+func TestRefreshAllFeedsFailKeepsPreviousPolicy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "gone", http.StatusGone)
+	}))
+	t.Cleanup(srv.Close)
+	obs := &healthObserver{}
+	b := NewShieldBlocklist([]string{CategoryMalware}, map[string][]string{
+		CategoryMalware: {srv.URL},
+	}, "", time.Hour, obs, testLogger(t))
+	b.client = srv.Client()
+	stamp := time.Unix(100, 0).UTC()
+	b.replace(map[string]string{"keep.example": CategoryMalware}, map[string]int{CategoryMalware: 1}, stamp)
+	b.refresh(context.Background())
+	if cat, ok := b.BlockedCategory("keep.example"); !ok || cat != CategoryMalware {
+		t.Fatalf("previous policy lost category=%q ok=%v", cat, ok)
+	}
+	b.mu.RLock()
+	got := b.lastSuccess
+	b.mu.RUnlock()
+	if !got.Equal(stamp) {
+		t.Fatalf("total failure moved last success to %s", got)
+	}
+	if obs.refreshFailed != 1 || !obs.degraded[CategoryMalware] {
+		t.Fatalf("refreshFailed=%d degraded=%v", obs.refreshFailed, obs.degraded)
+	}
+}
+
+func TestLiveMalwareFeedContainsKnownDomains(t *testing.T) {
+	if os.Getenv("VERITAS_MALWARE_FEED_LIVE") == "" {
+		t.Skip("set VERITAS_MALWARE_FEED_LIVE=1 to fetch the malware feeds")
+	}
+	client := &http.Client{Timeout: 60 * time.Second}
+	for _, raw := range defaultCategoryURLs[CategoryMalware] {
+		request, err := http.NewRequest(http.MethodGet, raw, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("User-Agent", "VeritasVPN-Shield/1.0")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusOK {
+			response.Body.Close()
+			t.Fatalf("%s status %d", raw, response.StatusCode)
+		}
+		parsed := map[string]struct{}{}
+		n, err := parseBlocklist(response.Body, parsed)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%s parsed_domains=%d", raw, n)
+		if n < 100000 {
+			t.Fatalf("%s parsed only %d domains", raw, n)
+		}
+		for _, domain := range malwareFeedSamples {
+			if _, ok := parsed[domain]; !ok {
+				t.Fatalf("%s missing %s", raw, domain)
+			}
+		}
+		b := NewShieldBlocklist([]string{CategoryMalware}, nil, "", time.Hour, nil, testLogger(t))
+		merged := map[string]string{}
+		addBuiltInProtectionDomains(merged)
+		mergeFeedDomains(merged, parsed, CategoryMalware)
+		b.replace(merged, map[string]int{CategoryMalware: n}, time.Now().UTC())
+		for _, domain := range malwareFeedSamples {
+			if cat, ok := b.BlockedCategory(domain); !ok || cat != CategoryMalware {
+				t.Fatalf("%s live category=%q ok=%v", domain, cat, ok)
+			}
+		}
 	}
 }
 

@@ -129,8 +129,10 @@ spec:
             # Veritas Shield Phase 1+2 — load all category feeds; per-peer presets select policy.
             - name: DNS_SHIELD_CATEGORIES
               value: "malware,phishing,scam,crypto,trackers,ads,adult"
+            # HaGeZi TIF mini (plain domains). jsDelivr mirror, then GitHub origin.
+            # URLhaus public hostfile/text/csv downloads return HTTP 410.
             - name: DNS_BLOCKLIST_URLS_MALWARE
-              value: "https://urlhaus.abuse.ch/downloads/hostfile/"
+              value: "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/wildcard/tif.mini-onlydomains.txt,https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif.mini-onlydomains.txt"
             - name: DNS_BLOCKLIST_URLS_PHISHING
               value: "https://phishing.army/download/phishing_army_blocklist_extended.txt"
             - name: DNS_BLOCKLIST_URLS_SCAM

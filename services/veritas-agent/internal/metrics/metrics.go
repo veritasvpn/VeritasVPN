@@ -9,27 +9,29 @@ import (
 )
 
 type Metrics struct {
-	PeerCount                   prometheus.Gauge
-	ActivePeerCount             prometheus.Gauge
-	RXBytesTotal                prometheus.Counter
-	TXBytesTotal                prometheus.Counter
-	UptimeSeconds               prometheus.Counter
-	CPUUsage                    prometheus.Gauge
-	MemoryUsage                 prometheus.Gauge
-	StalePeerCount              prometheus.Gauge
-	PeerExpiryFailures          prometheus.Counter
-	OrphanPeerCount             prometheus.Gauge
-	OrphanPeerRemovals          prometheus.Counter
-	DNSQueriesTotal             prometheus.Counter
-	DNSBlockedTotal             prometheus.Counter
-	DNSBlockedByCategory        *prometheus.CounterVec
-	DNSUpstreamFailures         prometheus.Counter
-	DNSBlocklistDomains         prometheus.Gauge
-	DNSBlocklistDomainsCategory *prometheus.GaugeVec
-	DNSBlocklistLastRefresh     prometheus.Gauge
-	DNSBlocklistRefreshFailures prometheus.Counter
-	PeerStreamConnected         prometheus.Gauge
-	PeerStreamDisconnects       prometheus.Counter
+	PeerCount                    prometheus.Gauge
+	ActivePeerCount              prometheus.Gauge
+	RXBytesTotal                 prometheus.Counter
+	TXBytesTotal                 prometheus.Counter
+	UptimeSeconds                prometheus.Counter
+	CPUUsage                     prometheus.Gauge
+	MemoryUsage                  prometheus.Gauge
+	StalePeerCount               prometheus.Gauge
+	PeerExpiryFailures           prometheus.Counter
+	OrphanPeerCount              prometheus.Gauge
+	OrphanPeerRemovals           prometheus.Counter
+	DNSQueriesTotal              prometheus.Counter
+	DNSBlockedTotal              prometheus.Counter
+	DNSBlockedByCategory         *prometheus.CounterVec
+	DNSUpstreamFailures          prometheus.Counter
+	DNSBlocklistDomains          prometheus.Gauge
+	DNSBlocklistDomainsCategory  *prometheus.GaugeVec
+	DNSBlocklistLastRefresh      prometheus.Gauge
+	DNSBlocklistRefreshFailures  prometheus.Counter
+	DNSBlocklistFeedFailures     *prometheus.CounterVec
+	DNSBlocklistCategoryDegraded *prometheus.GaugeVec
+	PeerStreamConnected          prometheus.Gauge
+	PeerStreamDisconnects        prometheus.Counter
 
 	registry *prometheus.Registry
 	port     string
@@ -132,8 +134,16 @@ func NewWithBind(port, bind string) *Metrics {
 		}),
 		DNSBlocklistRefreshFailures: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "veritas_agent_dns_blocklist_refresh_failures_total",
-			Help: "Failed DNS blocklist refresh attempts.",
+			Help: "DNS blocklist refreshes where every feed failed.",
 		}),
+		DNSBlocklistFeedFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "veritas_agent_dns_blocklist_feed_failures_total",
+			Help: "Per-category blocklist feeds that failed or returned no domains. The label is the Shield category, never a query name or client.",
+		}, []string{"category"}),
+		DNSBlocklistCategoryDegraded: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "veritas_agent_dns_blocklist_category_degraded",
+			Help: "1 when every configured feed for that Shield category failed on the latest refresh. The category may still be serving its last cached copy.",
+		}, []string{"category"}),
 		registry: reg,
 		port:     port,
 		bind:     bind,
@@ -158,6 +168,8 @@ func NewWithBind(port, bind string) *Metrics {
 	reg.MustRegister(m.DNSBlocklistDomainsCategory)
 	reg.MustRegister(m.DNSBlocklistLastRefresh)
 	reg.MustRegister(m.DNSBlocklistRefreshFailures)
+	reg.MustRegister(m.DNSBlocklistFeedFailures)
+	reg.MustRegister(m.DNSBlocklistCategoryDegraded)
 	reg.MustRegister(m.PeerStreamConnected)
 	reg.MustRegister(m.PeerStreamDisconnects)
 
@@ -195,6 +207,26 @@ func (m *Metrics) DNSBlocklistCategorySizes(byCategory map[string]int) {
 }
 
 func (m *Metrics) DNSBlocklistRefreshFailed() { m.DNSBlocklistRefreshFailures.Inc() }
+
+func (m *Metrics) DNSBlocklistFeedHealth(failed map[string]int, degraded map[string]bool) {
+	for category, n := range failed {
+		if category == "" || n <= 0 {
+			continue
+		}
+		m.DNSBlocklistFeedFailures.WithLabelValues(category).Add(float64(n))
+	}
+	m.DNSBlocklistCategoryDegraded.Reset()
+	for category, isDegraded := range degraded {
+		if category == "" {
+			continue
+		}
+		value := 0.0
+		if isDegraded {
+			value = 1
+		}
+		m.DNSBlocklistCategoryDegraded.WithLabelValues(category).Set(value)
+	}
+}
 
 func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
