@@ -1174,12 +1174,13 @@ fn recover_result(success: bool) -> ConnectResult {
     }
 }
 
-fn run_recover_helper(args: &[&str]) -> bool {
+fn run_recover_helper(args: &[&str], timeout_secs: u64) -> bool {
     if !Path::new(SOFT_RECOVER_HELPER).exists() {
         return false;
     }
+    let secs = timeout_secs.clamp(1, 25).to_string();
     let mut command = Command::new("timeout");
-    command.args(["25", "sudo", "-n", SOFT_RECOVER_HELPER]);
+    command.args([&secs, "sudo", "-n", SOFT_RECOVER_HELPER]);
     command.args(args);
     match command.output() {
         Ok(out) => out.status.success(),
@@ -1187,34 +1188,39 @@ fn run_recover_helper(args: &[&str]) -> bool {
     }
 }
 
-fn recovery_open_blocking() -> bool {
-    if !network_switch::recovery_lock_acquire() {
+fn recovery_helper_budget(timeout_secs: Option<u64>) -> u64 {
+    timeout_secs.unwrap_or(8).clamp(1, 8)
+}
+
+fn recovery_open_blocking(timeout_secs: u64) -> bool {
+    let Some(token) = network_switch::recovery_lock_acquire_owned() else {
         return false;
-    }
-    if run_recover_helper(&["open"]) {
+    };
+    if run_recover_helper(&["open"], timeout_secs) {
         true
     } else {
-        network_switch::recovery_lock_release();
+        network_switch::recovery_lock_abandon(token);
         false
     }
 }
 
 fn close_recovery_exception_quiet() {
-    let _ = run_recover_helper(&["close"]);
+    let _ = run_recover_helper(&["close"], 8);
 }
 
 fn recovery_close_blocking(release_lock: bool) {
     close_recovery_exception_quiet();
     if release_lock {
-        network_switch::recovery_lock_release();
+        network_switch::recovery_lock_release_owned();
     }
 }
 
 /// Open a scoped API exception without touching the kill switch. Serialized
 /// with path-adapt. Failure leaves the firewall up and returns no script output.
 #[tauri::command]
-async fn recovery_open() -> ConnectResult {
-    let ok = tauri::async_runtime::spawn_blocking(recovery_open_blocking)
+async fn recovery_open(timeout_secs: Option<u64>) -> ConnectResult {
+    let secs = recovery_helper_budget(timeout_secs);
+    let ok = tauri::async_runtime::spawn_blocking(move || recovery_open_blocking(secs))
         .await
         .unwrap_or(false);
     recover_result(ok)
@@ -1333,11 +1339,11 @@ fn write_recover_request(config: &WgTunnelConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn recover_wireguard_blocking(app: AppHandle, config: WgTunnelConfig) -> bool {
+fn recover_wireguard_blocking(app: AppHandle, config: WgTunnelConfig, timeout_secs: u64) -> bool {
     if write_recover_request(&config).is_err() {
         return false;
     }
-    if !run_recover_helper(&["apply"]) {
+    if !run_recover_helper(&["apply"], timeout_secs) {
         return false;
     }
     let _ = APP_HANDLE_FOR_RECOVER.set(app);
@@ -1348,10 +1354,17 @@ fn recover_wireguard_blocking(app: AppHandle, config: WgTunnelConfig) -> bool {
 /// Replace the WireGuard peer while the kill switch, sudoers, and helpers stay.
 /// Script output is ignored so a server address cannot reach the UI.
 #[tauri::command]
-async fn recover_wireguard(app: AppHandle, config: WgTunnelConfig) -> ConnectResult {
-    let ok = tauri::async_runtime::spawn_blocking(move || recover_wireguard_blocking(app, config))
-        .await
-        .unwrap_or(false);
+async fn recover_wireguard(
+    app: AppHandle,
+    config: WgTunnelConfig,
+    timeout_secs: Option<u64>,
+) -> ConnectResult {
+    let secs = recovery_helper_budget(timeout_secs);
+    let ok = tauri::async_runtime::spawn_blocking(move || {
+        recover_wireguard_blocking(app, config, secs)
+    })
+    .await
+    .unwrap_or(false);
     recover_result(ok)
 }
 
@@ -2087,6 +2100,7 @@ IFACE=""
 ENGINE=""
 RUNTIME_DIR="$(dirname "$IFACE_FILE")"
 install -d -m 0755 "$RUNTIME_DIR"
+rm -f "$RUNTIME_DIR/fresh-read"
 
 {endpoint_fns}
 
@@ -2756,9 +2770,12 @@ esac
 FRESH_EP=""
 FRESH_STEALTH=""
 STEALTH_BOUND_NOW=""
-_fresh="$(maybe_fresh_lines "$NEW_GW" "$NEW_GW_IF" || true)"
-FRESH_EP="$(printf '%s\n' "$_fresh" | sed -n '2p')"
-FRESH_STEALTH="$(printf '%s\n' "$_fresh" | sed -n '3p')"
+_fresh="$(maybe_fresh_lines "$NEW_GW" "$NEW_GW_IF" "$NEW_SRC" || true)"
+_fresh_code="$(printf '%s\n' "$_fresh" | sed -n '1p')"
+if [[ "$_fresh_code" == "200" ]]; then
+  FRESH_EP="$(printf '%s\n' "$_fresh" | sed -n '2p')"
+  FRESH_STEALTH="$(printf '%s\n' "$_fresh" | sed -n '3p')"
+fi
 apply_endpoint_choice
 if [[ ! "$CHOOSE_IP" =~ ^([0-9]{{1,3}}\.){{3}}[0-9]{{1,3}}$ || "$CHOOSE_IP" == "127.0.0.1" ]]; then
   echo "ok path-adapt"
@@ -2949,7 +2966,7 @@ done
 safe_stop_pid_file "$PID_FILE" "wireguard-go"
 rm -f /var/run/wireguard/*.sock 2>/dev/null || true
 safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
-rm -f "$IFACE_FILE" "$META_FILE" "$STATE_DIR/stealth-roam"
+rm -f "$IFACE_FILE" "$META_FILE" "$STATE_DIR/stealth-roam" "$STATE_DIR/fresh-read"
 if [[ -f "$DNS_BACKUP" ]]; then
   cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
 fi
@@ -3283,7 +3300,7 @@ rm -f /var/run/wireguard/*.sock 2>/dev/null || true
 # Stop stealth sidecar
 safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
 
-rm -f "$IFACE_FILE" "$META_FILE"
+rm -f "$IFACE_FILE" "$META_FILE" "$(dirname "$IFACE_FILE")/fresh-read"
 
 # Restore DNS
 if [[ -f "$DNS_BACKUP" ]]; then

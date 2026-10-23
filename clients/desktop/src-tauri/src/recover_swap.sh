@@ -373,6 +373,7 @@ recovery_apply() {
 
   dir="$(recovery_state_dir)" || return 1
   STATE_DIR="$dir"
+  clear_fresh_state
   read -r gw gif < <(detect_underlay_pair || true)
   recovery_is_ipv4 "$gw" || return 1
   recovery_valid_iface "$gif" || return 1
@@ -455,6 +456,7 @@ recovery_apply() {
 
   recovery_update_meta "$dns"
   recovery_mark_pin_kept
+  clear_fresh_state
   recovery_close >/dev/null
   printf 'ok\n'
 }
@@ -467,6 +469,10 @@ recovery_main() {
     expire-after) recovery_expire_after "${2:-}" "${3:-}" ;;
     apply)
       if ! recovery_apply; then
+        if dir="$(recovery_state_dir 2>/dev/null || true)" && [[ -n "$dir" ]]; then
+          STATE_DIR="$dir"
+          clear_fresh_state
+        fi
         recovery_close >/dev/null || true
         return 1
       fi

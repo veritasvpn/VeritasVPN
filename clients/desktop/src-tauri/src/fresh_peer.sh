@@ -201,7 +201,7 @@ fresh_state_value() {
 save_fresh_state() {
   local net="$1" at="$2" step="$3" ep="$4" stealth="$5" file="" tmp=""
   file="$(fresh_state_file 2>/dev/null || true)" || return 0
-  [[ "$net" =~ ^[A-Za-z0-9_.:|-]{1,80}$ ]] || return 0
+  [[ "$net" =~ ^[A-Za-z0-9_.:|-]{1,128}$ ]] || return 0
   [[ "$at" =~ ^[0-9]+$ ]] || at=0
   [[ "$step" =~ ^[0-9]+$ ]] || step=0
   [[ "$ep" =~ ^[A-Za-z0-9.-]+:[0-9]{1,5}$ ]] || ep=""
@@ -213,12 +213,81 @@ save_fresh_state() {
   chmod 600 "$file" 2>/dev/null || true
 }
 
-# One fresh read per network change, then 30s, 60s, 120s, and 5 minute gaps.
-# A skip reuses the cached endpoints for this network. A failed read clears them.
+clear_fresh_state() {
+  local file=""
+  file="$(fresh_state_file 2>/dev/null || true)" || return 0
+  [[ -n "$file" ]] && rm -f "$file"
+}
+
+fresh_is_private() {
+  local ip="$1"
+  [[ "$ip" =~ ^10\.([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] && return 0
+  [[ "$ip" =~ ^192\.168\.([0-9]{1,3}\.)[0-9]{1,3}$ ]] && return 0
+  [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\.([0-9]{1,3}\.)[0-9]{1,3}$ ]] && return 0
+  return 1
+}
+
+# gw|iface|src|mac. A missing source or MAC is its own value, so a later
+# DHCP address or neighbor entry does not keep the previous network's key.
+fresh_network_key() {
+  local gw="${1:-}" gif="${2:-}" src="${3:-}" mac="${4:-}"
+  [[ "$gw" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || gw="-"
+  [[ "$gif" =~ ^[A-Za-z0-9_.:-]{1,15}$ ]] || gif="-"
+  [[ "$src" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || src="-"
+  mac="$(printf '%s' "$mac" | tr 'A-F' 'a-f')"
+  [[ "$mac" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] || mac="-"
+  printf '%s|%s|%s|%s' "$gw" "$gif" "$src" "$mac"
+}
+
+gateway_mac() {
+  local gw="${1:-}" gif="${2:-}" mac=""
+  [[ "$gw" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 0
+  [[ "$gif" =~ ^[A-Za-z0-9_.:-]{1,15}$ ]] || gif=""
+  if [[ -n "$gif" ]]; then
+    mac="$(ip neigh show "$gw" dev "$gif" 2>/dev/null | awk '
+      { for (i = 1; i <= NF; i++) if ($i == "lladdr") { print $(i + 1); exit } }' || true)"
+  fi
+  if [[ -z "$mac" ]]; then
+    mac="$(ip neigh show "$gw" 2>/dev/null | awk '
+      { for (i = 1; i <= NF; i++) if ($i == "lladdr") { print $(i + 1); exit } }' || true)"
+  fi
+  mac="$(printf '%s' "$mac" | tr 'A-F' 'a-f')"
+  [[ "$mac" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] || return 0
+  printf '%s' "$mac"
+}
+
+# A backed-off read is not a fresh read. Private endpoints are omitted so a
+# home LAN address cannot be installed on another network during the backoff.
+fresh_cached_lines() {
+  local ep="${1:-}" st="${2:-}" host=""
+  [[ "$ep" =~ ^[A-Za-z0-9.-]+:[0-9]{1,5}$ ]] || ep=""
+  [[ "$st" =~ ^[A-Za-z0-9.-]+:[0-9]{1,5}$ ]] || st=""
+  host="${ep%%:*}"
+  if [[ -n "$ep" ]] && fresh_is_private "$host"; then
+    ep=""
+  fi
+  host="${st%%:*}"
+  if [[ -n "$st" ]] && fresh_is_private "$host"; then
+    st=""
+  fi
+  if [[ -z "$ep" && -z "$st" ]]; then
+    printf '0\n\n\n'
+    return 0
+  fi
+  printf 'cached\n%s\n%s\n' "$ep" "$st"
+}
+
+# One fresh read per underlay, then 30s, 60s, 120s, and 5 minute gaps.
+# The underlay is gateway, interface, source address, and gateway MAC.
+# Only a real 200 is a fresh read. A skip never returns a private endpoint.
 maybe_fresh_lines() {
-  local gw="${1:-}" gif="${2:-}" live="${1}|${2}"
+  local gw="${1:-}" gif="${2:-}" src="${3:-}" mac="${4:-}" live=""
   local stored_net="" stored_at="" stored_step="" stored_ep="" stored_stealth=""
   local now="" decision="" next="" lines="" code="" ep="" st=""
+  if [[ -z "$mac" ]]; then
+    mac="$(gateway_mac "$gw" "$gif")"
+  fi
+  live="$(fresh_network_key "$gw" "$gif" "$src" "$mac")"
   stored_net="$(fresh_state_value network)"
   stored_at="$(fresh_state_value at)"
   stored_step="$(fresh_state_value step)"
@@ -227,9 +296,7 @@ maybe_fresh_lines() {
   now="$(date +%s 2>/dev/null || echo 0)"
   read -r decision next < <(fresh_due "$stored_net" "$stored_at" "$stored_step" "$live" "$now")
   if [[ "$decision" == skip ]]; then
-    [[ "$stored_ep" =~ ^[A-Za-z0-9.-]+:[0-9]{1,5}$ ]] || stored_ep=""
-    [[ "$stored_stealth" =~ ^[A-Za-z0-9.-]+:[0-9]{1,5}$ ]] || stored_stealth=""
-    printf '200\n%s\n%s\n' "$stored_ep" "$stored_stealth"
+    fresh_cached_lines "$stored_ep" "$stored_stealth"
     return 0
   fi
   [[ "$next" =~ ^[0-9]+$ ]] || next=0
