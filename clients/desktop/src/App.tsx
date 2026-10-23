@@ -31,6 +31,7 @@ import {
   type PurchaseHistoryItem,
 } from "./billing";
 import { AUTH_API } from "./config";
+import { classifyPeerCheck, displayStatus, peerGoneAction } from "./reconnectPolicy";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
 import {
   advanceBlocked,
@@ -301,7 +302,7 @@ function formatConnectError(err: unknown, wantedStealth: boolean): string {
     }
     return "Kill switch could not be enabled. Connect was cancelled so traffic stays unprotected only while you fix it.";
   }
-  return raw || "Connection failed";
+  return displayStatus(raw) || "Connection failed";
 }
 
 function isStickyStatusMessage(msg: string): boolean {
@@ -990,6 +991,7 @@ function App() {
   const hadInterfaceUpRef = useRef(false);
   const reconnectAttemptRef = useRef(0);
   const reconnectingRef = useRef(false);
+  const attemptReconnectRef = useRef<(opts?: { once?: boolean }) => Promise<void>>(async () => {});
   const reconnectTimerRef = useRef<number | null>(null);
   const settingsCogRef = useRef<HTMLButtonElement>(null);
   const peerIdRef = useRef("");
@@ -1147,8 +1149,9 @@ function App() {
   }, []);
 
   const showStatus = useCallback((msg: string, sticky = false) => {
-    setStatusSticky(sticky || isStickyStatusMessage(msg));
-    setStatusMsg(msg);
+    const shown = displayStatus(msg);
+    setStatusSticky(sticky || isStickyStatusMessage(shown));
+    setStatusMsg(shown);
   }, []);
 
   useEffect(() => {
@@ -1638,17 +1641,18 @@ function App() {
   }, [tunnelMode, peerId, clearReconnectTimer, deletePeer]);
   handleDisconnectRef.current = handleDisconnect;
 
-  const attemptReconnect = useCallback(async () => {
+  const attemptReconnect = useCallback(async (opts?: { once?: boolean }) => {
     if (reconnectingRef.current) return;
     if (userDisconnectedRef.current || !subscriptionActiveRef.current) return;
     if (connectingRef.current) return;
 
+    const once = opts?.once === true;
     reconnectingRef.current = true;
     setReconnecting(true);
     setStatusMsg("Reconnecting…");
 
     const attempt = reconnectAttemptRef.current;
-    const delay = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
+    const delay = once ? 0 : RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
 
     clearReconnectTimer();
     reconnectTimerRef.current = window.setTimeout(async () => {
@@ -1680,6 +1684,10 @@ function App() {
         reconnectingRef.current = false;
         setReconnecting(false);
         setStatusMsg("");
+      } else if (once) {
+        // One create. Leave the friendly error from connect and do not retry.
+        reconnectingRef.current = false;
+        setReconnecting(false);
       } else {
         reconnectAttemptRef.current = Math.min(attempt + 1, RECONNECT_BACKOFF_MS.length - 1);
         reconnectingRef.current = false;
@@ -1692,6 +1700,7 @@ function App() {
       }
     }, delay);
   }, [clearReconnectTimer, connectVpn, deletePeer]);
+  attemptReconnectRef.current = attemptReconnect;
 
   useEffect(() => {
     blockedDismissedRef.current = blockedDismissed;
@@ -1819,38 +1828,102 @@ function App() {
       return;
     }
     let cancelled = false;
+    let peerCheckInFlight = false;
     const pollPeers = async () => {
       try {
         const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`);
-        if (!response.ok || cancelled) return;
-        const data = (await response.json()) as { peers?: PeerInfo[] };
-        if (cancelled || !Array.isArray(data.peers)) return;
-        const match = data.peers.find((p) => p.id === peerIdRef.current);
-        if (match && typeof match.dns_blocked_count === "number") {
-          setDnsBlockedCount(match.dns_blocked_count);
-          setDnsBlockedBaseline((prev) => (prev === null ? match.dns_blocked_count! : prev));
-        }
-        if (match) {
-          setShieldBlocks(readBlocks(match.shield_blocks));
-          const plan = planShieldNotices({
-            incoming: readNotices(match.shield_notices),
-            seen: noticeSeenRef.current,
-            prefs: readShieldNoticePrefs(),
-            flags: shieldFlagsRef.current,
-            nowMs: Date.now(),
-            lastSentAtMs: noticeSentAtRef.current,
-          });
-          noticeSeenRef.current = plan.seen;
-          noticeSentAtRef.current = plan.lastSentAtMs;
-          if (plan.banner) setShieldBanner(plan.banner);
-          if (plan.notification) {
-            void sendShieldNotification(plan.notification.title, plan.notification.body).then((shown) => {
-              if (!shown && plan.notification) setShieldBanner(plan.notification.body);
-            });
+        if (response.ok && !cancelled) {
+          const data = (await response.json()) as { peers?: PeerInfo[] };
+          if (!cancelled && Array.isArray(data.peers)) {
+            const match = data.peers.find((p) => p.id === peerIdRef.current);
+            if (match && typeof match.dns_blocked_count === "number") {
+              setDnsBlockedCount(match.dns_blocked_count);
+              setDnsBlockedBaseline((prev) => (prev === null ? match.dns_blocked_count! : prev));
+            }
+            if (match) {
+              setShieldBlocks(readBlocks(match.shield_blocks));
+              const plan = planShieldNotices({
+                incoming: readNotices(match.shield_notices),
+                seen: noticeSeenRef.current,
+                prefs: readShieldNoticePrefs(),
+                flags: shieldFlagsRef.current,
+                nowMs: Date.now(),
+                lastSentAtMs: noticeSentAtRef.current,
+              });
+              noticeSeenRef.current = plan.seen;
+              noticeSentAtRef.current = plan.lastSentAtMs;
+              if (plan.banner) setShieldBanner(plan.banner);
+              if (plan.notification) {
+                void sendShieldNotification(plan.notification.title, plan.notification.body).then((shown) => {
+                  if (!shown && plan.notification) setShieldBanner(plan.notification.body);
+                });
+              }
+            }
           }
         }
       } catch (err) {
-        if (err instanceof SessionExpiredError) expireAndReturnToSignIn();
+        if (err instanceof SessionExpiredError) {
+          expireAndReturnToSignIn();
+          return;
+        }
+      }
+      if (cancelled || !connectedRef.current || !peerIdRef.current) return;
+      if (userDisconnectedRef.current || !subscriptionActiveRef.current) return;
+      if (peerCheckInFlight) return;
+      peerCheckInFlight = true;
+      try {
+        let status: number | null = null;
+        let networkError = false;
+        let available = false;
+        try {
+          const helper = await invoke<{ available: boolean; status: number; network_error: boolean }>(
+            "check_current_peer",
+          );
+          available = helper.available;
+          status = helper.status;
+          networkError = helper.network_error;
+        } catch {
+          available = false;
+          networkError = true;
+        }
+        // A helper timeout is a network error. Do not replace it with a second
+        // request that might also time out and get misread as peer-gone.
+        if (!available) {
+          const controller = new AbortController();
+          const timer = window.setTimeout(() => controller.abort(), 4000);
+          const pending = fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${peerIdRef.current}`, {
+            signal: controller.signal,
+          });
+          try {
+            const res = await Promise.race([
+              pending,
+              new Promise<Response>((_, reject) => {
+                window.setTimeout(() => reject(new Error("timeout")), 4000);
+              }),
+            ]);
+            status = res.status;
+            networkError = false;
+          } catch (err) {
+            pending.catch((late) => {
+              if (late instanceof SessionExpiredError) expireAndReturnToSignIn();
+            });
+            if (err instanceof SessionExpiredError) {
+              expireAndReturnToSignIn();
+              return;
+            }
+            status = 0;
+            networkError = true;
+          } finally {
+            window.clearTimeout(timer);
+          }
+        }
+        if (cancelled || !connectedRef.current) return;
+        const kind = classifyPeerCheck(status, networkError);
+        if (peerGoneAction(kind === "gone", reconnectingRef.current || connectingRef.current) === "create") {
+          void attemptReconnectRef.current({ once: true });
+        }
+      } finally {
+        peerCheckInFlight = false;
       }
     };
     void pollPeers();
