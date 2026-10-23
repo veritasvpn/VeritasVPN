@@ -29,7 +29,10 @@ export function stepCheck(prev, ok, nowMs) {
       send: state.alerted ? "recovery" : null,
     };
   }
-  const failures = state.consecutiveFailures + 1;
+  // Stay at the alert threshold. A long outage must not change the stored
+  // counter every minute. The four-hour repeat reads lastAlertMs, which moves
+  // only when a message is actually sent.
+  const failures = Math.min(state.consecutiveFailures + 1, FAIL_THRESHOLD);
   const firstAlert = failures >= FAIL_THRESHOLD && !state.alerted;
   const dueRepeat = state.alerted && nowMs - state.lastAlertMs >= REPEAT_MS;
   const send = firstAlert || dueRepeat;
@@ -41,6 +44,47 @@ export function stepCheck(prev, ok, nowMs) {
     },
     send: send ? (firstAlert ? "alert" : "repeat") : null,
   };
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map((item) => canonicalize(item));
+  if (value && Object.prototype.toString.call(value) === "[object Object]") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      if (value[key] !== undefined) out[key] = canonicalize(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+// Key order in KV is not significant. Compare a stable encoding so a healthy
+// minute, or a minute of an ongoing outage, does not burn a put.
+export function stableStringify(value) {
+  return JSON.stringify(canonicalize(value ?? null));
+}
+
+export function advanceChecks(previous, probes, nowMs) {
+  const prev = previous && typeof previous === "object" && !Array.isArray(previous) ? previous : {};
+  const next = { ...prev };
+  const sends = [];
+  for (const check of CHECKS) {
+    const decision = stepCheck(prev[check] || emptyCheck(), probes?.[check] === true, nowMs);
+    next[check] = decision.next;
+    if (decision.send) sends.push({ check, kind: decision.send });
+  }
+  return { next, sends };
+}
+
+export async function commitUptimeState(kv, key, previous, next) {
+  if (stableStringify(previous ?? {}) === stableStringify(next ?? {})) return false;
+  try {
+    await kv.put(key, JSON.stringify(next));
+    return true;
+  } catch (error) {
+    console.error("veritas-uptime: UPTIME_STATE put failed; the new check state was not saved", error);
+    return false;
+  }
 }
 
 export function messageFor(check, kind) {
