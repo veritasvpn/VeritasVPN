@@ -9,6 +9,16 @@ export function classifyPeerCheck(status: number | null | undefined, networkErro
   return "network";
 }
 
+/** Recovery opens the API exception on every try. Stop after this many. */
+export const RECOVERY_MAX_ATTEMPTS = 3;
+
+/** `attempt` is the zero-based index of the try that just failed. */
+export function recoveryRetryAction(attempt: number): "retry" | "stop" {
+  if (!Number.isFinite(attempt) || attempt < 0) return "stop";
+  if (attempt + 1 >= RECOVERY_MAX_ATTEMPTS) return "stop";
+  return "retry";
+}
+
 /**
  * The latch stays until this peer answers 200 or the user connects.
  * A newer handshake does not release it: a recreated peer that still 404s

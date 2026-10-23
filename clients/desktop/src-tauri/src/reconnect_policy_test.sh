@@ -167,6 +167,36 @@ assert_eq "$(fresh_due "gw|eth0" 1000 3 "gw|eth0" 1299)" "skip" "step 3 waits 5 
 assert_eq "$(fresh_due "gw|eth0" 1000 3 "gw|eth0" 1300)" "read 3" "later reads stay at 5 min"
 assert_eq "$(fresh_due "gw|eth0" 1000 3 "other|eth1" 1001)" "read 0" "network change reads immediately"
 
+home_key="$(fresh_network_key "192.168.1.1" "wlan0" "192.168.1.50" "aa:bb:cc:dd:ee:ff")"
+other_src="$(fresh_network_key "192.168.1.1" "wlan0" "10.0.0.8" "aa:bb:cc:dd:ee:ff")"
+other_mac="$(fresh_network_key "192.168.1.1" "wlan0" "192.168.1.50" "11:22:33:44:55:66")"
+assert_eq "$(fresh_due "$home_key" 1000 0 "$other_src" 1001)" "read 0" "same gateway and iface with a different src re-reads"
+assert_eq "$(fresh_due "$home_key" 1000 0 "$other_mac" 1001)" "read 0" "same gateway and iface with a different mac re-reads"
+assert_eq "$(fresh_due "$home_key" 1000 0 "$home_key" 1010)" "skip" "same src and mac waits"
+
+private_skip="$(fresh_cached_lines "192.168.0.6:51820" "192.168.0.6:8443")"
+assert_eq "$private_skip" "0" "skip drops a private endpoint"
+if printf '%s\n' "$private_skip" | grep -q '192\.168'; then
+  fail "skip yielded a private endpoint"
+fi
+public_skip="$(fresh_cached_lines "203.0.113.10:51820" "203.0.113.10:8443")"
+assert_eq "$(printf '%s\n' "$public_skip" | sed -n '1p')" "cached" "backed-off read is not a fresh 200"
+if printf '%s\n' "$public_skip" | grep -qx '200'; then
+  fail "cached read uses the fresh code"
+fi
+
+fresh_tmp="$(mktemp -d)"
+STATE_DIR="$fresh_tmp"
+fresh_now="$(date +%s)"
+save_fresh_state "$home_key" "$fresh_now" 0 "192.168.0.6:51820" "192.168.0.6:8443"
+skipped="$(maybe_fresh_lines "192.168.1.1" "wlan0" "192.168.1.50" "aa:bb:cc:dd:ee:ff")"
+rm -rf "$fresh_tmp"
+unset STATE_DIR
+if printf '%s\n' "$skipped" | grep -q '192\.168\.0\.6'; then
+  fail "a skipped read returned the cached LAN endpoint"
+fi
+assert_eq "$(printf '%s\n' "$skipped" | sed -n '1p')" "0" "a skipped private cache is not a fresh read"
+
 # shellcheck disable=SC1091
 source "$ROOT/recover_swap.sh"
 routes="$(recovery_route_lines "10.7.0.2/32" "0.0.0.0/0,10.8.0.0/24,::/0")"
@@ -229,6 +259,24 @@ if grep -q 'last_handshake_sec > latchedAtSecRef' "$app"; then
 fi
 if ! grep -q 'RECOVERY_REQUEST_MS = 10_000' "$app"; then
   fail "recovery requests have no 10s deadline"
+fi
+if ! grep -q 'rm -f "$RUNTIME_DIR/fresh-read"' "$lib"; then
+  fail "connect does not clear the fresh-read cache"
+fi
+if ! grep -q 'STATE_DIR/fresh-read' "$lib"; then
+  fail "teardown does not clear the fresh-read cache"
+fi
+if ! grep -q 'dirname "$IFACE_FILE")/fresh-read' "$lib"; then
+  fail "disconnect does not clear the fresh-read cache"
+fi
+if ! grep -q 'clear_fresh_state' "$ROOT/recover_swap.sh"; then
+  fail "recovery does not clear the fresh-read cache"
+fi
+if ! grep -q '_fresh_code" == "200"' "$lib"; then
+  fail "path-adapt treats a cached read as fresh"
+fi
+if ! grep -q 'recoveryRetryAction' "$app"; then
+  fail "recovery retries are not capped"
 fi
 
 python3 - "$app" <<'PY'

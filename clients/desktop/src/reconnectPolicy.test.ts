@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { classifyPeerCheck, displayStatus, peerGoneAction, peerGoneLatchHeld } from "./reconnectPolicy";
+import {
+  classifyPeerCheck,
+  displayStatus,
+  peerGoneAction,
+  peerGoneLatchHeld,
+  recoveryRetryAction,
+} from "./reconnectPolicy";
 
 describe("peer check", () => {
   it("treats only 404 and 410 as peer gone", () => {
@@ -34,6 +40,14 @@ describe("peer-gone create", () => {
     expect(peerGoneAction(true, false, true)).toBe("latched");
     expect(peerGoneAction(true, true, true)).toBe("latched");
     expect(peerGoneAction(false, false, true)).toBe("ignore");
+  });
+
+  it("stops recovery retries after three attempts", () => {
+    expect(recoveryRetryAction(0)).toBe("retry");
+    expect(recoveryRetryAction(1)).toBe("retry");
+    expect(recoveryRetryAction(2)).toBe("stop");
+    expect(recoveryRetryAction(3)).toBe("stop");
+    expect(recoveryRetryAction(Number.NaN)).toBe("stop");
   });
 
   it("does not recreate again after a handshake when the new peer still 404s", () => {

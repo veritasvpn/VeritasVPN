@@ -31,7 +31,7 @@ import {
   type PurchaseHistoryItem,
 } from "./billing";
 import { AUTH_API } from "./config";
-import { classifyPeerCheck, displayStatus, peerGoneAction, peerGoneLatchHeld } from "./reconnectPolicy";
+import { classifyPeerCheck, displayStatus, peerGoneAction, peerGoneLatchHeld, recoveryRetryAction } from "./reconnectPolicy";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
 import {
   advanceBlocked,
@@ -203,15 +203,16 @@ function writeLocalFlag(key: string, enabled: boolean) {
 }
 
 /** Billing, peer create, and peer delete during a kill-switch recovery. */
-async function fetchRecovery(url: string, init: RequestInit = {}): Promise<Response> {
+async function fetchRecovery(url: string, init: RequestInit = {}, budgetMs = RECOVERY_REQUEST_MS): Promise<Response> {
+  const limit = Math.max(1, Math.min(RECOVERY_REQUEST_MS, budgetMs));
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), RECOVERY_REQUEST_MS);
+  const timer = window.setTimeout(() => controller.abort(), limit);
   const pending = fetchWithAuth(url, { ...init, signal: controller.signal });
   try {
     return await Promise.race([
       pending,
       new Promise<Response>((_, reject) => {
-        window.setTimeout(() => reject(new DOMException("timeout", "AbortError")), RECOVERY_REQUEST_MS);
+        window.setTimeout(() => reject(new DOMException("timeout", "AbortError")), limit);
       }),
     ]);
   } catch (err) {
@@ -1018,6 +1019,9 @@ function App() {
   const reconnectingRef = useRef(false);
   const attemptReconnectRef = useRef<(opts?: { once?: boolean }) => Promise<void>>(async () => {});
   const recoveryActiveRef = useRef(false);
+  const recoveryAttemptRef = useRef(false);
+  const recoveryGenerationRef = useRef(0);
+  const recoveryGaveUpRef = useRef(false);
   const peerGoneLatchedRef = useRef(false);
   const reconnectTimerRef = useRef<number | null>(null);
   const settingsCogRef = useRef<HTMLButtonElement>(null);
@@ -1189,10 +1193,14 @@ function App() {
   useEffect(() => {
     if (!connecting) return;
     const timer = window.setTimeout(async () => {
-      if (!connecting) return;
-      if (recoveryActiveRef.current) {
-        void invoke<ConnectResult>("recovery_close", { releaseLock: true }).catch(() => undefined);
-        recoveryActiveRef.current = false;
+      if (!connectingRef.current && !recoveryAttemptRef.current) return;
+      if (recoveryAttemptRef.current) {
+        if (recoveryActiveRef.current) {
+          recoveryGenerationRef.current += 1;
+          recoveryActiveRef.current = false;
+          recoveryGaveUpRef.current = true;
+          void invoke<ConnectResult>("recovery_close", { releaseLock: true }).catch(() => undefined);
+        }
         setStatusSticky(true);
         setStatusMsg("Tap to reconnect");
         return;
@@ -1459,11 +1467,11 @@ function App() {
   }, []);
   clearReconnectTimerRef.current = clearReconnectTimer;
 
-  const deletePeer = useCallback(async (id: string, recovery = false) => {
+  const deletePeer = useCallback(async (id: string, recovery = false, budgetMs = RECOVERY_REQUEST_MS) => {
     if (!id) return;
     if (recovery) {
       try {
-        await fetchRecovery(`${AUTH_API}/api/v1/wg/peers/${id}`, { method: "DELETE" });
+        await fetchRecovery(`${AUTH_API}/api/v1/wg/peers/${id}`, { method: "DELETE" }, budgetMs);
       } catch {
         // best effort cleanup
       }
@@ -1491,7 +1499,17 @@ function App() {
     const choice: StealthChoice = linuxDesktop ? stealthModeRef.current : "udp";
     const wantedStealth = choice === "stealth";
     if (!recover) showStatus("", false);
-    if (recover) recoveryActiveRef.current = true;
+    const generation = recover ? recoveryGenerationRef.current + 1 : recoveryGenerationRef.current;
+    const startedAt = Date.now();
+    const budgetLeft = () => CONNECT_TIMEOUT_MS - (Date.now() - startedAt);
+    const recoveryOwned = () => recover && recoveryGenerationRef.current === generation;
+    const helperSeconds = () => Math.max(1, Math.min(8, Math.floor(budgetLeft() / 1000)));
+    if (recover) {
+      recoveryGenerationRef.current = generation;
+      recoveryActiveRef.current = true;
+      recoveryAttemptRef.current = true;
+      recoveryGaveUpRef.current = false;
+    }
     connectingRef.current = true;
     setConnecting(true);
     setTransport(choice === "stealth" ? "stealth" : "");
@@ -1502,13 +1520,19 @@ function App() {
     let usedStealth = false;
     try {
       if (recover) {
-        const opened = await invoke<ConnectResult>("recovery_open");
-        if (!opened.success) return false;
+        if (!recoveryOwned() || budgetLeft() < 1000) return false;
+        const opened = await invoke<ConnectResult>("recovery_open", { timeoutSecs: helperSeconds() });
+        if (!recoveryOwned()) {
+          await invoke<ConnectResult>("recovery_close", { releaseLock: false }).catch(() => undefined);
+          return false;
+        }
+        if (!opened.success || budgetLeft() < 1000) return false;
       }
       // Drop any previous peer before registering a new one (reconnect + stale sessions).
       const priorPeer = peerIdRef.current;
       if (priorPeer) {
-        await deletePeer(priorPeer, recover);
+        if (recover && (!recoveryOwned() || budgetLeft() < 1000)) return false;
+        await deletePeer(priorPeer, recover, budgetLeft());
         if (peerIdRef.current === priorPeer) {
           setPeerId("");
         }
@@ -1518,7 +1542,8 @@ function App() {
         throw new Error("Stealth mode is Linux-only in this build. Choose UDP only to connect with Direct UDP.");
       }
 
-      const billingResponse = await (recover ? fetchRecovery : fetchWithAuth)(`${AUTH_API}/api/v1/billing/status`);
+      if (recover && (!recoveryOwned() || budgetLeft() < 1000)) return false;
+      const billingResponse = await (recover ? fetchRecovery(`${AUTH_API}/api/v1/billing/status`, {}, budgetLeft()) : fetchWithAuth(`${AUTH_API}/api/v1/billing/status`));
       const billing = (await billingResponse.json()) as BillingStatus;
       if (!billingResponse.ok || !billing.is_premium) {
         setSubscriptionActive(false);
@@ -1535,7 +1560,8 @@ function App() {
       const keys = await invoke<KeyPair>("generate_wg_keys");
       const deviceId = getOrCreateDeviceId();
       const metadata = await deviceMetadataForPeer();
-      const res = await (recover ? fetchRecovery : fetchWithAuth)(`${AUTH_API}/api/v1/wg/peers`, {
+      if (recover && (!recoveryOwned() || budgetLeft() < 1000)) return false;
+      const peerInit: RequestInit = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1547,7 +1573,10 @@ function App() {
           client_version: metadata.client_version,
           ...shieldRequest(shieldFlagsRef.current),
         }),
-      });
+      };
+      const res = recover
+        ? await fetchRecovery(`${AUTH_API}/api/v1/wg/peers`, peerInit, budgetLeft())
+        : await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`, peerInit);
       const peer = (await res.json()) as PeerResponse & { code?: string };
       if (!res.ok) {
         if (peer.code?.startsWith("plan_device_limit")) {
@@ -1576,7 +1605,9 @@ function App() {
         useStealth ? peer.stealth_endpoint || "" : "",
         useStealth ? "stealth" : "udp",
       ));
+      if (recover && (!recoveryOwned() || budgetLeft() < 1000)) return false;
       const result = await invoke<ConnectResult>(recover ? "recover_wireguard" : "connect_wireguard", {
+        ...(recover ? { timeoutSecs: helperSeconds() } : {}),
         config: {
           private_key: keys.private_key,
           address: peer.assigned_ip,
@@ -1592,6 +1623,10 @@ function App() {
           stealth_path_prefix: useStealth ? peer.stealth_path_prefix || "" : "",
         },
       });
+      if (recover && !recoveryOwned()) {
+        await invoke<ConnectResult>("recovery_close", { releaseLock: false }).catch(() => undefined);
+        return false;
+      }
       if (!result.success) throw new Error(result.message || "WireGuard connection failed");
       usedStealth = useStealth;
       setTransport(usedStealth ? "stealth" : "udp");
@@ -1619,7 +1654,7 @@ function App() {
       connectPeerRef.current = "";
       if (!recover) setTransport("");
       if (createdPeerId) {
-        await deletePeer(createdPeerId, recover);
+        await deletePeer(createdPeerId, recover, budgetLeft());
       }
       if (err instanceof SessionExpiredError) {
         expireAndReturnToSignIn();
@@ -1631,8 +1666,12 @@ function App() {
       return false;
     } finally {
       if (recover) {
-        await invoke<ConnectResult>("recovery_close").catch(() => undefined);
+        if (recoveryGenerationRef.current === generation) {
+          recoveryGenerationRef.current += 1;
+          await invoke<ConnectResult>("recovery_close", { releaseLock: true }).catch(() => undefined);
+        }
         recoveryActiveRef.current = false;
+        recoveryAttemptRef.current = false;
       }
       const applyStealth = pendingStealthApplyRef.current;
       pendingStealthApplyRef.current = false;
@@ -1652,6 +1691,7 @@ function App() {
     reconnectingRef.current = false;
     setReconnecting(false);
     setStatusSticky(false);
+    recoveryGaveUpRef.current = false;
     peerGoneLatchedRef.current = peerGoneLatchHeld(peerGoneLatchedRef.current, false, true);
     if (linuxDesktop) {
       await invoke<ConnectResult>("recovery_close", { releaseLock: false }).catch(() => undefined);
@@ -1754,7 +1794,7 @@ function App() {
         setReconnecting(false);
         setStatusSticky(false);
         setStatusMsg("");
-      } else if (once) {
+      } else if (once || recoveryGaveUpRef.current || (linuxDesktop && recoveryRetryAction(attempt) === "stop")) {
         reconnectingRef.current = false;
         setReconnecting(false);
         setStatusSticky(true);
@@ -2116,7 +2156,8 @@ function App() {
         reconnectingRef.current = false;
         setReconnecting(false);
         setStatusMsg("");
-      } else if (!userDisconnectedRef.current && subscriptionActiveRef.current) {
+      } else if (!userDisconnectedRef.current && subscriptionActiveRef.current && !recoveryGaveUpRef.current) {
+        reconnectAttemptRef.current = 1;
         setStatusMsg("Reconnecting…");
         void attemptReconnect();
       } else {
