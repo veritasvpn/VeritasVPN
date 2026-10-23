@@ -1,7 +1,8 @@
 # Endpoint and Stealth decisions shared by bring-up and path-adapt.
 # A stored LAN address is never selected just because the underlay shares its /24.
-# Stealth restarts at most once per network, then waits out a cooldown unless the
-# tunnel is receiving bytes or the WireGuard handshake is under 180s.
+# Stealth restarts once per network. That network may retry once more after 30s
+# while unhealthy, and then it stops. A tunnel that is receiving bytes, or whose
+# handshake is under 180s, is not restarted.
 
 is_rfc1918() {
   local ip="$1"
@@ -192,13 +193,15 @@ actual_wstunnel_ip() {
 # Prints "ACTION<TAB>issued<TAB>issued_at<TAB>baseline_rx<TAB>dials".
 # OPEN, DIALING, and FORCE are 1 or 0. Handshake age is in seconds.
 # Received bytes or a handshake under 180s means the tunnel is healthy.
-# A different gateway|interface dials once. The same network waits 30s.
+# A different gateway|interface dials once. That network may retry once more
+# after 30s if it is still unhealthy, and then it stops.
+# DIALS is the number of attempts already made for ISSUED. The counter caps at 2.
 stealth_decide() {
   local live="$1" bound="$2" open="$3" dialing="$4" rx="$5" tx="$6"
   local handshake_sec="$7" now_sec="$8"
   local issued="$9" issued_at="${10}" baseline_rx="${11}" dials="${12}" force="${13}"
   local on_network=0 received=0 handshake_fresh=0 age since
-  local moved=0 unbound=0 stalled=0
+  local moved=0 unbound=0 dials_here=0
 
   [[ "$rx" =~ ^[0-9]+$ ]] || rx=0
   [[ "$tx" =~ ^[0-9]+$ ]] || tx=0
@@ -207,7 +210,11 @@ stealth_decide() {
   [[ "$now_sec" =~ ^[0-9]+$ ]] || now_sec=0
   [[ "$issued_at" =~ ^[0-9]+$ ]] || issued_at=0
   [[ "$dials" =~ ^[0-9]+$ ]] || dials=0
+  if (( dials > 2 )); then
+    dials=2
+  fi
   : "$tx"
+  : "$force"
 
   if [[ -z "$live" ]]; then
     printf 'WAIT\t%s\t%s\t%s\t%s\n' "$issued" "$issued_at" "$baseline_rx" "$dials"
@@ -215,6 +222,9 @@ stealth_decide() {
   fi
 
   [[ -n "$bound" && "$bound" == "$live" ]] && on_network=1
+  if [[ "$issued" == "$live" ]]; then
+    dials_here=$dials
+  fi
   if (( rx > baseline_rx )); then
     received=1
   fi
@@ -226,7 +236,12 @@ stealth_decide() {
   fi
 
   if [[ "$on_network" == 1 && "$open" == 1 && "$dialing" != 1 && ( "$received" == 1 || "$handshake_fresh" == 1 ) ]]; then
-    printf 'HEALTHY\t%s\t%s\t%s\t%s\n' "$live" "$now_sec" "$rx" "$dials"
+    # A healthy sample must not erase the dials already spent on this network.
+    local keep="$dials_here"
+    if (( keep < 1 )); then
+      keep=1
+    fi
+    printf 'HEALTHY\t%s\t%s\t%s\t%s\n' "$live" "$now_sec" "$rx" "$keep"
     return 0
   fi
 
@@ -235,20 +250,27 @@ stealth_decide() {
     since=$(( now_sec - issued_at ))
   fi
   if [[ -n "$issued" && "$issued" == "$live" && "$since" -lt 30 ]]; then
-    printf 'WAIT\t%s\t%s\t%s\t%s\n' "$issued" "$issued_at" "$baseline_rx" "$dials"
+    printf 'WAIT\t%s\t%s\t%s\t%s\n' "$issued" "$issued_at" "$baseline_rx" "$dials_here"
+    return 0
+  fi
+
+  # One change-dial plus one unhealthy retry. Further samples wait for the user.
+  if (( dials_here >= 2 )); then
+    printf 'WAIT\t%s\t%s\t%s\t%s\n' "$issued" "$issued_at" "$baseline_rx" "$dials_here"
     return 0
   fi
 
   [[ -n "$bound" && "$bound" != "$live" ]] && moved=1
   [[ -z "$bound" && "$dialing" != 1 ]] && unbound=1
-  if [[ "$force" == 1 && "$received" != 1 && "$handshake_fresh" != 1 && "$dialing" != 1 ]]; then
-    stalled=1
-  fi
-  if [[ "$moved" == 1 || "$unbound" == 1 || "$stalled" == 1 ]]; then
-    printf 'DIAL\t%s\t%s\t%s\t%s\n' "$live" "$now_sec" "$rx" "$(( dials + 1 ))"
+  if [[ "$moved" == 1 || "$unbound" == 1 ]]; then
+    printf 'DIAL\t%s\t%s\t%s\t%s\n' "$live" "$now_sec" "$rx" "$(( dials_here + 1 ))"
     return 0
   fi
-  printf 'WAIT\t%s\t%s\t%s\t%s\n' "$issued" "$issued_at" "$baseline_rx" "$dials"
+  if [[ "$on_network" == 1 && "$dialing" != 1 && "$received" != 1 && "$handshake_fresh" != 1 && "$dials_here" -eq 1 ]]; then
+    printf 'DIAL\t%s\t%s\t%s\t%s\n' "$live" "$now_sec" "$rx" "$(( dials_here + 1 ))"
+    return 0
+  fi
+  printf 'WAIT\t%s\t%s\t%s\t%s\n' "$issued" "$issued_at" "$baseline_rx" "$dials_here"
 }
 
 resolve_ipv4() {
@@ -269,45 +291,64 @@ resolve_ipv4() {
 }
 
 # Sets CHOOSE_IP, CHOOSE_EP, STEALTH, STEALTH_DIAL, RESOLVED_STEALTH_IP.
-# Requires FRESH_EP, FRESH_STEALTH, ENDPOINT_WAN, STEALTH_REMOTE, ENDPOINT,
-# ENDPOINT_IP, and NEW_SRC. Does not consult a stored LAN field.
+# A failed fresh read never falls back to a stored private endpoint.
 apply_endpoint_choice() {
   local choice kind ep stealth_ep host ip
   STEALTH="${STEALTH_REMOTE:-}"
   STEALTH_DIAL=""
   RESOLVED_STEALTH_IP=""
+  CHOOSE_IP=""
+  CHOOSE_EP=""
   if [[ -z "$STEALTH" ]]; then
     choice="$(choose_underlay "${FRESH_EP:-}" "${ENDPOINT_WAN:-}" "${NEW_SRC:-}")"
     ep="${choice% *}"
     kind="${choice##* }"
     if [[ "$kind" == lan || "$kind" == public ]]; then
+      host="$(host_of "$ep")"
+      if [[ "$kind" == lan ]] || { [[ "$kind" == public ]] && ! is_rfc1918 "$host"; }; then
+        CHOOSE_EP="$ep"
+        CHOOSE_IP="$host"
+        return 0
+      fi
+    fi
+    ep="$(public_endpoint "${ENDPOINT_WAN:-}")"
+    if [[ -z "$ep" ]]; then
+      ep="$(public_endpoint "${ENDPOINT:-}")"
+    fi
+    if [[ -n "$ep" ]]; then
       CHOOSE_EP="$ep"
       CHOOSE_IP="$(host_of "$ep")"
-    else
-      CHOOSE_IP="${ENDPOINT_IP:-}"
-      CHOOSE_EP="${ENDPOINT:-${CHOOSE_IP}:51820}"
-      if [[ -n "$CHOOSE_IP" ]] && is_rfc1918 "$CHOOSE_IP"; then
-        ep="$(public_endpoint "${ENDPOINT_WAN:-}")"
-        if [[ -n "$ep" ]]; then
-          CHOOSE_EP="$ep"
-          CHOOSE_IP="$(host_of "$ep")"
-        fi
-      fi
     fi
     return 0
   fi
 
   stealth_ep="$(choose_stealth "${FRESH_EP:-}" "${FRESH_STEALTH:-}" "$STEALTH" "${ENDPOINT_WAN:-}" "${NEW_SRC:-}")"
   stealth_ep="$(trim_ep "$stealth_ep")"
+  if [[ -n "$stealth_ep" ]]; then
+    host="$(host_of "$stealth_ep")"
+    if is_rfc1918 "$host" && [[ -z "${FRESH_EP:-}" ]]; then
+      stealth_ep=""
+    fi
+  fi
   if [[ -z "$stealth_ep" ]]; then
-    stealth_ep="$STEALTH"
+    host="$(host_of "$STEALTH")"
+    if [[ -n "$host" ]] && ! is_rfc1918 "$host"; then
+      stealth_ep="$STEALTH"
+    fi
+  fi
+  if [[ -z "$stealth_ep" ]]; then
+    return 0
   fi
   host="$(host_of "$stealth_ep")"
   ip="$(resolve_ipv4 "$host")"
-  if [[ -n "$ip" ]]; then
+  if [[ -n "$ip" ]] && { [[ -n "${FRESH_EP:-}" ]] || ! is_rfc1918 "$ip"; }; then
     CHOOSE_IP="$ip"
   else
-    CHOOSE_IP="${ENDPOINT_IP:-}"
+    ep="$(public_endpoint "${ENDPOINT_WAN:-}")"
+    if [[ -n "$ep" ]]; then
+      CHOOSE_IP="$(host_of "$ep")"
+      ip="$CHOOSE_IP"
+    fi
   fi
   CHOOSE_EP="127.0.0.1:41820"
   STEALTH_DIAL="$stealth_ep"

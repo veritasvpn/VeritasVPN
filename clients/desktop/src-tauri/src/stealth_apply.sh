@@ -41,22 +41,49 @@ save_stealth_state() {
   mv "$tmp" "$f"
 }
 
+# Keep one veritas-outside accept for this ip/port/proto and delete the rest,
+# including accepts left behind for a previous server address.
 allow_outside_ip() {
   local ip="$1" port="$2" proto="$3"
+  local keeper="" handle="" line="" spec="" _i
   [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 0
   [[ "$port" =~ ^[0-9]+$ ]] || return 0
   [[ "$proto" == tcp || "$proto" == udp ]] || return 0
   if command -v nft >/dev/null 2>&1 && nft list table inet veritasvpn_killswitch >/dev/null 2>&1; then
-    if ! nft list chain inet veritasvpn_killswitch output 2>/dev/null | awk -v ip="$ip" -v port="$port" -v proto="$proto" '
-      index($0, "ip daddr " ip " ") && index($0, proto " dport " port) && index($0, "accept") { found=1 }
-      END { exit found ? 0 : 1 }
-    '; then
-      nft insert rule inet veritasvpn_killswitch output ip daddr "$ip" "$proto" dport "$port" accept >/dev/null 2>&1 || true
+    keeper="$(nft -a list chain inet veritasvpn_killswitch output 2>/dev/null | awk -v ip="$ip" -v port="$port" -v proto="$proto" '
+      index($0, "comment \"veritas-outside\"") && index($0, "ip daddr " ip " ") && index($0, proto " dport " port) && index($0, "accept") {
+        for (i = 1; i <= NF; i++) if ($i == "handle") { print $(i + 1); exit }
+      }')"
+    [[ "$keeper" =~ ^[0-9]+$ ]] || keeper=""
+    for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+      handle="$(nft -a list chain inet veritasvpn_killswitch output 2>/dev/null | awk -v keep="$keeper" '
+        index($0, "comment \"veritas-outside\"") {
+          h=""
+          for (i = 1; i <= NF; i++) if ($i == "handle") h=$(i+1)
+          if (h ~ /^[0-9]+$/ && h != keep) { print h; exit }
+        }')"
+      [[ "$handle" =~ ^[0-9]+$ ]] || break
+      nft delete rule inet veritasvpn_killswitch output handle "$handle" >/dev/null 2>&1 || break
+    done
+    if [[ -z "$keeper" ]]; then
+      nft insert rule inet veritasvpn_killswitch output ip daddr "$ip" "$proto" dport "$port" accept comment \"veritas-outside\" >/dev/null 2>&1 || true
     fi
   fi
   if command -v iptables >/dev/null 2>&1 && iptables -L VERITASVPN_KILLSWITCH >/dev/null 2>&1; then
-    iptables -C VERITASVPN_KILLSWITCH -d "$ip" -p "$proto" --dport "$port" -j ACCEPT >/dev/null 2>&1 || \
-      iptables -I VERITASVPN_KILLSWITCH 1 -d "$ip" -p "$proto" --dport "$port" -j ACCEPT >/dev/null 2>&1 || true
+    keeper=""
+    while IFS= read -r line; do
+      [[ "$line" == *"comment veritas-outside"* ]] || continue
+      if [[ -z "$keeper" && "$line" == *"-d $ip"* && "$line" == *"-p $proto"* && "$line" == *"dport $port"* ]]; then
+        keeper=1
+        continue
+      fi
+      spec="${line#-A VERITASVPN_KILLSWITCH }"
+      # shellcheck disable=SC2086
+      iptables -D VERITASVPN_KILLSWITCH $spec >/dev/null 2>&1 || true
+    done < <(iptables -S VERITASVPN_KILLSWITCH 2>/dev/null || true)
+    if [[ -z "$keeper" ]]; then
+      iptables -I VERITASVPN_KILLSWITCH 1 -d "$ip" -p "$proto" --dport "$port" -m comment --comment veritas-outside -j ACCEPT >/dev/null 2>&1 || true
+    fi
   fi
 }
 
@@ -111,18 +138,21 @@ start_wstunnel_pinned() {
     esac
   done < <(wstunnel_prepare_line "$dial" "$ip")
   [[ "$url" == wss://* ]] || return 1
+  local wst_log="$STATE_DIR/wstunnel.log"
+  : > "$wst_log" 2>/dev/null || true
+  chmod 600 "$wst_log" 2>/dev/null || true
   stop_wstunnel_pid
   if [[ -n "$sni" && "$sni" =~ ^[A-Za-z0-9.-]+$ ]]; then
     "$WSTUNNEL_BIN" client \
       --tls-sni-override "$sni" \
       --http-upgrade-path-prefix "$STEALTH_PREFIX" \
       -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
-      "$url" >/tmp/veritas-wstunnel.log 2>&1 &
+      "$url" >"$wst_log" 2>&1 &
   else
     "$WSTUNNEL_BIN" client \
       --http-upgrade-path-prefix "$STEALTH_PREFIX" \
       -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
-      "$url" >/tmp/veritas-wstunnel.log 2>&1 &
+      "$url" >"$wst_log" 2>&1 &
   fi
   pid=$!
   echo "$pid" > "$STATE_DIR/wstunnel.pid"
@@ -170,7 +200,7 @@ maybe_restart_stealth() {
   [[ "$now_sec" =~ ^[0-9]+$ ]] || now_sec=0
   load_stealth_state
   line="$(stealth_decide "$live" "$bound" "$open" 0 "$rx" 0 "$hs" "$now_sec" \
-    "$STEALTH_ISSUED" "$STEALTH_ISSUED_AT" "$STEALTH_BASELINE_RX" "$STEALTH_DIALS" 1)"
+    "$STEALTH_ISSUED" "$STEALTH_ISSUED_AT" "$STEALTH_BASELINE_RX" "$STEALTH_DIALS" 0)"
   action="${line%%$'\t'*}"
   issued="$(printf '%s' "$line" | awk -F '\t' '{ print $2 }')"
   issued_at="$(printf '%s' "$line" | awk -F '\t' '{ print $3 }')"
@@ -178,5 +208,7 @@ maybe_restart_stealth() {
   dials="$(printf '%s' "$line" | awk -F '\t' '{ print $5 }')"
   save_stealth_state "$issued" "$issued_at" "$baseline" "$dials"
   [[ "$action" == DIAL ]] || return 0
+  # Record the network before start so a failed dial still counts as this network.
+  STEALTH_BOUND_NOW="$live"
   start_wstunnel_pinned || true
 }

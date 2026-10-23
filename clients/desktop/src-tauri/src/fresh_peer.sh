@@ -46,16 +46,35 @@ read_fresh_lines() {
   [[ -n "$token" && ${#token} -le 4096 ]] || { printf '0\n\n\n'; return 0; }
 
   (
-    local pin=0 nft_handle="" ipt=0 body="" cfg="" code="0" parsed="" ep="" st=""
+    local pin="none" body="" cfg="" code="0" parsed="" ep="" st=""
+    local old_via="" old_dev="" old_src=""
+    delete_fresh_rules() {
+      local handle="" line="" spec="" _i
+      if command -v nft >/dev/null 2>&1 && nft list table inet veritasvpn_killswitch >/dev/null 2>&1; then
+        for _i in 1 2 3 4 5 6 7 8; do
+          handle="$(nft -a list chain inet veritasvpn_killswitch output 2>/dev/null | awk '
+            index($0, "comment \"veritas-fresh\"") {
+              for (i = 1; i <= NF; i++) if ($i == "handle") { print $(i + 1); exit }
+            }')"
+          [[ "$handle" =~ ^[0-9]+$ ]] || break
+          nft delete rule inet veritasvpn_killswitch output handle "$handle" >/dev/null 2>&1 || break
+        done
+      fi
+      if command -v iptables >/dev/null 2>&1 && iptables -L VERITASVPN_KILLSWITCH >/dev/null 2>&1; then
+        while IFS= read -r line; do
+          [[ "$line" == *"comment veritas-fresh"* ]] || continue
+          spec="${line#-A VERITASVPN_KILLSWITCH }"
+          # shellcheck disable=SC2086
+          iptables -D VERITASVPN_KILLSWITCH $spec >/dev/null 2>&1 || true
+        done < <(iptables -S VERITASVPN_KILLSWITCH 2>/dev/null || true)
+      fi
+    }
     cleanup() {
-      if [[ -n "$nft_handle" ]] && [[ "$nft_handle" =~ ^[0-9]+$ ]]; then
-        nft delete rule inet veritasvpn_killswitch output handle "$nft_handle" >/dev/null 2>&1 || true
-      fi
-      if [[ "$ipt" == 1 ]]; then
-        iptables -D VERITASVPN_KILLSWITCH -d "$api_ip" -p tcp --dport 443 -j ACCEPT >/dev/null 2>&1 || true
-      fi
-      if [[ "$pin" == 1 ]]; then
-        ip route del "$api_ip/32" >/dev/null 2>&1 || true
+      delete_fresh_rules
+      if [[ "$pin" == added ]]; then
+        ip route del "$api_ip/32" via "$gw" dev "$gif" >/dev/null 2>&1 || true
+      elif [[ "$pin" == replaced ]]; then
+        ip route replace "$api_ip/32" ${old_via:+via "$old_via"} ${old_dev:+dev "$old_dev"} ${old_src:+src "$old_src"} >/dev/null 2>&1 || true
       fi
       [[ -n "$body" ]] && rm -f "$body"
       [[ -n "$cfg" ]] && rm -f "$cfg"
@@ -64,32 +83,48 @@ read_fresh_lines() {
     body="$(mktemp)"
     cfg="$(mktemp)"
     chmod 600 "$body" "$cfg" 2>/dev/null || true
+    # The API /32 is pinned only when this call adds or replaces it, and only
+    # that route is removed. A route that was already correct is left alone.
     if [[ "$api_ip" != "$endpoint_ip" ]]; then
-      if ip route replace "$api_ip/32" via "$gw" dev "$gif" >/dev/null 2>&1; then
-        pin=1
-      fi
-    fi
-    if command -v nft >/dev/null 2>&1 && nft list table inet veritasvpn_killswitch >/dev/null 2>&1; then
-      nft insert rule inet veritasvpn_killswitch output ip daddr "$api_ip" tcp dport 443 accept >/dev/null 2>&1 || true
-      nft_handle="$(nft -a list chain inet veritasvpn_killswitch output 2>/dev/null | awk -v ip="$api_ip" '
-        index($0, "ip daddr " ip " ") && index($0, "tcp dport 443") && index($0, "accept") {
-          for (i = 1; i <= NF; i++) if ($i == "handle") { print $(i + 1); exit }
-        }')"
-      [[ "$nft_handle" =~ ^[0-9]+$ ]] || nft_handle=""
-    fi
-    if command -v iptables >/dev/null 2>&1 && iptables -L VERITASVPN_KILLSWITCH >/dev/null 2>&1; then
-      if ! iptables -C VERITASVPN_KILLSWITCH -d "$api_ip" -p tcp --dport 443 -j ACCEPT >/dev/null 2>&1; then
-        if iptables -I VERITASVPN_KILLSWITCH 1 -d "$api_ip" -p tcp --dport 443 -j ACCEPT >/dev/null 2>&1; then
-          ipt=1
+      read -r old_via old_dev old_src < <(ip -4 route show "$api_ip/32" 2>/dev/null | awk 'NR==1 {
+        via=""; dev=""; src=""
+        for (i = 1; i <= NF; i++) {
+          if ($i == "via") via=$(i+1)
+          else if ($i == "dev") dev=$(i+1)
+          else if ($i == "src") src=$(i+1)
+        }
+        printf "%s %s %s\n", via, dev, src
+        exit
+      }')
+      [[ "$old_via" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || old_via=""
+      [[ "$old_dev" =~ ^[A-Za-z0-9_.:-]{1,15}$ ]] || old_dev=""
+      [[ "$old_src" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || old_src=""
+      if [[ -z "$old_dev" && -z "$old_via" ]]; then
+        if ip route add "$api_ip/32" via "$gw" dev "$gif" >/dev/null 2>&1; then
+          pin="added"
+        fi
+      elif [[ "$old_via" == "$gw" && "$old_dev" == "$gif" ]]; then
+        pin="kept"
+      else
+        if ip route replace "$api_ip/32" via "$gw" dev "$gif" >/dev/null 2>&1; then
+          pin="replaced"
         fi
       fi
     fi
+    if command -v nft >/dev/null 2>&1 && nft list table inet veritasvpn_killswitch >/dev/null 2>&1; then
+      nft insert rule inet veritasvpn_killswitch output ip daddr "$api_ip" tcp dport 443 accept comment \"veritas-fresh\" >/dev/null 2>&1 || true
+    fi
+    if command -v iptables >/dev/null 2>&1 && iptables -L VERITASVPN_KILLSWITCH >/dev/null 2>&1; then
+      iptables -I VERITASVPN_KILLSWITCH 1 -d "$api_ip" -p tcp --dport 443 -m comment --comment veritas-fresh -j ACCEPT >/dev/null 2>&1 || true
+    fi
     printf 'header = "Authorization: Bearer %s"\n' "$token" > "$cfg"
+    printf 'url = "https://api.veritasvpn.cloud/api/v1/wg/peers/%s"\n' "$peer" >> "$cfg"
     printf 'resolve = "api.veritasvpn.cloud:443:%s"\n' "$api_ip" >> "$cfg"
     printf 'interface = "%s"\n' "$gif" >> "$cfg"
+    printf 'output = "%s"\n' "$body" >> "$cfg"
+    printf 'write-out = "%%{http_code}"\n' >> "$cfg"
     printf 'silent\n' >> "$cfg"
-    code="$(curl --config "$cfg" -4 --connect-timeout 2 --max-time 4 -o "$body" -w '%{http_code}' \
-      "https://api.veritasvpn.cloud/api/v1/wg/peers/${peer}" 2>/dev/null || true)"
+    code="$(curl --config "$cfg" -4 --connect-timeout 2 --max-time 4 2>/dev/null || true)"
     [[ "$code" =~ ^[0-9]{3}$ ]] || code=0
     if [[ "$code" == 200 ]] && command -v python3 >/dev/null 2>&1; then
       parsed="$(python3 -c '
