@@ -24,10 +24,16 @@ describe("peer check", () => {
 
 describe("peer-gone create", () => {
   it("creates once and ignores a second caller while that create is in flight", () => {
-    expect(peerGoneAction(true, false)).toBe("create");
-    expect(peerGoneAction(true, true)).toBe("in_flight");
-    expect(peerGoneAction(false, false)).toBe("ignore");
-    expect(peerGoneAction(false, true)).toBe("ignore");
+    expect(peerGoneAction(true, false, false)).toBe("create");
+    expect(peerGoneAction(true, true, false)).toBe("in_flight");
+    expect(peerGoneAction(false, false, false)).toBe("ignore");
+    expect(peerGoneAction(false, true, false)).toBe("ignore");
+  });
+
+  it("latches after one automatic recreate", () => {
+    expect(peerGoneAction(true, false, true)).toBe("latched");
+    expect(peerGoneAction(true, true, true)).toBe("latched");
+    expect(peerGoneAction(false, false, true)).toBe("ignore");
   });
 });
 
@@ -45,6 +51,7 @@ describe("status text", () => {
       "Connection timed out. Check your network and try again.",
     );
     expect(displayStatus("Reconnecting…")).toBe("Reconnecting…");
+    expect(displayStatus("Tap to reconnect")).toBe("Tap to reconnect");
     expect(displayStatus("")).toBe("");
     expect(displayStatus(null)).toBe("");
   });

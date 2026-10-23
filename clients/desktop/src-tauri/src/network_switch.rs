@@ -70,7 +70,29 @@ const REBIND_MIN_INTERVAL: Duration = Duration::from_secs(3);
 // switches that keep 192.168.1.1 (Android rebinds on any network change).
 static LAST_FINGERPRINT: Mutex<Option<String>> = Mutex::new(None);
 
-static REBIND_IN_FLIGHT: Mutex<bool> = Mutex::new(false);
+static REBIND_IN_FLIGHT: Mutex<Option<Instant>> = Mutex::new(None);
+const REBIND_LOCK_STALE: Duration = Duration::from_secs(45);
+
+fn rebind_lock_held(slot: &Option<Instant>) -> bool {
+    match slot {
+        Some(started) => started.elapsed() < REBIND_LOCK_STALE,
+        None => false,
+    }
+}
+
+/// One lock for path-adapt and the outside-tunnel recovery read.
+pub(crate) fn recovery_lock_acquire() -> bool {
+    let mut slot = REBIND_IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+    if rebind_lock_held(&slot) {
+        return false;
+    }
+    *slot = Some(Instant::now());
+    true
+}
+
+pub(crate) fn recovery_lock_release() {
+    *REBIND_IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
 
 fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
     let meta_path = privileged_state_dir()?.join("iface.meta");
@@ -108,7 +130,7 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
 
     {
         let mut in_flight = REBIND_IN_FLIGHT.lock().map_err(|e| e.to_string())?;
-        if *in_flight {
+        if rebind_lock_held(&in_flight) {
             return Ok(NetworkRecoverResult {
                 changed: false,
                 message: "path rebind already in progress".into(),
@@ -129,7 +151,7 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
             }
         }
         *last = Some(now);
-        *in_flight = true;
+        *in_flight = Some(now);
     }
 
     // Android keeps the VPN session and rebinds the underlay. Do the same:
@@ -137,7 +159,7 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
     // that dropped the tunnel and could not rebuild it without a password.
     let endpoint = refresh_endpoint_route_linux();
     let dns = reapply_dns_from_saved();
-    *REBIND_IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    recovery_lock_release();
 
     let mut msg = endpoint.message.clone();
     if let Ok(dns) = dns {

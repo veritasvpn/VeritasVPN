@@ -1108,7 +1108,7 @@ fn public_egress_ok() -> bool {
 const SOFT_CLEANUP_HELPER: &str = "/var/lib/veritasvpn/cleanup-killswitch.sh";
 const SOFT_PATH_ADAPT_HELPER: &str = "/var/lib/veritasvpn/path-adapt.sh";
 const SOFT_TEARDOWN_HELPER: &str = "/var/lib/veritasvpn/teardown.sh";
-const SOFT_PEER_CHECK_HELPER: &str = "/var/lib/veritasvpn/peer-check.sh";
+const SOFT_RECOVER_HELPER: &str = "/var/lib/veritasvpn/recover-swap.sh";
 
 fn peer_check_token_path() -> Result<PathBuf, String> {
     Ok(state_dir()?.join("peer-check.token"))
@@ -1159,72 +1159,159 @@ impl Drop for PeerCheckTokenGuard {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct PeerCheckResult {
-    available: bool,
-    status: u16,
-    network_error: bool,
-}
-
-fn check_current_peer_blocking() -> PeerCheckResult {
-    #[cfg(not(target_os = "linux"))]
-    {
-        return PeerCheckResult {
-            available: false,
-            status: 0,
-            network_error: true,
-        };
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if !Path::new(SOFT_PEER_CHECK_HELPER).exists() {
-            return PeerCheckResult {
-                available: false,
-                status: 0,
-                network_error: true,
-            };
-        }
-        let _token = PeerCheckTokenGuard::install();
-        let out = Command::new("timeout")
-            .args(["12", "sudo", "-n", SOFT_PEER_CHECK_HELPER])
-            .output();
-        match out {
-            Ok(out) => {
-                let text = String::from_utf8_lossy(&out.stdout);
-                let status_str = text.lines().next().unwrap_or("").trim();
-                match status_str.parse::<u16>() {
-                    Ok(status) => PeerCheckResult {
-                        available: true,
-                        status,
-                        network_error: status == 0,
-                    },
-                    Err(_) => PeerCheckResult {
-                        available: true,
-                        status: 0,
-                        network_error: true,
-                    },
-                }
-            }
-            Err(_) => PeerCheckResult {
-                available: true,
-                status: 0,
-                network_error: true,
-            },
-        }
+fn recover_result(success: bool) -> ConnectResult {
+    ConnectResult {
+        success,
+        message: if success {
+            "WireGuard reconnected".into()
+        } else {
+            "Reconnecting…".into()
+        },
+        mode: "wireguard".into(),
+        peer_id: String::new(),
     }
 }
 
-/// Classify the current peer from outside the tunnel. A missing helper asks the
-/// UI to use its own request. Timeouts are status 0, never a peer-gone signal.
+fn run_recover_helper(args: &[&str]) -> bool {
+    if !Path::new(SOFT_RECOVER_HELPER).exists() {
+        return false;
+    }
+    let mut command = Command::new("timeout");
+    command.args(["25", "sudo", "-n", SOFT_RECOVER_HELPER]);
+    command.args(args);
+    match command.output() {
+        Ok(out) => out.status.success(),
+        Err(_) => false,
+    }
+}
+
+fn recovery_open_blocking() -> bool {
+    if !network_switch::recovery_lock_acquire() {
+        return false;
+    }
+    if run_recover_helper(&["open"]) {
+        true
+    } else {
+        network_switch::recovery_lock_release();
+        false
+    }
+}
+
+fn recovery_close_blocking() {
+    let _ = run_recover_helper(&["close"]);
+    network_switch::recovery_lock_release();
+}
+
+/// Open a scoped API exception without touching the kill switch. Serialized
+/// with path-adapt. Failure leaves the firewall up and returns no script output.
 #[tauri::command]
-async fn check_current_peer() -> PeerCheckResult {
-    tauri::async_runtime::spawn_blocking(check_current_peer_blocking)
+async fn recovery_open() -> ConnectResult {
+    let ok = tauri::async_runtime::spawn_blocking(recovery_open_blocking)
         .await
-        .unwrap_or(PeerCheckResult {
-            available: true,
-            status: 0,
-            network_error: true,
-        })
+        .unwrap_or(false);
+    recover_result(ok)
+}
+
+/// Remove only the temporary API exception opened for recovery.
+#[tauri::command]
+async fn recovery_close() -> ConnectResult {
+    let _ = tauri::async_runtime::spawn_blocking(recovery_close_blocking).await;
+    recover_result(true)
+}
+
+fn write_recover_request(config: &WgTunnelConfig) -> Result<(), String> {
+    config.validate()?;
+    let dir = state_dir()?;
+    let endpoint = if config.stealth_endpoint.trim().is_empty() {
+        config.endpoint.trim().to_string()
+    } else {
+        "127.0.0.1:41820".into()
+    };
+    let allowed_joined = if config.allowed_ips.is_empty() {
+        "0.0.0.0/0, ::/0".to_string()
+    } else {
+        config
+            .allowed_ips
+            .iter()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut wg_conf = format!(
+        "[Interface]\nPrivateKey = {}\n\n[Peer]\nPublicKey = {}\nEndpoint = {}\nPersistentKeepalive = 25\nAllowedIPs = {allowed_joined}\n",
+        config.private_key.trim(),
+        config.server_public_key.trim(),
+        endpoint
+    );
+    if !config.preshared_key.trim().is_empty() {
+        wg_conf.push_str(&format!(
+            "PresharedKey = {}\n",
+            config.preshared_key.trim()
+        ));
+    }
+    write_secret_file(&dir.join("wg.conf"), wg_conf.as_bytes())
+        .map_err(|_| "could not store the tunnel config".to_string())?;
+    let dns = if config.dns.trim().is_empty() {
+        "1.1.1.1"
+    } else {
+        config.dns.trim()
+    };
+    let request = format!(
+        "address={}\nendpoint={}\nendpoint_wan={}\nendpoint_lan={}\nstealth_remote={}\nstealth_prefix={}\ndns={}\nfresh_ep={}\nfresh_stealth={}\n",
+        config.address.trim(),
+        config.endpoint.trim(),
+        config.endpoint_wan.trim(),
+        config.endpoint_lan.trim(),
+        config.stealth_endpoint.trim(),
+        config.stealth_path_prefix.trim(),
+        dns,
+        config.endpoint.trim(),
+        config.stealth_endpoint.trim(),
+    );
+    if request.bytes().any(|b| b == 0 || b == b'\r') {
+        return Err("could not store the tunnel config".into());
+    }
+    write_secret_file(&dir.join("recover-request"), request.as_bytes())
+        .map_err(|_| "could not store the tunnel config".to_string())?;
+    let _ = fs::write(peer_id_path()?, config.peer_id.as_bytes());
+    let _ = network_switch::save_last_config(&network_switch::SavedTunnelConfig {
+        private_key: config.private_key.clone(),
+        address: config.address.clone(),
+        dns: config.dns.clone(),
+        server_public_key: config.server_public_key.clone(),
+        endpoint: config.endpoint.clone(),
+        allowed_ips: config.allowed_ips.clone(),
+        peer_id: config.peer_id.clone(),
+        preshared_key: config.preshared_key.clone(),
+        stealth_endpoint: config.stealth_endpoint.clone(),
+        stealth_path_prefix: config.stealth_path_prefix.clone(),
+        endpoint_lan: config.endpoint_lan.clone(),
+        endpoint_wan: config.endpoint_wan.clone(),
+    });
+    Ok(())
+}
+
+fn recover_wireguard_blocking(app: AppHandle, config: WgTunnelConfig) -> bool {
+    if write_recover_request(&config).is_err() {
+        return false;
+    }
+    if !run_recover_helper(&["apply"]) {
+        return false;
+    }
+    let _ = APP_HANDLE_FOR_RECOVER.set(app);
+    start_network_switch_watcher_if_needed();
+    true
+}
+
+/// Replace the WireGuard peer while the kill switch, sudoers, and helpers stay.
+/// Script output is ignored so a server address cannot reach the UI.
+#[tauri::command]
+async fn recover_wireguard(app: AppHandle, config: WgTunnelConfig) -> ConnectResult {
+    let ok = tauri::async_runtime::spawn_blocking(move || recover_wireguard_blocking(app, config))
+        .await
+        .unwrap_or(false);
+    recover_result(ok)
 }
 
 #[allow(dead_code)]
@@ -2014,9 +2101,9 @@ install_killswitch() {{
       case " $seen " in *" $ip "*) continue ;; esac
       seen="$seen $ip"
       if [[ -n "$STEALTH_REMOTE" ]]; then
-        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ip" tcp dport "$ROUTE_PORT" accept || return 1
+        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ip" tcp dport "$ROUTE_PORT" accept comment \"veritas-outside\" || return 1
       else
-        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ip" udp dport "$ROUTE_PORT" accept || return 1
+        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ip" udp dport "$ROUTE_PORT" accept comment \"veritas-outside\" || return 1
       fi
     done
     nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" drop || return 1
@@ -2037,9 +2124,9 @@ install_killswitch() {{
       case " $seen " in *" $ip "*) continue ;; esac
       seen="$seen $ip"
       if [[ -n "$STEALTH_REMOTE" ]]; then
-        iptables -A "$KILLSWITCH_CHAIN" -d "$ip" -p tcp --dport "$ROUTE_PORT" -j ACCEPT || return 1
+        iptables -A "$KILLSWITCH_CHAIN" -d "$ip" -p tcp --dport "$ROUTE_PORT" -m comment --comment veritas-outside -j ACCEPT || return 1
       else
-        iptables -A "$KILLSWITCH_CHAIN" -d "$ip" -p udp --dport "$ROUTE_PORT" -j ACCEPT || return 1
+        iptables -A "$KILLSWITCH_CHAIN" -d "$ip" -p udp --dport "$ROUTE_PORT" -m comment --comment veritas-outside -j ACCEPT || return 1
       fi
     done
     iptables -A "$KILLSWITCH_CHAIN" -j DROP || return 1
@@ -2159,19 +2246,21 @@ if [[ -n "$STEALTH_REMOTE" ]]; then
       esac
     done < <(wstunnel_prepare_line "$STEALTH_REMOTE" "$ROUTE_IP")
   fi
+  touch "$RUNTIME_DIR/wstunnel.log"
+  chmod 600 "$RUNTIME_DIR/wstunnel.log"
   if [[ -n "$WST_SNI" && "$WST_SNI" =~ ^[A-Za-z0-9.-]+$ ]]; then
     "$WSTUNNEL" client \
       --tls-sni-override "$WST_SNI" \
       --http-upgrade-path-prefix "$STEALTH_PREFIX" \
       -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
       "$WST_URL" \
-      >/tmp/veritas-wstunnel.log 2>&1 &
+      >"$RUNTIME_DIR/wstunnel.log" 2>&1 &
   else
     "$WSTUNNEL" client \
       --http-upgrade-path-prefix "$STEALTH_PREFIX" \
       -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
       "$WST_URL" \
-      >/tmp/veritas-wstunnel.log 2>&1 &
+      >"$RUNTIME_DIR/wstunnel.log" 2>&1 &
   fi
   echo $! > "$STEALTH_PID_FILE"
   sleep 0.4
@@ -2181,7 +2270,6 @@ if [[ -n "$STEALTH_REMOTE" ]]; then
   fi
   if ! kill -0 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null; then
     echo "failed to start stealth transport" >&2
-    cat /tmp/veritas-wstunnel.log >&2 || true
     exit 1
   fi
   ENDPOINT_IP="$ROUTE_IP"
@@ -2536,16 +2624,9 @@ OLD_IF="$(meta_value gw_if)"
 [[ -z "$ENDPOINT_LAN" || "$ENDPOINT_LAN" =~ ^[A-Za-z0-9.:[\]-]+$ ]] || ENDPOINT_LAN=""
 [[ -z "$ENDPOINT_WAN" || "$ENDPOINT_WAN" =~ ^[A-Za-z0-9.:[\]-]+$ ]] || ENDPOINT_WAN=""
 [[ -z "$OLD_IF" || "$OLD_IF" =~ ^[A-Za-z0-9_.:-]{{1,15}}$ ]] || OLD_IF=""
-LAN_HOST="${{ENDPOINT_LAN%%:*}}"
 WAN_HOST="${{ENDPOINT_WAN%%:*}}"
-[[ "$LAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || LAN_HOST=""
 [[ "$WAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || WAN_HOST=""
 [[ -n "$ENDPOINT_IP" && "$ENDPOINT_IP" != "127.0.0.1" ]] || exit 0
-# Older APIs only sent the current endpoint. Treat a private one as LAN.
-if [[ -z "$LAN_HOST" && "$ENDPOINT_IP" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.) ]]; then
-  LAN_HOST="$ENDPOINT_IP"
-  [[ -n "$ENDPOINT_LAN" ]] || ENDPOINT_LAN="${{ENDPOINT:-$ENDPOINT_IP:51820}}"
-fi
 
 detect_underlay() {{
   local gw="" gif="" src=""
@@ -2638,6 +2719,10 @@ _fresh="$(read_fresh_lines "$NEW_GW" "$NEW_GW_IF" || true)"
 FRESH_EP="$(printf '%s\n' "$_fresh" | sed -n '2p')"
 FRESH_STEALTH="$(printf '%s\n' "$_fresh" | sed -n '3p')"
 apply_endpoint_choice
+if [[ ! "$CHOOSE_IP" =~ ^([0-9]{{1,3}}\.){{3}}[0-9]{{1,3}}$ || "$CHOOSE_IP" == "127.0.0.1" ]]; then
+  echo "ok path-adapt"
+  exit 0
+fi
 
 OLD_EP_IP="$ENDPOINT_IP"
 ip route del "$OLD_EP_IP" 2>/dev/null || true
@@ -2658,10 +2743,6 @@ if [[ -n "$WAN_HOST" && "$WAN_HOST" != "$CHOOSE_IP" ]]; then
   ip route del "$WAN_HOST" 2>/dev/null || true
   ip route del "$WAN_HOST/32" 2>/dev/null || true
   ip route replace "$WAN_HOST/32" via "$NEW_GW" ${{NEW_GW_IF:+dev $NEW_GW_IF}} 2>/dev/null || true
-fi
-if [[ -n "$LAN_HOST" && "$LAN_HOST" != "$CHOOSE_IP" ]]; then
-  ip route del "$LAN_HOST" 2>/dev/null || true
-  ip route del "$LAN_HOST/32" 2>/dev/null || true
 fi
 if command -v conntrack >/dev/null 2>&1; then
   conntrack -D -p udp --dst "$OLD_EP_IP" 2>/dev/null || true
@@ -2724,15 +2805,18 @@ SOFT_PATH
 chmod 755 "$SOFT_DIR/path-adapt.sh"
 chown root:root "$SOFT_DIR/path-adapt.sh"
 
-cat > "$SOFT_DIR/peer-check.sh" <<'PEER_CHECK'
+cat > "$SOFT_DIR/recover-swap.sh" <<'RECOVER_SWAP'
 #!/bin/bash
 set -uo pipefail
 {endpoint_fns}
 {fresh_fns}
-peer_check_main
-PEER_CHECK
-chmod 755 "$SOFT_DIR/peer-check.sh"
-chown root:root "$SOFT_DIR/peer-check.sh"
+{stealth_fns}
+{recover_fns}
+recovery_main "$@"
+RECOVER_SWAP
+chmod 755 "$SOFT_DIR/recover-swap.sh"
+chown root:root "$SOFT_DIR/recover-swap.sh"
+rm -f "$SOFT_DIR/peer-check.sh"
 
 # Remove the legacy root dispatcher. Network changes are handled by the
 # desktop watcher, which preserves SUDO_USER for state isolation.
@@ -2838,7 +2922,7 @@ rm -f "$DNS_BACKUP"
 if [[ "${{1:-}}" == "--purge" ]]; then
   rm -f /etc/sudoers.d/veritasvpn-soft
   rm -f /etc/NetworkManager/dispatcher.d/50-veritasvpn
-  rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh
+  rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh
   rmdir /var/lib/veritasvpn 2>/dev/null || true
 fi
 echo ok
@@ -2846,7 +2930,7 @@ SOFT_TEARDOWN
   chmod 755 "$SOFT_DIR/teardown.sh"
   chown root:root "$SOFT_DIR/teardown.sh"
 
-  printf '%s ALL=(root) NOPASSWD: %s/path-adapt.sh, %s/teardown.sh, %s/peer-check.sh\n' \
+  printf '%s ALL=(root) NOPASSWD: %s/path-adapt.sh, %s/teardown.sh, %s/recover-swap.sh\n' \
     "$DESKTOP_USER" "$SOFT_DIR" "$SOFT_DIR" "$SOFT_DIR" > /etc/sudoers.d/veritasvpn-soft
   chmod 440 /etc/sudoers.d/veritasvpn-soft
 fi
@@ -2870,6 +2954,7 @@ echo "ok iface=$IFACE_NAME engine=$ENGINE"
         endpoint_fns = include_str!("endpoint_choice.sh"),
         fresh_fns = include_str!("fresh_peer.sh"),
         stealth_fns = include_str!("stealth_apply.sh"),
+        recover_fns = include_str!("recover_swap.sh"),
     )
 }
 
@@ -3130,7 +3215,7 @@ ip -6 route del blackhole default metric 1 2>/dev/null || true
 # Soft-recovery helpers (installed at connect) — remove on intentional disconnect.
 rm -f /etc/sudoers.d/veritasvpn-soft
 rm -f /etc/NetworkManager/dispatcher.d/50-veritasvpn
-rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh
+rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh
 rm -f "$(dirname "$META_FILE")/stealth-roam"
 rmdir /var/lib/veritasvpn 2>/dev/null || true
 
@@ -3630,10 +3715,14 @@ mod security_tests {
         assert!(path_adapt.contains("apply_endpoint_choice"));
         assert!(path_adapt.contains("maybe_restart_stealth"));
         assert!(!path_adapt.contains("CHOOSE_IP=\"$LAN_HOST\""));
+        assert!(!path_adapt.contains("LAN_HOST="));
         check("veritas-path-adapt-syntax.sh", &path_adapt);
-        let peer_check = heredoc("PEER_CHECK");
-        assert!(peer_check.contains("peer_check_main"));
-        check("veritas-peer-check-syntax.sh", &peer_check);
+        let recover = heredoc("RECOVER_SWAP");
+        assert!(recover.contains("recovery_main"));
+        assert!(!recover.contains("nft delete table"));
+        assert!(!recover.contains("cleanup_killswitch"));
+        assert!(!recover.contains("ip route del blackhole"));
+        check("veritas-recover-syntax.sh", &recover);
     }
 
     #[test]
@@ -3680,7 +3769,9 @@ pub fn run() {
             wireguard_stats,
             refresh_endpoint_route,
             network_switch_recover,
-            check_current_peer
+            recovery_open,
+            recovery_close,
+            recover_wireguard
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

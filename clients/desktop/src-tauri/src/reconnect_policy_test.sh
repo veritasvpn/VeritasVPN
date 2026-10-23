@@ -68,25 +68,33 @@ assert_eq "$(printf '%s' "$healthy" | awk -F '\t' '{ print $5 }')" "1" "healthy 
 
 again="$(decide wifi cell 1 0 20000 18000 $((1040 - 11)) 1040 cell 1001 16000 1 1)"
 assert_eq "${again%%$'\t'*}" "DIAL" "a second network dials once more"
-assert_eq "$(printf '%s' "$again" | awk -F '\t' '{ print $5 }')" "2" "second dial counted"
+assert_eq "$(printf '%s' "$again" | awk -F '\t' '{ print $5 }')" "1" "one dial on the new network"
 
 # Transmit growth alone is not a live tunnel.
 tx_only="$(decide cell cell 1 0 1000 80000 0 $((1000 + 10)) cell 1000 1000 1 1)"
 assert_eq "${tx_only%%$'\t'*}" "WAIT" "tx-only during the cooldown waits"
 tx_later="$(decide cell cell 1 0 1000 80000 0 $((1000 + 31)) cell 1000 1000 1 1)"
 assert_eq "${tx_later%%$'\t'*}" "DIAL" "tx-only after the cooldown can redial"
+assert_eq "$(printf '%s' "$tx_later" | awk -F '\t' '{ print $5 }')" "2" "tx-only retry is the extra dial"
+tx_cap="$(decide cell cell 1 0 1000 80000 0 $((1000 + 80)) cell $((1000 + 31)) 1000 2 1)"
+assert_eq "${tx_cap%%$'\t'*}" "WAIT" "tx-only stops after the extra retry"
 
 # Handshake under 180s is healthy even when the byte counter did not move.
 fresh_hs="$(decide cell cell 1 0 1000 1000 $((5000 - 11)) 5000 cell 1000 1000 1 1)"
 assert_eq "${fresh_hs%%$'\t'*}" "HEALTHY" "11s handshake is healthy"
 stale_hs="$(decide cell cell 1 0 1000 1000 $((5000 - 181)) 5000 cell 1000 1000 1 1)"
 assert_eq "${stale_hs%%$'\t'*}" "DIAL" "181s handshake with no new bytes can redial"
+stale_cap="$(decide cell cell 1 0 1000 1000 $((5100 - 181)) 5100 cell 5031 1000 2 1)"
+assert_eq "${stale_cap%%$'\t'*}" "WAIT" "stale handshake does not dial a third time"
 
 # Same network, process still the one we dialed, inside 30s: no second restart.
 early="$(decide cell cell 0 0 100 100 0 $((1000 + 10)) cell 1000 100 1 1)"
 assert_eq "${early%%$'\t'*}" "WAIT" "dead tunnel still waits out 30s"
 later="$(decide cell cell 0 0 100 100 0 $((1000 + 31)) cell 1000 100 1 1)"
 assert_eq "${later%%$'\t'*}" "DIAL" "dead tunnel redials after the cooldown"
+assert_eq "$(printf '%s' "$later" | awk -F '\t' '{ print $5 }')" "2" "dead tunnel retry is the extra dial"
+capped="$(decide cell cell 0 0 100 100 0 $((1000 + 70)) cell $((1000 + 31)) 100 2 1)"
+assert_eq "${capped%%$'\t'*}" "WAIT" "no third dial after the extra retry"
 
 lib="$ROOT/lib.rs"
 if grep -q 'CHOOSE_IP="$LAN_HOST"' "$lib"; then
@@ -113,16 +121,94 @@ stealth_paths_ok '/tmp/wstunnel;id' /vpn && fail "shell metacharacter in binary 
 stealth_paths_ok /tmp/../wstunnel /vpn && fail "binary traversal accepted"
 stealth_paths_ok /usr/bin/wstunnel /../tmp && fail "prefix traversal accepted"
 
+# A failed fresh read never installs a stored private address.
+STEALTH_REMOTE=""
+FRESH_EP=""
+FRESH_STEALTH=""
+ENDPOINT_WAN="203.0.113.10:51820"
+ENDPOINT="192.168.0.6:51820"
+NEW_SRC="10.1.1.8"
+apply_endpoint_choice
+assert_eq "$CHOOSE_IP" "203.0.113.10" "failed fresh read uses the public endpoint"
+assert_eq "$CHOOSE_EP" "203.0.113.10:51820" "public endpoint replaces a stored private one"
+
+STEALTH_REMOTE="192.168.0.6:8443"
+FRESH_EP=""
+FRESH_STEALTH=""
+ENDPOINT_WAN=""
+ENDPOINT="192.168.0.6:51820"
+NEW_SRC="10.1.1.8"
+apply_endpoint_choice
+assert_eq "$STEALTH_DIAL" "" "no private stealth fallback"
+assert_eq "$CHOOSE_IP" "" "no private address installed when the fresh read fails"
+
+ENDPOINT_WAN="203.0.113.10:51820"
+apply_endpoint_choice
+assert_eq "$STEALTH_DIAL" "203.0.113.10:8443" "stealth falls forward to the public host"
+assert_eq "$CHOOSE_IP" "203.0.113.10" "stealth pin is the public address"
+
+STEALTH_REMOTE=""
+FRESH_EP="192.168.0.6:51820"
+ENDPOINT_WAN="203.0.113.10:51820"
+NEW_SRC="192.168.0.10"
+apply_endpoint_choice
+assert_eq "$CHOOSE_IP" "192.168.0.6" "fresh private read on its /24 is kept"
+
 bash -n "$ROOT/endpoint_choice.sh"
 bash -n "$ROOT/fresh_peer.sh"
 bash -n "$ROOT/stealth_apply.sh"
+bash -n "$ROOT/recover_swap.sh"
 
-# The actuator must not tear the kill switch down while restarting.
+# The actuator must not tear the kill switch down while restarting or recovering.
 if grep -E -q 'nft delete table|cleanup_killswitch|ip route del blackhole' "$ROOT/stealth_apply.sh"; then
   fail "stealth restart removes the kill switch"
+fi
+if grep -E -q 'nft delete table|cleanup_killswitch|ip route del blackhole' "$ROOT/recover_swap.sh"; then
+  fail "reconnect removes the kill switch"
 fi
 if grep -E -q 'echo "\$token"|printf '"'"'%s\\n'"'"' "\$token"' "$ROOT/fresh_peer.sh"; then
   fail "peer read prints the access token"
 fi
+if grep 'curl ' "$ROOT/fresh_peer.sh" | grep -q 'peers/'; then
+  fail "peer id is in curl argv"
+fi
+if ! grep -q 'url = "https://api.veritasvpn.cloud/api/v1/wg/peers/%s"' "$ROOT/fresh_peer.sh"; then
+  fail "peer url is not in the curl config"
+fi
+if grep -q '/tmp/veritas-wstunnel.log' "$lib" "$ROOT/stealth_apply.sh"; then
+  fail "wstunnel log is copied to the UI or /tmp"
+fi
+if grep -q 'check_current_peer' "$lib"; then
+  fail "outside-tunnel peer poll is still registered"
+fi
+if grep -q 'LAN_HOST=' "$lib" && grep -q 'LAN_HOST=' <(sed -n '/<<'"'"'SOFT_PATH'"'"'/,/^SOFT_PATH$/p' "$lib"); then
+  fail "path-adapt still carries the dead LAN host"
+fi
+
+app="$ROOT/../../src/App.tsx"
+python3 - "$app" <<'PY'
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+start = text.find("const pollPeers = async () => {")
+if start < 0:
+    sys.exit("pollPeers missing")
+i = text.find("{", start)
+depth = 0
+body = ""
+for j in range(i, len(text)):
+    if text[j] == "{":
+        depth += 1
+    elif text[j] == "}":
+        depth -= 1
+        if depth == 0:
+            body = text[i:j + 1]
+            break
+else:
+    sys.exit("pollPeers unterminated")
+banned = ["check_current_peer", "peer-check", "nft", "ip route", "read_fresh", "sudo"]
+for word in banned:
+    if word in body:
+        sys.exit("5s poll touches " + word)
+PY
 
 printf 'ok\n'

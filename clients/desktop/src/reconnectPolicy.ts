@@ -9,9 +9,17 @@ export function classifyPeerCheck(status: number | null | undefined, networkErro
   return "network";
 }
 
-/** One create while a reconnect is already running. Anything except peer-gone waits. */
-export function peerGoneAction(peerGone: boolean, inFlight: boolean): "create" | "in_flight" | "ignore" {
+/**
+ * One automatic recreate per connection. A latched session waits for a new
+ * handshake or a user connect. Anything except a real peer-gone waits.
+ */
+export function peerGoneAction(
+  peerGone: boolean,
+  inFlight: boolean,
+  latched: boolean,
+): "create" | "in_flight" | "latched" | "ignore" {
   if (!peerGone) return "ignore";
+  if (latched) return "latched";
   if (inFlight) return "in_flight";
   return "create";
 }
