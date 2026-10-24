@@ -283,7 +283,7 @@
         <li><strong>Prometheus</strong> — 21 days of aggregate metrics, without query names or your real IP</li>
         <li><strong>Cluster backups</strong> — an encrypted archive is kept for 14 days on the server. Encrypted copies in Cloudflare R2 are removed after 60 days. The archive includes the Veritas database and the BTCPay database. It does not include a peer endpoint or the address from a last handshake. A backup made by the previous script can still contain a WireGuard endpoint until that archive expires. It is not a log written when you connect</li>
         <li><strong>Other backup copies</strong> — the postgres backup script, where it is used, keeps 7 daily, 4 weekly, and 3 monthly copies (monthly copies are removed after about 93 days, about 3 months). Single-node recovery snapshots are removed after 35 days</li>
-        <li><strong>Application container logs</strong> — Docker json-file rotation, 10 MB per file, 3 files. Connect logs do not include your real public IP. The peer-created log and internal event store a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint, not the raw values</li>
+        <li><strong>Application container logs</strong> — connect logs do not include your real public IP. The peer-created log and internal event store a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint, not the raw values</li>
         <li><strong>Origin nginx and ingress access logs</strong> — disabled. They are not written to our disks. Cloudflare may still retain edge logs under Cloudflare’s own policies. We do not keep a separate access-log archive</li>
       </ul>
       <p>
