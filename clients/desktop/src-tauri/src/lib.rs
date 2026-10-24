@@ -607,6 +607,37 @@ fn linux_iface_sysfs_stats(iface: &str) -> (bool, u64, u64) {
     (up, rx, tx)
 }
 
+/// The root publisher writes one decimal unix time. Anything else is ignored
+/// so a tampered or partial file cannot be treated as a handshake.
+fn parse_published_handshake(text: &str) -> i64 {
+    let text = text.trim();
+    if text.is_empty() || text.len() > 20 || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return 0;
+    }
+    match text.parse::<i64>() {
+        Ok(n) if n > 0 => n,
+        _ => 0,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_published_handshake() -> i64 {
+    let Ok(dir) = privileged_state_dir() else {
+        return 0;
+    };
+    // No iface file means this session is down, even if a stale integer remains.
+    let Ok(iface) = fs::read_to_string(dir.join("iface")) else {
+        return 0;
+    };
+    if iface.trim() != "veritas0" {
+        return 0;
+    }
+    let Ok(text) = fs::read_to_string(dir.join("handshake")) else {
+        return 0;
+    };
+    parse_published_handshake(&text)
+}
+
 #[cfg(target_os = "linux")]
 fn wireguard_stats_linux() -> WgTransferStats {
     let iface = iface_path()
@@ -624,51 +655,15 @@ fn wireguard_stats_linux() -> WgTransferStats {
         };
     }
 
+    // Byte counters stay on sysfs. The handshake comes from a root-published
+    // integer: unprivileged `wg show dump` is EPERM on in-kernel WireGuard,
+    // and that dump's first line is the interface private key.
     let (sys_up, sys_rx, sys_tx) = linux_iface_sysfs_stats(&iface);
-
-    // The privileged bring-up sets the per-interface UAPI socket owner to the
-    // desktop user, so stats never need a passwordless shell.
-    let dump_text = Command::new("wg")
-        .args(["show", &iface, "dump"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
-
-    let Some(text) = dump_text else {
-        // Unprivileged `wg` often fails on the root-only UAPI socket; still
-        // report interface + byte counters from sysfs so LIVE STATS is useful.
-        return WgTransferStats {
-            rx_bytes: sys_rx,
-            tx_bytes: sys_tx,
-            last_handshake_sec: 0,
-            interface_up: sys_up,
-        };
-    };
-
-    // dump: iface line then peer lines with last_handshake rx_bytes tx_bytes
-    let mut rx = 0u64;
-    let mut tx = 0u64;
-    let mut handshake = 0i64;
-    let mut up = false;
-    let line_count = text.lines().count();
-    for (i, line) in text.lines().enumerate() {
-        let cols: Vec<&str> = line.split('\t').collect();
-        if i == 0 {
-            up = !cols.is_empty();
-            continue;
-        }
-        if cols.len() >= 7 {
-            handshake = cols[4].parse().unwrap_or(0);
-            rx = cols[5].parse().unwrap_or(0);
-            tx = cols[6].parse().unwrap_or(0);
-        }
-    }
     WgTransferStats {
-        rx_bytes: if rx > 0 { rx } else { sys_rx },
-        tx_bytes: if tx > 0 { tx } else { sys_tx },
-        last_handshake_sec: handshake,
-        interface_up: (up && line_count > 1) || sys_up,
+        rx_bytes: sys_rx,
+        tx_bytes: sys_tx,
+        last_handshake_sec: read_published_handshake(),
+        interface_up: sys_up,
     }
 }
 
@@ -2103,6 +2098,7 @@ install -d -m 0755 "$RUNTIME_DIR"
 rm -f "$RUNTIME_DIR/fresh-read"
 
 {endpoint_fns}
+{handshake_fns}
 
 safe_stop_pid_file() {{
   local file="$1" expected="$2" pid="" uid="" command=""
@@ -2201,6 +2197,7 @@ install_killswitch() {{
 trap 'rm -f "$UAPI"' EXIT
 
 # --- tear down any previous Veritas tunnel (best-effort) ---
+stop_handshake_publisher "$RUNTIME_DIR"
 cleanup_killswitch
 ip -6 route del blackhole default metric 1 2>/dev/null || true
 safe_stop_pid_file "$PID_FILE" "wireguard-go"
@@ -2375,20 +2372,8 @@ else
     exit 1
   fi
 
-  # Desktop UI polls `wg show` unprivileged. wireguard-go's UAPI socket is
-  # root-only by default, which made LIVE STATS show 0 B / Handshake never.
-  DESKTOP_USER="${{SUDO_USER:-}}"
-  if [[ -z "$DESKTOP_USER" && -n "${{PKEXEC_UID:-}}" ]]; then
-    DESKTOP_USER="$(getent passwd "$PKEXEC_UID" | cut -d: -f1 || true)"
-  fi
-  if [[ -z "$DESKTOP_USER" ]]; then
-    DESKTOP_USER="$(stat -c '%U' "$(dirname "$IFACE_FILE")" 2>/dev/null || true)"
-  fi
-  if [[ -n "$DESKTOP_USER" && -S "/var/run/wireguard/${{IFACE}}.sock" ]]; then
-    chown "$DESKTOP_USER:" "/var/run/wireguard/${{IFACE}}.sock" 2>/dev/null || true
-    chmod 600 "/var/run/wireguard/${{IFACE}}.sock" 2>/dev/null || true
-  fi
-
+  # The UAPI socket stays root-only. Delegating it would expose the private
+  # key in `wg show dump`. LIVE STATS reads the published handshake integer.
   if ! python3 - "$IFACE" "$UAPI" <<'PY'
 import socket, sys, pathlib
 iface, uapi = sys.argv[1], sys.argv[2]
@@ -2657,12 +2642,14 @@ set -uo pipefail
 {endpoint_fns}
 {fresh_fns}
 {stealth_fns}
+{handshake_fns}
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || exit 1
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || exit 1
 STATE_DIR="/var/lib/veritasvpn/state/$RUNTIME_UID"
 META="$STATE_DIR/iface.meta"
 [[ -f "$META" && ! -L "$META" ]] || exit 0
+start_handshake_publisher "$STATE_DIR" || true
 meta_value() {{
   awk -F= -v wanted="$1" '$1 == wanted {{ print substr($0, index($0, "=") + 1); exit }}' "$META"
 }}
@@ -2869,6 +2856,7 @@ set -uo pipefail
 {endpoint_fns}
 {fresh_fns}
 {stealth_fns}
+{handshake_fns}
 {recover_fns}
 recovery_main "$@"
 RECOVER_SWAP
@@ -2886,10 +2874,12 @@ if [[ -n "$DESKTOP_USER" ]]; then
   cat > "$SOFT_DIR/teardown.sh" <<'SOFT_TEARDOWN'
 #!/bin/bash
 set -uo pipefail
+{handshake_fns}
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || {{ echo "SUDO_USER is required" >&2; exit 1; }}
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || {{ echo "invalid runtime uid" >&2; exit 1; }}
 STATE_DIR="/var/lib/veritasvpn/state/$RUNTIME_UID"
+stop_handshake_publisher "$STATE_DIR" || true
 IFACE_FILE="$STATE_DIR/iface"
 PID_FILE="$STATE_DIR/wireguard-go.pid"
 STEALTH_PID_FILE="$STATE_DIR/wstunnel.pid"
@@ -2980,7 +2970,7 @@ rm -f "$DNS_BACKUP"
 if [[ "${{1:-}}" == "--purge" ]]; then
   rm -f /etc/sudoers.d/veritasvpn-soft
   rm -f /etc/NetworkManager/dispatcher.d/50-veritasvpn
-  rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh
+  rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh /var/lib/veritasvpn/handshake.sh
   rmdir /var/lib/veritasvpn 2>/dev/null || true
 fi
 echo ok
@@ -2993,6 +2983,7 @@ SOFT_TEARDOWN
   chmod 440 /etc/sudoers.d/veritasvpn-soft
 fi
 
+start_handshake_publisher "$RUNTIME_DIR" || true
 echo "ok iface=$IFACE_NAME engine=$ENGINE"
 "#,
         wg_go = shell_quote(&wg_go.display().to_string()),
@@ -3013,6 +3004,7 @@ echo "ok iface=$IFACE_NAME engine=$ENGINE"
         fresh_fns = include_str!("fresh_peer.sh"),
         stealth_fns = include_str!("stealth_apply.sh"),
         recover_fns = include_str!("recover_swap.sh"),
+        handshake_fns = include_str!("handshake_publish.sh"),
     )
 }
 
@@ -3214,6 +3206,8 @@ PID_FILE={pid_file}
 STEALTH_PID_FILE={stealth_pid}
 META_FILE={meta_file}
 DNS_BACKUP="${{META_FILE}}.dns"
+{handshake_fns}
+stop_handshake_publisher "$(dirname "$IFACE_FILE")" || true
 
 ENDPOINT_IP=""
 GW=""
@@ -3273,7 +3267,7 @@ ip -6 route del blackhole default metric 1 2>/dev/null || true
 # Soft-recovery helpers (installed at connect) — remove on intentional disconnect.
 rm -f /etc/sudoers.d/veritasvpn-soft
 rm -f /etc/NetworkManager/dispatcher.d/50-veritasvpn
-rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh
+rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh /var/lib/veritasvpn/handshake.sh
 rm -f "$(dirname "$META_FILE")/stealth-roam"
 rmdir /var/lib/veritasvpn 2>/dev/null || true
 
@@ -3322,6 +3316,7 @@ echo ok
         pid_file = shell_quote(&pid_file.display().to_string()),
         stealth_pid = shell_quote(&stealth_pid_path()?.display().to_string()),
         meta_file = shell_quote(&meta_file.display().to_string()),
+        handshake_fns = include_str!("handshake_publish.sh"),
     );
     fs::write(&script_path, &script).map_err(|e| format!("write teardown: {e}"))?;
     #[cfg(unix)]
@@ -3780,11 +3775,34 @@ mod security_tests {
         assert!(recover.contains("recovery_main"));
         assert!(recover.contains("systemd-run"));
         assert!(recover.contains("expire-after"));
+        assert!(recover.contains("start_handshake_publisher"));
         assert!(!recover.contains("10.0.0.0/24"));
         assert!(!recover.contains("nft delete table"));
         assert!(!recover.contains("cleanup_killswitch"));
         assert!(!recover.contains("ip route del blackhole"));
         check("veritas-recover-syntax.sh", &recover);
+        assert!(path_adapt.contains("start_handshake_publisher"));
+        assert!(script.contains("stop_handshake_publisher"));
+        assert!(script.contains("wg show veritas0 dump 2>/dev/null | handshake_from_dump"));
+        assert!(!script.contains("chown \"$DESKTOP_USER:\" \"/var/run/wireguard/"));
+        let sudoers = script.find("NOPASSWD").expect("sudoers grant");
+        let sudoers_end = script[sudoers..].find('\n').unwrap() + sudoers;
+        assert!(
+            !script[sudoers..sudoers_end].contains("handshake.sh"),
+            "handshake publisher must not be passwordless sudo"
+        );
+    }
+
+    #[test]
+    fn published_handshake_is_a_positive_integer_only() {
+        assert_eq!(parse_published_handshake("1700000000\n"), 1700000000);
+        assert_eq!(parse_published_handshake(" 42 "), 42);
+        assert_eq!(parse_published_handshake("0"), 0);
+        assert_eq!(parse_published_handshake("PRIVKEY_DO_NOT_LEAK"), 0);
+        assert_eq!(parse_published_handshake("-1"), 0);
+        assert_eq!(parse_published_handshake("12\n34"), 0);
+        assert_eq!(parse_published_handshake("9223372036854775808"), 0);
+        assert_eq!(parse_published_handshake(""), 0);
     }
 
     #[test]

@@ -457,6 +457,7 @@ recovery_apply() {
   recovery_update_meta "$dns"
   recovery_mark_pin_kept
   clear_fresh_state
+  start_handshake_publisher "$STATE_DIR" || true
   recovery_close >/dev/null
   printf 'ok\n'
 }

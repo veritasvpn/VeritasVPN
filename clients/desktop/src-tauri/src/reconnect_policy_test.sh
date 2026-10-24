@@ -278,6 +278,71 @@ fi
 if ! grep -q 'recoveryRetryAction' "$app"; then
   fail "recovery retries are not capped"
 fi
+if ! grep -q 'start_handshake_publisher' "$lib"; then
+  fail "connect does not publish the handshake"
+fi
+if ! grep -q 'stop_handshake_publisher' "$lib"; then
+  fail "teardown does not stop the handshake publisher"
+fi
+if ! grep -q 'start_handshake_publisher "$STATE_DIR"' "$ROOT/recover_swap.sh"; then
+  fail "recovery does not publish the handshake"
+fi
+if grep -q 'NOPASSWD:.*handshake\.sh' "$lib"; then
+  fail "handshake publisher is passwordless sudo"
+fi
+if grep -q '/var/run/wireguard/${{IFACE}}.sock' "$lib"; then
+  fail "UAPI socket is delegated to the desktop user"
+fi
+python3 - "$lib" <<'PY'
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+start = text.find("fn wireguard_stats_linux()")
+end = text.find("async fn disconnect_wireguard")
+if start < 0 or end < 0:
+    sys.exit("wireguard_stats_linux missing")
+body = text[start:end]
+if 'Command::new("wg")' in body:
+    sys.exit("unprivileged stats still reads wg dump")
+if "read_published_handshake" not in body:
+    sys.exit("stats does not read the published handshake")
+PY
+
+# shellcheck disable=SC1091
+source "$ROOT/handshake_publish.sh"
+priv=$'PRIVKEY_DO_NOT_LEAK\tpub\t51820\toff\npeerpub\t\t203.0.113.10:51820\t0.0.0.0/0\t1700000000\t10\t20\t25\npeer2\t(none)\t203.0.113.11:51820\t0.0.0.0/0\t1700000099\t1\t2\t25\n'
+err="$(mktemp)"
+got="$(printf '%s' "$priv" | handshake_from_dump 2>"$err")"
+assert_eq "$got" "1700000099" "newest handshake wins and the private key line is skipped"
+if [[ -s "$err" ]]; then
+  fail "handshake parser wrote stderr"
+fi
+if [[ "$got" == *PRIVKEY* || "$got" == *peerpub* ]]; then
+  fail "handshake parser echoed the dump"
+fi
+rm -f "$err"
+keyline=$'111\t222\t333\t444\t9999999999\npeer\t(none)\tend\tips\t5\t1\t2\t25\n'
+assert_eq "$(printf '%s' "$keyline" | handshake_from_dump)" "5" "interface line is not a handshake"
+assert_eq "$(printf '%s' $'only-the-interface-line\n' | handshake_from_dump)" "0" "no peer means no handshake"
+bash -n "$ROOT/handshake_publish.sh"
+
+watch="$(mktemp)"
+{
+  printf '%s\n' '#!/bin/bash' 'set -uo pipefail'
+  declare -f handshake_from_dump
+  awk '
+    /<<'"'"'HANDSHAKE_BODY'"'"'/ { grab=1; next }
+    grab && $0 == "HANDSHAKE_BODY" { exit }
+    grab { print }
+  ' "$ROOT/handshake_publish.sh"
+} > "$watch"
+bash -n "$watch"
+if ! grep -q 'wg show veritas0 dump 2>/dev/null | handshake_from_dump' "$watch"; then
+  fail "watcher does not discard wg stderr"
+fi
+if grep -q 'echo ' "$watch"; then
+  fail "watcher echoes output"
+fi
+rm -f "$watch"
 
 python3 - "$app" <<'PY'
 import pathlib, sys
