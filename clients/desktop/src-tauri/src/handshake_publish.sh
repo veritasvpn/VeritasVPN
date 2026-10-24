@@ -44,9 +44,9 @@ write_handshake_file() {
     return 0
   fi
   if [[ -f "$dir/iface" && ! -L "$dir/iface" ]]; then
+    # Owner and mode are already set on the temp file. chmod/chown of the
+    # destination would follow a symlink.
     mv -f "$tmp" "$dir/handshake" 2>/dev/null || rm -f "$tmp"
-    chmod 600 "$dir/handshake" 2>/dev/null || true
-    chown "$uid:" "$dir/handshake" 2>/dev/null || true
   else
     rm -f "$tmp"
   fi
@@ -84,20 +84,35 @@ handshake_publisher_alive() {
 }
 
 stop_handshake_publisher() {
-  local dir="${1:-}" pid="" uid="" command="" _
+  local dir="${1:-}" pid="" uid="" command="" pgid="" _
   [[ -n "$dir" && -d "$dir" && ! -L "$dir" ]] || return 0
   if [[ -f "$dir/handshake.pid" && ! -L "$dir/handshake.pid" ]]; then
     pid="$(cat "$dir/handshake.pid" 2>/dev/null || true)"
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
       uid="$(ps -o uid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
       command="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+      pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
       if [[ "$uid" == "0" && "$command" == *"/var/lib/veritasvpn/handshake.sh $dir"* ]]; then
-        kill "$pid" 2>/dev/null || true
+        # The watcher is started with setsid, so its pid is the process group.
+        # Killing only the pid leaves sleep/wg holding the lock fd.
+        if [[ "$pgid" == "$pid" ]]; then
+          kill -- "-$pid" 2>/dev/null || true
+        else
+          kill "$pid" 2>/dev/null || true
+        fi
         for _ in 1 2 3 4 5 6 7 8 9 10; do
           kill -0 "$pid" 2>/dev/null || break
           sleep 0.1
         done
-        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+        if kill -0 "$pid" 2>/dev/null; then
+          command="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+          pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+          if [[ "$command" == *"/var/lib/veritasvpn/handshake.sh $dir"* && "$pgid" == "$pid" ]]; then
+            kill -9 -- "-$pid" 2>/dev/null || true
+          elif [[ "$command" == *"/var/lib/veritasvpn/handshake.sh $dir"* ]]; then
+            kill -9 "$pid" 2>/dev/null || true
+          fi
+        fi
       fi
     fi
   fi
@@ -135,36 +150,36 @@ if command -v flock >/dev/null 2>&1; then
   flock -n 9 || exit 0
 fi
 printf '%s\n' "$$" > "$dir/handshake.pid" || exit 0
-chmod 600 "$dir/handshake.pid" 2>/dev/null || true
+chmod 600 "$dir/handshake.pid" 2>/dev/null 9>&- || true
 while [[ -f "$dir/iface" && ! -L "$dir/iface" ]]; do
   hs=""
   status=0
-  hs="$(wg show veritas0 dump 2>/dev/null | handshake_from_dump)" || status=$?
+  # Close the lock fd inside the substitution. A redirection on the
+  # assignment runs too late: the pipe subshell has already inherited fd 9.
+  hs="$(exec 9>&-; wg show veritas0 dump 2>/dev/null 9>&- | handshake_from_dump 9>&-)" || status=$?
   if [[ "$status" -eq 0 && "$hs" =~ ^[0-9]+$ && -f "$dir/iface" && ! -L "$dir/iface" ]]; then
     saved="$(umask)"
     umask 077
-    tmp="$(mktemp "$dir/.handshake.XXXXXX" 2>/dev/null || true)"
+    tmp="$(exec 9>&-; mktemp "$dir/.handshake.XXXXXX" 2>/dev/null || true)"
     umask "$saved"
     if [[ -n "$tmp" ]]; then
-      if printf '%s\n' "$hs" > "$tmp" && chmod 600 "$tmp" 2>/dev/null && chown "$uid:" "$tmp" 2>/dev/null; then
+      if printf '%s\n' "$hs" > "$tmp" && chmod 600 "$tmp" 2>/dev/null 9>&- && chown "$uid:" "$tmp" 2>/dev/null 9>&-; then
         if [[ -L "$dir/handshake" ]]; then
-          rm -f "$dir/handshake"
+          rm -f "$dir/handshake" 9>&-
         fi
         if [[ -f "$dir/iface" && ! -L "$dir/iface" ]]; then
-          mv -f "$tmp" "$dir/handshake" 2>/dev/null || rm -f "$tmp"
-          chmod 600 "$dir/handshake" 2>/dev/null || true
-          chown "$uid:" "$dir/handshake" 2>/dev/null || true
+          mv -f "$tmp" "$dir/handshake" 2>/dev/null 9>&- || rm -f "$tmp" 9>&-
         else
-          rm -f "$tmp"
+          rm -f "$tmp" 9>&-
         fi
       else
-        rm -f "$tmp"
+        rm -f "$tmp" 9>&-
       fi
     fi
   fi
-  sleep 2
+  sleep 2 9>&-
 done
-rm -f "$dir/handshake" "$dir/handshake.pid"
+rm -f "$dir/handshake" "$dir/handshake.pid" 9>&-
 HANDSHAKE_BODY
   chmod 755 "$tmp" || { rm -f "$tmp"; return 1; }
   chown root:root "$tmp" || { rm -f "$tmp"; return 1; }

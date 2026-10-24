@@ -3783,7 +3783,13 @@ mod security_tests {
         check("veritas-recover-syntax.sh", &recover);
         assert!(path_adapt.contains("start_handshake_publisher"));
         assert!(script.contains("stop_handshake_publisher"));
-        assert!(script.contains("wg show veritas0 dump 2>/dev/null | handshake_from_dump"));
+        assert!(script.contains(
+            "exec 9>&-; wg show veritas0 dump 2>/dev/null 9>&- | handshake_from_dump 9>&-"
+        ));
+        assert!(script.contains("sleep 2 9>&-"));
+        assert!(script.contains("kill -- \"-$pid\""));
+        assert!(!script.contains("chmod 600 \"$dir/handshake\""));
+        assert!(!script.contains("chown \"$uid:\" \"$dir/handshake\""));
         assert!(!script.contains("chown \"$DESKTOP_USER:\" \"/var/run/wireguard/"));
         let sudoers = script.find("NOPASSWD").expect("sudoers grant");
         let sudoers_end = script[sudoers..].find('\n').unwrap() + sudoers;
