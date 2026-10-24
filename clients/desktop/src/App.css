@@ -838,6 +838,25 @@ input::placeholder { color: var(--paper-dim); }
   flex: 0 0 auto;
 }
 
+.killswitch-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 183, 77, 0.42);
+  border-radius: 16px;
+  background: rgba(255, 183, 77, 0.1);
+  color: var(--warning);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.killswitch-banner p {
+  margin: 0;
+}
+
 .tunnel-section-label {
   margin: 6px 0 0;
   color: var(--paper-dim);

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicholas/tauri/refs/heads/v2/crates/tauri-config-schema/schema.json",
   "productName": "VeritasVPN",
-  "version": "0.2.97",
+  "version": "0.2.99",
   "identifier": "cloud.veritasvpn.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -54,9 +54,12 @@
     "linux": {
       "deb": {
         "desktopTemplate": "./linux/veritasvpn.desktop",
+        "preInstallScript": "./linux/killswitch-cleanup.sh",
         "postInstallScript": "./linux/postinst.sh",
+        "preRemoveScript": "./linux/killswitch-cleanup.sh",
         "files": {
-          "/usr/share/pixmaps/veritasvpn-desktop.png": "icons/256x256.png"
+          "/usr/share/pixmaps/veritasvpn-desktop.png": "icons/256x256.png",
+          "/usr/lib/veritasvpn/killswitch-cleanup.sh": "linux/killswitch-cleanup.sh"
         }
       },
       "rpm": {

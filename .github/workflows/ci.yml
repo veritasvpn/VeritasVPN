@@ -225,6 +225,8 @@ jobs:
         working-directory: third_party/rust/glib-0.18.5
       - run: cargo check --locked
         working-directory: clients/desktop/src-tauri
+      - run: cargo test --locked --lib
+        working-directory: clients/desktop/src-tauri
       - name: Bundle wstunnel for Stealth mode
         run: bash scripts/bundle-wstunnel-linux.sh
         working-directory: clients/desktop

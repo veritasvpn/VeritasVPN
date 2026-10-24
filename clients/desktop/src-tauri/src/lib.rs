@@ -121,6 +121,28 @@ impl WgTunnelConfig {
     }
 }
 
+/// A reused device peer is returned as a bare host. A fresh allocation already
+/// has the prefix. The tunnel address has to be CIDR either way.
+fn ensure_host_cidr(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() || value.contains('/') {
+        return value.to_string();
+    }
+    if value.parse::<std::net::Ipv4Addr>().is_ok() {
+        return format!("{value}/32");
+    }
+    if value.parse::<std::net::Ipv6Addr>().is_ok() {
+        return format!("{value}/128");
+    }
+    value.to_string()
+}
+
+impl WgTunnelConfig {
+    fn normalize_addresses(&mut self) {
+        self.address = ensure_host_cidr(&self.address);
+    }
+}
+
 fn validate_cidr(value: &str, field: &str) -> Result<(), String> {
     let value = value.trim();
     let (ip, prefix) = value
@@ -466,7 +488,9 @@ fn b64_key_to_hex(b64: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn connect_wireguard(app: AppHandle, config: WgTunnelConfig) -> ConnectResult {
+async fn connect_wireguard(app: AppHandle, mut config: WgTunnelConfig) -> ConnectResult {
+    let _ = tauri::async_runtime::spawn_blocking(close_recovery_exception_quiet).await;
+    config.normalize_addresses();
     if let Err(message) = config.validate() {
         return ConnectResult {
             success: false,
@@ -606,6 +630,37 @@ fn linux_iface_sysfs_stats(iface: &str) -> (bool, u64, u64) {
     (up, rx, tx)
 }
 
+/// The root publisher writes one decimal unix time. Anything else is ignored
+/// so a tampered or partial file cannot be treated as a handshake.
+fn parse_published_handshake(text: &str) -> i64 {
+    let text = text.trim();
+    if text.is_empty() || text.len() > 20 || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return 0;
+    }
+    match text.parse::<i64>() {
+        Ok(n) if n > 0 => n,
+        _ => 0,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_published_handshake() -> i64 {
+    let Ok(dir) = privileged_state_dir() else {
+        return 0;
+    };
+    // No iface file means this session is down, even if a stale integer remains.
+    let Ok(iface) = fs::read_to_string(dir.join("iface")) else {
+        return 0;
+    };
+    if iface.trim() != "veritas0" {
+        return 0;
+    }
+    let Ok(text) = fs::read_to_string(dir.join("handshake")) else {
+        return 0;
+    };
+    parse_published_handshake(&text)
+}
+
 #[cfg(target_os = "linux")]
 fn wireguard_stats_linux() -> WgTransferStats {
     let iface = iface_path()
@@ -623,51 +678,15 @@ fn wireguard_stats_linux() -> WgTransferStats {
         };
     }
 
+    // Byte counters stay on sysfs. The handshake comes from a root-published
+    // integer: unprivileged `wg show dump` is EPERM on in-kernel WireGuard,
+    // and that dump's first line is the interface private key.
     let (sys_up, sys_rx, sys_tx) = linux_iface_sysfs_stats(&iface);
-
-    // The privileged bring-up sets the per-interface UAPI socket owner to the
-    // desktop user, so stats never need a passwordless shell.
-    let dump_text = Command::new("wg")
-        .args(["show", &iface, "dump"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
-
-    let Some(text) = dump_text else {
-        // Unprivileged `wg` often fails on the root-only UAPI socket; still
-        // report interface + byte counters from sysfs so LIVE STATS is useful.
-        return WgTransferStats {
-            rx_bytes: sys_rx,
-            tx_bytes: sys_tx,
-            last_handshake_sec: 0,
-            interface_up: sys_up,
-        };
-    };
-
-    // dump: iface line then peer lines with last_handshake rx_bytes tx_bytes
-    let mut rx = 0u64;
-    let mut tx = 0u64;
-    let mut handshake = 0i64;
-    let mut up = false;
-    let line_count = text.lines().count();
-    for (i, line) in text.lines().enumerate() {
-        let cols: Vec<&str> = line.split('\t').collect();
-        if i == 0 {
-            up = !cols.is_empty();
-            continue;
-        }
-        if cols.len() >= 7 {
-            handshake = cols[4].parse().unwrap_or(0);
-            rx = cols[5].parse().unwrap_or(0);
-            tx = cols[6].parse().unwrap_or(0);
-        }
-    }
     WgTransferStats {
-        rx_bytes: if rx > 0 { rx } else { sys_rx },
-        tx_bytes: if tx > 0 { tx } else { sys_tx },
-        last_handshake_sec: handshake,
-        interface_up: (up && line_count > 1) || sys_up,
+        rx_bytes: sys_rx,
+        tx_bytes: sys_tx,
+        last_handshake_sec: read_published_handshake(),
+        interface_up: sys_up,
     }
 }
 
@@ -681,6 +700,7 @@ async fn disconnect_wireguard(app: AppHandle, soft: Option<bool>) -> ConnectResu
         stop_network_switch_watcher();
     }
     let result = tauri::async_runtime::spawn_blocking(move || {
+        close_recovery_exception_quiet();
         if soft {
             let _guard = SoftElevatedGuard::enter();
             bring_down_wireguard(&app)
@@ -796,7 +816,10 @@ pub(crate) fn refresh_endpoint_route_linux() -> RouteRefreshResult {
     }
 
     // Helper rebinds on any underlay change, including same gateway IP.
+    // The token lets that helper read the peer on the underlay. It is removed
+    // before this function returns, including on failure.
     if Path::new(SOFT_PATH_ADAPT_HELPER).exists() {
+        let _token = PeerCheckTokenGuard::install();
         match Command::new("timeout")
             .args(["20", "sudo", "-n", SOFT_PATH_ADAPT_HELPER])
             .output()
@@ -806,28 +829,25 @@ pub(crate) fn refresh_endpoint_route_linux() -> RouteRefreshResult {
                 return RouteRefreshResult {
                     refreshed: true,
                     gateway: old_gw,
-                    message: if msg.is_empty() {
+                    message: if msg.is_empty() || msg.contains('=') {
                         "endpoint route rebound".into()
                     } else {
                         msg
                     },
                 };
             }
-            Ok(out) => {
+            Ok(_) => {
                 return RouteRefreshResult {
                     refreshed: false,
                     gateway: old_gw,
-                    message: format!(
-                        "path-adapt: {}",
-                        String::from_utf8_lossy(&out.stderr).trim()
-                    ),
+                    message: "path-adapt failed".into(),
                 };
             }
-            Err(e) => {
+            Err(_) => {
                 return RouteRefreshResult {
                     refreshed: false,
                     gateway: old_gw,
-                    message: format!("path-adapt spawn: {e}"),
+                    message: "path-adapt failed".into(),
                 };
             }
         }
@@ -1014,20 +1034,30 @@ pub(crate) fn reapply_dns_from_saved() -> Result<RouteRefreshResult, String> {
             }
         }
     }
-    // Prefer resolvectl on the underlay interface when available.
-    if !gw_if.is_empty() {
-        if let Ok(out) = Command::new("resolvectl")
-            .args(["dns", &gw_if, &dns])
-            .output()
-        {
-            if out.status.success() {
-                return Ok(RouteRefreshResult {
-                    refreshed: true,
-                    gateway: gw_if.clone(),
-                    message: format!("DNS re-applied via resolvectl on {gw_if}: {dns}"),
-                });
-            }
+    // Prefer the tunnel resolver. The physical link keeps its own servers.
+    if Command::new("resolvectl")
+        .args(["dns", "veritas0", &dns])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .is_some()
+    {
+        let _ = Command::new("resolvectl")
+            .args(["domain", "veritas0", "~."])
+            .output();
+        let _ = Command::new("resolvectl")
+            .args(["default-route", "veritas0", "true"])
+            .output();
+        if !gw_if.is_empty() {
+            let _ = Command::new("resolvectl")
+                .args(["default-route", &gw_if, "false"])
+                .output();
         }
+        return Ok(RouteRefreshResult {
+            refreshed: true,
+            gateway: gw_if,
+            message: "DNS re-applied on the tunnel".into(),
+        });
     }
     // Fallback: write the DNS server into resolv.conf if writable.
     // Soft recovery must never hang on elevated — use noninteractive only.
@@ -1035,12 +1065,15 @@ pub(crate) fn reapply_dns_from_saved() -> Result<RouteRefreshResult, String> {
         r#"#!/bin/bash
 set -uo pipefail
 if command -v resolvectl >/dev/null 2>&1; then
-  GW_IF="{gw_if}"
   DNS="{dns}"
+  GW_IF="{gw_if}"
+  resolvectl dns veritas0 "$DNS" 2>/dev/null || true
+  resolvectl domain veritas0 '~.' 2>/dev/null || true
+  resolvectl default-route veritas0 true 2>/dev/null || true
   if [[ -n "$GW_IF" ]]; then
-    resolvectl dns "$GW_IF" "$DNS" 2>/dev/null || true
-    resolvectl flush-caches 2>/dev/null || true
+    resolvectl default-route "$GW_IF" false 2>/dev/null || true
   fi
+  resolvectl flush-caches 2>/dev/null || true
 fi
 "#,
         gw_if = gw_if.replace('\'', "'\\''"),
@@ -1106,8 +1139,473 @@ fn public_egress_ok() -> bool {
 
 /// Root-owned soft-recovery helpers installed at connect time.
 const SOFT_CLEANUP_HELPER: &str = "/var/lib/veritasvpn/cleanup-killswitch.sh";
+const PACKAGED_KILLSWITCH_CLEANUP: &str = "/usr/lib/veritasvpn/killswitch-cleanup.sh";
 const SOFT_PATH_ADAPT_HELPER: &str = "/var/lib/veritasvpn/path-adapt.sh";
 const SOFT_TEARDOWN_HELPER: &str = "/var/lib/veritasvpn/teardown.sh";
+const SOFT_RECOVER_HELPER: &str = "/var/lib/veritasvpn/recover-swap.sh";
+
+fn peer_check_token_path() -> Result<PathBuf, String> {
+    Ok(state_dir()?.join("peer-check.token"))
+}
+
+/// Short-lived copy of the access token so the root peer read can authenticate
+/// on the underlay. The value is never placed in an error string or a log.
+fn write_peer_check_token() -> Result<(), ()> {
+    let token = keyring_entry("access_token")
+        .ok()
+        .and_then(|entry| entry.get_password().ok())
+        .ok_or(())?;
+    if token.is_empty()
+        || token.len() > 4096
+        || !token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return Err(());
+    }
+    let path = peer_check_token_path().map_err(|_| ())?;
+    write_secret_file(&path, token.as_bytes()).map_err(|_| ())
+}
+
+fn remove_peer_check_token() {
+    let Ok(path) = peer_check_token_path() else {
+        return;
+    };
+    if let Ok(mut file) = fs::OpenOptions::new().write(true).open(&path) {
+        let _ = file.write_all(&[0u8; 32]);
+        let _ = file.flush();
+    }
+    let _ = fs::remove_file(path);
+}
+
+struct PeerCheckTokenGuard;
+
+impl PeerCheckTokenGuard {
+    fn install() -> Self {
+        let _ = write_peer_check_token();
+        Self
+    }
+}
+
+impl Drop for PeerCheckTokenGuard {
+    fn drop(&mut self) {
+        remove_peer_check_token();
+    }
+}
+
+fn recover_result(success: bool) -> ConnectResult {
+    ConnectResult {
+        success,
+        message: if success {
+            "WireGuard reconnected".into()
+        } else {
+            "Reconnecting…".into()
+        },
+        mode: "wireguard".into(),
+        peer_id: String::new(),
+    }
+}
+
+fn run_recover_helper(args: &[&str], timeout_secs: u64) -> bool {
+    if !Path::new(SOFT_RECOVER_HELPER).exists() {
+        return false;
+    }
+    let secs = timeout_secs.clamp(1, 25).to_string();
+    let mut command = Command::new("timeout");
+    command.args([&secs, "sudo", "-n", SOFT_RECOVER_HELPER]);
+    command.args(args);
+    match command.output() {
+        Ok(out) => out.status.success(),
+        Err(_) => false,
+    }
+}
+
+fn recovery_helper_budget(timeout_secs: Option<u64>) -> u64 {
+    timeout_secs.unwrap_or(8).clamp(1, 8)
+}
+
+fn recovery_open_blocking(timeout_secs: u64) -> bool {
+    let Some(token) = network_switch::recovery_lock_acquire_owned() else {
+        return false;
+    };
+    if run_recover_helper(&["open"], timeout_secs) {
+        true
+    } else {
+        network_switch::recovery_lock_abandon(token);
+        false
+    }
+}
+
+fn close_recovery_exception_quiet() {
+    let _ = run_recover_helper(&["close"], 8);
+}
+
+fn recovery_close_blocking(release_lock: bool) {
+    close_recovery_exception_quiet();
+    if release_lock {
+        network_switch::recovery_lock_release_owned();
+    }
+}
+
+/// Open a scoped API exception without touching the kill switch. Serialized
+/// with path-adapt. Failure leaves the firewall up and returns no script output.
+#[tauri::command]
+async fn recovery_open(timeout_secs: Option<u64>) -> ConnectResult {
+    let secs = recovery_helper_budget(timeout_secs);
+    let ok = tauri::async_runtime::spawn_blocking(move || recovery_open_blocking(secs))
+        .await
+        .unwrap_or(false);
+    recover_result(ok)
+}
+
+/// Remove only the temporary API exception opened for recovery.
+/// `release_lock` is true for the close that pairs with recovery_open.
+/// Startup, connect, and disconnect pass false so they cannot drop an
+/// in-flight path-adapt lock they did not take.
+#[tauri::command]
+async fn recovery_close(release_lock: Option<bool>) -> ConnectResult {
+    let release = release_lock.unwrap_or(true);
+    let _ = tauri::async_runtime::spawn_blocking(move || recovery_close_blocking(release)).await;
+    recover_result(true)
+}
+
+fn recovery_allowed_field(allowed: &[String]) -> Result<String, String> {
+    let parts: Vec<String> = if allowed.is_empty() {
+        vec!["0.0.0.0/0".to_string(), "::/0".to_string()]
+    } else {
+        allowed
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    let parts = if parts.is_empty() {
+        vec!["0.0.0.0/0".to_string(), "::/0".to_string()]
+    } else {
+        parts
+    };
+    for part in &parts {
+        if part.len() > 64
+            || !part.contains('/')
+            || !part
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b':' | b'/'))
+        {
+            return Err("could not store the tunnel config".into());
+        }
+    }
+    Ok(parts.join(","))
+}
+
+fn write_recover_request(config: &WgTunnelConfig) -> Result<(), String> {
+    config.validate()?;
+    let dir = state_dir()?;
+    let endpoint = if config.stealth_endpoint.trim().is_empty() {
+        config.endpoint.trim().to_string()
+    } else {
+        "127.0.0.1:41820".into()
+    };
+    let allowed_joined = if config.allowed_ips.is_empty() {
+        "0.0.0.0/0, ::/0".to_string()
+    } else {
+        config
+            .allowed_ips
+            .iter()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let allowed_field = recovery_allowed_field(&config.allowed_ips)?;
+    let mut wg_conf = format!(
+        "[Interface]\nPrivateKey = {}\n\n[Peer]\nPublicKey = {}\nEndpoint = {}\nPersistentKeepalive = 25\nAllowedIPs = {allowed_joined}\n",
+        config.private_key.trim(),
+        config.server_public_key.trim(),
+        endpoint
+    );
+    if !config.preshared_key.trim().is_empty() {
+        wg_conf.push_str(&format!(
+            "PresharedKey = {}\n",
+            config.preshared_key.trim()
+        ));
+    }
+    write_secret_file(&dir.join("wg.conf"), wg_conf.as_bytes())
+        .map_err(|_| "could not store the tunnel config".to_string())?;
+    let dns = if config.dns.trim().is_empty() {
+        "1.1.1.1"
+    } else {
+        config.dns.trim()
+    };
+    let request = format!(
+        "address={}\nendpoint={}\nendpoint_wan={}\nendpoint_lan={}\nstealth_remote={}\nstealth_prefix={}\ndns={}\nfresh_ep={}\nfresh_stealth={}\nallowed={allowed_field}\n",
+        config.address.trim(),
+        config.endpoint.trim(),
+        config.endpoint_wan.trim(),
+        config.endpoint_lan.trim(),
+        config.stealth_endpoint.trim(),
+        config.stealth_path_prefix.trim(),
+        dns,
+        config.endpoint.trim(),
+        config.stealth_endpoint.trim(),
+    );
+    if request.bytes().any(|b| b == 0 || b == b'\r') {
+        return Err("could not store the tunnel config".into());
+    }
+    write_secret_file(&dir.join("recover-request"), request.as_bytes())
+        .map_err(|_| "could not store the tunnel config".to_string())?;
+    let _ = fs::write(peer_id_path()?, config.peer_id.as_bytes());
+    let _ = network_switch::save_last_config(&network_switch::SavedTunnelConfig {
+        private_key: config.private_key.clone(),
+        address: config.address.clone(),
+        dns: config.dns.clone(),
+        server_public_key: config.server_public_key.clone(),
+        endpoint: config.endpoint.clone(),
+        allowed_ips: config.allowed_ips.clone(),
+        peer_id: config.peer_id.clone(),
+        preshared_key: config.preshared_key.clone(),
+        stealth_endpoint: config.stealth_endpoint.clone(),
+        stealth_path_prefix: config.stealth_path_prefix.clone(),
+        endpoint_lan: config.endpoint_lan.clone(),
+        endpoint_wan: config.endpoint_wan.clone(),
+    });
+    Ok(())
+}
+
+fn recover_wireguard_blocking(app: AppHandle, mut config: WgTunnelConfig, timeout_secs: u64) -> bool {
+    config.normalize_addresses();
+    if write_recover_request(&config).is_err() {
+        return false;
+    }
+    if !run_recover_helper(&["apply"], timeout_secs) {
+        return false;
+    }
+    let _ = APP_HANDLE_FOR_RECOVER.set(app);
+    start_network_switch_watcher_if_needed();
+    true
+}
+
+/// Replace the WireGuard peer while the kill switch, sudoers, and helpers stay.
+/// Script output is ignored so a server address cannot reach the UI.
+#[tauri::command]
+async fn recover_wireguard(
+    app: AppHandle,
+    config: WgTunnelConfig,
+    timeout_secs: Option<u64>,
+) -> ConnectResult {
+    let secs = recovery_helper_budget(timeout_secs);
+    let ok = tauri::async_runtime::spawn_blocking(move || {
+        recover_wireguard_blocking(app, config, secs)
+    })
+    .await
+    .unwrap_or(false);
+    recover_result(ok)
+}
+
+#[derive(Serialize)]
+struct StaleKillSwitchStatus {
+    blocked: bool,
+    cleared: bool,
+}
+
+fn nic_name_is_physical_candidate(name: &str) -> bool {
+    if name.is_empty() || name.len() > 15 {
+        return false;
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+    {
+        return false;
+    }
+    const BLOCKED: [&str; 6] = ["lo", "veritas0", "tailscale0", "docker0", "tun0", "wg0"];
+    if BLOCKED.contains(&name) {
+        return false;
+    }
+    const PREFIXES: [&str; 9] = [
+        "tailscale", "docker", "veth", "br-", "virbr", "tun", "wg", "zt", "ifb",
+    ];
+    !PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+}
+
+/// True only for a link this app set to `-DefaultRoute`, and only while the
+/// tunnel is down. A NIC that merely has no resolver, and the underlay while
+/// `veritas0` is up, are not leftovers.
+fn recorded_underlay_needs_restore(tunnel_up: bool, recorded: bool, status: &str) -> bool {
+    if tunnel_up || !recorded {
+        return false;
+    }
+    status.lines().any(|line| line.contains("-DefaultRoute"))
+}
+
+#[cfg(target_os = "linux")]
+fn recorded_link_names() -> Vec<String> {
+    let Ok(dir) = privileged_state_dir() else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    let mut push = |raw: &str| {
+        let name = raw.trim();
+        if nic_name_is_physical_candidate(name) && !names.iter().any(|existing| existing == name) {
+            names.push(name.to_string());
+        }
+    };
+    if let Ok(text) = fs::read_to_string(dir.join("iface.meta.links")) {
+        for line in text.lines() {
+            push(line);
+        }
+    }
+    if let Ok(text) = fs::read_to_string(dir.join("iface.meta")) {
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("gw_if=") {
+                push(rest);
+            }
+        }
+    }
+    names
+}
+
+#[cfg(target_os = "linux")]
+fn recorded_dns_stuck() -> bool {
+    if command_succeeded("ip", &["link", "show", "veritas0"]) {
+        return false;
+    }
+    for name in recorded_link_names() {
+        let Ok(out) = Command::new("timeout")
+            .args(["5", "resolvectl", "status", &name])
+            .output()
+        else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        if recorded_underlay_needs_restore(false, true, &String::from_utf8_lossy(&out.stdout)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn line_is_app_blackhole(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let metric_one = words
+        .windows(2)
+        .any(|pair| pair[0] == "metric" && pair[1] == "1");
+    lower.contains("blackhole") && lower.contains("default") && metric_one
+}
+
+#[cfg(target_os = "linux")]
+fn command_succeeded(program: &str, args: &[&str]) -> bool {
+    Command::new(program)
+        .args(args)
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn app_blackhole_present() -> bool {
+    for args in [["route", "show"].as_slice(), ["-6", "route", "show"].as_slice()] {
+        let Ok(out) = Command::new("ip").args(args).output() else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        if String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .any(line_is_app_blackhole)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn nft_killswitch_present() -> bool {
+    command_succeeded("nft", &["list", "table", "inet", "veritasvpn_killswitch"])
+}
+
+#[cfg(target_os = "linux")]
+fn stale_kill_switch_present() -> bool {
+    app_blackhole_present() || nft_killswitch_present() || recorded_dns_stuck()
+}
+
+#[cfg(target_os = "linux")]
+fn sudo_n_root_script(path: &str) -> bool {
+    if !Path::new(path).is_file() {
+        return false;
+    }
+    command_succeeded("timeout", &["20", "sudo", "-n", "/bin/bash", path])
+}
+
+#[cfg(target_os = "linux")]
+fn pkexec_root_script(path: &str) -> bool {
+    command_succeeded("pkexec", &["/bin/bash", path])
+}
+
+/// Clear a kill switch left behind after a package swap. One passwordless
+/// attempt for the packaged script, one for the connect-time helper, then a
+/// single pkexec prompt. Soft recovery never prompts. Stderr stays here.
+#[cfg(target_os = "linux")]
+fn clear_stale_kill_switch_blocking() -> StaleKillSwitchStatus {
+    if !stale_kill_switch_present() {
+        return StaleKillSwitchStatus {
+            blocked: false,
+            cleared: false,
+        };
+    }
+    let _ = sudo_n_root_script(PACKAGED_KILLSWITCH_CLEANUP);
+    if !stale_kill_switch_present() {
+        return StaleKillSwitchStatus {
+            blocked: false,
+            cleared: true,
+        };
+    }
+    let _ = sudo_n_root_script(SOFT_CLEANUP_HELPER);
+    if !stale_kill_switch_present() {
+        return StaleKillSwitchStatus {
+            blocked: false,
+            cleared: true,
+        };
+    }
+    if is_soft_elevated() {
+        return StaleKillSwitchStatus {
+            blocked: true,
+            cleared: false,
+        };
+    }
+    if Path::new(PACKAGED_KILLSWITCH_CLEANUP).is_file() {
+        let _ = pkexec_root_script(PACKAGED_KILLSWITCH_CLEANUP);
+    } else {
+        let _ = run_elevated(include_str!("../linux/killswitch-cleanup.sh"));
+    }
+    let still = stale_kill_switch_present();
+    StaleKillSwitchStatus {
+        blocked: still,
+        cleared: !still,
+    }
+}
+
+#[tauri::command]
+async fn clear_stale_kill_switch() -> StaleKillSwitchStatus {
+    #[cfg(target_os = "linux")]
+    {
+        return tauri::async_runtime::spawn_blocking(clear_stale_kill_switch_blocking)
+            .await
+            .unwrap_or(StaleKillSwitchStatus {
+                blocked: false,
+                cleared: false,
+            });
+    }
+    #[cfg(not(target_os = "linux"))]
+    StaleKillSwitchStatus {
+        blocked: false,
+        cleared: false,
+    }
+}
 
 #[allow(dead_code)]
 pub(crate) fn cleanup_kill_switch_noninteractive() -> Result<bool, String> {
@@ -1136,7 +1634,7 @@ pub(crate) fn cleanup_kill_switch_noninteractive() -> Result<bool, String> {
 #[allow(dead_code)]
 pub(crate) fn bring_up_from_saved_config_soft() -> Result<String, String> {
     let saved = network_switch::load_last_config().map_err(|e| e)?;
-    let config = WgTunnelConfig {
+    let mut config = WgTunnelConfig {
         private_key: saved.private_key,
         address: saved.address,
         dns: saved.dns,
@@ -1150,6 +1648,7 @@ pub(crate) fn bring_up_from_saved_config_soft() -> Result<String, String> {
         endpoint_lan: saved.endpoint_lan,
         endpoint_wan: saved.endpoint_wan,
     };
+    config.normalize_addresses();
     config.validate()?;
     // Soft reconnect: force noninteractive elevated only — never pkexec.
     // Soft reconnect is detached so soft recovery never freezes the watcher.
@@ -1678,14 +2177,8 @@ fn bring_up_wireguard_linux_full(
     };
 
     let dir = state_dir()?;
-    let address = config
-        .address
-        .trim()
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_string();
-    if address.is_empty() {
+    let address = ensure_host_cidr(config.address.trim());
+    if !address.contains('/') {
         return Err("missing assigned address".into());
     }
 
@@ -1791,9 +2284,9 @@ fn bring_up_wireguard_linux_full(
         run_elevated(&script)?;
     }
     if stealth_remote.is_empty() {
-        Ok(format!("WireGuard connected via {endpoint}"))
+        Ok("WireGuard connected".into())
     } else {
-        Ok(format!("WireGuard connected via stealth {stealth_remote}"))
+        Ok("WireGuard connected via stealth".into())
     }
 }
 
@@ -1841,6 +2334,11 @@ IFACE=""
 ENGINE=""
 RUNTIME_DIR="$(dirname "$IFACE_FILE")"
 install -d -m 0755 "$RUNTIME_DIR"
+rm -f "$RUNTIME_DIR/fresh-read"
+
+{endpoint_fns}
+{handshake_fns}
+{dns_fns}
 
 safe_stop_pid_file() {{
   local file="$1" expected="$2" pid="" uid="" command=""
@@ -1894,9 +2392,9 @@ install_killswitch() {{
       case " $seen " in *" $ip "*) continue ;; esac
       seen="$seen $ip"
       if [[ -n "$STEALTH_REMOTE" ]]; then
-        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ip" tcp dport "$ROUTE_PORT" accept || return 1
+        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ip" tcp dport "$ROUTE_PORT" accept comment \"veritas-outside\" || return 1
       else
-        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ip" udp dport "$ROUTE_PORT" accept || return 1
+        nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" ip daddr "$ip" udp dport "$ROUTE_PORT" accept comment \"veritas-outside\" || return 1
       fi
     done
     nft add rule inet "$KILLSWITCH_TABLE" output oifname != "$IFACE_NAME" oifname != "lo" drop || return 1
@@ -1917,9 +2415,9 @@ install_killswitch() {{
       case " $seen " in *" $ip "*) continue ;; esac
       seen="$seen $ip"
       if [[ -n "$STEALTH_REMOTE" ]]; then
-        iptables -A "$KILLSWITCH_CHAIN" -d "$ip" -p tcp --dport "$ROUTE_PORT" -j ACCEPT || return 1
+        iptables -A "$KILLSWITCH_CHAIN" -d "$ip" -p tcp --dport "$ROUTE_PORT" -m comment --comment veritas-outside -j ACCEPT || return 1
       else
-        iptables -A "$KILLSWITCH_CHAIN" -d "$ip" -p udp --dport "$ROUTE_PORT" -j ACCEPT || return 1
+        iptables -A "$KILLSWITCH_CHAIN" -d "$ip" -p udp --dport "$ROUTE_PORT" -m comment --comment veritas-outside -j ACCEPT || return 1
       fi
     done
     iptables -A "$KILLSWITCH_CHAIN" -j DROP || return 1
@@ -1939,6 +2437,7 @@ install_killswitch() {{
 trap 'rm -f "$UAPI"' EXIT
 
 # --- tear down any previous Veritas tunnel (best-effort) ---
+stop_handshake_publisher "$RUNTIME_DIR"
 cleanup_killswitch
 ip -6 route del blackhole default metric 1 2>/dev/null || true
 safe_stop_pid_file "$PID_FILE" "wireguard-go"
@@ -1980,6 +2479,9 @@ if [[ -n "$ROUTE_HOST" ]]; then
   fi
 fi
 ENDPOINT_IP="$ROUTE_IP"
+API_IP=""
+API_IP="$(getent ahostsv4 api.veritasvpn.cloud 2>/dev/null | awk '{{print $1; exit}}' || true)"
+[[ "$API_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || API_IP=""
 LAN_HOST="${{ENDPOINT_LAN%%:*}}"
 WAN_HOST="${{ENDPOINT_WAN%%:*}}"
 [[ "$LAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || LAN_HOST=""
@@ -2026,18 +2528,49 @@ if [[ -n "$STEALTH_REMOTE" ]]; then
     echo "stealth engine missing: $WSTUNNEL" >&2
     exit 1
   fi
-  "$WSTUNNEL" client \
-    --http-upgrade-path-prefix "$STEALTH_PREFIX" \
-    -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
-    "wss://${{STEALTH_REMOTE}}" \
-    >/tmp/veritas-wstunnel.log 2>&1 &
+  WST_URL="wss://${{STEALTH_REMOTE}}"
+  WST_SNI=""
+  if [[ -n "$ROUTE_IP" || -n "$STEALTH_REMOTE" ]]; then
+    while IFS= read -r _wst_line; do
+      case "$_wst_line" in
+        url\ *) WST_URL="${{_wst_line#url }}" ;;
+        sni\ *) WST_SNI="${{_wst_line#sni }}" ;;
+      esac
+    done < <(wstunnel_prepare_line "$STEALTH_REMOTE" "$ROUTE_IP")
+  fi
+  touch "$RUNTIME_DIR/wstunnel.log"
+  chmod 600 "$RUNTIME_DIR/wstunnel.log"
+  if [[ -n "$WST_SNI" && "$WST_SNI" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    "$WSTUNNEL" client \
+      --tls-sni-override "$WST_SNI" \
+      --http-upgrade-path-prefix "$STEALTH_PREFIX" \
+      -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
+      "$WST_URL" \
+      >"$RUNTIME_DIR/wstunnel.log" 2>&1 &
+  else
+    "$WSTUNNEL" client \
+      --http-upgrade-path-prefix "$STEALTH_PREFIX" \
+      -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
+      "$WST_URL" \
+      >"$RUNTIME_DIR/wstunnel.log" 2>&1 &
+  fi
   echo $! > "$STEALTH_PID_FILE"
   sleep 0.4
+  _wst_actual="$(actual_wstunnel_ip "$(cat "$STEALTH_PID_FILE" 2>/dev/null || true)")"
+  if [[ "$_wst_actual" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    ROUTE_IP="$_wst_actual"
+  fi
   if ! kill -0 "$(cat "$STEALTH_PID_FILE")" 2>/dev/null; then
     echo "failed to start stealth transport" >&2
-    cat /tmp/veritas-wstunnel.log >&2 || true
     exit 1
   fi
+  ENDPOINT_IP="$ROUTE_IP"
+  # The connect dial counts as the restart for this network, so a healthy
+  # tunnel is not torn down by the first path-adapt a few seconds later.
+  _stealth_now="$(date +%s 2>/dev/null || echo 0)"
+  [[ "$_stealth_now" =~ ^[0-9]+$ ]] || _stealth_now=0
+  printf 'issued=%s|%s\nissued_at=%s\nbaseline_rx=0\ndials=1\n' "$GW" "$GW_IF" "$_stealth_now" > "$RUNTIME_DIR/stealth-roam"
+  chmod 600 "$RUNTIME_DIR/stealth-roam" 2>/dev/null || true
 fi
 
 # Start WireGuard: prefer in-kernel (stable under pkexec). wireguard-go's
@@ -2079,20 +2612,8 @@ else
     exit 1
   fi
 
-  # Desktop UI polls `wg show` unprivileged. wireguard-go's UAPI socket is
-  # root-only by default, which made LIVE STATS show 0 B / Handshake never.
-  DESKTOP_USER="${{SUDO_USER:-}}"
-  if [[ -z "$DESKTOP_USER" && -n "${{PKEXEC_UID:-}}" ]]; then
-    DESKTOP_USER="$(getent passwd "$PKEXEC_UID" | cut -d: -f1 || true)"
-  fi
-  if [[ -z "$DESKTOP_USER" ]]; then
-    DESKTOP_USER="$(stat -c '%U' "$(dirname "$IFACE_FILE")" 2>/dev/null || true)"
-  fi
-  if [[ -n "$DESKTOP_USER" && -S "/var/run/wireguard/${{IFACE}}.sock" ]]; then
-    chown "$DESKTOP_USER:" "/var/run/wireguard/${{IFACE}}.sock" 2>/dev/null || true
-    chmod 600 "/var/run/wireguard/${{IFACE}}.sock" 2>/dev/null || true
-  fi
-
+  # The UAPI socket stays root-only. Delegating it would expose the private
+  # key in `wg show dump`. LIVE STATS reads the published handshake integer.
   if ! python3 - "$IFACE" "$UAPI" <<'PY'
 import socket, sys, pathlib
 iface, uapi = sys.argv[1], sys.argv[2]
@@ -2119,7 +2640,10 @@ PY
 fi
 echo "$IFACE_NAME" > "$IFACE_FILE"
 
-ip addr add "$ADDR" dev "$IFACE_NAME"
+if ! ip addr replace "$ADDR" dev "$IFACE_NAME" >/tmp/veritas-wg-addr.log 2>&1; then
+  echo "Could not start the tunnel. Try connecting again." >&2
+  exit 1
+fi
 ip link set "$IFACE_NAME" up
 # Product default MTU 1280 (reliability on mobile/hostile paths); see docs/MTU_STRATEGY.md
 ip link set "$IFACE_NAME" mtu 1280
@@ -2150,9 +2674,6 @@ if [[ -n "$ROUTE_IP" && "$ROUTE_IP" != "127.0.0.1" ]]; then
 fi
 if [[ -n "$WAN_HOST" && "$WAN_HOST" != "$ROUTE_IP" ]]; then
   bind_host_route "$WAN_HOST" "$GW" "$GW_IF" "$UNDERLAY_SRC"
-fi
-if [[ -n "$LAN_HOST" && "$LAN_HOST" != "$ROUTE_IP" && -n "$UNDERLAY_SRC" ]] && [[ "$(same_ipv4_24 "$LAN_HOST" "$UNDERLAY_SRC")" == "yes" ]]; then
-  bind_host_route "$LAN_HOST" "$GW" "$GW_IF" "$UNDERLAY_SRC"
 fi
 
 # Split default via the tunnel
@@ -2213,13 +2734,15 @@ if ! install_killswitch; then
   exit 1
 fi
 
-# DNS: backup resolv.conf and set new DNS
-cp /etc/resolv.conf "$DNS_BACKUP" 2>/dev/null || true
-if [[ -w /etc/resolv.conf ]]; then
-  echo "nameserver $DNS" > /etc/resolv.conf
-elif command -v resolvectl >/dev/null 2>&1; then
-  resolvectl dns "$GW_IF" "$DNS" 2>/dev/null || true
-  resolvectl flush-caches 2>/dev/null || true
+# DNS goes to veritas0. The physical link keeps its own servers and loses
+# the default DNS route until disconnect turns that route back on. Overwriting
+# stub-resolv.conf is only the fallback when resolvectl is missing.
+LINKS_FILE="${{META_FILE}}.links"
+if ! apply_tunnel_dns "$DNS" "$GW_IF" "$LINKS_FILE"; then
+  cp /etc/resolv.conf "$DNS_BACKUP" 2>/dev/null || true
+  if [[ -w /etc/resolv.conf ]]; then
+    echo "nameserver $DNS" > /etc/resolv.conf
+  fi
 fi
 
 # Persist state for teardown / path rebind
@@ -2228,8 +2751,8 @@ if [[ -n "$GW_IF" ]]; then
   UNDERLAY_SRC="$(ip -4 -o addr show dev "$GW_IF" 2>/dev/null | awk '{{print $4; exit}}')"
   UNDERLAY_SRC="${{UNDERLAY_SRC%%/*}}"
 fi
-printf 'endpoint_ip=%s\nendpoint=%s\nendpoint_lan=%s\nendpoint_wan=%s\ngateway=%s\niface=%s\ngw_if=%s\nunderlay_src=%s\ndns=%s\nstealth_remote=%s\nengine=%s\n' \
-  "$ROUTE_IP" "$ENDPOINT" "$ENDPOINT_LAN" "$ENDPOINT_WAN" "$GW" "$IFACE_NAME" "$GW_IF" "$UNDERLAY_SRC" "$DNS" "$STEALTH_REMOTE" "$ENGINE" > "$META_FILE"
+printf 'endpoint_ip=%s\nendpoint=%s\nendpoint_lan=%s\nendpoint_wan=%s\ngateway=%s\niface=%s\ngw_if=%s\nunderlay_src=%s\ndns=%s\nstealth_remote=%s\nstealth_prefix=%s\nwstunnel_bin=%s\napi_ip=%s\nstealth_bound=%s\nengine=%s\n' \
+  "$ROUTE_IP" "$ENDPOINT" "$ENDPOINT_LAN" "$ENDPOINT_WAN" "$GW" "$IFACE_NAME" "$GW_IF" "$UNDERLAY_SRC" "$DNS" "$STEALTH_REMOTE" "$STEALTH_PREFIX" "$WSTUNNEL" "$API_IP" "${{GW}}|${{GW_IF}}" "$ENGINE" > "$META_FILE"
 
 restore_after_validation_fail() {{
   local msg="$1"
@@ -2240,13 +2763,7 @@ restore_after_validation_fail() {{
   ip -6 route del blackhole default metric 1 2>/dev/null || true
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
   unbind_host_routes
-  if [[ -f "$DNS_BACKUP" ]]; then
-    cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
-  fi
-  if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
-    resolvectl revert "$GW_IF" 2>/dev/null || true
-  fi
-  rm -f "$DNS_BACKUP"
+  restore_veritas_dns "${{META_FILE}}.links" "$DNS_BACKUP" "$META_FILE" "$GW_IF" || true
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   safe_stop_pid_file "$PID_FILE" "wireguard-go"
   safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
@@ -2306,6 +2823,7 @@ fi
 cat > "$SOFT_DIR/cleanup-killswitch.sh" <<'SOFT_CLEANUP'
 #!/bin/bash
 set -uo pipefail
+{dns_fns}
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || exit 1
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || exit 1
@@ -2343,13 +2861,7 @@ ip route del 128.0.0.0/1 dev "$IFACE" 2>/dev/null || true
 ip route del 0.0.0.0/1 2>/dev/null || true
 ip route del 128.0.0.0/1 2>/dev/null || true
 ip route del 10.0.0.0/24 dev "$IFACE" 2>/dev/null || true
-if [[ -f "$DNS_BACKUP" ]]; then
-  cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
-fi
-if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
-  resolvectl revert "$GW_IF" 2>/dev/null || true
-  resolvectl flush-caches 2>/dev/null || true
-fi
+restore_veritas_dns "${{META}}.links" "$DNS_BACKUP" "$META" "$GW_IF" || true
 echo ok
 SOFT_CLEANUP
 chmod 755 "$SOFT_DIR/cleanup-killswitch.sh"
@@ -2361,12 +2873,18 @@ cat > "$SOFT_DIR/path-adapt.sh" <<'SOFT_PATH'
 # the tunnel down. Same behavior as Android: stay connected across network
 # changes (including Wi-Fi→Wi-Fi with the same gateway IP).
 set -uo pipefail
+{endpoint_fns}
+{fresh_fns}
+{stealth_fns}
+{handshake_fns}
+{dns_fns}
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || exit 1
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || exit 1
 STATE_DIR="/var/lib/veritasvpn/state/$RUNTIME_UID"
 META="$STATE_DIR/iface.meta"
 [[ -f "$META" && ! -L "$META" ]] || exit 0
+start_handshake_publisher "$STATE_DIR" || true
 meta_value() {{
   awk -F= -v wanted="$1" '$1 == wanted {{ print substr($0, index($0, "=") + 1); exit }}' "$META"
 }}
@@ -2383,23 +2901,9 @@ OLD_IF="$(meta_value gw_if)"
 [[ -z "$ENDPOINT_LAN" || "$ENDPOINT_LAN" =~ ^[A-Za-z0-9.:[\]-]+$ ]] || ENDPOINT_LAN=""
 [[ -z "$ENDPOINT_WAN" || "$ENDPOINT_WAN" =~ ^[A-Za-z0-9.:[\]-]+$ ]] || ENDPOINT_WAN=""
 [[ -z "$OLD_IF" || "$OLD_IF" =~ ^[A-Za-z0-9_.:-]{{1,15}}$ ]] || OLD_IF=""
-LAN_HOST="${{ENDPOINT_LAN%%:*}}"
 WAN_HOST="${{ENDPOINT_WAN%%:*}}"
-[[ "$LAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || LAN_HOST=""
 [[ "$WAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || WAN_HOST=""
 [[ -n "$ENDPOINT_IP" && "$ENDPOINT_IP" != "127.0.0.1" ]] || exit 0
-# Older APIs only sent the current endpoint. Treat a private one as LAN.
-if [[ -z "$LAN_HOST" && "$ENDPOINT_IP" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.) ]]; then
-  LAN_HOST="$ENDPOINT_IP"
-  [[ -n "$ENDPOINT_LAN" ]] || ENDPOINT_LAN="${{ENDPOINT:-$ENDPOINT_IP:51820}}"
-fi
-
-same_ipv4_24() {{
-  local a="$1" b="$2"
-  [[ "$a" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {{ echo no; return; }}
-  [[ "$b" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {{ echo no; return; }}
-  [[ "${{a%.*}}" == "${{b%.*}}" ]] && echo yes || echo no
-}}
 
 detect_underlay() {{
   local gw="" gif="" src=""
@@ -2457,20 +2961,47 @@ for _ in $(seq 1 25); do
 done
 [[ -n "$NEW_GW" ]] || exit 0
 
-# Prefer the LAN node address when we are on its subnet; otherwise WAN.
-# Frozen connect-time endpoint is why leaving/joining home used to die.
-# Stealth keeps WireGuard on loopback — only the TLS host route moves.
-CHOOSE_IP="$ENDPOINT_IP"
-CHOOSE_EP="${{ENDPOINT:-$ENDPOINT_IP:51820}}"
-STEALTH="${{stealth_remote:-}}"
-if [[ -z "$STEALTH" ]]; then
-  if [[ -n "$LAN_HOST" && -n "$NEW_SRC" ]] && [[ "$(same_ipv4_24 "$LAN_HOST" "$NEW_SRC")" == "yes" ]]; then
-    CHOOSE_IP="$LAN_HOST"
-    CHOOSE_EP="${{ENDPOINT_LAN:-$LAN_HOST:51820}}"
-  elif [[ -n "$WAN_HOST" ]]; then
-    CHOOSE_IP="$WAN_HOST"
-    CHOOSE_EP="${{ENDPOINT_WAN:-$WAN_HOST:51820}}"
-  fi
+# A shared /24 is not proof we are on the node LAN. Use a private endpoint
+# only when a fresh peer read on this underlay returned that private address.
+# Otherwise stay on the public endpoint. Stealth keeps WireGuard on loopback.
+STEALTH_REMOTE="$(meta_value stealth_remote)"
+STEALTH_PREFIX="$(meta_value stealth_prefix)"
+WSTUNNEL_BIN="$(meta_value wstunnel_bin)"
+case "$STEALTH_REMOTE" in
+  "") ;;
+  *[!A-Za-z0-9.:-]*) exit 0 ;;
+esac
+case "$STEALTH_PREFIX" in
+  "") ;;
+  /*) ;;
+  *) STEALTH_PREFIX="" ;;
+esac
+case "$STEALTH_PREFIX" in
+  *..*) STEALTH_PREFIX="" ;;
+esac
+if [[ -n "$STEALTH_PREFIX" && ! "$STEALTH_PREFIX" =~ ^[A-Za-z0-9/._~-]+$ ]]; then
+  STEALTH_PREFIX=""
+fi
+case "$WSTUNNEL_BIN" in
+  /*) ;;
+  *) WSTUNNEL_BIN="" ;;
+esac
+case "$WSTUNNEL_BIN" in
+  *..*|*[!A-Za-z0-9/._~+-]*) WSTUNNEL_BIN="" ;;
+esac
+FRESH_EP=""
+FRESH_STEALTH=""
+STEALTH_BOUND_NOW=""
+_fresh="$(maybe_fresh_lines "$NEW_GW" "$NEW_GW_IF" "$NEW_SRC" || true)"
+_fresh_code="$(printf '%s\n' "$_fresh" | sed -n '1p')"
+if [[ "$_fresh_code" == "200" ]]; then
+  FRESH_EP="$(printf '%s\n' "$_fresh" | sed -n '2p')"
+  FRESH_STEALTH="$(printf '%s\n' "$_fresh" | sed -n '3p')"
+fi
+apply_endpoint_choice
+if [[ ! "$CHOOSE_IP" =~ ^([0-9]{{1,3}}\.){{3}}[0-9]{{1,3}}$ || "$CHOOSE_IP" == "127.0.0.1" ]]; then
+  echo "ok path-adapt"
+  exit 0
 fi
 
 OLD_EP_IP="$ENDPOINT_IP"
@@ -2493,10 +3024,6 @@ if [[ -n "$WAN_HOST" && "$WAN_HOST" != "$CHOOSE_IP" ]]; then
   ip route del "$WAN_HOST/32" 2>/dev/null || true
   ip route replace "$WAN_HOST/32" via "$NEW_GW" ${{NEW_GW_IF:+dev $NEW_GW_IF}} 2>/dev/null || true
 fi
-if [[ -n "$LAN_HOST" && "$LAN_HOST" != "$CHOOSE_IP" ]]; then
-  ip route del "$LAN_HOST" 2>/dev/null || true
-  ip route del "$LAN_HOST/32" 2>/dev/null || true
-fi
 if command -v conntrack >/dev/null 2>&1; then
   conntrack -D -p udp --dst "$OLD_EP_IP" 2>/dev/null || true
   conntrack -D -p tcp --dst "$OLD_EP_IP" 2>/dev/null || true
@@ -2509,24 +3036,35 @@ if [[ -z "$STEALTH" ]] && [[ "$CHOOSE_EP" != 127.0.0.1:* ]] && command -v wg >/d
     wg set "$IFACE" peer "$PEER" endpoint "$CHOOSE_EP" 2>/dev/null || true
   fi
 fi
-if [[ -n "$DNS" ]] && command -v resolvectl >/dev/null 2>&1; then
-  if [[ -n "${{gw_if:-}}" && "${{gw_if}}" != "$NEW_GW_IF" ]]; then
-    resolvectl revert "$gw_if" 2>/dev/null || true
-  fi
-  resolvectl dns "$NEW_GW_IF" "$DNS" 2>/dev/null || true
-  resolvectl flush-caches 2>/dev/null || true
+# Open the new path without removing the kill-switch drop rule.
+if [[ -n "$STEALTH" ]]; then
+  _allow_port="$(port_of "${{STEALTH_DIAL:-$STEALTH}}" 2>/dev/null || true)"
+  [[ -n "$_allow_port" ]] && allow_outside_ip "$CHOOSE_IP" "$_allow_port" tcp
+else
+  _allow_port="$(port_of "$CHOOSE_EP" 2>/dev/null || true)"
+  [[ -n "$_allow_port" ]] && allow_outside_ip "$CHOOSE_IP" "$_allow_port" udp
 fi
-if [[ -n "$DNS" && -w /etc/resolv.conf ]]; then
-  echo "nameserver $DNS" > /etc/resolv.conf 2>/dev/null || true
+maybe_restart_stealth
+if [[ -n "$DNS" ]]; then
+  if [[ -n "${{gw_if:-}}" && "${{gw_if}}" != "$NEW_GW_IF" ]] && dns_link_name_ok "$gw_if"; then
+    resolvectl default-route "$gw_if" true >/dev/null 2>&1 || true
+  fi
+  apply_tunnel_dns "$DNS" "$NEW_GW_IF" "$STATE_DIR/iface.meta.links" || true
 fi
 tmp="$(mktemp)"
-awk -v gw="$NEW_GW" -v gwif="$NEW_GW_IF" -v src="$NEW_SRC" -v epip="$CHOOSE_IP" -v ep="$CHOOSE_EP" '
-  BEGIN{{gw_set=0; gwif_set=0; src_set=0; epip_set=0; ep_set=0}}
+awk -v gw="$NEW_GW" -v gwif="$NEW_GW_IF" -v src="$NEW_SRC" -v epip="$CHOOSE_IP" -v ep="$CHOOSE_EP" -v bound="$STEALTH_BOUND_NOW" '
+  BEGIN{{gw_set=0; gwif_set=0; src_set=0; epip_set=0; ep_set=0; bound_set=0}}
   /^gateway=/ {{print "gateway=" gw; gw_set=1; next}}
   /^gw_if=/ {{print "gw_if=" gwif; gwif_set=1; next}}
   /^underlay_src=/ {{print "underlay_src=" src; src_set=1; next}}
   /^endpoint_ip=/ {{print "endpoint_ip=" epip; epip_set=1; next}}
   /^endpoint=/ {{print "endpoint=" ep; ep_set=1; next}}
+  /^stealth_bound=/ {{
+    if (bound != "") {{ print "stealth_bound=" bound; bound_set=1; next }}
+    print
+    bound_set=1
+    next
+  }}
   {{print}}
   END{{
     if (!gw_set) print "gateway=" gw
@@ -2534,13 +3072,29 @@ awk -v gw="$NEW_GW" -v gwif="$NEW_GW_IF" -v src="$NEW_SRC" -v epip="$CHOOSE_IP" 
     if (!src_set && src != "") print "underlay_src=" src
     if (!epip_set) print "endpoint_ip=" epip
     if (!ep_set) print "endpoint=" ep
+    if (!bound_set && bound != "") print "stealth_bound=" bound
   }}
 ' "$META" > "$tmp"
 mv "$tmp" "$META"
-echo "ok endpoint=$CHOOSE_IP via=$NEW_GW dev=$NEW_GW_IF src=$NEW_SRC onlink=$(same_ipv4_24 "$CHOOSE_IP" "$NEW_SRC")"
+echo "ok path-adapt"
 SOFT_PATH
 chmod 755 "$SOFT_DIR/path-adapt.sh"
 chown root:root "$SOFT_DIR/path-adapt.sh"
+
+cat > "$SOFT_DIR/recover-swap.sh" <<'RECOVER_SWAP'
+#!/bin/bash
+set -uo pipefail
+{endpoint_fns}
+{fresh_fns}
+{stealth_fns}
+{handshake_fns}
+{dns_fns}
+{recover_fns}
+recovery_main "$@"
+RECOVER_SWAP
+chmod 755 "$SOFT_DIR/recover-swap.sh"
+chown root:root "$SOFT_DIR/recover-swap.sh"
+rm -f "$SOFT_DIR/peer-check.sh"
 
 # Remove the legacy root dispatcher. Network changes are handled by the
 # desktop watcher, which preserves SUDO_USER for state isolation.
@@ -2552,10 +3106,13 @@ if [[ -n "$DESKTOP_USER" ]]; then
   cat > "$SOFT_DIR/teardown.sh" <<'SOFT_TEARDOWN'
 #!/bin/bash
 set -uo pipefail
+{handshake_fns}
+{dns_fns}
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || {{ echo "SUDO_USER is required" >&2; exit 1; }}
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || {{ echo "invalid runtime uid" >&2; exit 1; }}
 STATE_DIR="/var/lib/veritasvpn/state/$RUNTIME_UID"
+stop_handshake_publisher "$STATE_DIR" || true
 IFACE_FILE="$STATE_DIR/iface"
 PID_FILE="$STATE_DIR/wireguard-go.pid"
 STEALTH_PID_FILE="$STATE_DIR/wstunnel.pid"
@@ -2632,21 +3189,14 @@ done
 safe_stop_pid_file "$PID_FILE" "wireguard-go"
 rm -f /var/run/wireguard/*.sock 2>/dev/null || true
 safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
-rm -f "$IFACE_FILE" "$META_FILE"
-if [[ -f "$DNS_BACKUP" ]]; then
-  cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
-fi
-if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
-  resolvectl revert "$GW_IF" 2>/dev/null || true
-  resolvectl flush-caches 2>/dev/null || true
-fi
-rm -f "$DNS_BACKUP"
+rm -f "$IFACE_FILE" "$STATE_DIR/stealth-roam" "$STATE_DIR/fresh-read"
+restore_veritas_dns "${{META_FILE}}.links" "$DNS_BACKUP" "$META_FILE" "$GW_IF" || true
 # Optional on intentional disconnect. Soft reconnect omits this flag so the
 # passwordless helpers stay available for the next recovery.
 if [[ "${{1:-}}" == "--purge" ]]; then
   rm -f /etc/sudoers.d/veritasvpn-soft
   rm -f /etc/NetworkManager/dispatcher.d/50-veritasvpn
-  rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh
+  rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh /var/lib/veritasvpn/handshake.sh
   rmdir /var/lib/veritasvpn 2>/dev/null || true
 fi
 echo ok
@@ -2654,12 +3204,13 @@ SOFT_TEARDOWN
   chmod 755 "$SOFT_DIR/teardown.sh"
   chown root:root "$SOFT_DIR/teardown.sh"
 
-  printf '%s ALL=(root) NOPASSWD: %s/path-adapt.sh, %s/teardown.sh\n' \
-    "$DESKTOP_USER" "$SOFT_DIR" "$SOFT_DIR" > /etc/sudoers.d/veritasvpn-soft
+  printf '%s ALL=(root) NOPASSWD: %s/path-adapt.sh, %s/teardown.sh, %s/recover-swap.sh\n' \
+    "$DESKTOP_USER" "$SOFT_DIR" "$SOFT_DIR" "$SOFT_DIR" > /etc/sudoers.d/veritasvpn-soft
   chmod 440 /etc/sudoers.d/veritasvpn-soft
 fi
 
-echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}} gw=$GW engine=$ENGINE"
+start_handshake_publisher "$RUNTIME_DIR" || true
+echo "ok iface=$IFACE_NAME engine=$ENGINE"
 "#,
         wg_go = shell_quote(&wg_go.display().to_string()),
         uapi = shell_quote(&uapi_path.display().to_string()),
@@ -2675,6 +3226,12 @@ echo "ok iface=$IFACE_NAME endpoint_ip=$ROUTE_IP stealth=${{STEALTH_REMOTE:-off}
         endpoint = shell_quote(endpoint),
         endpoint_lan = shell_quote(endpoint_lan),
         endpoint_wan = shell_quote(endpoint_wan),
+        endpoint_fns = include_str!("endpoint_choice.sh"),
+        fresh_fns = include_str!("fresh_peer.sh"),
+        stealth_fns = include_str!("stealth_apply.sh"),
+        recover_fns = include_str!("recover_swap.sh"),
+        handshake_fns = include_str!("handshake_publish.sh"),
+        dns_fns = include_str!("dns_restore.sh"),
     )
 }
 
@@ -2876,6 +3433,9 @@ PID_FILE={pid_file}
 STEALTH_PID_FILE={stealth_pid}
 META_FILE={meta_file}
 DNS_BACKUP="${{META_FILE}}.dns"
+{handshake_fns}
+{dns_fns}
+stop_handshake_publisher "$(dirname "$IFACE_FILE")" || true
 
 ENDPOINT_IP=""
 GW=""
@@ -2935,7 +3495,8 @@ ip -6 route del blackhole default metric 1 2>/dev/null || true
 # Soft-recovery helpers (installed at connect) — remove on intentional disconnect.
 rm -f /etc/sudoers.d/veritasvpn-soft
 rm -f /etc/NetworkManager/dispatcher.d/50-veritasvpn
-rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh
+rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh /var/lib/veritasvpn/handshake.sh
+rm -f "$(dirname "$META_FILE")/stealth-roam"
 rmdir /var/lib/veritasvpn 2>/dev/null || true
 
 # Remove split-tunnel routes
@@ -2961,21 +3522,11 @@ rm -f /var/run/wireguard/*.sock 2>/dev/null || true
 # Stop stealth sidecar
 safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
 
-rm -f "$IFACE_FILE" "$META_FILE"
+rm -f "$IFACE_FILE" "$(dirname "$IFACE_FILE")/fresh-read"
 
-# Restore DNS
-if [[ -f "$DNS_BACKUP" ]]; then
-  cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
-fi
-if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
-  resolvectl revert "$GW_IF" 2>/dev/null || true
-fi
-# Full DNS reset so browsing works immediately after disconnect
-if command -v resolvectl >/dev/null 2>&1; then
-  resolvectl flush-caches 2>/dev/null || true
-fi
-systemctl reload-or-restart systemd-resolved 2>/dev/null || true
-rm -f "$DNS_BACKUP"
+# Revert every link this session touched, then any physical NIC still left
+# without DNS. Delete the backup and metadata only after that succeeds.
+restore_veritas_dns "${{META_FILE}}.links" "$DNS_BACKUP" "$META_FILE" "$GW_IF" || true
 
 echo ok
 "#,
@@ -2983,6 +3534,8 @@ echo ok
         pid_file = shell_quote(&pid_file.display().to_string()),
         stealth_pid = shell_quote(&stealth_pid_path()?.display().to_string()),
         meta_file = shell_quote(&meta_file.display().to_string()),
+        handshake_fns = include_str!("handshake_publish.sh"),
+        dns_fns = include_str!("dns_restore.sh"),
     );
     fs::write(&script_path, &script).map_err(|e| format!("write teardown: {e}"))?;
     #[cfg(unix)]
@@ -3333,6 +3886,21 @@ mod security_tests {
     }
 
     #[test]
+    fn reused_bare_peer_address_is_a_host_route() {
+        assert_eq!(ensure_host_cidr("10.7.0.2"), "10.7.0.2/32");
+        assert_eq!(ensure_host_cidr(" 10.7.0.2 "), "10.7.0.2/32");
+        assert_eq!(ensure_host_cidr("10.7.0.2/32"), "10.7.0.2/32");
+        assert_eq!(ensure_host_cidr("fd00::2"), "fd00::2/128");
+        assert_eq!(ensure_host_cidr(""), "");
+        assert_eq!(ensure_host_cidr("not-an-address"), "not-an-address");
+        let mut config = valid_config();
+        config.address = "10.7.0.2".into();
+        config.normalize_addresses();
+        config.validate().expect("bare host address");
+        assert_eq!(config.address, "10.7.0.2/32");
+    }
+
+    #[test]
     fn rejects_shell_syntax_in_privileged_fields() {
         for malicious in ["1.1.1.1'; id #", "$(id)", "host:51820\nwhoami"] {
             let mut config = valid_config();
@@ -3385,6 +3953,209 @@ mod security_tests {
         assert_eq!(bound_device_text("abcdefghij", 4), "abcd");
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bringup_helpers_are_valid_bash() {
+        let script = build_bringup_script_linux(
+            Path::new("/usr/bin/wireguard-go"),
+            Path::new("/tmp/uapi.txt"),
+            Path::new("/tmp/wg.conf"),
+            Path::new("/var/lib/veritasvpn/state/1000/iface"),
+            Path::new("/tmp/wireguard-go.pid"),
+            "10.0.0.2/32",
+            "10.0.0.1",
+            "203.0.113.10:51820",
+            "vpn.example.com:443",
+            Path::new("/usr/lib/veritasvpn/wstunnel"),
+            "/vpn",
+            Path::new("/tmp/wstunnel.pid"),
+            "192.168.0.6:51820",
+            "203.0.113.10:51820",
+        );
+        let dir = std::env::temp_dir();
+        let check = |name: &str, body: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            let status = std::process::Command::new("bash")
+                .arg("-n")
+                .arg(&path)
+                .status()
+                .expect("bash -n");
+            let _ = std::fs::remove_file(&path);
+            assert!(status.success(), "{name} has a syntax error");
+        };
+        check("veritas-bringup-syntax.sh", &script);
+        let heredoc = |marker: &str| {
+            let start_token = format!("<<'{marker}'\n");
+            let start = script
+                .find(&start_token)
+                .unwrap_or_else(|| panic!("missing {marker}"))
+                + start_token.len();
+            let end_token = format!("\n{marker}\n");
+            let end = script[start..]
+                .find(&end_token)
+                .unwrap_or_else(|| panic!("unclosed {marker}"))
+                + start;
+            script[start..end].to_string()
+        };
+        let path_adapt = heredoc("SOFT_PATH");
+        assert!(path_adapt.contains("apply_endpoint_choice"));
+        assert!(path_adapt.contains("maybe_fresh_lines"));
+        assert!(path_adapt.contains("maybe_restart_stealth"));
+        assert!(!path_adapt.contains("CHOOSE_IP=\"$LAN_HOST\""));
+        assert!(!path_adapt.contains("LAN_HOST="));
+        check("veritas-path-adapt-syntax.sh", &path_adapt);
+        let recover = heredoc("RECOVER_SWAP");
+        assert!(recover.contains("recovery_main"));
+        assert!(recover.contains("systemd-run"));
+        assert!(recover.contains("expire-after"));
+        assert!(recover.contains("start_handshake_publisher"));
+        assert!(!recover.contains("10.0.0.0/24"));
+        assert!(!recover.contains("nft delete table"));
+        assert!(!recover.contains("cleanup_killswitch"));
+        assert!(!recover.contains("ip route del blackhole"));
+        check("veritas-recover-syntax.sh", &recover);
+        assert!(path_adapt.contains("start_handshake_publisher"));
+        assert!(script.contains("stop_handshake_publisher"));
+        assert!(script.contains(
+            "exec 9>&-; wg show veritas0 dump 2>/dev/null | handshake_from_dump"
+        ));
+        assert!(script.contains("sleep 2 9>&-"));
+        assert!(script.contains("kill -- \"-$pid\""));
+        assert!(!script.contains("chmod 600 \"$dir/handshake\""));
+        assert!(!script.contains("chown \"$uid:\" \"$dir/handshake\""));
+        assert!(!script.contains("chown \"$uid:\""));
+        assert!(script.contains("logger -t veritasvpn-handshake"));
+        assert!(script.contains("apply_tunnel_dns"));
+        assert!(script.contains("resolvectl dns veritas0"));
+        assert!(script.contains("resolvectl default-route veritas0 true"));
+        assert!(script.contains("ip addr replace \"$ADDR\""));
+        assert!(script.contains("10.0.0.2/32"));
+        assert!(!script.contains("resolvectl dns \"$GW_IF\""));
+        assert!(!script.contains("resolvectl dns \"$NEW_GW_IF\""));
+        assert!(!script.contains("resolvectl revert \"$gw_if\""));
+        assert!(!script.contains("chown \"$DESKTOP_USER:\" \"/var/run/wireguard/"));
+        let sudoers = script.find("NOPASSWD").expect("sudoers grant");
+        let sudoers_end = script[sudoers..].find('\n').unwrap() + sudoers;
+        let sudoers_line = &script[sudoers..sudoers_end];
+        assert!(
+            !sudoers_line.contains("handshake.sh"),
+            "handshake publisher must not be passwordless sudo"
+        );
+        assert!(!sudoers_line.contains("cleanup-killswitch.sh"));
+        assert!(!sudoers_line.contains("killswitch-cleanup.sh"));
+        let cleanup = heredoc("SOFT_CLEANUP");
+        assert!(cleanup.contains("nft delete table inet veritasvpn_killswitch"));
+        assert!(cleanup.contains("ip route del blackhole default metric 1"));
+        assert!(cleanup.contains("ip -6 route del blackhole default metric 1"));
+        assert!(!cleanup.contains("ip rule"));
+        assert!(!cleanup.contains("table 52"));
+        check("veritas-cleanup-syntax.sh", &cleanup);
+    }
+
+    #[test]
+    fn app_blackhole_line_is_metric_one_only() {
+        assert!(line_is_app_blackhole("blackhole default metric 1"));
+        assert!(line_is_app_blackhole(
+            "blackhole default proto static metric 1"
+        ));
+        assert!(!line_is_app_blackhole("blackhole default metric 10"));
+        assert!(!line_is_app_blackhole("blackhole default metric 100"));
+        assert!(!line_is_app_blackhole(
+            "default via 192.0.2.1 dev eth0 metric 1"
+        ));
+        assert!(!line_is_app_blackhole("blackhole 10.0.0.0/8 metric 1"));
+    }
+
+    #[test]
+    fn recorded_underlay_only_when_this_app_cleared_the_default_route() {
+        let off = "Protocols: -DefaultRoute\nDNS Servers: 1.1.1.1\n";
+        let on = "Protocols: +DefaultRoute\nDNS Servers: 1.1.1.1\n";
+        let no_dns = "Protocols: +DefaultRoute\nCurrent Scopes: none\n";
+        assert!(recorded_underlay_needs_restore(false, true, off));
+        assert!(!recorded_underlay_needs_restore(true, true, off));
+        assert!(!recorded_underlay_needs_restore(false, false, off));
+        assert!(!recorded_underlay_needs_restore(false, true, on));
+        assert!(!recorded_underlay_needs_restore(false, false, no_dns));
+    }
+
+    #[test]
+    fn physical_nic_filter_skips_tailscale_and_docker() {
+        assert!(nic_name_is_physical_candidate("eno1"));
+        assert!(nic_name_is_physical_candidate("enp0s3"));
+        assert!(nic_name_is_physical_candidate("wlan0"));
+        assert!(!nic_name_is_physical_candidate("tailscale0"));
+        assert!(!nic_name_is_physical_candidate("docker0"));
+        assert!(!nic_name_is_physical_candidate("veth7191c24"));
+        assert!(!nic_name_is_physical_candidate("br-1234"));
+        assert!(!nic_name_is_physical_candidate("veritas0"));
+        assert!(!nic_name_is_physical_candidate("lo"));
+    }
+
+    #[test]
+    fn packaged_killswitch_cleanup_stays_inside_veritas() {
+        let script = include_str!("../linux/killswitch-cleanup.sh");
+        assert!(script.contains("nft delete table inet veritasvpn_killswitch"));
+        assert!(script.contains("ip route del blackhole default metric 1"));
+        assert!(script.contains("ip -6 route del blackhole default metric 1"));
+        assert!(script.contains("ip link delete veritas0"));
+        assert!(script.contains("exit 0"));
+        assert!(script.contains("restore_veritas_dns"));
+        assert!(script.contains("resolvectl default-route"));
+        assert!(script.contains("nmcli device reapply"));
+        assert!(script.contains("systemctl reload NetworkManager"));
+        assert!(script.contains("timeout"));
+        assert!(!script.contains("physical_links"));
+        assert!(!script.contains("resolvectl revert \"$link\""));
+        assert!(script.contains("tailscale0"));
+        let embedded = script
+            .split_once("# BEGIN dns_restore.sh\n")
+            .and_then(|(_, rest)| rest.split_once("# END dns_restore.sh\n"))
+            .map(|(body, _)| body)
+            .expect("packaged cleanup embeds dns restore");
+        assert_eq!(embedded, include_str!("dns_restore.sh"));
+        assert!(!script.contains("ip rule"));
+        assert!(!script.contains("table 52"));
+        assert!(!script.contains("5210"));
+        assert!(!script.contains("nft flush ruleset"));
+        let conf = include_str!("../tauri.conf.json");
+        assert!(conf.contains("\"preInstallScript\": \"./linux/killswitch-cleanup.sh\""));
+        assert!(conf.contains("\"preRemoveScript\": \"./linux/killswitch-cleanup.sh\""));
+        assert!(conf.contains("\"/usr/lib/veritasvpn/killswitch-cleanup.sh\""));
+    }
+
+    #[test]
+    fn published_handshake_is_a_positive_integer_only() {
+        assert_eq!(parse_published_handshake("1700000000\n"), 1700000000);
+        assert_eq!(parse_published_handshake(" 42 "), 42);
+        assert_eq!(parse_published_handshake("0"), 0);
+        assert_eq!(parse_published_handshake("PRIVKEY_DO_NOT_LEAK"), 0);
+        assert_eq!(parse_published_handshake("-1"), 0);
+        assert_eq!(parse_published_handshake("12\n34"), 0);
+        assert_eq!(parse_published_handshake("9223372036854775808"), 0);
+        assert_eq!(parse_published_handshake(""), 0);
+    }
+
+    #[test]
+    fn recovery_allowed_field_keeps_cidr_charset() {
+        let field = recovery_allowed_field(&["0.0.0.0/0".into(), "::/0".into()]).unwrap();
+        assert_eq!(field, "0.0.0.0/0,::/0");
+        assert_eq!(recovery_allowed_field(&[]).unwrap(), "0.0.0.0/0,::/0");
+        assert!(recovery_allowed_field(&["10.0.0.0/24;id".into()]).is_err());
+    }
+
+    #[test]
+    fn reconnect_policy_matches_android() {
+        let status = std::process::Command::new("bash")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/reconnect_policy_test.sh"
+            ))
+            .status()
+            .expect("run reconnect policy tests");
+        assert!(status.success(), "reconnect policy tests failed");
+    }
+
     #[test]
     fn peer_metadata_has_platform_and_omits_a_custom_name() {
         let metadata = collect_desktop_device_metadata();
@@ -3405,6 +4176,10 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .setup(|_app| {
+            tauri::async_runtime::spawn_blocking(close_recovery_exception_quiet);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             secure_credential_set,
             secure_credential_get,
@@ -3416,7 +4191,11 @@ pub fn run() {
             disconnect_wireguard,
             wireguard_stats,
             refresh_endpoint_route,
-            network_switch_recover
+            network_switch_recover,
+            recovery_open,
+            recovery_close,
+            recover_wireguard,
+            clear_stale_kill_switch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
