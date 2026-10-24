@@ -13,10 +13,12 @@ Static legal pages for veritasvpn.cloud:
 | `support.html` | `/support.html` |
 | `../canary.txt` | `/canary.txt` |
 
-These are honest early-stage templates, not a substitute for lawyer review.
-Update dates and contact email when practices change. The public contact address
-is contact@veritasvpn.cloud. Keep the warrant canary in sync (monthly if you
-claim a monthly cadence). Support replies live in `support.html` and must match
+These pages describe the live service. Update dates when practices change.
+The public operator name is Veritas Ark, in Asunción, Paraguay. The public
+contact address is contact@veritasvpn.cloud. Do not add a street address,
+phone number, tax ID, or a personal name or email to the Terms or Privacy
+pages. Keep the warrant canary in sync (monthly if you claim a monthly
+cadence). Support replies live in `support.html` and must match
 `docs/SUPPORT_SNIPPETS.md`.
 
 ## For AI
