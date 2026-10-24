@@ -336,8 +336,8 @@ watch="$(mktemp)"
   ' "$ROOT/handshake_publish.sh"
 } > "$watch"
 bash -n "$watch"
-if ! grep -q 'exec 9>&-; wg show veritas0 dump 2>/dev/null 9>&- | handshake_from_dump 9>&-' "$watch"; then
-  fail "watcher pipe inherits the lock fd"
+if ! grep -q 'exec 9>&-; wg show veritas0 dump 2>/dev/null | handshake_from_dump' "$ROOT/handshake_publish.sh"; then
+  fail "watcher pipe does not close the lock fd"
 fi
 if ! grep -q 'sleep 2 9>&-' "$watch"; then
   fail "watcher sleep inherits the lock fd"
@@ -348,9 +348,45 @@ fi
 if grep -q 'chmod 600 "$dir/handshake"' "$ROOT/handshake_publish.sh"; then
   fail "chmod follows the handshake path"
 fi
-if grep -q 'chown "$uid:" "$dir/handshake"' "$ROOT/handshake_publish.sh"; then
-  fail "chown follows the handshake path"
+if grep -q 'chown "$uid:"' "$ROOT/handshake_publish.sh"; then
+  fail "numeric chown spec is rejected by coreutils"
 fi
+if ! grep -q 'logger -t veritasvpn-handshake' "$ROOT/handshake_publish.sh"; then
+  fail "handshake write failure is silent"
+fi
+if grep -q 'logger -t veritasvpn-handshake -- "$hs"' "$ROOT/handshake_publish.sh"; then
+  fail "handshake log includes the value"
+fi
+
+# The installed loop body, with the lock held, writes one integer from a kernel dump.
+hsdir="$(mktemp -d)"
+wgdir="$(mktemp -d)"
+printf 'veritas0\n' > "$hsdir/iface"
+cat > "$wgdir/wg" << 'EOF'
+#!/bin/bash
+if [[ "$1 $2 $3" == "show veritas0 dump" ]]; then
+  printf 'PRIVKEY_DO_NOT_LEAK\tpub\t51820\toff\n'
+  printf 'peerpub\t(none)\t203.0.113.10:51820\t0.0.0.0/0\t1700000099\t10\t20\t25\n'
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$wgdir/wg"
+bash -c '
+set -uo pipefail
+source "$1"
+exec 9>"$2/handshake.lock"
+flock -n 9 || exit 1
+PATH="$3:$PATH" publish_watcher_once "$2" "$4"
+' _ "$ROOT/handshake_publish.sh" "$hsdir" "$wgdir" "$(id -u)" || fail "watcher iteration failed"
+assert_eq "$(cat "$hsdir/handshake" 2>/dev/null || true)" "1700000099" "watcher wrote the kernel handshake"
+assert_eq "$(stat -c %a "$hsdir/handshake")" "600" "handshake mode"
+assert_eq "$(stat -c %u "$hsdir/handshake")" "$(id -u)" "handshake owner"
+if grep -q PRIVKEY "$hsdir/handshake"; then
+  fail "handshake file contains the private key"
+fi
+rm -rf "$hsdir" "$wgdir"
+
 if ! grep -q 'kill -- "-$pid"' "$ROOT/handshake_publish.sh"; then
   fail "stop does not signal the watcher process group"
 fi
@@ -411,7 +447,15 @@ grep -q 'nft delete table inet veritasvpn_killswitch' "$cleanup" || fail "cleanu
 grep -q 'ip route del blackhole default metric 1' "$cleanup" || fail "cleanup does not delete the v4 blackhole"
 grep -q 'ip -6 route del blackhole default metric 1' "$cleanup" || fail "cleanup does not delete the v6 blackhole"
 grep -q 'ip link delete veritas0' "$cleanup" || fail "cleanup does not delete veritas0"
-grep -q 'exit 0' "$cleanup" || fail "cleanup can fail the package operation"
+grep -q 'restore_veritas_dns' "$cleanup" || fail "cleanup does not restore DNS"
+grep -q 'resolvectl revert' "$cleanup" || fail "cleanup does not revert resolved"
+grep -q 'tailscale0' "$cleanup" || fail "cleanup does not exclude tailscale"
+if ! grep -q 'apply_tunnel_dns' "$ROOT/lib.rs"; then
+  fail "connect does not scope DNS to the tunnel"
+fi
+if grep -q 'resolvectl dns "$GW_IF"' "$ROOT/lib.rs" || grep -q 'resolvectl dns "$NEW_GW_IF"' "$ROOT/lib.rs" || grep -q 'resolvectl dns "$gif"' "$ROOT/recover_swap.sh"; then
+  fail "DNS is still pinned to the physical link"
+fi
 if grep -q 'table 52' "$cleanup" || grep -q '5210' "$cleanup" || grep -q 'ip rule' "$cleanup" || grep -q 'nft flush ruleset' "$cleanup"; then
   fail "cleanup touches another vendor"
 fi

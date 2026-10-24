@@ -810,6 +810,7 @@ function HomeStage({
   onDisconnect,
   onGetPremium,
   onDismissStatus,
+  restorePending,
 }: {
   connected: boolean;
   connecting: boolean;
@@ -831,6 +832,7 @@ function HomeStage({
   onDisconnect: () => void;
   onGetPremium: () => void;
   onDismissStatus: () => void;
+  restorePending: boolean;
 }) {
   const phase: HeroPhase = connected
     ? "protected"
@@ -841,7 +843,7 @@ function HomeStage({
         : subscriptionActive
           ? "ready"
           : "upsell";
-  const onClick = connecting || !subscriptionChecked
+  const onClick = connecting || !subscriptionChecked || (restorePending && !connected)
     ? null
     : connected
       ? onDisconnect
@@ -2270,7 +2272,7 @@ function App() {
 
   const killSwitchBanner = killSwitchLeftover && !connected && !connecting ? (
     <div className="killswitch-banner" role="status">
-      <p>Your internet is blocked by a leftover VeritasVPN kill switch.</p>
+      <p>Your internet is blocked by leftover VeritasVPN network settings.</p>
       <button
         type="button"
         className="btn-outline"
@@ -2570,6 +2572,7 @@ function App() {
             onDisconnect={() => { void handleDisconnect(); }}
             onGetPremium={openAccount}
             onDismissStatus={dismissStatus}
+            restorePending={killSwitchBusy}
           />
         )}
       </main>

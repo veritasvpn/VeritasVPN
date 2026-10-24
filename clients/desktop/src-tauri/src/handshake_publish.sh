@@ -21,35 +21,71 @@ handshake_state_uid() {
   printf '%s\n' "$uid"
 }
 
+handshake_log_once() {
+  local msg="$1"
+  [[ "${HANDSHAKE_FAIL_LOGGED:-}" == "$msg" ]] && return 0
+  HANDSHAKE_FAIL_LOGGED="$msg"
+  command -v logger >/dev/null 2>&1 || return 0
+  # One fixed line. Never the dump, the key, or the epoch.
+  logger -t veritasvpn-handshake -- "$msg" >/dev/null 2>&1 || true
+}
+
 write_handshake_file() {
   local dir="$1" value="$2" uid="$3" tmp="" saved=""
   [[ "$value" =~ ^[0-9]+$ ]] || return 0
-  [[ -d "$dir" && ! -L "$dir" ]] || return 0
+  [[ "$uid" =~ ^[0-9]+$ ]] || return 1
+  [[ -d "$dir" && ! -L "$dir" ]] || return 1
   [[ -f "$dir/iface" && ! -L "$dir/iface" ]] || return 0
   if [[ -L "$dir/handshake" ]]; then
-    rm -f "$dir/handshake"
+    rm -f "$dir/handshake" 9>&-
   fi
   saved="$(umask)"
   umask 077
-  tmp="$(mktemp "$dir/.handshake.XXXXXX" 2>/dev/null || true)"
+  # Close the lock fd inside the substitution. The temp file must not inherit it.
+  tmp="$(exec 9>&-; mktemp "$dir/.handshake.XXXXXX" 2>/dev/null || true)"
   umask "$saved"
-  [[ -n "$tmp" ]] || return 0
-  if ! printf '%s\n' "$value" > "$tmp"; then
-    rm -f "$tmp"
-    return 0
+  if [[ -z "$tmp" ]]; then
+    handshake_log_once "could not publish the handshake file"
+    return 1
   fi
-  chmod 600 "$tmp" 2>/dev/null || true
-  if ! chown "$uid:" "$tmp" 2>/dev/null; then
-    rm -f "$tmp"
-    return 0
+  if ! printf '%s\n' "$value" > "$tmp"; then
+    rm -f "$tmp" 9>&-
+    handshake_log_once "could not publish the handshake file"
+    return 1
+  fi
+  # GNU coreutils 9.4 rejects "chown <numeric-uid>:". The owner is enough;
+  # mode 0600 does not grant the group access. chmod/chown of the final path
+  # would follow a symlink, so they stay on the temp file.
+  if ! chmod 600 "$tmp" 2>/dev/null 9>&- || ! chown "$uid" "$tmp" 2>/dev/null 9>&-; then
+    rm -f "$tmp" 9>&-
+    handshake_log_once "could not publish the handshake file"
+    return 1
   fi
   if [[ -f "$dir/iface" && ! -L "$dir/iface" ]]; then
-    # Owner and mode are already set on the temp file. chmod/chown of the
-    # destination would follow a symlink.
-    mv -f "$tmp" "$dir/handshake" 2>/dev/null || rm -f "$tmp"
+    if ! mv -f "$tmp" "$dir/handshake" 2>/dev/null 9>&-; then
+      rm -f "$tmp" 9>&-
+      handshake_log_once "could not publish the handshake file"
+      return 1
+    fi
   else
-    rm -f "$tmp"
+    rm -f "$tmp" 9>&-
+    return 0
   fi
+  HANDSHAKE_FAIL_LOGGED=""
+  return 0
+}
+
+publish_watcher_once() {
+  local dir="$1" uid="$2" hs="" status=0
+  status=0
+  # exec closes fd 9 for this subshell before wg starts. A later 9>&- on wg
+  # would target an already-closed descriptor and is not required.
+  hs="$(exec 9>&-; wg show veritas0 dump 2>/dev/null | handshake_from_dump)" || status=$?
+  if [[ "$status" -ne 0 || ! "$hs" =~ ^[0-9]+$ ]]; then
+    handshake_log_once "could not read the handshake"
+    return 0
+  fi
+  write_handshake_file "$dir" "$hs" "$uid" || true
 }
 
 read_handshake_value() {
@@ -125,7 +161,10 @@ install_handshake_helper() {
   if [[ -L "$dest" ]]; then
     rm -f "$dest"
   fi
-  fn="$(declare -f handshake_from_dump 2>/dev/null || true)"
+  fn="$(declare -f handshake_from_dump 2>/dev/null || true)
+$(declare -f handshake_log_once 2>/dev/null || true)
+$(declare -f write_handshake_file 2>/dev/null || true)
+$(declare -f publish_watcher_once 2>/dev/null || true)"
   [[ "$fn" == handshake_from_dump* ]] || return 1
   tmp="$(mktemp /var/lib/veritasvpn/.handshake.sh.XXXXXX 2>/dev/null || true)"
   [[ -n "$tmp" ]] || return 1
@@ -152,31 +191,7 @@ fi
 printf '%s\n' "$$" > "$dir/handshake.pid" || exit 0
 chmod 600 "$dir/handshake.pid" 2>/dev/null 9>&- || true
 while [[ -f "$dir/iface" && ! -L "$dir/iface" ]]; do
-  hs=""
-  status=0
-  # Close the lock fd inside the substitution. A redirection on the
-  # assignment runs too late: the pipe subshell has already inherited fd 9.
-  hs="$(exec 9>&-; wg show veritas0 dump 2>/dev/null 9>&- | handshake_from_dump 9>&-)" || status=$?
-  if [[ "$status" -eq 0 && "$hs" =~ ^[0-9]+$ && -f "$dir/iface" && ! -L "$dir/iface" ]]; then
-    saved="$(umask)"
-    umask 077
-    tmp="$(exec 9>&-; mktemp "$dir/.handshake.XXXXXX" 2>/dev/null || true)"
-    umask "$saved"
-    if [[ -n "$tmp" ]]; then
-      if printf '%s\n' "$hs" > "$tmp" && chmod 600 "$tmp" 2>/dev/null 9>&- && chown "$uid:" "$tmp" 2>/dev/null 9>&-; then
-        if [[ -L "$dir/handshake" ]]; then
-          rm -f "$dir/handshake" 9>&-
-        fi
-        if [[ -f "$dir/iface" && ! -L "$dir/iface" ]]; then
-          mv -f "$tmp" "$dir/handshake" 2>/dev/null 9>&- || rm -f "$tmp" 9>&-
-        else
-          rm -f "$tmp" 9>&-
-        fi
-      else
-        rm -f "$tmp" 9>&-
-      fi
-    fi
-  fi
+  publish_watcher_once "$dir" "$uid" || true
   sleep 2 9>&-
 done
 rm -f "$dir/handshake" "$dir/handshake.pid" 9>&-

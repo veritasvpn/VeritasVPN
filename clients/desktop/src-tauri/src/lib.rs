@@ -1011,20 +1011,30 @@ pub(crate) fn reapply_dns_from_saved() -> Result<RouteRefreshResult, String> {
             }
         }
     }
-    // Prefer resolvectl on the underlay interface when available.
-    if !gw_if.is_empty() {
-        if let Ok(out) = Command::new("resolvectl")
-            .args(["dns", &gw_if, &dns])
-            .output()
-        {
-            if out.status.success() {
-                return Ok(RouteRefreshResult {
-                    refreshed: true,
-                    gateway: gw_if.clone(),
-                    message: format!("DNS re-applied via resolvectl on {gw_if}: {dns}"),
-                });
-            }
+    // Prefer the tunnel resolver. The physical link keeps its own servers.
+    if Command::new("resolvectl")
+        .args(["dns", "veritas0", &dns])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .is_some()
+    {
+        let _ = Command::new("resolvectl")
+            .args(["domain", "veritas0", "~."])
+            .output();
+        let _ = Command::new("resolvectl")
+            .args(["default-route", "veritas0", "true"])
+            .output();
+        if !gw_if.is_empty() {
+            let _ = Command::new("resolvectl")
+                .args(["default-route", &gw_if, "false"])
+                .output();
         }
+        return Ok(RouteRefreshResult {
+            refreshed: true,
+            gateway: gw_if,
+            message: "DNS re-applied on the tunnel".into(),
+        });
     }
     // Fallback: write the DNS server into resolv.conf if writable.
     // Soft recovery must never hang on elevated — use noninteractive only.
@@ -1032,12 +1042,15 @@ pub(crate) fn reapply_dns_from_saved() -> Result<RouteRefreshResult, String> {
         r#"#!/bin/bash
 set -uo pipefail
 if command -v resolvectl >/dev/null 2>&1; then
-  GW_IF="{gw_if}"
   DNS="{dns}"
+  GW_IF="{gw_if}"
+  resolvectl dns veritas0 "$DNS" 2>/dev/null || true
+  resolvectl domain veritas0 '~.' 2>/dev/null || true
+  resolvectl default-route veritas0 true 2>/dev/null || true
   if [[ -n "$GW_IF" ]]; then
-    resolvectl dns "$GW_IF" "$DNS" 2>/dev/null || true
-    resolvectl flush-caches 2>/dev/null || true
+    resolvectl default-route "$GW_IF" false 2>/dev/null || true
   fi
+  resolvectl flush-caches 2>/dev/null || true
 fi
 "#,
         gw_if = gw_if.replace('\'', "'\\''"),
@@ -1370,6 +1383,86 @@ struct StaleKillSwitchStatus {
     cleared: bool,
 }
 
+fn nic_name_is_physical_candidate(name: &str) -> bool {
+    if name.is_empty() || name.len() > 15 {
+        return false;
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+    {
+        return false;
+    }
+    const BLOCKED: [&str; 6] = ["lo", "veritas0", "tailscale0", "docker0", "tun0", "wg0"];
+    if BLOCKED.contains(&name) {
+        return false;
+    }
+    const PREFIXES: [&str; 9] = [
+        "tailscale", "docker", "veth", "br-", "virbr", "tun", "wg", "zt", "ifb",
+    ];
+    !PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+}
+
+/// A link resolved will not use for global lookups, or a link with no resolver
+/// at all. Healthy output has `+DefaultRoute` and at least one DNS address.
+fn resolvectl_status_is_stuck(text: &str) -> bool {
+    let default_off = text.lines().any(|line| line.contains("-DefaultRoute"));
+    let has_dns = text.lines().any(|line| {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        let rest = if let Some(rest) = lower.strip_prefix("dns servers:") {
+            rest
+        } else if let Some(rest) = lower.strip_prefix("current dns server:") {
+            rest
+        } else {
+            return false;
+        };
+        rest.chars().any(|c| c.is_ascii_hexdigit())
+    });
+    default_off || !has_dns
+}
+
+#[cfg(target_os = "linux")]
+fn link_has_ipv4(name: &str) -> bool {
+    let Ok(out) = Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "dev", name])
+        .output()
+    else {
+        return false;
+    };
+    out.status.success() && String::from_utf8_lossy(&out.stdout).contains("inet ")
+}
+
+#[cfg(target_os = "linux")]
+fn physical_dns_stuck() -> bool {
+    let Ok(entries) = fs::read_dir("/sys/class/net") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !nic_name_is_physical_candidate(&name) {
+            continue;
+        }
+        let base = entry.path();
+        if !base.join("device").exists() && !base.join("wireless").exists() {
+            continue;
+        }
+        if !link_has_ipv4(&name) {
+            continue;
+        }
+        let Ok(out) = Command::new("resolvectl").args(["status", &name]).output() else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        if resolvectl_status_is_stuck(&String::from_utf8_lossy(&out.stdout)) {
+            return true;
+        }
+    }
+    false
+}
+
 fn line_is_app_blackhole(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     let words: Vec<&str> = lower.split_whitespace().collect();
@@ -1414,7 +1507,7 @@ fn nft_killswitch_present() -> bool {
 
 #[cfg(target_os = "linux")]
 fn stale_kill_switch_present() -> bool {
-    app_blackhole_present() || nft_killswitch_present()
+    app_blackhole_present() || nft_killswitch_present() || physical_dns_stuck()
 }
 
 #[cfg(target_os = "linux")]
@@ -2227,6 +2320,7 @@ rm -f "$RUNTIME_DIR/fresh-read"
 
 {endpoint_fns}
 {handshake_fns}
+{dns_fns}
 
 safe_stop_pid_file() {{
   local file="$1" expected="$2" pid="" uid="" command=""
@@ -2619,13 +2713,15 @@ if ! install_killswitch; then
   exit 1
 fi
 
-# DNS: backup resolv.conf and set new DNS
-cp /etc/resolv.conf "$DNS_BACKUP" 2>/dev/null || true
-if [[ -w /etc/resolv.conf ]]; then
-  echo "nameserver $DNS" > /etc/resolv.conf
-elif command -v resolvectl >/dev/null 2>&1; then
-  resolvectl dns "$GW_IF" "$DNS" 2>/dev/null || true
-  resolvectl flush-caches 2>/dev/null || true
+# DNS goes to veritas0. The physical link keeps its own servers and loses
+# the default DNS route until disconnect reverts it. Overwriting
+# stub-resolv.conf is only the fallback when resolvectl is missing.
+LINKS_FILE="${{META_FILE}}.links"
+if ! apply_tunnel_dns "$DNS" "$GW_IF" "$LINKS_FILE"; then
+  cp /etc/resolv.conf "$DNS_BACKUP" 2>/dev/null || true
+  if [[ -w /etc/resolv.conf ]]; then
+    echo "nameserver $DNS" > /etc/resolv.conf
+  fi
 fi
 
 # Persist state for teardown / path rebind
@@ -2646,13 +2742,8 @@ restore_after_validation_fail() {{
   ip -6 route del blackhole default metric 1 2>/dev/null || true
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
   unbind_host_routes
-  if [[ -f "$DNS_BACKUP" ]]; then
-    cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
-  fi
-  if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
-    resolvectl revert "$GW_IF" 2>/dev/null || true
-  fi
-  rm -f "$DNS_BACKUP"
+  restore_veritas_dns "${{META_FILE}}.links" "$DNS_BACKUP" "$META_FILE" "$GW_IF" || true
+  rm -f "$DNS_BACKUP" "${{META_FILE}}.links"
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   safe_stop_pid_file "$PID_FILE" "wireguard-go"
   safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
@@ -2712,6 +2803,7 @@ fi
 cat > "$SOFT_DIR/cleanup-killswitch.sh" <<'SOFT_CLEANUP'
 #!/bin/bash
 set -uo pipefail
+{dns_fns}
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || exit 1
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || exit 1
@@ -2749,13 +2841,7 @@ ip route del 128.0.0.0/1 dev "$IFACE" 2>/dev/null || true
 ip route del 0.0.0.0/1 2>/dev/null || true
 ip route del 128.0.0.0/1 2>/dev/null || true
 ip route del 10.0.0.0/24 dev "$IFACE" 2>/dev/null || true
-if [[ -f "$DNS_BACKUP" ]]; then
-  cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
-fi
-if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
-  resolvectl revert "$GW_IF" 2>/dev/null || true
-  resolvectl flush-caches 2>/dev/null || true
-fi
+restore_veritas_dns "${{META}}.links" "$DNS_BACKUP" "$META" "$GW_IF" || true
 echo ok
 SOFT_CLEANUP
 chmod 755 "$SOFT_DIR/cleanup-killswitch.sh"
@@ -2771,6 +2857,7 @@ set -uo pipefail
 {fresh_fns}
 {stealth_fns}
 {handshake_fns}
+{dns_fns}
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || exit 1
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || exit 1
@@ -2938,15 +3025,12 @@ else
   [[ -n "$_allow_port" ]] && allow_outside_ip "$CHOOSE_IP" "$_allow_port" udp
 fi
 maybe_restart_stealth
-if [[ -n "$DNS" ]] && command -v resolvectl >/dev/null 2>&1; then
-  if [[ -n "${{gw_if:-}}" && "${{gw_if}}" != "$NEW_GW_IF" ]]; then
-    resolvectl revert "$gw_if" 2>/dev/null || true
+if [[ -n "$DNS" ]]; then
+  if [[ -n "${{gw_if:-}}" && "${{gw_if}}" != "$NEW_GW_IF" ]] && dns_link_name_ok "$gw_if"; then
+    resolvectl default-route "$gw_if" true >/dev/null 2>&1 || true
+    resolvectl revert "$gw_if" >/dev/null 2>&1 || true
   fi
-  resolvectl dns "$NEW_GW_IF" "$DNS" 2>/dev/null || true
-  resolvectl flush-caches 2>/dev/null || true
-fi
-if [[ -n "$DNS" && -w /etc/resolv.conf ]]; then
-  echo "nameserver $DNS" > /etc/resolv.conf 2>/dev/null || true
+  apply_tunnel_dns "$DNS" "$NEW_GW_IF" "$STATE_DIR/iface.meta.links" || true
 fi
 tmp="$(mktemp)"
 awk -v gw="$NEW_GW" -v gwif="$NEW_GW_IF" -v src="$NEW_SRC" -v epip="$CHOOSE_IP" -v ep="$CHOOSE_EP" -v bound="$STEALTH_BOUND_NOW" '
@@ -2985,6 +3069,7 @@ set -uo pipefail
 {fresh_fns}
 {stealth_fns}
 {handshake_fns}
+{dns_fns}
 {recover_fns}
 recovery_main "$@"
 RECOVER_SWAP
@@ -3003,6 +3088,7 @@ if [[ -n "$DESKTOP_USER" ]]; then
 #!/bin/bash
 set -uo pipefail
 {handshake_fns}
+{dns_fns}
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || {{ echo "SUDO_USER is required" >&2; exit 1; }}
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || {{ echo "invalid runtime uid" >&2; exit 1; }}
@@ -3084,15 +3170,8 @@ done
 safe_stop_pid_file "$PID_FILE" "wireguard-go"
 rm -f /var/run/wireguard/*.sock 2>/dev/null || true
 safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
-rm -f "$IFACE_FILE" "$META_FILE" "$STATE_DIR/stealth-roam" "$STATE_DIR/fresh-read"
-if [[ -f "$DNS_BACKUP" ]]; then
-  cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
-fi
-if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
-  resolvectl revert "$GW_IF" 2>/dev/null || true
-  resolvectl flush-caches 2>/dev/null || true
-fi
-rm -f "$DNS_BACKUP"
+rm -f "$IFACE_FILE" "$STATE_DIR/stealth-roam" "$STATE_DIR/fresh-read"
+restore_veritas_dns "${{META_FILE}}.links" "$DNS_BACKUP" "$META_FILE" "$GW_IF" || true
 # Optional on intentional disconnect. Soft reconnect omits this flag so the
 # passwordless helpers stay available for the next recovery.
 if [[ "${{1:-}}" == "--purge" ]]; then
@@ -3133,6 +3212,7 @@ echo "ok iface=$IFACE_NAME engine=$ENGINE"
         stealth_fns = include_str!("stealth_apply.sh"),
         recover_fns = include_str!("recover_swap.sh"),
         handshake_fns = include_str!("handshake_publish.sh"),
+        dns_fns = include_str!("dns_restore.sh"),
     )
 }
 
@@ -3335,6 +3415,7 @@ STEALTH_PID_FILE={stealth_pid}
 META_FILE={meta_file}
 DNS_BACKUP="${{META_FILE}}.dns"
 {handshake_fns}
+{dns_fns}
 stop_handshake_publisher "$(dirname "$IFACE_FILE")" || true
 
 ENDPOINT_IP=""
@@ -3422,21 +3503,11 @@ rm -f /var/run/wireguard/*.sock 2>/dev/null || true
 # Stop stealth sidecar
 safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
 
-rm -f "$IFACE_FILE" "$META_FILE" "$(dirname "$IFACE_FILE")/fresh-read"
+rm -f "$IFACE_FILE" "$(dirname "$IFACE_FILE")/fresh-read"
 
-# Restore DNS
-if [[ -f "$DNS_BACKUP" ]]; then
-  cat "$DNS_BACKUP" > /etc/resolv.conf 2>/dev/null || true
-fi
-if [[ -n "$GW_IF" ]] && command -v resolvectl >/dev/null 2>&1; then
-  resolvectl revert "$GW_IF" 2>/dev/null || true
-fi
-# Full DNS reset so browsing works immediately after disconnect
-if command -v resolvectl >/dev/null 2>&1; then
-  resolvectl flush-caches 2>/dev/null || true
-fi
-systemctl reload-or-restart systemd-resolved 2>/dev/null || true
-rm -f "$DNS_BACKUP"
+# Revert every link this session touched, then any physical NIC still left
+# without DNS. Delete the backup and metadata only after that succeeds.
+restore_veritas_dns "${{META_FILE}}.links" "$DNS_BACKUP" "$META_FILE" "$GW_IF" || true
 
 echo ok
 "#,
@@ -3445,6 +3516,7 @@ echo ok
         stealth_pid = shell_quote(&stealth_pid_path()?.display().to_string()),
         meta_file = shell_quote(&meta_file.display().to_string()),
         handshake_fns = include_str!("handshake_publish.sh"),
+        dns_fns = include_str!("dns_restore.sh"),
     );
     fs::write(&script_path, &script).map_err(|e| format!("write teardown: {e}"))?;
     #[cfg(unix)]
@@ -3912,12 +3984,19 @@ mod security_tests {
         assert!(path_adapt.contains("start_handshake_publisher"));
         assert!(script.contains("stop_handshake_publisher"));
         assert!(script.contains(
-            "exec 9>&-; wg show veritas0 dump 2>/dev/null 9>&- | handshake_from_dump 9>&-"
+            "exec 9>&-; wg show veritas0 dump 2>/dev/null | handshake_from_dump"
         ));
         assert!(script.contains("sleep 2 9>&-"));
         assert!(script.contains("kill -- \"-$pid\""));
         assert!(!script.contains("chmod 600 \"$dir/handshake\""));
         assert!(!script.contains("chown \"$uid:\" \"$dir/handshake\""));
+        assert!(!script.contains("chown \"$uid:\""));
+        assert!(script.contains("logger -t veritasvpn-handshake"));
+        assert!(script.contains("apply_tunnel_dns"));
+        assert!(script.contains("resolvectl dns veritas0"));
+        assert!(script.contains("resolvectl default-route veritas0 true"));
+        assert!(!script.contains("resolvectl dns \"$GW_IF\""));
+        assert!(!script.contains("resolvectl dns \"$NEW_GW_IF\""));
         assert!(!script.contains("chown \"$DESKTOP_USER:\" \"/var/run/wireguard/"));
         let sudoers = script.find("NOPASSWD").expect("sudoers grant");
         let sudoers_end = script[sudoers..].find('\n').unwrap() + sudoers;
@@ -3952,6 +4031,45 @@ mod security_tests {
     }
 
     #[test]
+    fn resolvectl_stuck_is_missing_dns_or_default_route() {
+        let healthy = "\
+Current Scopes: DNS
+Protocols: +DefaultRoute +LLMNR
+Current DNS Server: 1.1.1.1
+DNS Servers: 1.1.1.1
+";
+        assert!(!resolvectl_status_is_stuck(healthy));
+        let no_route = "\
+Current Scopes: none
+Protocols: -DefaultRoute +LLMNR
+";
+        assert!(resolvectl_status_is_stuck(no_route));
+        let servers_but_not_default = "\
+Protocols: -DefaultRoute
+DNS Servers: 8.8.8.8
+";
+        assert!(resolvectl_status_is_stuck(servers_but_not_default));
+        let route_without_servers = "\
+Protocols: +DefaultRoute
+Current Scopes: none
+";
+        assert!(resolvectl_status_is_stuck(route_without_servers));
+    }
+
+    #[test]
+    fn physical_nic_filter_skips_tailscale_and_docker() {
+        assert!(nic_name_is_physical_candidate("eno1"));
+        assert!(nic_name_is_physical_candidate("enp0s3"));
+        assert!(nic_name_is_physical_candidate("wlan0"));
+        assert!(!nic_name_is_physical_candidate("tailscale0"));
+        assert!(!nic_name_is_physical_candidate("docker0"));
+        assert!(!nic_name_is_physical_candidate("veth7191c24"));
+        assert!(!nic_name_is_physical_candidate("br-1234"));
+        assert!(!nic_name_is_physical_candidate("veritas0"));
+        assert!(!nic_name_is_physical_candidate("lo"));
+    }
+
+    #[test]
     fn packaged_killswitch_cleanup_stays_inside_veritas() {
         let script = include_str!("../linux/killswitch-cleanup.sh");
         assert!(script.contains("nft delete table inet veritasvpn_killswitch"));
@@ -3959,7 +4077,16 @@ mod security_tests {
         assert!(script.contains("ip -6 route del blackhole default metric 1"));
         assert!(script.contains("ip link delete veritas0"));
         assert!(script.contains("exit 0"));
-        assert!(script.contains("veritasvpn-desktop"));
+        assert!(script.contains("restore_veritas_dns"));
+        assert!(script.contains("nmcli device reapply"));
+        assert!(script.contains("systemctl reload NetworkManager"));
+        assert!(script.contains("tailscale0"));
+        let embedded = script
+            .split_once("# BEGIN dns_restore.sh\n")
+            .and_then(|(_, rest)| rest.split_once("# END dns_restore.sh\n"))
+            .map(|(body, _)| body)
+            .expect("packaged cleanup embeds dns restore");
+        assert_eq!(embedded, include_str!("dns_restore.sh"));
         assert!(!script.contains("ip rule"));
         assert!(!script.contains("table 52"));
         assert!(!script.contains("5210"));

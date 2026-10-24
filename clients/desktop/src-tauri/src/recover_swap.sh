@@ -417,11 +417,15 @@ recovery_apply() {
     fi
   fi
   recovery_install_routes "$address" "$(recovery_request_value allowed)"
-  if [[ -w /etc/resolv.conf ]]; then
-    echo "nameserver $dns" > /etc/resolv.conf
-  elif command -v resolvectl >/dev/null 2>&1; then
-    resolvectl dns "$gif" "$dns" >/dev/null 2>&1 || true
-    resolvectl flush-caches >/dev/null 2>&1 || true
+  old_gif="$(recovery_meta_value gw_if)"
+  if [[ -n "$old_gif" && "$old_gif" != "$gif" ]] && dns_link_name_ok "$old_gif"; then
+    resolvectl default-route "$old_gif" true >/dev/null 2>&1 || true
+    resolvectl revert "$old_gif" >/dev/null 2>&1 || true
+  fi
+  if ! apply_tunnel_dns "$dns" "$gif" "$STATE_DIR/iface.meta.links"; then
+    if [[ -w /etc/resolv.conf ]]; then
+      echo "nameserver $dns" > /etc/resolv.conf
+    fi
   fi
 
   old_ip="$(recovery_meta_value endpoint_ip)"
