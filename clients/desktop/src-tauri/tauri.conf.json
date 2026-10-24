@@ -54,9 +54,12 @@
     "linux": {
       "deb": {
         "desktopTemplate": "./linux/veritasvpn.desktop",
+        "preInstallScript": "./linux/killswitch-cleanup.sh",
         "postInstallScript": "./linux/postinst.sh",
+        "preRemoveScript": "./linux/killswitch-cleanup.sh",
         "files": {
-          "/usr/share/pixmaps/veritasvpn-desktop.png": "icons/256x256.png"
+          "/usr/share/pixmaps/veritasvpn-desktop.png": "icons/256x256.png",
+          "/usr/lib/veritasvpn/killswitch-cleanup.sh": "linux/killswitch-cleanup.sh"
         }
       },
       "rpm": {

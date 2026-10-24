@@ -1103,6 +1103,7 @@ fn public_egress_ok() -> bool {
 
 /// Root-owned soft-recovery helpers installed at connect time.
 const SOFT_CLEANUP_HELPER: &str = "/var/lib/veritasvpn/cleanup-killswitch.sh";
+const PACKAGED_KILLSWITCH_CLEANUP: &str = "/usr/lib/veritasvpn/killswitch-cleanup.sh";
 const SOFT_PATH_ADAPT_HELPER: &str = "/var/lib/veritasvpn/path-adapt.sh";
 const SOFT_TEARDOWN_HELPER: &str = "/var/lib/veritasvpn/teardown.sh";
 const SOFT_RECOVER_HELPER: &str = "/var/lib/veritasvpn/recover-swap.sh";
@@ -1361,6 +1362,133 @@ async fn recover_wireguard(
     .await
     .unwrap_or(false);
     recover_result(ok)
+}
+
+#[derive(Serialize)]
+struct StaleKillSwitchStatus {
+    blocked: bool,
+    cleared: bool,
+}
+
+fn line_is_app_blackhole(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let metric_one = words
+        .windows(2)
+        .any(|pair| pair[0] == "metric" && pair[1] == "1");
+    lower.contains("blackhole") && lower.contains("default") && metric_one
+}
+
+#[cfg(target_os = "linux")]
+fn command_succeeded(program: &str, args: &[&str]) -> bool {
+    Command::new(program)
+        .args(args)
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn app_blackhole_present() -> bool {
+    for args in [["route", "show"].as_slice(), ["-6", "route", "show"].as_slice()] {
+        let Ok(out) = Command::new("ip").args(args).output() else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        if String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .any(line_is_app_blackhole)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn nft_killswitch_present() -> bool {
+    command_succeeded("nft", &["list", "table", "inet", "veritasvpn_killswitch"])
+}
+
+#[cfg(target_os = "linux")]
+fn stale_kill_switch_present() -> bool {
+    app_blackhole_present() || nft_killswitch_present()
+}
+
+#[cfg(target_os = "linux")]
+fn sudo_n_root_script(path: &str) -> bool {
+    if !Path::new(path).is_file() {
+        return false;
+    }
+    command_succeeded("timeout", &["20", "sudo", "-n", "/bin/bash", path])
+}
+
+#[cfg(target_os = "linux")]
+fn pkexec_root_script(path: &str) -> bool {
+    command_succeeded("pkexec", &["/bin/bash", path])
+}
+
+/// Clear a kill switch left behind after a package swap. One passwordless
+/// attempt for the packaged script, one for the connect-time helper, then a
+/// single pkexec prompt. Soft recovery never prompts. Stderr stays here.
+#[cfg(target_os = "linux")]
+fn clear_stale_kill_switch_blocking() -> StaleKillSwitchStatus {
+    if !stale_kill_switch_present() {
+        return StaleKillSwitchStatus {
+            blocked: false,
+            cleared: false,
+        };
+    }
+    let _ = sudo_n_root_script(PACKAGED_KILLSWITCH_CLEANUP);
+    if !stale_kill_switch_present() {
+        return StaleKillSwitchStatus {
+            blocked: false,
+            cleared: true,
+        };
+    }
+    let _ = sudo_n_root_script(SOFT_CLEANUP_HELPER);
+    if !stale_kill_switch_present() {
+        return StaleKillSwitchStatus {
+            blocked: false,
+            cleared: true,
+        };
+    }
+    if is_soft_elevated() {
+        return StaleKillSwitchStatus {
+            blocked: true,
+            cleared: false,
+        };
+    }
+    if Path::new(PACKAGED_KILLSWITCH_CLEANUP).is_file() {
+        let _ = pkexec_root_script(PACKAGED_KILLSWITCH_CLEANUP);
+    } else {
+        let _ = run_elevated(include_str!("../linux/killswitch-cleanup.sh"));
+    }
+    let still = stale_kill_switch_present();
+    StaleKillSwitchStatus {
+        blocked: still,
+        cleared: !still,
+    }
+}
+
+#[tauri::command]
+async fn clear_stale_kill_switch() -> StaleKillSwitchStatus {
+    #[cfg(target_os = "linux")]
+    {
+        return tauri::async_runtime::spawn_blocking(clear_stale_kill_switch_blocking)
+            .await
+            .unwrap_or(StaleKillSwitchStatus {
+                blocked: false,
+                cleared: false,
+            });
+    }
+    #[cfg(not(target_os = "linux"))]
+    StaleKillSwitchStatus {
+        blocked: false,
+        cleared: false,
+    }
 }
 
 #[allow(dead_code)]
@@ -3793,10 +3921,53 @@ mod security_tests {
         assert!(!script.contains("chown \"$DESKTOP_USER:\" \"/var/run/wireguard/"));
         let sudoers = script.find("NOPASSWD").expect("sudoers grant");
         let sudoers_end = script[sudoers..].find('\n').unwrap() + sudoers;
+        let sudoers_line = &script[sudoers..sudoers_end];
         assert!(
-            !script[sudoers..sudoers_end].contains("handshake.sh"),
+            !sudoers_line.contains("handshake.sh"),
             "handshake publisher must not be passwordless sudo"
         );
+        assert!(!sudoers_line.contains("cleanup-killswitch.sh"));
+        assert!(!sudoers_line.contains("killswitch-cleanup.sh"));
+        let cleanup = heredoc("SOFT_CLEANUP");
+        assert!(cleanup.contains("nft delete table inet veritasvpn_killswitch"));
+        assert!(cleanup.contains("ip route del blackhole default metric 1"));
+        assert!(cleanup.contains("ip -6 route del blackhole default metric 1"));
+        assert!(!cleanup.contains("ip rule"));
+        assert!(!cleanup.contains("table 52"));
+        check("veritas-cleanup-syntax.sh", &cleanup);
+    }
+
+    #[test]
+    fn app_blackhole_line_is_metric_one_only() {
+        assert!(line_is_app_blackhole("blackhole default metric 1"));
+        assert!(line_is_app_blackhole(
+            "blackhole default proto static metric 1"
+        ));
+        assert!(!line_is_app_blackhole("blackhole default metric 10"));
+        assert!(!line_is_app_blackhole("blackhole default metric 100"));
+        assert!(!line_is_app_blackhole(
+            "default via 192.0.2.1 dev eth0 metric 1"
+        ));
+        assert!(!line_is_app_blackhole("blackhole 10.0.0.0/8 metric 1"));
+    }
+
+    #[test]
+    fn packaged_killswitch_cleanup_stays_inside_veritas() {
+        let script = include_str!("../linux/killswitch-cleanup.sh");
+        assert!(script.contains("nft delete table inet veritasvpn_killswitch"));
+        assert!(script.contains("ip route del blackhole default metric 1"));
+        assert!(script.contains("ip -6 route del blackhole default metric 1"));
+        assert!(script.contains("ip link delete veritas0"));
+        assert!(script.contains("exit 0"));
+        assert!(script.contains("veritasvpn-desktop"));
+        assert!(!script.contains("ip rule"));
+        assert!(!script.contains("table 52"));
+        assert!(!script.contains("5210"));
+        assert!(!script.contains("nft flush ruleset"));
+        let conf = include_str!("../tauri.conf.json");
+        assert!(conf.contains("\"preInstallScript\": \"./linux/killswitch-cleanup.sh\""));
+        assert!(conf.contains("\"preRemoveScript\": \"./linux/killswitch-cleanup.sh\""));
+        assert!(conf.contains("\"/usr/lib/veritasvpn/killswitch-cleanup.sh\""));
     }
 
     #[test]
@@ -3869,7 +4040,8 @@ pub fn run() {
             network_switch_recover,
             recovery_open,
             recovery_close,
-            recover_wireguard
+            recover_wireguard,
+            clear_stale_kill_switch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
