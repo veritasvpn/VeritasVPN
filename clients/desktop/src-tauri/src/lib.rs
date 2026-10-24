@@ -121,6 +121,28 @@ impl WgTunnelConfig {
     }
 }
 
+/// A reused device peer is returned as a bare host. A fresh allocation already
+/// has the prefix. The tunnel address has to be CIDR either way.
+fn ensure_host_cidr(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() || value.contains('/') {
+        return value.to_string();
+    }
+    if value.parse::<std::net::Ipv4Addr>().is_ok() {
+        return format!("{value}/32");
+    }
+    if value.parse::<std::net::Ipv6Addr>().is_ok() {
+        return format!("{value}/128");
+    }
+    value.to_string()
+}
+
+impl WgTunnelConfig {
+    fn normalize_addresses(&mut self) {
+        self.address = ensure_host_cidr(&self.address);
+    }
+}
+
 fn validate_cidr(value: &str, field: &str) -> Result<(), String> {
     let value = value.trim();
     let (ip, prefix) = value
@@ -466,8 +488,9 @@ fn b64_key_to_hex(b64: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn connect_wireguard(app: AppHandle, config: WgTunnelConfig) -> ConnectResult {
+async fn connect_wireguard(app: AppHandle, mut config: WgTunnelConfig) -> ConnectResult {
     let _ = tauri::async_runtime::spawn_blocking(close_recovery_exception_quiet).await;
+    config.normalize_addresses();
     if let Err(message) = config.validate() {
         return ConnectResult {
             success: false,
@@ -1348,7 +1371,8 @@ fn write_recover_request(config: &WgTunnelConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn recover_wireguard_blocking(app: AppHandle, config: WgTunnelConfig, timeout_secs: u64) -> bool {
+fn recover_wireguard_blocking(app: AppHandle, mut config: WgTunnelConfig, timeout_secs: u64) -> bool {
+    config.normalize_addresses();
     if write_recover_request(&config).is_err() {
         return false;
     }
@@ -1403,60 +1427,59 @@ fn nic_name_is_physical_candidate(name: &str) -> bool {
     !PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
-/// A link resolved will not use for global lookups, or a link with no resolver
-/// at all. Healthy output has `+DefaultRoute` and at least one DNS address.
-fn resolvectl_status_is_stuck(text: &str) -> bool {
-    let default_off = text.lines().any(|line| line.contains("-DefaultRoute"));
-    let has_dns = text.lines().any(|line| {
-        let trimmed = line.trim();
-        let lower = trimmed.to_ascii_lowercase();
-        let rest = if let Some(rest) = lower.strip_prefix("dns servers:") {
-            rest
-        } else if let Some(rest) = lower.strip_prefix("current dns server:") {
-            rest
-        } else {
-            return false;
-        };
-        rest.chars().any(|c| c.is_ascii_hexdigit())
-    });
-    default_off || !has_dns
+/// True only for a link this app set to `-DefaultRoute`, and only while the
+/// tunnel is down. A NIC that merely has no resolver, and the underlay while
+/// `veritas0` is up, are not leftovers.
+fn recorded_underlay_needs_restore(tunnel_up: bool, recorded: bool, status: &str) -> bool {
+    if tunnel_up || !recorded {
+        return false;
+    }
+    status.lines().any(|line| line.contains("-DefaultRoute"))
 }
 
 #[cfg(target_os = "linux")]
-fn link_has_ipv4(name: &str) -> bool {
-    let Ok(out) = Command::new("ip")
-        .args(["-4", "-o", "addr", "show", "dev", name])
-        .output()
-    else {
-        return false;
+fn recorded_link_names() -> Vec<String> {
+    let Ok(dir) = privileged_state_dir() else {
+        return Vec::new();
     };
-    out.status.success() && String::from_utf8_lossy(&out.stdout).contains("inet ")
+    let mut names = Vec::new();
+    let mut push = |raw: &str| {
+        let name = raw.trim();
+        if nic_name_is_physical_candidate(name) && !names.iter().any(|existing| existing == name) {
+            names.push(name.to_string());
+        }
+    };
+    if let Ok(text) = fs::read_to_string(dir.join("iface.meta.links")) {
+        for line in text.lines() {
+            push(line);
+        }
+    }
+    if let Ok(text) = fs::read_to_string(dir.join("iface.meta")) {
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("gw_if=") {
+                push(rest);
+            }
+        }
+    }
+    names
 }
 
 #[cfg(target_os = "linux")]
-fn physical_dns_stuck() -> bool {
-    let Ok(entries) = fs::read_dir("/sys/class/net") else {
+fn recorded_dns_stuck() -> bool {
+    if command_succeeded("ip", &["link", "show", "veritas0"]) {
         return false;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !nic_name_is_physical_candidate(&name) {
-            continue;
-        }
-        let base = entry.path();
-        if !base.join("device").exists() && !base.join("wireless").exists() {
-            continue;
-        }
-        if !link_has_ipv4(&name) {
-            continue;
-        }
-        let Ok(out) = Command::new("resolvectl").args(["status", &name]).output() else {
+    }
+    for name in recorded_link_names() {
+        let Ok(out) = Command::new("timeout")
+            .args(["5", "resolvectl", "status", &name])
+            .output()
+        else {
             continue;
         };
         if !out.status.success() {
             continue;
         }
-        if resolvectl_status_is_stuck(&String::from_utf8_lossy(&out.stdout)) {
+        if recorded_underlay_needs_restore(false, true, &String::from_utf8_lossy(&out.stdout)) {
             return true;
         }
     }
@@ -1507,7 +1530,7 @@ fn nft_killswitch_present() -> bool {
 
 #[cfg(target_os = "linux")]
 fn stale_kill_switch_present() -> bool {
-    app_blackhole_present() || nft_killswitch_present() || physical_dns_stuck()
+    app_blackhole_present() || nft_killswitch_present() || recorded_dns_stuck()
 }
 
 #[cfg(target_os = "linux")]
@@ -1611,7 +1634,7 @@ pub(crate) fn cleanup_kill_switch_noninteractive() -> Result<bool, String> {
 #[allow(dead_code)]
 pub(crate) fn bring_up_from_saved_config_soft() -> Result<String, String> {
     let saved = network_switch::load_last_config().map_err(|e| e)?;
-    let config = WgTunnelConfig {
+    let mut config = WgTunnelConfig {
         private_key: saved.private_key,
         address: saved.address,
         dns: saved.dns,
@@ -1625,6 +1648,7 @@ pub(crate) fn bring_up_from_saved_config_soft() -> Result<String, String> {
         endpoint_lan: saved.endpoint_lan,
         endpoint_wan: saved.endpoint_wan,
     };
+    config.normalize_addresses();
     config.validate()?;
     // Soft reconnect: force noninteractive elevated only — never pkexec.
     // Soft reconnect is detached so soft recovery never freezes the watcher.
@@ -2153,14 +2177,8 @@ fn bring_up_wireguard_linux_full(
     };
 
     let dir = state_dir()?;
-    let address = config
-        .address
-        .trim()
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_string();
-    if address.is_empty() {
+    let address = ensure_host_cidr(config.address.trim());
+    if !address.contains('/') {
         return Err("missing assigned address".into());
     }
 
@@ -2622,7 +2640,10 @@ PY
 fi
 echo "$IFACE_NAME" > "$IFACE_FILE"
 
-ip addr add "$ADDR" dev "$IFACE_NAME"
+if ! ip addr replace "$ADDR" dev "$IFACE_NAME" >/tmp/veritas-wg-addr.log 2>&1; then
+  echo "Could not start the tunnel. Try connecting again." >&2
+  exit 1
+fi
 ip link set "$IFACE_NAME" up
 # Product default MTU 1280 (reliability on mobile/hostile paths); see docs/MTU_STRATEGY.md
 ip link set "$IFACE_NAME" mtu 1280
@@ -2714,7 +2735,7 @@ if ! install_killswitch; then
 fi
 
 # DNS goes to veritas0. The physical link keeps its own servers and loses
-# the default DNS route until disconnect reverts it. Overwriting
+# the default DNS route until disconnect turns that route back on. Overwriting
 # stub-resolv.conf is only the fallback when resolvectl is missing.
 LINKS_FILE="${{META_FILE}}.links"
 if ! apply_tunnel_dns "$DNS" "$GW_IF" "$LINKS_FILE"; then
@@ -2743,7 +2764,6 @@ restore_after_validation_fail() {{
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
   unbind_host_routes
   restore_veritas_dns "${{META_FILE}}.links" "$DNS_BACKUP" "$META_FILE" "$GW_IF" || true
-  rm -f "$DNS_BACKUP" "${{META_FILE}}.links"
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   safe_stop_pid_file "$PID_FILE" "wireguard-go"
   safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
@@ -3028,7 +3048,6 @@ maybe_restart_stealth
 if [[ -n "$DNS" ]]; then
   if [[ -n "${{gw_if:-}}" && "${{gw_if}}" != "$NEW_GW_IF" ]] && dns_link_name_ok "$gw_if"; then
     resolvectl default-route "$gw_if" true >/dev/null 2>&1 || true
-    resolvectl revert "$gw_if" >/dev/null 2>&1 || true
   fi
   apply_tunnel_dns "$DNS" "$NEW_GW_IF" "$STATE_DIR/iface.meta.links" || true
 fi
@@ -3867,6 +3886,21 @@ mod security_tests {
     }
 
     #[test]
+    fn reused_bare_peer_address_is_a_host_route() {
+        assert_eq!(ensure_host_cidr("10.7.0.2"), "10.7.0.2/32");
+        assert_eq!(ensure_host_cidr(" 10.7.0.2 "), "10.7.0.2/32");
+        assert_eq!(ensure_host_cidr("10.7.0.2/32"), "10.7.0.2/32");
+        assert_eq!(ensure_host_cidr("fd00::2"), "fd00::2/128");
+        assert_eq!(ensure_host_cidr(""), "");
+        assert_eq!(ensure_host_cidr("not-an-address"), "not-an-address");
+        let mut config = valid_config();
+        config.address = "10.7.0.2".into();
+        config.normalize_addresses();
+        config.validate().expect("bare host address");
+        assert_eq!(config.address, "10.7.0.2/32");
+    }
+
+    #[test]
     fn rejects_shell_syntax_in_privileged_fields() {
         for malicious in ["1.1.1.1'; id #", "$(id)", "host:51820\nwhoami"] {
             let mut config = valid_config();
@@ -3995,8 +4029,11 @@ mod security_tests {
         assert!(script.contains("apply_tunnel_dns"));
         assert!(script.contains("resolvectl dns veritas0"));
         assert!(script.contains("resolvectl default-route veritas0 true"));
+        assert!(script.contains("ip addr replace \"$ADDR\""));
+        assert!(script.contains("10.0.0.2/32"));
         assert!(!script.contains("resolvectl dns \"$GW_IF\""));
         assert!(!script.contains("resolvectl dns \"$NEW_GW_IF\""));
+        assert!(!script.contains("resolvectl revert \"$gw_if\""));
         assert!(!script.contains("chown \"$DESKTOP_USER:\" \"/var/run/wireguard/"));
         let sudoers = script.find("NOPASSWD").expect("sudoers grant");
         let sudoers_end = script[sudoers..].find('\n').unwrap() + sudoers;
@@ -4031,29 +4068,15 @@ mod security_tests {
     }
 
     #[test]
-    fn resolvectl_stuck_is_missing_dns_or_default_route() {
-        let healthy = "\
-Current Scopes: DNS
-Protocols: +DefaultRoute +LLMNR
-Current DNS Server: 1.1.1.1
-DNS Servers: 1.1.1.1
-";
-        assert!(!resolvectl_status_is_stuck(healthy));
-        let no_route = "\
-Current Scopes: none
-Protocols: -DefaultRoute +LLMNR
-";
-        assert!(resolvectl_status_is_stuck(no_route));
-        let servers_but_not_default = "\
-Protocols: -DefaultRoute
-DNS Servers: 8.8.8.8
-";
-        assert!(resolvectl_status_is_stuck(servers_but_not_default));
-        let route_without_servers = "\
-Protocols: +DefaultRoute
-Current Scopes: none
-";
-        assert!(resolvectl_status_is_stuck(route_without_servers));
+    fn recorded_underlay_only_when_this_app_cleared_the_default_route() {
+        let off = "Protocols: -DefaultRoute\nDNS Servers: 1.1.1.1\n";
+        let on = "Protocols: +DefaultRoute\nDNS Servers: 1.1.1.1\n";
+        let no_dns = "Protocols: +DefaultRoute\nCurrent Scopes: none\n";
+        assert!(recorded_underlay_needs_restore(false, true, off));
+        assert!(!recorded_underlay_needs_restore(true, true, off));
+        assert!(!recorded_underlay_needs_restore(false, false, off));
+        assert!(!recorded_underlay_needs_restore(false, true, on));
+        assert!(!recorded_underlay_needs_restore(false, false, no_dns));
     }
 
     #[test]
@@ -4078,8 +4101,12 @@ Current Scopes: none
         assert!(script.contains("ip link delete veritas0"));
         assert!(script.contains("exit 0"));
         assert!(script.contains("restore_veritas_dns"));
+        assert!(script.contains("resolvectl default-route"));
         assert!(script.contains("nmcli device reapply"));
         assert!(script.contains("systemctl reload NetworkManager"));
+        assert!(script.contains("timeout"));
+        assert!(!script.contains("physical_links"));
+        assert!(!script.contains("resolvectl revert \"$link\""));
         assert!(script.contains("tailscale0"));
         let embedded = script
             .split_once("# BEGIN dns_restore.sh\n")

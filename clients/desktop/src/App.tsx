@@ -31,7 +31,7 @@ import {
   type PurchaseHistoryItem,
 } from "./billing";
 import { AUTH_API } from "./config";
-import { classifyPeerCheck, displayStatus, peerGoneAction, peerGoneLatchHeld, recoveryRetryAction } from "./reconnectPolicy";
+import { classifyPeerCheck, displayStatus, peerGoneAction, peerGoneLatchHeld, recoveryRetryAction, tunnelAddress } from "./reconnectPolicy";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
 import {
   advanceBlocked,
@@ -1639,7 +1639,7 @@ function App() {
         ...(recover ? { timeoutSecs: helperSeconds() } : {}),
         config: {
           private_key: keys.private_key,
-          address: peer.assigned_ip,
+          address: tunnelAddress(peer.assigned_ip),
           dns: gatewayDns,
           server_public_key: peer.server_public_key,
           endpoint: peer.server_endpoint,

@@ -5,6 +5,7 @@ import {
   peerGoneAction,
   peerGoneLatchHeld,
   recoveryRetryAction,
+  tunnelAddress,
 } from "./reconnectPolicy";
 
 describe("peer check", () => {
@@ -77,5 +78,23 @@ describe("status text", () => {
     expect(displayStatus("Tap to reconnect")).toBe("Tap to reconnect");
     expect(displayStatus("")).toBe("");
     expect(displayStatus(null)).toBe("");
+  });
+
+  it("turns a bare reused peer address into a host route and hides the parser error", () => {
+    expect(tunnelAddress("10.7.0.2")).toBe("10.7.0.2/32");
+    expect(tunnelAddress(" 10.7.0.2 ")).toBe("10.7.0.2/32");
+    expect(tunnelAddress("10.7.0.2/32")).toBe("10.7.0.2/32");
+    expect(tunnelAddress("10.7.0.0/24")).toBe("10.7.0.0/24");
+    expect(tunnelAddress("fd00::2")).toBe("fd00::2/128");
+    expect(tunnelAddress("")).toBe("");
+    expect(tunnelAddress(undefined)).toBe("");
+    const friendly = "Couldn't start the tunnel. Try connecting again.";
+    expect(displayStatus("address must be CIDR notation")).toBe(friendly);
+    expect(displayStatus("address must be CIDR notation")).not.toContain("CIDR");
+    expect(displayStatus('Error: inet prefix is expected rather than "10.7.0.2".')).toBe(friendly);
+    expect(displayStatus("invalid address prefix")).toBe(friendly);
+    expect(displayStatus("An active subscription is required. Open Account to subscribe.")).toBe(
+      "An active subscription is required. Open Account to subscribe.",
+    );
   });
 });

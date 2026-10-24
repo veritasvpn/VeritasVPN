@@ -448,8 +448,15 @@ grep -q 'ip route del blackhole default metric 1' "$cleanup" || fail "cleanup do
 grep -q 'ip -6 route del blackhole default metric 1' "$cleanup" || fail "cleanup does not delete the v6 blackhole"
 grep -q 'ip link delete veritas0' "$cleanup" || fail "cleanup does not delete veritas0"
 grep -q 'restore_veritas_dns' "$cleanup" || fail "cleanup does not restore DNS"
-grep -q 'resolvectl revert' "$cleanup" || fail "cleanup does not revert resolved"
+grep -q 'resolvectl default-route' "$cleanup" || fail "cleanup does not restore the default DNS route"
+grep -q 'timeout' "$cleanup" || fail "cleanup resolver commands have no timeout"
 grep -q 'tailscale0' "$cleanup" || fail "cleanup does not exclude tailscale"
+if grep -q 'physical_links' "$cleanup" || grep -q 'physical_dns_stuck' "$ROOT/lib.rs"; then
+  fail "DNS cleanup scans physical NICs the app did not record"
+fi
+if grep -q 'resolvectl revert "$' "$cleanup" || grep -q 'resolvectl revert "$gw_if"' "$ROOT/lib.rs" || grep -q 'resolvectl revert "$old_gif"' "$ROOT/recover_swap.sh"; then
+  fail "DNS cleanup reverts a physical link"
+fi
 if ! grep -q 'apply_tunnel_dns' "$ROOT/lib.rs"; then
   fail "connect does not scope DNS to the tunnel"
 fi
@@ -493,5 +500,53 @@ for word in banned:
     if word in body:
         sys.exit("5s poll touches " + word)
 PY
+
+dns_sandbox="$(mktemp -d)"
+mkdir -p "$dns_sandbox/bin"
+cat > "$dns_sandbox/bin/resolvectl" << 'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$DNS_LOG"
+if [[ "$1" == status ]]; then
+  if grep -q 'default-route eno1 true' "$DNS_LOG"; then
+    printf '%s\n' 'Protocols: +DefaultRoute'
+  else
+    printf '%s\n' 'Protocols: -DefaultRoute'
+  fi
+fi
+exit 0
+EOF
+cat > "$dns_sandbox/bin/nmcli" << 'EOF'
+#!/bin/bash
+printf 'nmcli %s\n' "$*" >> "$DNS_LOG"
+exit 0
+EOF
+cat > "$dns_sandbox/bin/systemctl" << 'EOF'
+#!/bin/bash
+printf 'systemctl %s\n' "$*" >> "$DNS_LOG"
+exit 0
+EOF
+cat > "$dns_sandbox/bin/timeout" << 'EOF'
+#!/bin/bash
+shift
+exec "$@"
+EOF
+chmod +x "$dns_sandbox/bin/"*
+printf 'eno1\n' > "$dns_sandbox/links"
+printf 'nameserver 192.0.2.1\n' > "$dns_sandbox/backup"
+printf 'gw_if=eno1\n' > "$dns_sandbox/meta"
+: > "$dns_sandbox/log"
+PATH="$dns_sandbox/bin:$PATH" DNS_LOG="$dns_sandbox/log" bash -c '
+  set -uo pipefail
+  source "$1"
+  restore_veritas_dns "$2" "$3" "$4" ""
+' _ "$ROOT/dns_restore.sh" "$dns_sandbox/links" "$dns_sandbox/backup" "$dns_sandbox/meta" || fail "recorded DNS restore failed"
+dns_log="$(cat "$dns_sandbox/log")"
+printf '%s\n' "$dns_log" | grep -q 'default-route eno1 true' || fail "recorded link was not restored"
+printf '%s\n' "$dns_log" | grep -q 'revert veritas0' || fail "tunnel DNS was not cleared"
+if printf '%s\n' "$dns_log" | grep -Eq 'eno2|revert eno1'; then
+  fail "DNS restore touched a link it did not record"
+fi
+[[ ! -e "$dns_sandbox/meta" && ! -e "$dns_sandbox/backup" && ! -e "$dns_sandbox/links" ]] || fail "DNS record kept after a successful restore"
+rm -rf "$dns_sandbox"
 
 printf 'ok\n'
