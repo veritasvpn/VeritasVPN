@@ -336,13 +336,72 @@ watch="$(mktemp)"
   ' "$ROOT/handshake_publish.sh"
 } > "$watch"
 bash -n "$watch"
-if ! grep -q 'wg show veritas0 dump 2>/dev/null | handshake_from_dump' "$watch"; then
-  fail "watcher does not discard wg stderr"
+if ! grep -q 'exec 9>&-; wg show veritas0 dump 2>/dev/null 9>&- | handshake_from_dump 9>&-' "$watch"; then
+  fail "watcher pipe inherits the lock fd"
+fi
+if ! grep -q 'sleep 2 9>&-' "$watch"; then
+  fail "watcher sleep inherits the lock fd"
 fi
 if grep -q 'echo ' "$watch"; then
   fail "watcher echoes output"
 fi
+if grep -q 'chmod 600 "$dir/handshake"' "$ROOT/handshake_publish.sh"; then
+  fail "chmod follows the handshake path"
+fi
+if grep -q 'chown "$uid:" "$dir/handshake"' "$ROOT/handshake_publish.sh"; then
+  fail "chown follows the handshake path"
+fi
+if ! grep -q 'kill -- "-$pid"' "$ROOT/handshake_publish.sh"; then
+  fail "stop does not signal the watcher process group"
+fi
 rm -f "$watch"
+
+# A child must not keep flock after the watcher is killed.
+lock="$(mktemp)"
+pidf="$(mktemp)"
+bash -c 'exec 9>"$1"; flock -n 9 || exit 1; echo $$ > "$2"; hs="$(exec 9>&-; sleep 25 9>&- | true 9>&-)"; sleep 25 9>&-' _ "$lock" "$pidf" &
+for _ in $(seq 1 40); do
+  [[ -s "$pidf" ]] && break
+  sleep 0.05
+done
+parent="$(cat "$pidf" 2>/dev/null || true)"
+[[ "$parent" =~ ^[0-9]+$ ]] || fail "lock test did not start"
+kill "$parent" 2>/dev/null || true
+sleep 0.15
+if ! flock -n "$lock" true; then
+  kill "$parent" 2>/dev/null || true
+  pkill -P "$parent" 2>/dev/null || true
+  ps -eo pid,args | awk '$2 == "sleep" && $3 == "25" { print $1 }' | while read -r p; do kill "$p" 2>/dev/null || true; done
+  rm -f "$lock" "$pidf"
+  fail "watcher child kept the handshake lock"
+fi
+ps -eo pid,args | awk '$2 == "sleep" && $3 == "25" { print $1 }' | while read -r p; do kill "$p" 2>/dev/null || true; done
+rm -f "$lock" "$pidf"
+
+if command -v setsid >/dev/null 2>&1; then
+  pidf="$(mktemp)"
+  setsid bash -c 'sleep 27 & echo $$ > "$1"; wait' _ "$pidf" >/dev/null 2>&1 &
+  for _ in $(seq 1 40); do
+    [[ -s "$pidf" ]] && break
+    sleep 0.05
+  done
+  parent="$(cat "$pidf" 2>/dev/null || true)"
+  pgid="$(ps -o pgid= -p "$parent" 2>/dev/null | tr -d ' ' || true)"
+  [[ "$pgid" == "$parent" ]] || fail "setsid watcher is not its process group"
+  kill -- "-$parent" 2>/dev/null || true
+  sleep 0.15
+  if kill -0 "$parent" 2>/dev/null; then
+    kill -9 -- "-$parent" 2>/dev/null || true
+    rm -f "$pidf"
+    fail "process group kill left the watcher"
+  fi
+  if ps -eo pid,args | awk '$2 == "sleep" && $3 == "27" { found=1 } END { exit !found }'; then
+    ps -eo pid,args | awk '$2 == "sleep" && $3 == "27" { print $1 }' | while read -r p; do kill "$p" 2>/dev/null || true; done
+    rm -f "$pidf"
+    fail "process group kill left a watcher child"
+  fi
+  rm -f "$pidf"
+fi
 
 python3 - "$app" <<'PY'
 import pathlib, sys
