@@ -14,6 +14,10 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=../backup/strip-peer-endpoints.sh
+source "$SCRIPT_DIR/../backup/strip-peer-endpoints.sh"
+
 install -d -m 700 "$BACKUP_ROOT" "$DEST" "$DEST/config"
 
 docker exec "$POSTGRES_CONTAINER" pg_dump -U veritas -d veritas -Fc >"$DEST/postgres.dump"
@@ -25,8 +29,9 @@ install -m 600 "$PROJECT_DIR/docker-compose.yml" "$DEST/config/docker-compose.ym
 install -m 600 "$PROJECT_DIR/docker-compose.pi.yml" "$DEST/config/docker-compose.pi.yml"
 install -m 600 "$PROJECT_DIR/website/nginx.conf" "$DEST/config/nginx.conf"
 cp -a "$PROJECT_DIR/data/wireguard" "$DEST/wireguard"
-wg showconf wg0 >"$DEST/wg0.showconf"
-nft list ruleset >"$DEST/nftables.rules"
+sanitize_wireguard_tree "$DEST/wireguard"
+capture_wg_showconf wg0 "$DEST/wg0.showconf"
+nft list ruleset | strip_peer_endpoints >"$DEST/nftables.rules"
 docker ps --no-trunc --format '{{.Names}}|{{.Image}}|{{.ID}}|{{.Status}}' >"$DEST/containers.txt"
 chmod -R go-rwx "$DEST"
 

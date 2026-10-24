@@ -18,7 +18,7 @@ expected="$(cat "$latest.hmac")"
 actual="$(openssl dgst -sha256 -hmac "$hmac_key" -binary "$latest" | od -An -tx1 -v | tr -d ' \n')"
 test "$expected" = "$actual"
 openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:$KEY_FILE" -in "$latest" | tar -xzf - -C "$tmp"
-for required in veritas.sql.gz btcpay.sql.gz veritas-k8s.yaml btcpay-k8s.yaml wireguard-private.key wireguard-state.txt; do
+for required in veritas.sql.gz btcpay.sql.gz veritas-k8s.yaml btcpay-k8s.yaml wireguard-private.key; do
   test -s "$tmp/$required"
 done
 gzip -t "$tmp/veritas.sql.gz"

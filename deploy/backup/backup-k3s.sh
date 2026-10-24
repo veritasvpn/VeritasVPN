@@ -11,6 +11,8 @@ WORK="$(mktemp -d)"
 TEXTFILE_DIR="${TEXTFILE_DIR:-/var/lib/veritasvpn/metrics}"
 WG_PRIVATE_KEY_FILE="${WG_PRIVATE_KEY_FILE:-/etc/wireguard/private.key}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=strip-peer-endpoints.sh
+source "$SCRIPT_DIR/strip-peer-endpoints.sh"
 trap 'rm -rf "$WORK"' EXIT
 
 install -d -m 700 "$BACKUP_ROOT"
@@ -28,7 +30,9 @@ if [[ ! -f "$WG_PRIVATE_KEY_FILE" || -L "$WG_PRIVATE_KEY_FILE" ]]; then
   exit 1
 fi
 install -m 600 -- "$WG_PRIVATE_KEY_FILE" "$WORK/wireguard-private.key"
-wg show all dump > "$WORK/wireguard-state.txt"
+# Do not archive `wg show` output. Restore uses the server private key above
+# plus peer public keys, preshared keys, and allowed IPs from the database.
+# `wg show all dump` also contains each peer's real public IP and last handshake.
 # The Android signing identity is an irreplaceable release credential. Include
 # it only inside this already encrypted and authenticated off-site backup.
 if [[ -s /etc/veritasvpn/android-signing/veritasvpn-release.p12 && -s /etc/veritasvpn/android-signing/signing.env ]]; then
@@ -36,6 +40,7 @@ if [[ -s /etc/veritasvpn/android-signing/veritasvpn-release.p12 && -s /etc/verit
   install -m 600 /etc/veritasvpn/android-signing/veritasvpn-release.p12 "$WORK/android-signing/veritasvpn-release.p12"
   install -m 600 /etc/veritasvpn/android-signing/signing.env "$WORK/android-signing/signing.env"
 fi
+assert_no_peer_endpoints_in_tree "$WORK"
 
 archive="$BACKUP_ROOT/veritasvpn-$STAMP.tar.gz.enc"
 tar -C "$WORK" -czf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:$KEY_FILE" -out "$archive"

@@ -12,7 +12,9 @@ confirm "This will stop the compose veritas-agent and let k3s agent take over wg
 cd "$REPO_ROOT"
 
 echo "Recording current WireGuard state..."
-wg show > /tmp/wg-pre-migration.txt
+# shellcheck source=../../../backup/strip-peer-endpoints.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/../../../backup/strip-peer-endpoints.sh"
+wg show | strip_peer_endpoints > /tmp/wg-pre-migration.txt
 cat /tmp/wg-pre-migration.txt
 
 echo "Copying WireGuard keys to k3s-compatible path..."

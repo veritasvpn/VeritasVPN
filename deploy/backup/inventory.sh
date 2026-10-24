@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=strip-peer-endpoints.sh
+source "$SCRIPT_DIR/strip-peer-endpoints.sh"
+
 OUTDIR="${1:-./inventory-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUTDIR"
 
@@ -36,7 +40,7 @@ echo "[inventory] writing to $OUTDIR"
   echo "=== Tailscale IP ==="
   tailscale ip -4 2>/dev/null || echo "N/A"
   echo "=== WG show ==="
-  wg show 2>/dev/null || echo "N/A"
+  wg show 2>/dev/null | strip_peer_endpoints || echo "N/A"
   echo "=== ip forwarding ==="
   echo "ipv4: $(cat /proc/sys/net/ipv4/ip_forward)"
   echo "ipv6: $(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || echo N/A)"

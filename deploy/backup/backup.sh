@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=strip-peer-endpoints.sh
+source "$SCRIPT_DIR/strip-peer-endpoints.sh"
+
 BACKUP_ROOT="${1:-./backups}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
@@ -16,6 +20,7 @@ fi
 if [ -d data/wireguard ]; then
   cp -rp data/wireguard "$BACKUP_DIR/wireguard"
   chmod -R 700 "$BACKUP_DIR/wireguard"
+  sanitize_wireguard_tree "$BACKUP_DIR/wireguard"
   echo "  WireGuard state backed up"
 fi
 
