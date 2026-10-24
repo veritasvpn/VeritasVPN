@@ -6,6 +6,8 @@ echo "=== STEP 3: Full backup ==="
 echo ""
 
 REPO_ROOT="${REPO_ROOT:-/opt/veritasvpn}"
+# shellcheck source=../../../backup/strip-peer-endpoints.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/../../../backup/strip-peer-endpoints.sh"
 
 confirm() { read -rp "$1 [y/N] " yn; if [ "$yn" != "y" ] && [ "$yn" != "Y" ]; then echo "aborted"; exit 0; fi; }
 
@@ -20,6 +22,7 @@ echo "Backing up WireGuard..."
 if [ -d data/wireguard ]; then
   cp -rp data/wireguard "$BACKUP_DIR/wireguard"
   chmod -R 700 "$BACKUP_DIR/wireguard"
+  sanitize_wireguard_tree "$BACKUP_DIR/wireguard"
 fi
 
 echo "Backing up PostgreSQL..."

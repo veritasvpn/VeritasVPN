@@ -47,7 +47,10 @@ chown root:root "$REPO_ROOT/data/wireguard/private.key" || true
 # ---------- 2. Backup ----------
 if [ "${SKIP_BACKUP:-0}" != "1" ]; then
   step "Backup"
+  # shellcheck source=../../backup/strip-peer-endpoints.sh
+  source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/../../backup/strip-peer-endpoints.sh"
   cp -a "$REPO_ROOT/data/wireguard" "$BACKUP_DIR/wireguard"
+  sanitize_wireguard_tree "$BACKUP_DIR/wireguard"
   install -m 600 "$REPO_ROOT/.env" "$BACKUP_DIR/.env"
   docker compose -f docker-compose.yml config > "$BACKUP_DIR/compose-config.yml" || true
   docker compose -f btcpay/docker-compose.yml config > "$BACKUP_DIR/btcpay-compose-config.yml" 2>/dev/null || true
@@ -57,7 +60,7 @@ if [ "${SKIP_BACKUP:-0}" != "1" ]; then
   docker compose -f btcpay/docker-compose.yml exec -T postgres-btcpay pg_dumpall -U btcpay 2>/dev/null \
     | gzip > "$BACKUP_DIR/btcpay-pg_dumpall.sql.gz" || echo "WARN: btcpay dump failed"
   docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' > "$BACKUP_DIR/docker-images.txt"
-  wg show > "$BACKUP_DIR/wg-show.txt" 2>/dev/null || true
+  wg show 2>/dev/null | strip_peer_endpoints > "$BACKUP_DIR/wg-show.txt" || true
   ls -lh "$BACKUP_DIR"
 else
   step "Backup SKIPPED"
