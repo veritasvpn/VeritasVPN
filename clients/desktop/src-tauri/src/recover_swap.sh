@@ -420,7 +420,6 @@ recovery_apply() {
   old_gif="$(recovery_meta_value gw_if)"
   if [[ -n "$old_gif" && "$old_gif" != "$gif" ]] && dns_link_name_ok "$old_gif"; then
     resolvectl default-route "$old_gif" true >/dev/null 2>&1 || true
-    resolvectl revert "$old_gif" >/dev/null 2>&1 || true
   fi
   if ! apply_tunnel_dns "$dns" "$gif" "$STATE_DIR/iface.meta.links"; then
     if [[ -w /etc/resolv.conf ]]; then

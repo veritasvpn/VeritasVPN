@@ -44,6 +44,38 @@ export function peerGoneAction(
 }
 
 const GIVE_UP = "Couldn't reconnect on this network. Check your connection and try again.";
+const TUNNEL_RETRY = "Couldn't start the tunnel. Try connecting again.";
+
+/**
+ * The control plane returns a bare host when it reuses this device's peer,
+ * and a prefixed address on a fresh allocation. The tunnel needs the prefix.
+ */
+export function tunnelAddress(raw: string | null | undefined): string {
+  const value = (raw ?? "").trim();
+  if (!value || value.includes("/")) return value;
+  if (isIpv4Host(value)) return `${value}/32`;
+  if (isIpv6Host(value)) return `${value}/128`;
+  return value;
+}
+
+function isIpv4Host(value: string): boolean {
+  const parts = value.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    const n = Number(part);
+    return n <= 255;
+  });
+}
+
+function isIpv6Host(value: string): boolean {
+  if (!value.includes(":") || value.includes("/")) return false;
+  if (!/^[0-9A-Fa-f:]+$/.test(value)) return false;
+  const halves = value.split("::");
+  if (halves.length > 2) return false;
+  const groups = value.split(":").filter((part) => part.length > 0);
+  return groups.length >= 1 && groups.length <= 8 && groups.every((part) => part.length <= 4);
+}
 
 /**
  * Raw timeout and exception text never reach the status line.
@@ -54,7 +86,18 @@ export function displayStatus(raw: string | null | undefined): string {
   const text = raw.trim();
   if (!text) return "";
   if (isRawTransportError(text)) return GIVE_UP;
+  if (isRawAddressError(text)) return TUNNEL_RETRY;
   return text;
+}
+
+function isRawAddressError(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (lower.includes("cidr notation")) return true;
+  if (lower.includes("prefix is expected")) return true;
+  if (lower === "invalid address" || lower === "invalid address prefix") return true;
+  if (lower.startsWith("invalid allowed ip")) return true;
+  if (lower === "missing assigned address") return true;
+  return false;
 }
 
 function isRawTransportError(text: string): boolean {
