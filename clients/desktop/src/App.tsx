@@ -75,6 +75,11 @@ function isAllowedBtcpayCheckoutUrl(url: string | undefined): boolean {
   return ALLOWED_BTCPAY_CHECKOUT_PREFIXES.some((prefix) => url.startsWith(prefix));
 }
 
+interface StaleKillSwitchStatus {
+  blocked: boolean;
+  cleared: boolean;
+}
+
 interface ConnectResult {
   success: boolean;
   message: string;
@@ -999,6 +1004,8 @@ function App() {
   const blockedDismissedRef = useRef(false);
   const [transport, setTransport] = useState<"" | "udp" | "stealth" | "switching">("");
   const [linuxDesktop] = useState(() => isLinuxDesktop());
+  const [killSwitchLeftover, setKillSwitchLeftover] = useState(false);
+  const [killSwitchBusy, setKillSwitchBusy] = useState(false);
   const [reconnectToApply, setReconnectToApply] = useState(false);
   const [statusSticky, setStatusSticky] = useState(false);
   const [wgStats, setWgStats] = useState<WgTransferStats | null>(null);
@@ -1058,10 +1065,30 @@ function App() {
   useEffect(() => { stealthModeRef.current = stealthMode; }, [stealthMode]);
   useEffect(() => { shieldFlagsRef.current = shieldFlags; }, [shieldFlags]);
 
+  const restoreLeftoverKillSwitch = useCallback(async () => {
+    if (!linuxDesktop || connectedRef.current || connectingRef.current) return;
+    setKillSwitchBusy(true);
+    try {
+      const status = await invoke<StaleKillSwitchStatus>("clear_stale_kill_switch");
+      if (connectedRef.current || connectingRef.current) return;
+      setKillSwitchLeftover(status.blocked && !status.cleared);
+    } catch {
+      // A failed command is not proof of a leftover firewall, and its text
+      // must never reach the screen.
+    } finally {
+      setKillSwitchBusy(false);
+    }
+  }, [linuxDesktop]);
+
   useEffect(() => {
     if (!linuxDesktop) return;
     void invoke<ConnectResult>("recovery_close", { releaseLock: false }).catch(() => undefined);
-  }, [linuxDesktop]);
+    void restoreLeftoverKillSwitch();
+  }, [linuxDesktop, restoreLeftoverKillSwitch]);
+
+  useEffect(() => {
+    if (connected) setKillSwitchLeftover(false);
+  }, [connected]);
 
   useEffect(() => {
     if (resetCooldown <= 0) return;
@@ -2241,11 +2268,26 @@ function App() {
     }
   }, [newAccountId]);
 
+  const killSwitchBanner = killSwitchLeftover && !connected && !connecting ? (
+    <div className="killswitch-banner" role="status">
+      <p>Your internet is blocked by a leftover VeritasVPN kill switch.</p>
+      <button
+        type="button"
+        className="btn-outline"
+        disabled={killSwitchBusy}
+        onClick={() => { void restoreLeftoverKillSwitch(); }}
+      >
+        {killSwitchBusy ? "Restoring…" : "Restore internet"}
+      </button>
+    </div>
+  ) : null;
+
   if (!user || (newAccountId && method === "accountId" && mode === "signup")) {
     const showingNewId = Boolean(newAccountId);
     if (pendingVerificationEmail) {
       return (
         <div className="app auth-screen">
+          {killSwitchBanner}
           <div className="brand">
             <div className="auth-mark"><img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" /></div>
             <h1>VeritasVPN</h1>
@@ -2268,6 +2310,7 @@ function App() {
     if (forgotPassword) {
       return (
         <div className="app auth-screen">
+          {killSwitchBanner}
           <div className="brand">
             <div className="auth-mark"><img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" /></div>
             <h1>VeritasVPN</h1>
@@ -2294,6 +2337,7 @@ function App() {
 
     return (
       <div className="app auth-screen">
+        {killSwitchBanner}
         <div className="brand">
           <div className="auth-mark"><img className="brand-logo auth-logo" src={veritasMark} alt="VeritasVPN" /></div>
           <h1>VeritasVPN</h1>
@@ -2377,6 +2421,7 @@ function App() {
   if (checkoutUrl) {
     return (
       <div className="app app-dashboard">
+        {killSwitchBanner}
         <PaymentCheckoutScreen
           checkoutUrl={checkoutUrl}
           onClose={() => setCheckoutUrl(null)}
@@ -2395,6 +2440,7 @@ function App() {
   const onHome = !showPlans && !showTunnelSettings && !showStealthSettings && !showShieldSettings && !showNetworkMap && !showHelp;
   return (
     <div className="app app-dashboard">
+      {killSwitchBanner}
       {onHome && <header className="app-header blueprint-header">
         <img className="brand-logo" src={veritasLogo} alt="VeritasVPN" />
         <div className="header-actions">

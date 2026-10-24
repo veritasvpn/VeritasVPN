@@ -403,6 +403,28 @@ if command -v setsid >/dev/null 2>&1; then
   rm -f "$pidf"
 fi
 
+cleanup="$ROOT/../linux/killswitch-cleanup.sh"
+conf="$ROOT/../tauri.conf.json"
+[[ -f "$cleanup" ]] || fail "killswitch cleanup script missing"
+bash -n "$cleanup" || fail "killswitch cleanup syntax"
+grep -q 'nft delete table inet veritasvpn_killswitch' "$cleanup" || fail "cleanup does not delete the veritas nft table"
+grep -q 'ip route del blackhole default metric 1' "$cleanup" || fail "cleanup does not delete the v4 blackhole"
+grep -q 'ip -6 route del blackhole default metric 1' "$cleanup" || fail "cleanup does not delete the v6 blackhole"
+grep -q 'ip link delete veritas0' "$cleanup" || fail "cleanup does not delete veritas0"
+grep -q 'exit 0' "$cleanup" || fail "cleanup can fail the package operation"
+if grep -q 'table 52' "$cleanup" || grep -q '5210' "$cleanup" || grep -q 'ip rule' "$cleanup" || grep -q 'nft flush ruleset' "$cleanup"; then
+  fail "cleanup touches another vendor"
+fi
+grep -q 'install|upgrade|remove' "$cleanup" || fail "desktop stop is not limited to maintainer scripts"
+bash "$cleanup" || fail "cleanup script failed when nothing was installed"
+grep -q '"preInstallScript": "./linux/killswitch-cleanup.sh"' "$conf" || fail "deb preinst is not the cleanup script"
+grep -q '"preRemoveScript": "./linux/killswitch-cleanup.sh"' "$conf" || fail "deb prerm is not the cleanup script"
+grep -q 'ip route del blackhole default metric 1' "$ROOT/lib.rs" || fail "connect-time cleanup dropped the v4 blackhole"
+grep -q 'ip -6 route del blackhole default metric 1' "$ROOT/lib.rs" || fail "connect-time cleanup dropped the v6 blackhole"
+if grep -n 'NOPASSWD' "$ROOT/lib.rs" | grep -E 'killswitch-cleanup|cleanup-killswitch'; then
+  fail "cleanup helper is passwordless"
+fi
+
 python3 - "$app" <<'PY'
 import pathlib, sys
 text = pathlib.Path(sys.argv[1]).read_text()
