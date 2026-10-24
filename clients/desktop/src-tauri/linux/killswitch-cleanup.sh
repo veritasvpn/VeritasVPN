@@ -134,6 +134,31 @@ remember_dns_link() {
   printf '%s\n' "$link" >> "$file" 2>/dev/null || true
 }
 
+# The links file is iface.meta.links. Record gw_if in iface.meta before the
+# underlay route changes, without dropping the other fields already there.
+remember_gw_if() {
+  local links_file="$1" link="$2" meta="" tmp=""
+  dns_link_name_ok "$link" || return 0
+  case "$links_file" in
+    *.links) meta="${links_file%.links}" ;;
+    *) return 0 ;;
+  esac
+  [[ -L "$meta" ]] && return 0
+  if [[ -f "$meta" ]]; then
+    tmp="$(mktemp "${meta}.XXXXXX" 2>/dev/null || true)"
+    [[ -n "$tmp" ]] || return 0
+    awk -v gif="$link" '
+      BEGIN { done = 0 }
+      /^gw_if=/ { print "gw_if=" gif; done = 1; next }
+      { print }
+      END { if (!done) print "gw_if=" gif }
+    ' "$meta" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+    mv -f "$tmp" "$meta" 2>/dev/null || rm -f "$tmp"
+  else
+    printf 'gw_if=%s\n' "$link" > "$meta" 2>/dev/null || true
+  fi
+}
+
 dns_run() {
   local seconds="$1"
   shift
@@ -160,8 +185,11 @@ apply_tunnel_dns() {
     resolvectl default-route veritas0 true >/dev/null 2>&1 || true
   fi
   if dns_link_name_ok "$underlay"; then
-    dns_run 5 resolvectl default-route "$underlay" false
+    # Record the link before turning its default DNS route off. A crash
+    # between these steps must still leave a name to restore.
     remember_dns_link "$links_file" "$underlay"
+    remember_gw_if "$links_file" "$underlay"
+    dns_run 5 resolvectl default-route "$underlay" false
   fi
   dns_run 5 resolvectl flush-caches
   return 0
