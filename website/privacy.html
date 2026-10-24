@@ -52,7 +52,7 @@
 
       <h2 id="no-logs">No-logs policy</h2>
       <ul>
-        <li>We do not store browsing history, a log of the DNS names you look up, the contents of your VPN traffic, or your real public IP address when you connect. That address is not written to the account database and it is not written to the connect log. An encrypted cluster backup can include a WireGuard status snapshot of peers configured on the server at that moment, including the endpoint address WireGuard last saw for each of those peers. It is not a history of connections. See Retention.</li>
+        <li>We do not store browsing history, a log of the DNS names you look up, the contents of your VPN traffic, or your real connection IP. That address is not written to the account database, the connect log, or backups. A backup made by the previous script can still contain a WireGuard endpoint until that archive expires: 14 days on the server, and 60 days off site. It is not a connection history. See Retention.</li>
         <li>When a peer is created, the log and the internal event store a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint. They do not store those values in the clear, and they do not store your real public IP.</li>
         <li>The Stealth listener is started at error log level, on the VPN node and in the cluster, so a rejected connection does not record the stealth path. Error lines can still be written. This is not a browsing log.</li>
         <li>We do keep an email address if you register with one. Email is optional. An anonymous Account ID has no email. We keep that Account ID, and we keep purchase history, for the life of the account.</li>
@@ -81,7 +81,7 @@
         <li>Browsing activity or browsing history</li>
         <li>A log of the DNS names you look up</li>
         <li>The contents of your VPN traffic</li>
-        <li>A log of your real public IP address when you connect</li>
+        <li>Your real connection IP, including in backups</li>
       </ul>
       <p>
         The connection map in the Android and Linux apps shows only the server location
@@ -147,8 +147,7 @@
       </p>
       <p>
         Your real public IP may be read in memory to choose a LAN or WAN endpoint for
-        that response. It is not written to the database and it is not written to the
-        connect log.
+        that response. It is not written to the database, the connect log, or backups.
       </p>
 
       <h3>Short-lived IP checks</h3>
@@ -282,7 +281,7 @@
         <li><strong>Account category block counts</strong> — about 8 days in the Redis cache, with no domain names. Memory pressure can drop them sooner. Deleted when the account is deleted</li>
         <li><strong>Blocked names for a notice</strong> — gateway memory for up to about 10 minutes, and a Redis cache for about 2 minutes, keyed by the tunnel IP. Not written to disk. Deleted when the peer is removed. Not a query log and not your public IP</li>
         <li><strong>Prometheus</strong> — 21 days of aggregate metrics, without query names or your real IP</li>
-        <li><strong>Cluster backups</strong> — the cluster backup keeps an encrypted archive for 14 days on the server. The archive includes the Veritas database, the BTCPay database, and a WireGuard status snapshot of peers configured on the server at that moment, including the endpoint address WireGuard last saw for each of those peers. It is not a log written when you connect, and it is not a history of connections. Encrypted copies uploaded to Cloudflare R2 are removed after 60 days</li>
+        <li><strong>Cluster backups</strong> — an encrypted archive is kept for 14 days on the server. Encrypted copies in Cloudflare R2 are removed after 60 days. The archive includes the Veritas database and the BTCPay database. It does not include a peer endpoint or the address from a last handshake. A backup made by the previous script can still contain a WireGuard endpoint until that archive expires. It is not a log written when you connect</li>
         <li><strong>Other backup copies</strong> — the postgres backup script, where it is used, keeps 7 daily, 4 weekly, and 3 monthly copies (monthly copies are removed after about 93 days, about 3 months). Single-node recovery snapshots are removed after 35 days</li>
         <li><strong>Application container logs</strong> — Docker json-file rotation, 10 MB per file, 3 files. Connect logs do not include your real public IP. The peer-created log and internal event store a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint, not the raw values</li>
         <li><strong>Origin nginx and ingress access logs</strong> — disabled. They are not written to our disks. Cloudflare may still retain edge logs under Cloudflare’s own policies. We do not keep a separate access-log archive</li>
@@ -427,10 +426,10 @@
         has one, a password hash, session-token hashes, device and tunnel metadata,
         last handshake time, and payment records. BTCPay could produce invoices
         tagged with an account ID. We cannot produce browsing history, a DNS query
-        log, traffic contents, or a log of your real public IP written at
-        connect time. An encrypted backup can include the last WireGuard endpoint
-        of a peer that was still configured when the backup ran, for the windows
-        in section 7. A
+        log, traffic contents, or your real connection IP from the account
+        database, the connect log, or a current backup. A backup made by the
+        previous script can still contain a WireGuard endpoint until it expires,
+        for the windows in section 7. A
         blocked name held so the app can show a notice may exist only for the
         short windows in section 7. Short-lived Redis rate-limit keys and a
         Turnstile check may exist only for those windows too. Our

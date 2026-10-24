@@ -41,6 +41,12 @@ test("privacy policy lists Android and Linux IP-check hosts and the install id",
   assert.match(privacy, /random per-install device ID/);
   assert.match(privacy, /does not cancel a Google Play subscription/);
   assert.match(privacy, /about 3 months/);
+  assert.match(privacy, /real connection IP/);
+  assert.match(privacy, /not written to the account database, the connect log, or backups/);
+  assert.match(privacy, /previous script/);
+  assert.match(privacy, /14 days on the server/);
+  assert.match(privacy, /60 days off site/);
+  assert.equal(privacy.includes("status snapshot"), false);
 });
 
 test("account page shows deletion steps before sign-in", () => {
