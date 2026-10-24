@@ -48,17 +48,11 @@
   <main class="legal-page">
     <div class="container">
       <h1>Privacy Policy</h1>
-      <p class="legal-meta">Effective date: October 21, 2026. Published at https://veritasvpn.cloud/privacy.html. <a href="#no-logs">No-logs policy</a>.</p>
-
-      <div class="legal-notice">
-        This policy describes how VeritasVPN actually handles personal data. It is written
-        for users and for app-store review. It is not a substitute for legal advice. An
-        EU/UK Article 27 representative has not been appointed; that is an open item for counsel.
-      </div>
+      <p class="legal-meta">Effective date: October 21, 2026. Last updated: October 24, 2026. Published at https://veritasvpn.cloud/privacy.html. <a href="#no-logs">No-logs policy</a>.</p>
 
       <h2 id="no-logs">No-logs policy</h2>
       <ul>
-        <li>We do not store browsing history, a log of the DNS names you look up, the contents of your VPN traffic, or your real public IP address when you connect.</li>
+        <li>We do not store browsing history, a log of the DNS names you look up, the contents of your VPN traffic, or your real public IP address when you connect. That address is not written to the account database and it is not written to the connect log. An encrypted cluster backup can include a WireGuard status snapshot of peers configured on the server at that moment, including the endpoint address WireGuard last saw for each of those peers. It is not a history of connections. See Retention.</li>
         <li>When a peer is created, the log and the internal event store a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint. They do not store those values in the clear, and they do not store your real public IP.</li>
         <li>The Stealth listener is started at error log level, on the VPN node and in the cluster, so a rejected connection does not record the stealth path. Error lines can still be written. This is not a browsing log.</li>
         <li>We do keep an email address if you register with one. Email is optional. An anonymous Account ID has no email. We keep that Account ID, and we keep purchase history, for the life of the account.</li>
@@ -68,16 +62,16 @@
 
       <h2>1. Who we are</h2>
       <p>
-        VeritasVPN is operated from Asunción, Paraguay. The controller location
-        published in this policy is Asunción, Paraguay.
+        Veritas Ark, in Asunción, Paraguay, operates VeritasVPN. Veritas Ark is
+        the controller of the personal data described in this policy.
       </p>
       <p>
-        VeritasVPN is the controller of personal data described in this policy for the
-        website, the Android app, the Linux app, the Chrome extension, and the VPN
-        service at veritasvpn.cloud. VPN servers are in Paraguay.
+        This policy covers the website, the Android app, the Linux app, the Chrome
+        extension, and the VPN service at veritasvpn.cloud. VPN servers are in
+        Paraguay. Windows and macOS apps are not offered.
       </p>
       <p>
-        Privacy requests and other contact go to
+        Privacy requests go to
         <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a>.
       </p>
 
@@ -183,9 +177,11 @@
           Deleting the account does not cancel the Google Play subscription.
         </li>
         <li>
-          Website and Linux app: self-hosted BTCPay, paid in Bitcoin. We store the
-          amount, currency, plan, status, and timestamps against your account. The
-          BTCPay invoice is tagged with your account ID.
+          Website, Linux app, and the Android app installed from this website
+          rather than Google Play: self-hosted BTCPay, paid in Bitcoin. There is
+          no card checkout on this path. We store the amount, currency, plan,
+          status, and timestamps against your account. The BTCPay invoice is
+          tagged with your account ID.
         </li>
       </ul>
       <p>
@@ -235,8 +231,8 @@
       <h2>5. Processors and recipients</h2>
       <p>We do not sell personal data. We use these processors and recipients:</p>
       <ul>
-        <li><strong>Cloudflare</strong> — website hosting (Pages), Tunnel in front of the origin, Turnstile, R2 backup storage, and DNS-over-HTTPS (1.1.1.1) for names Veritas Shield forwards</li>
-        <li><strong>Google</strong> — DNS-over-HTTPS (dns.google) as the other Shield upstream; Google Play Billing for the Play app, including a one-way hash of the Account ID on new purchases; Google Fonts requests from some download pages</li>
+        <li><strong>Cloudflare</strong> — website hosting (Pages), Tunnel in front of the origin, Turnstile, R2 backup storage, and DNS-over-HTTPS (cloudflare-dns.com) for names Veritas Shield forwards</li>
+        <li><strong>Google</strong> — DNS-over-HTTPS (dns.google) as the other Shield upstream; Google Play Billing for the Play app, including a one-way hash of the Account ID on new purchases; a preconnect to fonts.gstatic.com on some download pages. That preconnect can send your IP address to Google. Those pages do not load a font stylesheet, and the marketing homepage does not preconnect</li>
         <li><strong>Resend</strong> — verification and password-reset email</li>
         <li><strong>The mailbox provider for contact@veritasvpn.cloud</strong> — messages you send us</li>
         <li><strong>BTCPay</strong> — self-hosted by us, for Bitcoin invoices on the website and Linux app</li>
@@ -247,7 +243,7 @@
         <li><strong>edns.ip-api.com</strong> — DNS leak test on the website</li>
         <li><strong>XposedOrNot</strong> — breach-check lookup</li>
         <li><strong>GitHub</strong> — only if you file a public issue</li>
-        <li><strong>Telegram</strong> — operational alerts to us. Those alerts are not supposed to contain personal data</li>
+        <li><strong>Telegram</strong> — operational alerts to us, such as a new account or a payment received. Those messages include the account type or the payment method. They do not include an email address, an Account ID, or an IP address</li>
       </ul>
       <p>
         OpenStreetMap tiles load in your browser during the IP check map. We do not
@@ -257,21 +253,18 @@
 
       <h2>6. International transfers</h2>
       <p>
-        Servers are in Paraguay. Paraguay is not the subject of a European Commission
-        adequacy decision. Using the VPN means your account and tunnel metadata are
-        processed in Paraguay, because that is the service.
+        The VPN servers and the account database are in Paraguay. Paraguay is not
+        the subject of a European Commission adequacy decision. Using the VPN means
+        your account and tunnel metadata are processed in Paraguay, because that is
+        where the service runs.
       </p>
       <p>
-        Where we transfer personal data from the EEA or the United Kingdom to a
-        processor outside those places, we use appropriate safeguards such as the
-        European Commission’s standard contractual clauses, and the UK addendum where
-        it applies, with processors that offer them. We do not treat “by using the
-        service you consent” as the transfer mechanism.
+        The processors in section 5 can process data outside Paraguay, including
+        outside the EEA and the United Kingdom. Cloudflare, Google, Resend, and the
+        other recipients listed there operate in their own locations.
       </p>
       <p>
-        We have not appointed an EU or UK representative under Article 27. That
-        appointment is an open item for a lawyer before we rely on this service for
-        a broad EEA or UK launch.
+        We have not appointed an EU or UK representative under Article 27.
       </p>
 
       <h2>7. Retention</h2>
@@ -289,7 +282,8 @@
         <li><strong>Account category block counts</strong> — about 8 days in the Redis cache, with no domain names. Memory pressure can drop them sooner. Deleted when the account is deleted</li>
         <li><strong>Blocked names for a notice</strong> — gateway memory for up to about 10 minutes, and a Redis cache for about 2 minutes, keyed by the tunnel IP. Not written to disk. Deleted when the peer is removed. Not a query log and not your public IP</li>
         <li><strong>Prometheus</strong> — 21 days of aggregate metrics, without query names or your real IP</li>
-        <li><strong>Database backups</strong> — the postgres backup script keeps 7 daily, 4 weekly, and 3 monthly copies (monthly copies are removed after about 93 days). Encrypted copies uploaded to Cloudflare R2 are removed after 60 days. Single-node recovery snapshots are removed after 35 days</li>
+        <li><strong>Cluster backups</strong> — the cluster backup keeps an encrypted archive for 14 days on the server. The archive includes the Veritas database, the BTCPay database, and a WireGuard status snapshot of peers configured on the server at that moment, including the endpoint address WireGuard last saw for each of those peers. It is not a log written when you connect, and it is not a history of connections. Encrypted copies uploaded to Cloudflare R2 are removed after 60 days</li>
+        <li><strong>Other backup copies</strong> — the postgres backup script, where it is used, keeps 7 daily, 4 weekly, and 3 monthly copies (monthly copies are removed after about 93 days, about 3 months). Single-node recovery snapshots are removed after 35 days</li>
         <li><strong>Application container logs</strong> — Docker json-file rotation, 10 MB per file, 3 files. Connect logs do not include your real public IP. The peer-created log and internal event store a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint, not the raw values</li>
         <li><strong>Origin nginx and ingress access logs</strong> — disabled. They are not written to our disks. Cloudflare may still retain edge logs under Cloudflare’s own policies. We do not keep a separate access-log archive</li>
       </ul>
@@ -320,8 +314,8 @@
       </p>
       <p>We still keep:</p>
       <ul>
-        <li>Encrypted database backups until they expire. Monthly copies are removed after about 93 days (about 3 months). Encrypted copies in Cloudflare R2 are removed after 60 days. See section 7. We do not restore a deleted account into the live service except to recover from an incident.</li>
-        <li>BTCPay invoices tagged with the Account ID, on the self-hosted BTCPay server. The Google Play app does not use BTCPay.</li>
+        <li>Encrypted database backups until they expire. Cluster archives are removed after 14 days on the server, and encrypted copies in Cloudflare R2 are removed after 60 days. Where the postgres backup script is used, monthly copies are removed after about 93 days (about 3 months). Single-node recovery snapshots are removed after 35 days. See section 7. We do not restore a deleted account into the live service except to recover from an incident.</li>
+        <li>BTCPay invoices tagged with the Account ID, on the self-hosted BTCPay server, and a copy of the BTCPay database inside a cluster backup until that backup expires. The Google Play app does not use BTCPay.</li>
       </ul>
       <p>
         Deleting the account does not cancel a Google Play subscription. Google can
@@ -356,9 +350,8 @@
       </p>
       <p>
         We do not track you across other websites, so we do not change the service
-        in response to a browser Do Not Track signal. Material changes to this
-        policy are announced as described in section 16, which is also how we meet
-        the CalOPPA change-notice practice.
+        in response to a browser Do Not Track signal. Changes to this policy are
+        posted as described in section 17.
       </p>
 
       <h2>10. Complaints</h2>
@@ -393,10 +386,10 @@
 
       <h2>13. Children</h2>
       <p>
-        VeritasVPN is not for anyone under 16. That matches Ley 7593 Article 7 and
-        our Play target audience of 18 and over. Do not create an account if you are
-        under 16. If we learn that we have personal data of a child under 16, we
-        delete the account and the data we control.
+        VeritasVPN is not for anyone under 16. Do not create an account if you are
+        under 16. The apps do not ask for your age. If we learn that we have
+        personal data of a child under 16, we delete the account and the data we
+        control.
       </p>
 
       <h2>14. VPN-specific statements</h2>
@@ -418,8 +411,9 @@
         See the <a href="/cookies.html">Cookie Policy</a>. The site uses essential
         session storage, Cloudflare Turnstile cookies when a security check runs
         (including in the Android sign-in WebView, which allows third-party cookies
-        for that check), and Google Fonts requests on some download pages. We do not
-        use advertising cookies.
+        for that check), and a preconnect to fonts.gstatic.com on some download
+        pages. That preconnect can send your IP address to Google. Those pages do
+        not load a font stylesheet. We do not use advertising cookies.
       </p>
 
       <h2>16. Law-enforcement requests</h2>
@@ -433,24 +427,27 @@
         has one, a password hash, session-token hashes, device and tunnel metadata,
         last handshake time, and payment records. BTCPay could produce invoices
         tagged with an account ID. We cannot produce browsing history, a DNS query
-        log, traffic contents, or a stored log of your real public IP at
-        connect time. A blocked name held so the app can show a notice may exist
-        only for the short windows in section 7. Short-lived Redis rate-limit keys
-        and a Turnstile check may exist only for those windows too. Our
+        log, traffic contents, or a log of your real public IP written at
+        connect time. An encrypted backup can include the last WireGuard endpoint
+        of a peer that was still configured when the backup ran, for the windows
+        in section 7. A
+        blocked name held so the app can show a notice may exist only for the
+        short windows in section 7. Short-lived Redis rate-limit keys and a
+        Turnstile check may exist only for those windows too. Our
         <a href="/canary.txt">warrant canary</a> states whether we have received a
         secret order we cannot describe.
       </p>
 
       <h2>17. Changes</h2>
       <p>
-        We will give advance notice of material changes by email, when we have an
-        email for the account, or in the app, before the change takes effect.
-        Updating the date on this page is not the only notice. Continued use is not
-        how we obtain agreement to a material change.
+        We post changes on this page and change the Last updated date. That posted
+        page is the notice. The apps do not show a separate acceptance screen for
+        this policy, and a change does not send an automatic email.
       </p>
 
       <h2>18. Contact</h2>
       <p>
+        Veritas Ark<br />
         Asunción, Paraguay<br />
         <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a><br />
         <a href="/contact.html">Contact page</a>
