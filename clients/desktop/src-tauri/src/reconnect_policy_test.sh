@@ -549,4 +549,43 @@ fi
 [[ ! -e "$dns_sandbox/meta" && ! -e "$dns_sandbox/backup" && ! -e "$dns_sandbox/links" ]] || fail "DNS record kept after a successful restore"
 rm -rf "$dns_sandbox"
 
+# The underlay record is written before its default DNS route is turned off.
+order_sandbox="$(mktemp -d)"
+mkdir -p "$order_sandbox/bin" "$order_sandbox/state"
+cat > "$order_sandbox/bin/resolvectl" << 'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$DNS_LOG"
+if [[ "$1" == default-route && "$2" == eno1 && "$3" == false ]]; then
+  if grep -qx 'eno1' "$LINKS_FILE" && grep -qx 'gw_if=eno1' "$META_FILE"; then
+    printf '%s\n' ORDER_OK >> "$DNS_LOG"
+  else
+    printf '%s\n' ORDER_FAIL >> "$DNS_LOG"
+  fi
+fi
+exit 0
+EOF
+cat > "$order_sandbox/bin/timeout" << 'EOF'
+#!/bin/bash
+shift
+exec "$@"
+EOF
+chmod +x "$order_sandbox/bin/"*
+: > "$order_sandbox/log"
+PATH="$order_sandbox/bin:$PATH" DNS_LOG="$order_sandbox/log" \
+  LINKS_FILE="$order_sandbox/state/iface.meta.links" \
+  META_FILE="$order_sandbox/state/iface.meta" \
+  bash -c '
+    set -uo pipefail
+    source "$1"
+    apply_tunnel_dns 10.0.0.1 eno1 "$2"
+  ' _ "$ROOT/dns_restore.sh" "$order_sandbox/state/iface.meta.links" || fail "apply_tunnel_dns failed"
+order_log="$(cat "$order_sandbox/log")"
+printf '%s\n' "$order_log" | grep -qx ORDER_OK || fail "underlay was changed before it was recorded"
+if printf '%s\n' "$order_log" | grep -qx ORDER_FAIL; then
+  fail "underlay was changed before it was recorded"
+fi
+grep -qx 'eno1' "$order_sandbox/state/iface.meta.links" || fail "links file missing the underlay"
+grep -qx 'gw_if=eno1' "$order_sandbox/state/iface.meta" || fail "iface.meta missing gw_if"
+rm -rf "$order_sandbox"
+
 printf 'ok\n'
