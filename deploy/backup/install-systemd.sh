@@ -27,6 +27,7 @@ if [[ -d "$ROOT/backups" && ! -L "$ROOT/backups" ]]; then
   find "$ROOT/backups" -type f -exec chmod 0600 {} +
 fi
 install -o root -g root -m 0755 "$ROOT/deploy/backup/backup-k3s.sh" "$LIBEXEC/backup-k3s.sh"
+install -o root -g root -m 0755 "$ROOT/deploy/backup/strip-peer-endpoints.sh" "$LIBEXEC/strip-peer-endpoints.sh"
 install -o root -g root -m 0755 "$ROOT/deploy/backup/restore-test.sh" "$LIBEXEC/restore-test.sh"
 install -o root -g root -m 0755 "$ROOT/deploy/systemd/veritas-backup-verify.sh" "$LIBEXEC/verify-backup.sh"
 install -o root -g root -m 0755 "$ROOT/deploy/backup/r2-upload.py" "$LIBEXEC/r2-upload.py"
