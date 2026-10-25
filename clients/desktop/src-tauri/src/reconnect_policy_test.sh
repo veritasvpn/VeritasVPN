@@ -588,4 +588,31 @@ grep -qx 'eno1' "$order_sandbox/state/iface.meta.links" || fail "links file miss
 grep -qx 'gw_if=eno1' "$order_sandbox/state/iface.meta" || fail "iface.meta missing gw_if"
 rm -rf "$order_sandbox"
 
+# Underlay switch: the endpoint host route follows the new default interface.
+# shellcheck disable=SC1091
+source "$ROOT/endpoint_choice.sh"
+# shellcheck disable=SC1091
+source "$ROOT/underlay_follow.sh"
+route_log="$(mktemp)"
+ip() { printf '%s\n' "$*" >> "$route_log"; }
+follow_underlay_route 203.0.113.10 198.51.100.1 eno1 198.51.100.20 || fail "wired underlay was not ready"
+grep -q 'route replace 203.0.113.10/32 via 198.51.100.1 dev eno1' "$route_log" || fail "endpoint did not move to the wired underlay"
+if grep -q 'wlx90de802153e1' "$route_log"; then
+  fail "endpoint route stayed on the old wifi interface"
+fi
+: > "$route_log"
+follow_underlay_route 203.0.113.10 192.0.2.1 wlx90de802153e1 192.0.2.50 || fail "wifi underlay was not ready"
+grep -q 'route replace 203.0.113.10/32 via 192.0.2.1 dev wlx90de802153e1' "$route_log" || fail "endpoint did not move to the wifi underlay"
+if follow_underlay_route 203.0.113.10 "" eno1 198.51.100.20; then
+  fail "a missing gateway was treated as ready"
+fi
+rm -f "$route_log"
+unset -f ip
+
+path_section="$(sed -n "/<<'SOFT_PATH'/,/^SOFT_PATH$/p" "$lib")"
+follow_line="$(printf '%s\n' "$path_section" | awk '/follow_underlay_route/{print NR; exit}')"
+fresh_line="$(printf '%s\n' "$path_section" | awk '/maybe_fresh_lines/{print NR; exit}')"
+[[ -n "$follow_line" && -n "$fresh_line" && "$follow_line" -lt "$fresh_line" ]] || fail "path-adapt reads the peer before moving the endpoint route"
+printf '%s\n' "$path_section" | grep -q 'underlay not ready' || fail "path-adapt treats a missing underlay as success"
+
 printf 'ok\n'

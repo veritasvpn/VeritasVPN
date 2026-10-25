@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::thread;
 use std::time::Duration;
@@ -528,6 +528,7 @@ async fn connect_wireguard(app: AppHandle, mut config: WgTunnelConfig) -> Connec
         Ok(msg) => {
             // Store AppHandle so soft reconnect can re-bring the tunnel up.
             let _ = APP_HANDLE_FOR_RECOVER.set(app.clone());
+            network_switch::clear_underlay_notice();
             // Start background watcher (Phase 1) for underlay flaps.
             start_network_switch_watcher_if_needed();
             ConnectResult {
@@ -552,38 +553,34 @@ static NETWORK_SWITCH_JOIN: std::sync::OnceLock<thread::JoinHandle<()>> =
     std::sync::OnceLock::new();
 
 fn start_network_switch_watcher_if_needed() {
-    // Allow restart after disconnect/reconnect.
-    if let Some(running) = NETWORK_SWITCH_WATCHER.get() {
-        if running.load(Ordering::SeqCst) {
-            return;
-        }
-        running.store(true, Ordering::SeqCst);
-    } else {
-        let running = Arc::new(AtomicBool::new(true));
-        let _ = NETWORK_SWITCH_WATCHER.set(running.clone());
-        let handle = thread::spawn(move || {
-            while running.load(Ordering::SeqCst) {
-                // Soft recovery is best-effort and must never block the UI.
-                // Soft reconnect is also throttled inside recover_network_switch.
-                match network_switch::recover_network_switch() {
-                    network_switch::NetworkRecoverResult { changed: true, .. } => {
-                        // Soft recovery ran; keep logging to stderr for diagnostics.
-                    }
-                    _ => {}
+    // The thread is started once and then only paused. Stopping it used to
+    // exit the thread while the OnceLock still held the finished handle, so
+    // every connect after the first disconnect left the watcher dead and a
+    // later underlay change sat behind the kill switch.
+    let running = NETWORK_SWITCH_WATCHER.get_or_init(|| Arc::new(AtomicBool::new(false)));
+    running.store(true, Ordering::SeqCst);
+    network_switch::clear_underlay_watch();
+    let _ = NETWORK_SWITCH_JOIN.get_or_init(|| {
+        let running = NETWORK_SWITCH_WATCHER
+            .get()
+            .expect("watcher flag")
+            .clone();
+        thread::spawn(move || {
+            loop {
+                if running.load(Ordering::SeqCst) {
+                    let _ = network_switch::recover_network_switch();
                 }
-                // Soft recovery is cheap when gateway is unchanged.
-                // Soft reconnect is throttled inside recover_network_switch.
                 thread::sleep(Duration::from_secs(2));
             }
-        });
-        let _ = NETWORK_SWITCH_JOIN.set(handle);
-    }
+        })
+    });
 }
 
 fn stop_network_switch_watcher() {
     if let Some(running) = NETWORK_SWITCH_WATCHER.get() {
         running.store(false, Ordering::SeqCst);
     }
+    network_switch::clear_underlay_watch();
 }
 
 #[derive(Debug, Serialize)]
@@ -592,6 +589,10 @@ pub struct WgTransferStats {
     pub tx_bytes: u64,
     pub last_handshake_sec: i64,
     pub interface_up: bool,
+    /// Friendly sentence after the tunnel could not follow an underlay change.
+    /// Empty the rest of the time. Read once.
+    #[serde(default)]
+    pub underlay_notice: String,
 }
 
 #[tauri::command]
@@ -607,6 +608,7 @@ fn wireguard_stats() -> WgTransferStats {
             tx_bytes: 0,
             last_handshake_sec: 0,
             interface_up: false,
+            underlay_notice: String::new(),
         }
     }
 }
@@ -675,6 +677,7 @@ fn wireguard_stats_linux() -> WgTransferStats {
             tx_bytes: 0,
             last_handshake_sec: 0,
             interface_up: false,
+            underlay_notice: network_switch::take_underlay_notice(),
         };
     }
 
@@ -687,6 +690,7 @@ fn wireguard_stats_linux() -> WgTransferStats {
         tx_bytes: sys_tx,
         last_handshake_sec: read_published_handshake(),
         interface_up: sys_up,
+        underlay_notice: network_switch::take_underlay_notice(),
     }
 }
 
@@ -698,6 +702,7 @@ async fn disconnect_wireguard(app: AppHandle, soft: Option<bool>) -> ConnectResu
     // falls back to interactive elevation when that helper is missing.
     if !soft {
         stop_network_switch_watcher();
+        network_switch::clear_underlay_notice();
     }
     let result = tauri::async_runtime::spawn_blocking(move || {
         close_recovery_exception_quiet();
@@ -796,12 +801,14 @@ pub(crate) fn refresh_endpoint_route_linux() -> RouteRefreshResult {
     let meta = fs::read_to_string(&meta_file).unwrap_or_default();
     let mut endpoint_ip = String::new();
     let mut old_gw = String::new();
+    let mut old_gw_if = String::new();
     let mut iface = String::new();
     for line in meta.lines() {
         if let Some((k, v)) = line.split_once('=') {
             match k.trim() {
                 "endpoint_ip" => endpoint_ip = v.trim().to_string(),
                 "gateway" => old_gw = v.trim().to_string(),
+                "gw_if" => old_gw_if = v.trim().to_string(),
                 "iface" => iface = v.trim().to_string(),
                 _ => {}
             }
@@ -815,24 +822,38 @@ pub(crate) fn refresh_endpoint_route_linux() -> RouteRefreshResult {
         };
     }
 
+    // One rebind at a time, and never overlapping a teardown.
+    let _flight = match network_switch::FlightGuard::enter(network_switch::FlightKind::Rebind) {
+        Some(guard) => guard,
+        None => {
+            return RouteRefreshResult {
+                refreshed: false,
+                gateway: old_gw,
+                message: "path rebind already in progress".into(),
+            };
+        }
+    };
     // Helper rebinds on any underlay change, including same gateway IP.
     // The token lets that helper read the peer on the underlay. It is removed
     // before this function returns, including on failure.
     if Path::new(SOFT_PATH_ADAPT_HELPER).exists() {
         let _token = PeerCheckTokenGuard::install();
         match Command::new("timeout")
-            .args(["20", "sudo", "-n", SOFT_PATH_ADAPT_HELPER])
+            .args(["12", "sudo", "-n", SOFT_PATH_ADAPT_HELPER])
             .output()
         {
             Ok(out) if out.status.success() => {
                 let msg = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                // Exit 0 without this line means the helper did not move the
+                // underlay (no gateway yet, or it returned before writing meta).
+                let rebound = msg.contains("ok path-adapt");
                 return RouteRefreshResult {
-                    refreshed: true,
+                    refreshed: rebound,
                     gateway: old_gw,
-                    message: if msg.is_empty() || msg.contains('=') {
-                        "endpoint route rebound".into()
-                    } else {
+                    message: if rebound {
                         msg
+                    } else {
+                        "path-adapt made no change".into()
                     },
                 };
             }
@@ -906,7 +927,8 @@ printf '%s %s\n' "$GW" "$GW_IF"
             message: "underlay gateway not ready yet".into(),
         };
     }
-    if new_gw == old_gw {
+    // Same gateway IP on a different NIC is still a network change.
+    if new_gw == old_gw && (new_gw_if.is_empty() || new_gw_if == old_gw_if) {
         return RouteRefreshResult {
             refreshed: false,
             gateway: old_gw,
@@ -1241,6 +1263,15 @@ fn close_recovery_exception_quiet() {
 }
 
 fn recovery_close_blocking(release_lock: bool) {
+    let _flight = match network_switch::FlightGuard::enter(network_switch::FlightKind::Close) {
+        Some(guard) => guard,
+        None => {
+            if release_lock {
+                network_switch::recovery_lock_release_owned();
+            }
+            return;
+        }
+    };
     close_recovery_exception_quiet();
     if release_lock {
         network_switch::recovery_lock_release_owned();
@@ -1543,6 +1574,7 @@ fn sudo_n_root_script(path: &str) -> bool {
 
 #[cfg(target_os = "linux")]
 fn pkexec_root_script(path: &str) -> bool {
+    let _hold = PKEXEC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     command_succeeded("pkexec", &["/bin/bash", path])
 }
 
@@ -2878,6 +2910,7 @@ set -uo pipefail
 {stealth_fns}
 {handshake_fns}
 {dns_fns}
+{underlay_fns}
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || exit 1
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || exit 1
@@ -2903,48 +2936,39 @@ OLD_IF="$(meta_value gw_if)"
 [[ -z "$OLD_IF" || "$OLD_IF" =~ ^[A-Za-z0-9_.:-]{{1,15}}$ ]] || OLD_IF=""
 WAN_HOST="${{ENDPOINT_WAN%%:*}}"
 [[ "$WAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || WAN_HOST=""
-[[ -n "$ENDPOINT_IP" && "$ENDPOINT_IP" != "127.0.0.1" ]] || exit 0
+[[ -n "$ENDPOINT_IP" ]] || exit 0
 
 detect_underlay() {{
   local gw="" gif="" src=""
-  local cand_gw cand_if cand_src
-  if command -v nmcli >/dev/null 2>&1; then
-    local dev type state oper
+  local dev type state oper
+  # Follow the OS default route. Device-list order is not the route the host uses.
+  gw="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
+    /blackhole/ {{ next }}
+    /via/ {{
+      for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
+      if (d == "" || d != iface) {{ print $3; exit }}
+    }}
+  ')"
+  gif="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
+    /blackhole/ {{ next }}
+    /via/ {{
+      for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
+      if (d == "" || d != iface) {{ print d; exit }}
+    }}
+  ')"
+  if [[ -z "$gw" || -z "$gif" ]] && command -v nmcli >/dev/null 2>&1; then
     while IFS=: read -r dev type state; do
       [[ "$state" == "connected" ]] || continue
       case "$type" in wifi|ethernet|802-11-wireless|802-3-ethernet) ;; *) continue ;; esac
       [[ -n "$dev" && "$dev" != "$IFACE" && "$dev" != "lo" ]] || continue
       oper="$(cat "/sys/class/net/$dev/operstate" 2>/dev/null || true)"
       [[ "$oper" == "up" ]] || continue
-      cand_gw="$(nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1)"
-      cand_src="$(nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1)"
-      cand_src="${{cand_src%%/*}}"
-      cand_if="$dev"
-      [[ -n "$cand_gw" && -n "$cand_src" ]] || continue
-      # Prefer a live underlay that is not the interface we just left.
-      if [[ -n "$OLD_IF" && "$dev" == "$OLD_IF" ]]; then
-        gw="$cand_gw"; gif="$cand_if"; src="$cand_src"
-        continue
-      fi
-      gw="$cand_gw"; gif="$cand_if"; src="$cand_src"
-      break
+      gw="$(nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1)"
+      src="$(nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1)"
+      src="${{src%%/*}}"
+      gif="$dev"
+      [[ -n "$gw" && -n "$gif" ]] && break
     done < <(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null)
-  fi
-  if [[ -z "$gw" ]]; then
-    gw="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
-      /blackhole/ {{ next }}
-      /via/ {{
-        for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
-        if (d == "" || d != iface) {{ print $3; exit }}
-      }}
-    ')"
-    gif="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
-      /blackhole/ {{ next }}
-      /via/ {{
-        for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
-        if (d == "" || d != iface) {{ print d; exit }}
-      }}
-    ')"
   fi
   if [[ -z "$src" && -n "$gif" ]]; then
     src="$(ip -4 -o addr show dev "$gif" 2>/dev/null | awk '{{print $4; exit}}')"
@@ -2954,12 +2978,29 @@ detect_underlay() {{
 }}
 
 NEW_GW=""; NEW_GW_IF=""; NEW_SRC=""
-for _ in $(seq 1 25); do
+for _ in $(seq 1 8); do
   read -r NEW_GW NEW_GW_IF NEW_SRC <<<"$(detect_underlay)"
   [[ -n "$NEW_GW" && -n "$NEW_GW_IF" ]] && break
   sleep 0.4
 done
-[[ -n "$NEW_GW" ]] || exit 0
+# Not ready is a failure. Exit 0 here used to be reported as a successful
+# rebind, so the watcher stopped retrying while the kill switch still
+# pointed at the interface that had just disappeared.
+if [[ -z "$NEW_GW" || -z "$NEW_GW_IF" ]]; then
+  echo "underlay not ready" >&2
+  exit 1
+fi
+# Move the current endpoint before any peer read. The read needs this path,
+# and waiting for it first let the helper hit its deadline without rebinding.
+if ! follow_underlay_route "$ENDPOINT_IP" "$NEW_GW" "$NEW_GW_IF" "$NEW_SRC"; then
+  echo "underlay not ready" >&2
+  exit 1
+fi
+if [[ -n "$WAN_HOST" && "$WAN_HOST" != "$ENDPOINT_IP" && "$WAN_HOST" != "127.0.0.1" ]]; then
+  ip route del "$WAN_HOST" 2>/dev/null || true
+  ip route del "$WAN_HOST/32" 2>/dev/null || true
+  ip route replace "$WAN_HOST/32" via "$NEW_GW" dev "$NEW_GW_IF" 2>/dev/null || true
+fi
 
 # A shared /24 is not proof we are on the node LAN. Use a private endpoint
 # only when a fresh peer read on this underlay returned that private address.
@@ -2992,6 +3033,18 @@ esac
 FRESH_EP=""
 FRESH_STEALTH=""
 STEALTH_BOUND_NOW=""
+# Open the new underlay in the kill switch before the read, using the
+# endpoint already on the tunnel. A later fresh read may narrow it.
+if [[ -z "$STEALTH_REMOTE" ]]; then
+  _allow_port="$(port_of "$ENDPOINT" 2>/dev/null || true)"
+  [[ -n "$_allow_port" ]] && allow_outside_ip "$ENDPOINT_IP" "$_allow_port" udp
+fi
+if [[ -n "$DNS" && "$NEW_GW_IF" != "$OLD_IF" ]]; then
+  if [[ -n "$OLD_IF" ]] && dns_link_name_ok "$OLD_IF"; then
+    resolvectl default-route "$OLD_IF" true >/dev/null 2>&1 || true
+  fi
+  apply_tunnel_dns "$DNS" "$NEW_GW_IF" "$STATE_DIR/iface.meta.links" || true
+fi
 _fresh="$(maybe_fresh_lines "$NEW_GW" "$NEW_GW_IF" "$NEW_SRC" || true)"
 _fresh_code="$(printf '%s\n' "$_fresh" | sed -n '1p')"
 if [[ "$_fresh_code" == "200" ]]; then
@@ -3000,6 +3053,30 @@ if [[ "$_fresh_code" == "200" ]]; then
 fi
 apply_endpoint_choice
 if [[ ! "$CHOOSE_IP" =~ ^([0-9]{{1,3}}\.){{3}}[0-9]{{1,3}}$ || "$CHOOSE_IP" == "127.0.0.1" ]]; then
+  # Stealth stays on loopback, but the underlay record still has to follow
+  # the OS default route or the next change looks unchanged.
+  maybe_restart_stealth
+  tmp="$(mktemp)"
+  awk -v gw="$NEW_GW" -v gwif="$NEW_GW_IF" -v src="$NEW_SRC" -v bound="$STEALTH_BOUND_NOW" '
+    BEGIN{{gw_set=0; gwif_set=0; src_set=0; bound_set=0}}
+    /^gateway=/ {{print "gateway=" gw; gw_set=1; next}}
+    /^gw_if=/ {{print "gw_if=" gwif; gwif_set=1; next}}
+    /^underlay_src=/ {{print "underlay_src=" src; src_set=1; next}}
+    /^stealth_bound=/ {{
+      if (bound != "") {{ print "stealth_bound=" bound; bound_set=1; next }}
+      print
+      bound_set=1
+      next
+    }}
+    {{print}}
+    END{{
+      if (!gw_set) print "gateway=" gw
+      if (!gwif_set) print "gw_if=" gwif
+      if (!src_set && src != "") print "underlay_src=" src
+      if (!bound_set && bound != "") print "stealth_bound=" bound
+    }}
+  ' "$META" > "$tmp"
+  mv "$tmp" "$META"
   echo "ok path-adapt"
   exit 0
 fi
@@ -3046,8 +3123,8 @@ else
 fi
 maybe_restart_stealth
 if [[ -n "$DNS" ]]; then
-  if [[ -n "${{gw_if:-}}" && "${{gw_if}}" != "$NEW_GW_IF" ]] && dns_link_name_ok "$gw_if"; then
-    resolvectl default-route "$gw_if" true >/dev/null 2>&1 || true
+  if [[ -n "$OLD_IF" && "$OLD_IF" != "$NEW_GW_IF" ]] && dns_link_name_ok "$OLD_IF"; then
+    resolvectl default-route "$OLD_IF" true >/dev/null 2>&1 || true
   fi
   apply_tunnel_dns "$DNS" "$NEW_GW_IF" "$STATE_DIR/iface.meta.links" || true
 fi
@@ -3232,6 +3309,7 @@ echo "ok iface=$IFACE_NAME engine=$ENGINE"
         recover_fns = include_str!("recover_swap.sh"),
         handshake_fns = include_str!("handshake_publish.sh"),
         dns_fns = include_str!("dns_restore.sh"),
+        underlay_fns = include_str!("underlay_follow.sh"),
     )
 }
 
@@ -3419,6 +3497,10 @@ fn linux_kill_switch_remains_visible() -> bool {
 
 #[cfg(target_os = "linux")]
 fn bring_down_wireguard_linux(app: &AppHandle) -> Result<String, String> {
+    let _flight = match network_switch::FlightGuard::enter(network_switch::FlightKind::Teardown) {
+        Some(guard) => guard,
+        None => return Ok("WireGuard disconnected".into()),
+    };
     let wg_go = resolve_wireguard_go(app)?;
     let _ = wg_go;
     let script_path = state_dir()?.join("teardown.sh");
@@ -3614,6 +3696,21 @@ echo ok
     Ok("WireGuard disconnected".into())
 }
 
+/// Drop the tunnel and kill switch without deleting the passwordless helpers
+/// and without a password prompt. Used when an underlay change could not be
+/// followed before the deadline.
+#[cfg(target_os = "linux")]
+pub(crate) fn soft_release_tunnel() -> bool {
+    let Some(app) = get_app_handle_for_recover() else {
+        return false;
+    };
+    let _guard = SoftElevatedGuard::enter();
+    match bring_down_wireguard(&app) {
+        Ok(_) => !linux_kill_switch_remains_visible(),
+        Err(_) => false,
+    }
+}
+
 /// Execute a privileged script from an application-owned memory buffer.
 ///
 /// Passing the script over stdin closes the old time-of-check/time-of-use gap
@@ -3641,6 +3738,9 @@ fn command_with_script(mut command: Command, script: &str) -> Result<Output, Str
         .map_err(|e| format!("write privileged script: {e}"))?;
     Ok(output)
 }
+
+/// Serializes interactive pkexec so one user action cannot open a stack of prompts.
+static PKEXEC_LOCK: Mutex<()> = Mutex::new(());
 
 /// Elevated execution without interactive password prompts.
 /// Never falls back to pkexec (which shows a password dialog and freezes the UI).
@@ -3718,6 +3818,9 @@ fn run_elevated(script: &str) -> Result<(), String> {
         if is_soft_elevated() {
             return Err("soft recovery cannot use interactive elevation".into());
         }
+        // One password dialog at a time. Overlapping connects used to open
+        // several prompts for a single click.
+        let _hold = PKEXEC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut pkexec = Command::new("pkexec");
         pkexec.args(["bash", "-s", "--"]);
         let output = command_with_script(pkexec, script).map_err(|e| format!("pkexec: {e}"))?;
@@ -4002,6 +4105,22 @@ mod security_tests {
         assert!(path_adapt.contains("apply_endpoint_choice"));
         assert!(path_adapt.contains("maybe_fresh_lines"));
         assert!(path_adapt.contains("maybe_restart_stealth"));
+        assert!(path_adapt.contains("follow_underlay_route"));
+        assert!(path_adapt.contains("underlay not ready"));
+        let follow_at = path_adapt
+            .find("follow_underlay_route \"$ENDPOINT_IP\"")
+            .expect("follow call");
+        let fresh_at = path_adapt
+            .find("maybe_fresh_lines \"$NEW_GW\"")
+            .expect("fresh call");
+        assert!(
+            follow_at < fresh_at,
+            "the endpoint route must move before the peer read"
+        );
+        assert!(
+            !path_adapt.contains("[[ -n \"$NEW_GW\" ]] || exit 0"),
+            "a missing underlay must not look like a successful rebind"
+        );
         assert!(!path_adapt.contains("CHOOSE_IP=\"$LAN_HOST\""));
         assert!(!path_adapt.contains("LAN_HOST="));
         check("veritas-path-adapt-syntax.sh", &path_adapt);

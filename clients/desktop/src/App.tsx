@@ -177,6 +177,7 @@ interface WgTransferStats {
   tx_bytes: number;
   last_handshake_sec: number;
   interface_up: boolean;
+  underlay_notice?: string;
 }
 
 interface PeerInfo {
@@ -337,7 +338,7 @@ function formatConnectError(err: unknown, wantedStealth: boolean): string {
 }
 
 function isStickyStatusMessage(msg: string): boolean {
-  return /stealth|kill switch|tap to reconnect/i.test(msg);
+  return /stealth|kill switch|tap to reconnect|couldn't follow it/i.test(msg);
 }
 
 function applyExcludeLan(allowed: string[], excludeLan: boolean): string[] {
@@ -1714,7 +1715,10 @@ function App() {
     }
   }, [user, deletePeer, linuxDesktop, showStatus, expireAndReturnToSignIn]);
 
+  const connectInFlightRef = useRef(false);
   const handleConnect = useCallback(async () => {
+    if (connectInFlightRef.current || connectingRef.current) return;
+    connectInFlightRef.current = true;
     userDisconnectedRef.current = false;
     clearReconnectTimer();
     reconnectingRef.current = false;
@@ -1725,10 +1729,18 @@ function App() {
     if (linuxDesktop) {
       await invoke<ConnectResult>("recovery_close", { releaseLock: false }).catch(() => undefined);
     }
-    await connectVpn();
+    try {
+      await connectVpn();
+    } finally {
+      connectInFlightRef.current = false;
+    }
   }, [clearReconnectTimer, connectVpn, linuxDesktop]);
 
+  const disconnectInFlightRef = useRef(false);
   const handleDisconnect = useCallback(async () => {
+    if (disconnectInFlightRef.current) return;
+    disconnectInFlightRef.current = true;
+    try {
     userDisconnectedRef.current = true;
     clearReconnectTimer();
     reconnectingRef.current = false;
@@ -1776,6 +1788,9 @@ function App() {
     clearUi();
     setStatusSticky(false);
     setStatusMsg(statusAfterDisconnectFailure(teardownFailedMsg));
+    } finally {
+      disconnectInFlightRef.current = false;
+    }
   }, [tunnelMode, peerId, clearReconnectTimer, deletePeer, linuxDesktop]);
   handleDisconnectRef.current = handleDisconnect;
 
@@ -1923,6 +1938,27 @@ function App() {
       try {
         const stats = await invoke<WgTransferStats>("wireguard_stats");
         if (cancelled) return;
+        const notice = (stats.underlay_notice || "").trim();
+        if (notice) {
+          const shown = displayStatus(notice);
+          const oldPeer = peerIdRef.current;
+          userDisconnectedRef.current = false;
+          reconnectingRef.current = false;
+          setReconnecting(false);
+          setConnected(false);
+          setTunnelMode("");
+          setTransport("");
+          setPeerId("");
+          setWgStats(null);
+          hadGoodHandshakeRef.current = false;
+          hadInterfaceUpRef.current = false;
+          peerGoneLatchedRef.current = false;
+          if (/restore internet/i.test(shown)) setKillSwitchLeftover(true);
+          setStatusSticky(true);
+          setStatusMsg(shown);
+          if (oldPeer) void deletePeer(oldPeer);
+          return;
+        }
         setWgStats(stats);
 
         // Soft path adapt and soft reconnect are done only in the backend
@@ -1955,7 +1991,7 @@ function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [connected, reconnecting]);
+  }, [connected, reconnecting, deletePeer]);
 
   // Poll peers for DNS blocked count of current peer
   useEffect(() => {

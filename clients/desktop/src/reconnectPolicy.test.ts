@@ -76,6 +76,11 @@ describe("status text", () => {
     );
     expect(displayStatus("Reconnecting…")).toBe("Reconnecting…");
     expect(displayStatus("Tap to reconnect")).toBe("Tap to reconnect");
+    expect(
+      displayStatus(
+        "The network changed and the VPN couldn't follow it. Internet is back. Tap to reconnect.",
+      ),
+    ).toBe("The network changed and the VPN couldn't follow it. Internet is back. Tap to reconnect.");
     expect(displayStatus("")).toBe("");
     expect(displayStatus(null)).toBe("");
   });

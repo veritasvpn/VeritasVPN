@@ -213,11 +213,38 @@ export function isAccessTokenExpired(token: string, skewSeconds = 30): boolean {
   return exp <= Math.floor(Date.now() / 1000) + skewSeconds;
 }
 
+export type RefreshOutcome = "ok" | "rejected" | "offline";
+
+/** A network failure is not a rejected session. Signing out here used to tear
+ * the tunnel down with --purge while the kill switch was still up. */
+export async function refreshSessionOutcome(): Promise<RefreshOutcome> {
+  const rt = refreshTokenCache;
+  if (!rt) return "rejected";
+  try {
+    const data = await authAPI("/api/v1/auth/refresh", {
+      refresh_token: rt,
+    });
+    const user = getStoredUser();
+    if (!user) return "rejected";
+    await persistSession(user, data);
+    return "ok";
+  } catch (err) {
+    if (err instanceof ApiError && (err.httpCode === 401 || err.httpCode === 403)) {
+      return "rejected";
+    }
+    return "offline";
+  }
+}
+
 /** Returns a fresh access token, refreshing when expired. */
 export async function getValidAccessToken(): Promise<string | null> {
-  let token = getStoredToken();
+  const token = getStoredToken();
   if (token && !isAccessTokenExpired(token)) return token;
-  if (await refreshSession()) return getStoredToken();
+  const outcome = await refreshSessionOutcome();
+  if (outcome === "ok") return getStoredToken();
+  // Keep the current token across a blip. The next request can still 401
+  // for real once the network is back.
+  if (outcome === "offline" && token) return token;
   return null;
 }
 
@@ -244,19 +271,7 @@ export async function validateSessionOnResume(): Promise<boolean> {
 
 /** Refresh access token so JWT tier matches billing after Premium purchase. */
 export async function refreshSession(): Promise<boolean> {
-  const rt = refreshTokenCache;
-  if (!rt) return false;
-  try {
-    const data = await authAPI("/api/v1/auth/refresh", {
-      refresh_token: rt,
-    });
-    const user = getStoredUser();
-    if (!user) return false;
-    await persistSession(user, data);
-    return true;
-  } catch {
-    return false;
-  }
+  return (await refreshSessionOutcome()) === "ok";
 }
 
 export async function signIn(

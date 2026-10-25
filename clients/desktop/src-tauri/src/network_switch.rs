@@ -4,7 +4,7 @@
 //! Soft recovery never freezes the UI and never prompts for a password.
 
 use std::fs;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -65,10 +65,6 @@ pub fn recover_network_switch() -> NetworkRecoverResult {
 // Rebind throttle — keep the tunnel up; never tear it down on a network switch.
 static LAST_REBIND: Mutex<Option<Instant>> = Mutex::new(None);
 const REBIND_MIN_INTERVAL: Duration = Duration::from_secs(3);
-
-// Underlay fingerprint: gateway|iface|src. Gateway IP alone misses Wi-Fi→Wi-Fi
-// switches that keep 192.168.1.1 (Android rebinds on any network change).
-static LAST_FINGERPRINT: Mutex<Option<String>> = Mutex::new(None);
 
 static REBIND_IN_FLIGHT: Mutex<Option<(Instant, u64)>> = Mutex::new(None);
 static REBIND_OWNER_SEQ: Mutex<u64> = Mutex::new(0);
@@ -137,9 +133,126 @@ pub(crate) fn recovery_lock_abandon(token: u64) {
     recovery_lock_release(token);
 }
 
+/// How long a diverged underlay may stay behind the kill switch.
+/// Past this, release the tunnel (no purge, no password) so the internet works.
+pub(crate) const UNDERLAY_RELEASE_AFTER: Duration = Duration::from_secs(18);
+
+pub(crate) const UNDERLAY_RELEASED_NOTICE: &str =
+    "The network changed and the VPN couldn't follow it. Internet is back. Tap to reconnect.";
+pub(crate) const UNDERLAY_BLOCKED_NOTICE: &str =
+    "The network changed and the VPN couldn't follow it. Tap Restore internet, then connect again.";
+
+static DIVERGED_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
+static RELEASE_LATCHED: Mutex<bool> = Mutex::new(false);
+static UNDERLAY_NOTICE: Mutex<String> = Mutex::new(String::new());
+
+pub(crate) fn clear_underlay_watch() {
+    *DIVERGED_SINCE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *RELEASE_LATCHED.lock().unwrap_or_else(|e| e.into_inner()) = false;
+}
+
+pub(crate) fn clear_underlay_notice() {
+    *UNDERLAY_NOTICE.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+}
+
+pub(crate) fn take_underlay_notice() -> String {
+    std::mem::take(&mut *UNDERLAY_NOTICE.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+fn set_underlay_notice(msg: &str) {
+    *UNDERLAY_NOTICE.lock().unwrap_or_else(|e| e.into_inner()) = msg.to_string();
+}
+
+/// `recorded` and `detected` are `gateway|iface|src`.
+/// A missing detection counts as a change once a tunnel underlay was recorded,
+/// so an interface that disappeared is retried instead of ignored.
+pub(crate) fn underlay_fingerprint_diverged(recorded: &str, detected: Option<&str>) -> bool {
+    let recorded = recorded.trim();
+    match detected.map(str::trim).filter(|s| !s.is_empty()) {
+        None => !recorded.is_empty(),
+        Some(now) => recorded.is_empty() || now != recorded,
+    }
+}
+
+pub(crate) fn underlay_release_due(diverged_for: Duration) -> bool {
+    diverged_for >= UNDERLAY_RELEASE_AFTER
+}
+
+fn note_divergence(diverged: bool) -> Option<Duration> {
+    let mut since = DIVERGED_SINCE.lock().unwrap_or_else(|e| e.into_inner());
+    if !diverged {
+        *since = None;
+        return None;
+    }
+    let start = since.get_or_insert_with(Instant::now);
+    Some(start.elapsed())
+}
+
+fn release_latched() -> bool {
+    *RELEASE_LATCHED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn latch_release() -> bool {
+    let mut latched = RELEASE_LATCHED.lock().unwrap_or_else(|e| e.into_inner());
+    if *latched {
+        return false;
+    }
+    *latched = true;
+    true
+}
+
+fn recorded_underlay_fingerprint() -> String {
+    let Ok(dir) = privileged_state_dir() else {
+        return String::new();
+    };
+    let meta = fs::read_to_string(dir.join("iface.meta")).unwrap_or_default();
+    let mut gw = String::new();
+    let mut gif = String::new();
+    let mut src = String::new();
+    for line in meta.lines() {
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        match k.trim() {
+            "gateway" => gw = v.trim().to_string(),
+            "gw_if" => gif = v.trim().to_string(),
+            "underlay_src" => src = v.trim().to_string(),
+            _ => {}
+        }
+    }
+    if gw.is_empty() && gif.is_empty() {
+        String::new()
+    } else {
+        format!("{gw}|{gif}|{src}")
+    }
+}
+
+fn release_diverged_tunnel() -> NetworkRecoverResult {
+    if !latch_release() {
+        return NetworkRecoverResult {
+            changed: false,
+            message: "underlay release already attempted".into(),
+            action: "released".into(),
+        };
+    }
+    let cleared = super::soft_release_tunnel();
+    let notice = if cleared {
+        UNDERLAY_RELEASED_NOTICE
+    } else {
+        UNDERLAY_BLOCKED_NOTICE
+    };
+    set_underlay_notice(notice);
+    NetworkRecoverResult {
+        changed: true,
+        message: notice.to_string(),
+        action: "released".into(),
+    }
+}
+
 fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
     let meta_path = privileged_state_dir()?.join("iface.meta");
     if !meta_path.exists() {
+        clear_underlay_watch();
         return Ok(NetworkRecoverResult {
             changed: false,
             message: "not connected".into(),
@@ -147,28 +260,28 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
         });
     }
 
-    let fp = detect_underlay_fingerprint();
+    let recorded = recorded_underlay_fingerprint();
+    let detected = detect_underlay_fingerprint();
+    let underlay_changed = underlay_fingerprint_diverged(&recorded, detected.as_deref());
     let healthy = tunnel_is_healthy().unwrap_or(false);
-    let mut last_fp = LAST_FINGERPRINT.lock().map_err(|e| e.to_string())?;
-    let underlay_changed = match (fp.as_ref(), last_fp.as_ref()) {
-        (Some(now), Some(prev)) => now != prev,
-        // Underlay vanished (DHCP/association gap) — still rebind so the
-        // helper can wait for the new path.
-        (None, Some(_)) => true,
-        (Some(_), None) => false,
-        (None, None) => false,
-    };
-    if let Some(now) = fp.clone() {
-        *last_fp = Some(now);
-    }
-    drop(last_fp);
 
-    if healthy && !underlay_changed {
+    if !underlay_changed {
+        let _ = note_divergence(false);
+        if healthy {
+            return Ok(NetworkRecoverResult {
+                changed: false,
+                message: "underlay unchanged; tunnel healthy".into(),
+                action: "noop".into(),
+            });
+        }
+    } else if release_latched() {
         return Ok(NetworkRecoverResult {
             changed: false,
-            message: "underlay unchanged; tunnel healthy".into(),
-            action: "noop".into(),
+            message: "underlay release already attempted".into(),
+            action: "released".into(),
         });
+    } else if underlay_release_due(note_divergence(true).unwrap_or_default()) {
+        return Ok(release_diverged_tunnel());
     }
 
     let owner = {
@@ -199,12 +312,22 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
         token
     };
 
-    // Android keeps the VPN session and rebinds the underlay. Do the same:
-    // refresh the endpoint host route + handshake. Never cleanup/teardown —
-    // that dropped the tunnel and could not rebuild it without a password.
+    // Keep the same tunnel and follow the OS default route. A rebind that
+    // still has not landed after UNDERLAY_RELEASE_AFTER drops the kill switch
+    // without --purge so the internet works. That fallback is not a reconnect.
     let endpoint = refresh_endpoint_route_linux();
     let dns = reapply_dns_from_saved();
     recovery_lock_release(owner);
+
+    let still = underlay_fingerprint_diverged(
+        &recorded_underlay_fingerprint(),
+        detect_underlay_fingerprint().as_deref(),
+    );
+    if !still {
+        let _ = note_divergence(false);
+    } else if underlay_release_due(note_divergence(true).unwrap_or_default()) {
+        return Ok(release_diverged_tunnel());
+    }
 
     let mut msg = endpoint.message.clone();
     if let Ok(dns) = dns {
@@ -223,6 +346,81 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
     })
 }
 
+/// One privileged helper at a time. Teardown and recover-close coalesce so a
+/// burst of callers shares the in-flight sudo instead of starting another.
+const FLIGHT_COALESCE: Duration = Duration::from_secs(3);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FlightKind {
+    Close,
+    Teardown,
+    Rebind,
+}
+
+struct FlightGate {
+    busy: Option<FlightKind>,
+    finished: Option<(FlightKind, Instant)>,
+}
+
+static FLIGHT: Mutex<FlightGate> = Mutex::new(FlightGate {
+    busy: None,
+    finished: None,
+});
+static FLIGHT_CV: Condvar = Condvar::new();
+
+enum FlightRole {
+    Run,
+    Skip,
+}
+
+fn flight_enter(kind: FlightKind) -> FlightRole {
+    let mut gate = FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        if gate.busy.is_some() {
+            gate = FLIGHT_CV.wait(gate).unwrap_or_else(|e| e.into_inner());
+            continue;
+        }
+        if kind != FlightKind::Rebind {
+            if let Some((done, at)) = gate.finished {
+                if at.elapsed() < FLIGHT_COALESCE && (done == FlightKind::Teardown || done == kind)
+                {
+                    return FlightRole::Skip;
+                }
+            }
+        }
+        gate.busy = Some(kind);
+        return FlightRole::Run;
+    }
+}
+
+fn flight_exit(kind: FlightKind) {
+    let mut gate = FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+    if gate.busy == Some(kind) {
+        gate.busy = None;
+        gate.finished = Some((kind, Instant::now()));
+    }
+    FLIGHT_CV.notify_all();
+}
+
+pub(crate) struct FlightGuard {
+    kind: FlightKind,
+}
+
+impl FlightGuard {
+    pub(crate) fn enter(kind: FlightKind) -> Option<Self> {
+        match flight_enter(kind) {
+            FlightRole::Run => Some(Self { kind }),
+            FlightRole::Skip => None,
+        }
+    }
+}
+
+impl Drop for FlightGuard {
+    fn drop(&mut self) {
+        flight_exit(self.kind);
+    }
+}
+
 /// Detect underlay path as `gateway|iface|src` (best-effort, non-elevated).
 fn detect_underlay_fingerprint() -> Option<String> {
     let out = std::process::Command::new("bash")
@@ -231,7 +429,22 @@ fn detect_underlay_fingerprint() -> Option<String> {
             r#"
 IFACE="veritas0"
 gw=""; gif=""; src=""
-if command -v nmcli >/dev/null 2>&1; then
+# The OS default route is the underlay. nmcli device order is not.
+gw="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
+  /blackhole/ { next }
+  /via/ {
+    for (i = 1; i <= NF; i++) if ($i == "dev") { d=$(i+1); break }
+    if (d == "" || d != iface) { print $3; exit }
+  }
+')"
+gif="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
+  /blackhole/ { next }
+  /via/ {
+    for (i = 1; i <= NF; i++) if ($i == "dev") { d=$(i+1); break }
+    if (d == "" || d != iface) { print d; exit }
+  }
+')"
+if [ -z "$gw" ] && command -v nmcli >/dev/null 2>&1; then
   while IFS=: read -r dev type state; do
     [ "$state" = "connected" ] || continue
     case "$type" in wifi|ethernet|802-11-wireless|802-3-ethernet) ;; *) continue ;; esac
@@ -244,22 +457,6 @@ if command -v nmcli >/dev/null 2>&1; then
   done <<EOF
 $(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null)
 EOF
-fi
-if [ -z "$gw" ]; then
-  gw="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
-    /blackhole/ { next }
-    /via/ {
-      for (i = 1; i <= NF; i++) if ($i == "dev") { d=$(i+1); break }
-      if (d == "" || d != iface) { print $3; exit }
-    }
-  ')"
-  gif="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
-    /blackhole/ { next }
-    /via/ {
-      for (i = 1; i <= NF; i++) if ($i == "dev") { d=$(i+1); break }
-      if (d == "" || d != iface) { print d; exit }
-    }
-  ')"
 fi
 if [ -z "$src" ] && [ -n "$gif" ]; then
   src="$(ip -4 -o addr show dev "$gif" 2>/dev/null | awk '{print $4; exit}')"
@@ -290,10 +487,52 @@ pub fn load_last_config() -> Result<SavedTunnelConfig, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{
         recovery_lock_abandon, recovery_lock_acquire, recovery_lock_acquire_owned,
-        recovery_lock_release, recovery_lock_release_owned,
+        recovery_lock_release, recovery_lock_release_owned, underlay_fingerprint_diverged,
+        underlay_release_due, FlightGuard, FlightKind, UNDERLAY_RELEASE_AFTER,
     };
+
+    #[test]
+    fn underlay_switch_retries_then_releases() {
+        let wifi = "192.0.2.1|wlx90de802153e1|192.0.2.20";
+        let wired = "198.51.100.1|eno1|198.51.100.10";
+        assert!(!underlay_fingerprint_diverged(wired, Some(wired)));
+        assert!(underlay_fingerprint_diverged(wifi, Some(wired)));
+        assert!(
+            underlay_fingerprint_diverged(wifi, None),
+            "a disappeared underlay must be retried"
+        );
+        assert!(!underlay_fingerprint_diverged("", None));
+        assert!(!underlay_release_due(Duration::from_secs(17)));
+        assert!(underlay_release_due(Duration::from_secs(18)));
+        assert!(underlay_release_due(UNDERLAY_RELEASE_AFTER));
+    }
+
+    #[test]
+    fn teardown_flight_is_single() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        let ran = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let ran = ran.clone();
+            handles.push(thread::spawn(move || {
+                if FlightGuard::enter(FlightKind::Teardown).is_some() {
+                    ran.fetch_add(1, Ordering::SeqCst);
+                    thread::sleep(Duration::from_millis(40));
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("flight thread");
+        }
+        assert_eq!(ran.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn recovery_lock_release_matches_its_owner() {
