@@ -135,6 +135,23 @@ jobs:
         run: find deploy scripts -type f -name '*.sh' -print0 | xargs -0 -r shellcheck --severity=error
       - name: Backup archives omit peer endpoints
         run: bash deploy/backup/backup-no-peer-endpoints.test.sh
+      - name: Hardware health firmware metrics
+        run: bash deploy/systemd/veritas-hardware-health.test.sh
+      - name: Validate Prometheus alert rules
+        env:
+          PROM_VERSION: "3.15.1"
+          PROM_LINUX_AMD64_SHA256: 6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84
+        run: |
+          if ! command -v promtool >/dev/null 2>&1; then
+            archive="$RUNNER_TEMP/prometheus.tar.gz"
+            curl -fsSL --retry 5 --retry-delay 3 -o "$archive" \
+              "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+            printf '%s  %s\n' "$PROM_LINUX_AMD64_SHA256" "$archive" | sha256sum --check --strict
+            tar -xzf "$archive" -C "$RUNNER_TEMP" "prometheus-${PROM_VERSION}.linux-amd64/promtool"
+            export PATH="$RUNNER_TEMP/prometheus-${PROM_VERSION}.linux-amd64:${PATH}"
+          fi
+          promtool check rules deploy/k8s/monitoring/alerts.yml
+          promtool test rules deploy/k8s/monitoring/alerts.test.yml
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}

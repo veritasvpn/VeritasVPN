@@ -1,0 +1,51 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'veritas_host_firmware_updates_pending'
+        values: '1x500'
+      - series: 'veritas_host_firmware_update_available{device="TPM",current="1.0",available="1.10",ignored="false"}'
+        values: '1x500'
+      - series: 'veritas_host_firmware_update_available{device="UEFI dbx",current="20230501",available="20260707",ignored="true"}'
+        values: '1x500'
+      - series: 'veritas_host_bios_below_minimum{version="1.26.0",minimum="1.32.0"}'
+        values: '1x500'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: DellFirmwareUpdatesPending
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: DellFirmwareUpdatesPending
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Dell firmware updates pending: TPM (installed 1.0, offered 1.10);"
+              description: "Review firmware urgency and schedule a powered maintenance window. Pending devices: TPM (installed 1.0, offered 1.10);"
+      - eval_time: 7h
+        alertname: DellBiosBelowMinimum
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              version: "1.26.0"
+              minimum: "1.32.0"
+            exp_annotations:
+              summary: "Dell BIOS 1.26.0 is below minimum 1.32.0"
+              description: "Installed BIOS 1.26.0 is older than the configured minimum 1.32.0. Flash the newer BIOS by hand; fwupd does not list Dell-site-only BIOS releases."
+  - interval: 1m
+    input_series:
+      - series: 'veritas_host_firmware_updates_pending'
+        values: '0x500'
+      - series: 'veritas_host_bios_below_minimum{version="1.32.0",minimum="1.32.0"}'
+        values: '0x500'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: DellFirmwareUpdatesPending
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: DellBiosBelowMinimum
+        exp_alerts: []

@@ -93,13 +93,24 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "Dell requires a reboot to finish maintenance"
+      # veritas_host_firmware_updates_pending excludes devices pinned in
+      # /etc/veritasvpn/firmware-ignore.conf. The summary lists the rest.
       - alert: DellFirmwareUpdatesPending
         expr: veritas_host_firmware_updates_pending > 0
         for: 6h
         labels: { severity: warning }
         annotations:
-          summary: "Dell firmware updates are pending"
-          description: "Review firmware urgency and schedule a powered maintenance window."
+          summary: >-
+            Dell firmware updates pending:{{ range query `veritas_host_firmware_update_available{ignored="false"}` }} {{ .Labels.device }} (installed {{ .Labels.current }}, offered {{ .Labels.available }});{{ end }}
+          description: >-
+            Review firmware urgency and schedule a powered maintenance window. Pending devices:{{ range query `veritas_host_firmware_update_available{ignored="false"}` }} {{ .Labels.device }} (installed {{ .Labels.current }}, offered {{ .Labels.available }});{{ end }}
+      - alert: DellBiosBelowMinimum
+        expr: veritas_host_bios_below_minimum == 1
+        for: 6h
+        labels: { severity: warning }
+        annotations:
+          summary: "Dell BIOS {{ $labels.version }} is below minimum {{ $labels.minimum }}"
+          description: "Installed BIOS {{ $labels.version }} is older than the configured minimum {{ $labels.minimum }}. Flash the newer BIOS by hand; fwupd does not list Dell-site-only BIOS releases."
       - alert: EncryptedBackupTooOld
         expr: veritas_backup_age_seconds < 0 or veritas_backup_age_seconds > 93600
         for: 15m
