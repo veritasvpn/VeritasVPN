@@ -7,6 +7,7 @@ Static legal pages for veritasvpn.cloud:
 | File | URL |
 |------|-----|
 | `privacy.html` | `/privacy.html` |
+| `transparency.html` | `/transparency.html` |
 | `terms.html` | `/terms.html` |
 | `cookies.html` | `/cookies.html` |
 | `contact.html` | `/contact.html` |

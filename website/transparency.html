@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Transparency — VeritasVPN</title>
+  <meta name="description" content="How VeritasVPN handles your real IP address, what else the service keeps, and what it does not keep." />
+  <link rel="stylesheet" href="/css/style-typography1.css" />
+  <link rel="stylesheet" href="/css/legal.css" />
+</head>
+<body>
+  <nav class="navbar" id="navbar">
+    <div class="container">
+      <a href="/" class="logo">
+        <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="36" height="36">
+        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+      </a>
+      <ul class="nav-links">
+                <li><a href="/learn/">Learn</a></li>
+                <li><a href="/check/">Check</a></li>
+                <li><a href="/#pricing">Pricing</a></li>
+                <li><a href="/downloads.html">Download</a></li>
+                <li><a href="/#faq">FAQ</a></li>
+      </ul>
+      <div class="nav-auth">
+        <div id="navAuthLoggedOut" class="nav-auth-logged-out">
+          <a href="/?signin=1" class="btn btn-primary nav-login">Log in</a>
+        </div>
+        <div id="navAuthLoggedIn" class="nav-auth-logged-in is-hidden">
+          <span id="navPlanBadge" class="nav-plan-badge" hidden>Inactive</span>
+          <button type="button" class="nav-user-btn" id="navUserMenuBtn" aria-haspopup="true" aria-expanded="false">
+            <span class="nav-user-avatar" aria-hidden="true"></span>
+            <span id="navUserEmail" class="nav-user-email"></span>
+          </button>
+          <div class="nav-user-menu" id="navUserMenu" role="menu">
+            <a href="/account/" class="nav-user-menu-item" role="menuitem">Open dashboard</a>
+            <button type="button" class="nav-user-menu-item nav-user-menu-item--signout" id="authSignOutAll" role="menuitem">Sign out from all devices</button>
+            <button type="button" class="nav-user-menu-item nav-user-menu-item--signout" id="authSignOut" role="menuitem">Sign out from this device</button>
+          </div>
+        </div>
+      </div>
+      <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <main class="legal-page">
+    <div class="container">
+      <h1>Transparency</h1>
+      <p class="legal-meta">Last updated: October 25, 2026. Veritas Ark, Asunción, Paraguay. <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a>. This page explains the controls behind the <a href="/privacy.html">Privacy Policy</a>. It is not a substitute for that policy, and it is not an audit.</p>
+
+      <h2 id="what-this-is">What this page is</h2>
+      <p>
+        One operator, Veritas Ark, runs VeritasVPN. The VPN servers and the account
+        database are in Paraguay. No independent audit report is published. The
+        source is public under the Business Source License. A
+        <a href="/canary.txt">warrant canary</a> states whether we have received a
+        secret order we cannot describe.
+      </p>
+      <p>
+        Read this as a description of the code in the public repository. It is not
+        a claim that a person with access to the machine cannot look at live state.
+        It is not a claim that we keep zero logs, and it is not a claim that the
+        service is RAM-only. The account database, metrics, the DNS filter list,
+        and backups are on disk. The connecting IP is handled as described below.
+      </p>
+
+      <h2 id="what-we-keep">What we keep</h2>
+      <h3>Account</h3>
+      <ul>
+        <li>An email address, if you register with one. An Account ID account has no email. Email is optional.</li>
+        <li>A bcrypt hash of the password. We do not store the password itself.</li>
+        <li>The Account ID, plan, subscription status, account creation time, and email verification time.</li>
+        <li>SHA-256 hashes of refresh tokens, email-verification tokens, and password-reset tokens. We do not store those tokens in the clear.</li>
+      </ul>
+      <p>
+        Access tokens last 1 hour by default. Refresh-token hashes last 7 days by
+        default. Verification links expire in 1 hour. Password-reset links expire
+        in 20 minutes. Email accounts that are never verified are deleted after 72
+        hours. That cleanup runs every 6 hours.
+      </p>
+
+      <h3>Device and tunnel</h3>
+      <p>While a peer is pending or active, and for 30 days after it is removed, we store:</p>
+      <ul>
+        <li>The WireGuard public key and a preshared key used to operate the tunnel.</li>
+        <li>The assigned tunnel IP, the server, the status, and the create time.</li>
+        <li>The last handshake time. That is a timestamp, not an address.</li>
+        <li>A random per-install device ID. The app creates it on the device so one account can have one peer per install, up to the plan's device limit. It is not an IMEI, Android ID, advertising ID, or MAC address. The peer-created log stores a short hash of it, not the raw value.</li>
+        <li>Device name, platform, model, OS version, and client version. Android sends the manufacturer and model. The Linux app may send the computer hostname as the device model. These are display data for the account, and the device ID is also how the device limit is enforced.</li>
+        <li>The Veritas Shield toggles for that peer.</li>
+      </ul>
+      <p>A free account cannot create a tunnel, so Shield does not filter a free account.</p>
+
+      <h3>Payments</h3>
+      <ul>
+        <li>Google Play Billing, for the Play app. Google processes the payment. We store purchase and subscription status, and the Play purchase token on the subscription row, so we can check that status. We do not receive card numbers. New purchases are matched with a one-way HMAC-SHA256 of the Account ID, using a fixed public label rather than a secret key. That value is not the Account ID and cannot be used to sign in. Purchases started before this change may still be matched using the Account ID that was sent with them. Deleting the account does not cancel the Google Play subscription.</li>
+        <li>Bitcoin, for the website, the Linux app, and the Android app installed from this website rather than Google Play. Checkout is self-hosted BTCPay. There is no card checkout on this path. We store the amount, currency, plan, status, timestamps, and a provider transaction id against the account. The BTCPay invoice is tagged with the account ID. A Bitcoin checkout that is still pending after 4 days is marked failed and then kept for the life of the account. Deleting the account removes our payment rows. It does not delete the invoice on the BTCPay server.</li>
+      </ul>
+
+      <h3>Bandwidth</h3>
+      <p>
+        The VPN node adds up bytes sent and received across peers on that server.
+        Prometheus records those totals, and the peer count, with no per-user
+        label. Heartbeats report the same server-wide totals, the peer count, and
+        each peer's last handshake time. They do not report a per-user traffic
+        history, and they do not report the connecting IP.
+      </p>
+
+      <h2 id="what-we-do-not-keep">What we do not keep</h2>
+      <ul>
+        <li>Browsing history.</li>
+        <li>A log of the DNS names you look up. A blocked name can be held for the short windows in the Shield section. Allowed lookups are not stored.</li>
+        <li>The contents of your VPN traffic.</li>
+        <li>Your real connection IP in the account database, the connect log, or a backup produced by the current backup scripts.</li>
+      </ul>
+
+      <h2 id="connecting-ip">What happens to the connecting IP</h2>
+      <p>
+        When an app asks for a tunnel, that API request comes through Cloudflare.
+        Origin nginx fills <code>X-Real-IP</code> from Cloudflare's connecting-IP
+        header when that header is present, and otherwise from the immediate
+        connection address. The account service and the WireGuard manager read
+        <code>X-Real-IP</code>. They do not read <code>CF-Connecting-IP</code> or
+        <code>X-Forwarded-For</code> themselves, because a client can spoof those
+        headers if it can reach the app directly. They trust the address the
+        origin proxy puts in <code>X-Real-IP</code>.
+      </p>
+      <p>
+        That address is used in memory to choose whether this response should name
+        the on-LAN server endpoint or the public one. It is not a column on the
+        peer. The peer-created log line, and the event published for that peer,
+        store a short hash of the peer id, the account id, the device id, the
+        assigned tunnel IP, and the server endpoint that was chosen. They do not
+        store those values in the clear, and they do not store your real public
+        IP. The hash is the first 8 bytes of SHA-256, with no secret salt. A
+        tunnel address comes from a small pool, so that hash is not a strong
+        secret for the tunnel address. Your real public IP is not an input. The
+        VPN server id is logged in the clear. That id names our server, not you.
+      </p>
+      <p>
+        The node then installs the peer with a public key, a preshared key, and
+        the tunnel addresses that peer may use. It does not set your real address
+        on the peer. After packets arrive, kernel WireGuard holds the current
+        remote address so it can send packets back. The agent reads byte counters
+        and the last handshake time from that state. It does not copy the remote
+        address into those reports or into the database.
+      </p>
+      <p>
+        While the peer exists, a person with access to the server can look at live
+        WireGuard status and see the current endpoint. That is the address of a
+        connected peer at that moment. We do not write that status into the
+        account database, and the cluster backup is built so it does not archive
+        it. It is not a connection history we keep. The kernel also tracks active
+        forwarded flows so routing works. This repository does not archive that
+        table. An operator on the machine can inspect current flows. We do not
+        keep a destination log.
+      </p>
+      <p>
+        The origin proxy also keeps rate-limit counters in memory, keyed by the
+        same connecting address when Cloudflare sends it. Access logs are off, so
+        those counters are not an access log on disk. They are gone when the proxy
+        process restarts.
+      </p>
+
+      <h2 id="logs">Logs and how long data is kept</h2>
+      <p>
+        The production log level is info. The peer-created log is described above.
+        Some agent lines about an expired or stale peer include the internal peer
+        id in the clear. They do not include the real public IP.
+      </p>
+      <p>
+        Origin nginx and the ingress controller have access logs turned off. We do
+        not keep a separate access-log archive. Nginx error logging is not given
+        its own off switch in this configuration, so a failed request can still
+        produce an error line. Cloudflare may retain its own edge logs. We do not
+        control that retention, and we do not keep a copy.
+      </p>
+      <p>
+        The Stealth listener is started at error log level, on the VPN node and in
+        the cluster. A warning would record the stealth path. Error lines can
+        still be written. This is not a browsing log.
+      </p>
+      <p>
+        Redis is started with snapshots and the append-only file turned off, with
+        a memory cap that evicts keys under pressure. It is a cache.
+      </p>
+      <ul>
+        <li>Authentication rate-limit keys include the client IP. Some also include an email address or an Account ID. Sign-in counters expire after 1 minute. The longest of these windows is 1 hour (account creation, verification resend, and the password-reset hourly limit).</li>
+        <li>The website privacy checks (IP, DNS session, and breach) send the visitor IP to our API. That API stores a SHA-256 hash of the IP as a one-minute counter key, not the raw IP.</li>
+        <li>The phishing check keeps the visitor IP in process memory for a one-minute limit, and sends it to Cloudflare Turnstile with the challenge token. It does not write the IP or the checked URL to a log line.</li>
+        <li>When another security check is required, we send the client IP to Cloudflare Turnstile with the token. We do not write that IP down after the check.</li>
+        <li>Removed peers, including device metadata, keys, the tunnel IP, and the last handshake time, are deleted 30 days after removal.</li>
+        <li>Refresh-token hashes last 7 days, or until you sign out or delete the account. Verification and reset token hashes last 1 hour and 20 minutes. Unverified email accounts last 72 hours.</li>
+      </ul>
+      <p>
+        Events such as "peer created" and "account registered" are published on
+        NATS. JetStream is enabled and can store data on disk, but this repository
+        does not create a stream that captures those subjects. The account event
+        carries the account type (email, anonymous, or device), not the email
+        address and not an IP. The registration log stores a short hash of the
+        account id, and for an email account a short hash of the email.
+      </p>
+
+      <h2 id="backups">Backups</h2>
+      <p>
+        The cluster backup dumps the Veritas database and the BTCPay database,
+        Kubernetes config and secrets, and the server WireGuard private key. It
+        does not run a WireGuard status command into the archive. That status
+        output would contain each peer's real public IP, which is why it is left
+        out. Before the archive is encrypted, a check refuses to continue if the
+        staging directory contains a peer endpoint. Local archives older than 14
+        days are deleted. Encrypted copies in Cloudflare R2 are deleted after 60
+        days by default.
+      </p>
+      <p>
+        The database includes the VPN server's own address. That is the address
+        clients connect to. It is not your address. The peer table has no endpoint
+        column and no client-IP column.
+      </p>
+      <p>
+        A separate postgres backup script, where it is used, keeps 7 daily, 4
+        weekly, and 3 monthly copies. Monthly copies are removed after about 93
+        days. It encrypts with GPG when a recipient is configured. Single-node
+        recovery snapshots are removed after 35 days. Those scripts also strip
+        peer endpoints from WireGuard text they copy.
+      </p>
+      <p>
+        The <a href="/privacy.html">Privacy Policy</a> still says an archive made
+        by the previous backup script can contain a WireGuard endpoint until that
+        archive expires, on the windows above. This page does not claim those
+        older archives have already been deleted. The repository shows how new
+        archives are built and how old ones age out. It does not record a separate
+        purge.
+      </p>
+      <p>
+        A deleted account can remain inside a backup until that backup expires.
+        We do not use backups to restore a deleted account into the live service
+        except to recover from an incident.
+      </p>
+
+      <h2 id="monitoring">Monitoring</h2>
+      <p>
+        Prometheus keeps 21 days of metrics, with a 10 GB cap. The VPN agent
+        exports peer counts, aggregate bytes in and out, DNS request and block
+        counts, blocklist size, and error counters. DNS block counters are labeled
+        by category only. There is no per-user label, no query name, and no client
+        IP. Database, Redis, node, and probe exporters report whether those
+        systems are up. They are not a browsing log.
+      </p>
+      <p>
+        An uptime worker checks whether the website, the API, billing, the egress
+        check, and the Stealth listener answer. It stores success and failure
+        counters. It can send a Telegram message that names which check failed.
+        That message does not include a visitor IP.
+      </p>
+
+      <h2 id="shield">DNS and Veritas Shield</h2>
+      <p>
+        Shield is a DNS filter for WireGuard clients that use the in-tunnel
+        resolver. Premium starts with malware, phishing, scam, cryptomining, and
+        tracker names blocked. Ads and adult domains stay off until that Premium
+        user turns them on. A block is an NXDOMAIN answer. It does not remove ads
+        or trackers inside a page.
+      </p>
+      <p>Allowed lookups are not stored. When a name is blocked:</p>
+      <ul>
+        <li>The gateway keeps that name in a deduplication map for up to 10 minutes, together with the tunnel IP and the category, so the same block is not announced again. The notice the app can show stays in gateway memory for up to 90 seconds.</li>
+        <li>A Redis key holds that notice for 2 minutes (120 seconds), keyed by the tunnel IP. Redis is not writing snapshots or an append-only file. The key is deleted when the peer is removed.</li>
+        <li>Session block totals, with no names, are keyed by the tunnel IP. They expire after 2 hours without a refresh, or when the peer is removed.</li>
+        <li>Account totals by category, with no names, are kept for 8 days and deleted when the account is deleted. Memory pressure can drop them sooner.</li>
+        <li>Prometheus keeps the aggregate counts, labeled by category and not by name, for 21 days.</li>
+      </ul>
+      <p>
+        Names that are not blocked are forwarded with DNS-over-HTTPS to
+        cloudflare-dns.com and dns.google. Those providers see the hostnames.
+        The list of names we refuse is downloaded and can be cached on disk. That
+        file is the public filter list, not a record of your lookups.
+      </p>
+
+      <h2 id="apps">Apps, checks, and diagnostics</h2>
+      <p>
+        The Android app does not request a location permission. The connection map
+        draws a fixed point for the server in Paraguay. It does not read the
+        device location. The Linux app map is the server location as well.
+      </p>
+      <p>
+        After the Android app connects, it asks api.ipify.org, ifconfig.me, and
+        icanhazip.com for the public address seen through the VPN. Those requests
+        are bound to the VPN network, including in Stealth mode. We do not store
+        the address they return. The Linux app asks api.ipify.org for the same
+        kind of egress check. It does not contact ifconfig.me or icanhazip.com.
+        The Chrome extension can ask ipwho.is for an approximate location so its
+        map can draw a pin, and it can contact api.ipify.org. The result stays in
+        the extension. The extension does not log destination sites on our servers.
+      </p>
+      <p>
+        Diagnostics stay on the device unless you turn sharing on and send the
+        report yourself, from your own email app. A report can include the app
+        version, OS, device model, connection state, transport, handshake age,
+        server address, and a sanitized last error. It does not include WireGuard
+        keys or session tokens. We do not receive it unless you send that email.
+      </p>
+      <p>
+        The IP check on this website returns the request IP and coarse Cloudflare
+        edge data for that page view, and your browser can load an OpenStreetMap
+        map from it. We do not build a profile from it. The DNS leak test resolves
+        short-lived names through edns.ip-api.com. We do not operate that DNS
+        authority and we do not store those query names. The breach check sends
+        the email you type to our edge function and then to XposedOrNot. We do not
+        store that email. The browser check can open a WebRTC connection to a
+        Google STUN server, and it can ask api64.ipify.org about IPv6. Those calls
+        happen in your browser. We do not store the result.
+      </p>
+      <p>
+        Some download pages preconnect to fonts.gstatic.com. That request can send
+        your IP address to Google. Those pages do not load a font stylesheet. The
+        marketing homepage does not preconnect.
+      </p>
+
+      <h2 id="third-parties">Third parties</h2>
+      <p>We do not sell personal data. These parties appear in the service:</p>
+      <ul>
+        <li><strong>Cloudflare</strong> — website hosting, the tunnel in front of the origin, Turnstile, R2 backup storage, and DNS-over-HTTPS for names Shield forwards. Cloudflare sees client IPs for site and API traffic under Cloudflare's own policies.</li>
+        <li><strong>Google</strong> — DNS-over-HTTPS for names Shield forwards, Google Play Billing, the font preconnect on some download pages, and the browser check's STUN server.</li>
+        <li><strong>Resend</strong> — verification and password-reset email. The message includes the address it is sent to.</li>
+        <li><strong>The mailbox for contact@veritasvpn.cloud</strong> — messages you send us, including the address you wrote from.</li>
+        <li><strong>BTCPay</strong> — self-hosted by us, for Bitcoin invoices.</li>
+        <li><strong>api.ipify.org, ifconfig.me, icanhazip.com, api64.ipify.org, ipwho.is, edns.ip-api.com, and XposedOrNot</strong> — the checks described above.</li>
+        <li><strong>GitHub</strong> — only if you file a public issue.</li>
+        <li><strong>Telegram</strong> — operational alerts to us. A new-account alert says the account type. A payment alert says the payment method, and whether it was a trial. Those messages do not include an email address, an Account ID, or an IP address. Uptime alerts name the failing check.</li>
+        <li><strong>OpenStreetMap</strong> — map tiles loaded in your browser during the IP check. We do not receive a copy of that tile request beyond what Cloudflare already sees as ordinary site traffic.</li>
+      </ul>
+
+      <h2 id="requests">If we are asked for data</h2>
+      <p>
+        We review requests. We require valid legal process under Paraguayan law,
+        or another process we are legally required to honor. We narrow the request
+        to what the order covers. We tell the user when the law allows it.
+      </p>
+      <p>
+        If compelled, the live systems could produce an email address when the
+        account has one, a password hash, session-token hashes, device and tunnel
+        metadata, the last handshake time, and payment records, including a Play
+        purchase token or a provider transaction id stored on our side. BTCPay
+        could produce invoices tagged with an account ID.
+      </p>
+      <p>
+        We cannot produce browsing history, a DNS query log, traffic contents, or
+        your real connection IP from the account database, the connect log, or a
+        backup built by the current scripts. A live look at WireGuard on the
+        server can show the current endpoint of a peer that is connected at that
+        moment. A blocked name can exist only for the short windows above. Redis
+        rate-limit keys and a Turnstile check exist only for their windows.
+        Cloudflare may have edge logs we do not hold. The
+        <a href="/canary.txt">warrant canary</a> is the public statement about
+        secret orders.
+      </p>
+
+      <h2 id="limits">Limits, stated plainly</h2>
+      <ul>
+        <li>One operator runs the service. There is no second organization holding the keys.</li>
+        <li>No independent audit has been published.</li>
+        <li>We keep accounts, payments, peer metadata, operational logs, and aggregate metrics. This page does not say otherwise.</li>
+        <li>The database, Prometheus, the DNS filter-list cache, and backups are on disk. The connecting IP is not written into those stores by the current code. Live kernel state on the VPN server still has the current endpoint of a connected peer.</li>
+        <li>Cloudflare and the upstream DNS providers see data that we do not store ourselves.</li>
+        <li>Paraguay is not the subject of a European Commission adequacy decision. We have not appointed an EU or UK representative. Using the VPN means account and tunnel metadata are processed in Paraguay, because that is where the service runs.</li>
+      </ul>
+
+      <h2 id="contact">Contact</h2>
+      <p>
+        Veritas Ark<br />
+        Asunción, Paraguay<br />
+        <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a>
+      </p>
+      <p>
+        <a href="/privacy.html">Privacy Policy</a> ·
+        <a href="/terms.html">Terms</a> ·
+        <a href="/cookies.html">Cookies</a> ·
+        <a href="/contact.html">Contact</a> ·
+        <a href="/canary.txt">Warrant canary</a>
+      </p>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-bottom">
+        <p>&copy; 2026 VeritasVPN. <a href="/privacy.html">Privacy</a> · <a href="/transparency.html">Transparency</a> · <a href="/terms.html">Terms</a></p>
+      </div>
+    </div>
+  </footer>
+  <script type="module" src="/js/site-nav.js?v=mobilefix1"></script>
+</body>
+</html>

@@ -66,6 +66,11 @@
     <priority>0.5</priority>
   </url>
   <url>
+    <loc>https://veritasvpn.cloud/transparency.html</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
     <loc>https://veritasvpn.cloud/terms.html</loc>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>

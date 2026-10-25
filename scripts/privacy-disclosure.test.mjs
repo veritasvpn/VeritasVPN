@@ -5,11 +5,12 @@ import test from "node:test";
 const privacy = readFileSync("website/privacy.html", "utf8");
 const terms = readFileSync("website/terms.html", "utf8");
 const contact = readFileSync("website/contact.html", "utf8");
+const transparency = readFileSync("website/transparency.html", "utf8");
 const account = readFileSync("website/account/index.html", "utf8");
 const accountJs = readFileSync("website/account/js/account-app-v4.js", "utf8");
 
 test("public pages do not publish the operator legal name, RUC, or a street address", () => {
-  for (const page of [privacy, terms, contact]) {
+  for (const page of [privacy, terms, contact, transparency]) {
     assert.equal(page.includes("García"), false);
     assert.equal(page.includes("Vacchetta"), false);
     assert.equal(page.includes("5111281"), false);
@@ -17,6 +18,18 @@ test("public pages do not publish the operator legal name, RUC, or a street addr
     assert.match(page, /Asunción, Paraguay/);
     assert.match(page, /contact@veritasvpn\.cloud/);
   }
+});
+
+test("transparency page is linked from the privacy policy and does not overclaim", () => {
+  const flat = transparency.replace(/\s+/g, " ");
+  assert.match(privacy, /href="\/transparency\.html"/);
+  assert.match(flat, /Veritas Ark/);
+  assert.match(flat, /Last updated: October 25, 2026/);
+  assert.match(flat, /No independent audit/);
+  assert.match(flat, /not a claim that we keep zero logs/i);
+  assert.match(flat, /not a claim that the service is RAM-only/);
+  assert.equal(/audited/i.test(flat), false);
+  assert.equal(flat.includes("zero logs ever"), false);
 });
 
 test("terms and privacy name the operator and are not drafts", () => {

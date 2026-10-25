@@ -116,7 +116,7 @@ def footer_html() -> str:
     return """  <footer class="footer">
     <div class="container">
       <div class="footer-bottom">
-        <p>&copy; 2026 VeritasVPN. <a href="/learn/">Learn</a> · <a href="/check/">Privacy check</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+        <p>&copy; 2026 VeritasVPN. <a href="/learn/">Learn</a> · <a href="/check/">Privacy check</a> · <a href="/privacy.html">Privacy</a> · <a href="/transparency.html">Transparency</a> · <a href="/terms.html">Terms</a></p>
       </div>
     </div>
   </footer>"""
