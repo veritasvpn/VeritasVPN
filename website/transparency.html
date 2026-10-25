@@ -95,8 +95,8 @@
 
       <h3>Payments</h3>
       <ul>
-        <li>Google Play Billing, for the Play app. Google processes the payment. We store purchase and subscription status, and the Play purchase token on the subscription row, so we can check that status. We do not receive card numbers. New purchases are matched with a one-way HMAC-SHA256 of the Account ID, using a fixed public label rather than a secret key. That value is not the Account ID and cannot be used to sign in. Purchases started before this change may still be matched using the Account ID that was sent with them. Deleting the account does not cancel the Google Play subscription.</li>
-        <li>Bitcoin, for the website, the Linux app, and the Android app installed from this website rather than Google Play. Checkout is self-hosted BTCPay. There is no card checkout on this path. We store the amount, currency, plan, status, timestamps, and a provider transaction id against the account. The BTCPay invoice is tagged with the account ID. A Bitcoin checkout that is still pending after 4 days is marked failed and then kept for the life of the account. Deleting the account removes our payment rows. It does not delete the invoice on the BTCPay server.</li>
+        <li>Google Play Billing, for the Play app. Google processes the payment. We store purchase and subscription status, and the Play purchase token on the subscription row. We keep that token so we can check the purchase with Google, and so the same token is not linked to a second account. We do not send it back to the app. The payment row stores the same token as the provider transaction id, so a repeat notice updates that row instead of creating another one. We do not receive card numbers. New purchases are matched with a one-way HMAC-SHA256 of the Account ID, using a fixed public label rather than a secret key. That value is not the Account ID and cannot be used to sign in. Purchases started before this change may still be matched using the Account ID that was sent with them. Deleting the account does not cancel the Google Play subscription.</li>
+        <li>Bitcoin, for the website, the Linux app, and the Android app installed from this website rather than Google Play. Checkout is self-hosted BTCPay. There is no card checkout on this path. We store the amount, currency, plan, status, timestamps, and a provider transaction id against the account. That id is the BTCPay invoice id. We keep it so a later payment notice is matched to that checkout and is not applied twice. The BTCPay invoice is tagged with the account ID. A Bitcoin checkout that is still pending after 4 days is marked failed and then kept for the life of the account. Deleting the account removes our payment rows. It does not delete the invoice on the BTCPay server.</li>
       </ul>
 
       <h3>Bandwidth</h3>
@@ -113,7 +113,7 @@
         <li>Browsing history.</li>
         <li>A log of the DNS names you look up. A blocked name can be held for the short windows in the Shield section. Allowed lookups are not stored.</li>
         <li>The contents of your VPN traffic.</li>
-        <li>Your real connection IP in the account database, the connect log, or a backup produced by the current backup scripts.</li>
+        <li>Your real connection IP in the account database, the connect log, or a backup. No backup contains a real user IP.</li>
       </ul>
 
       <h2 id="connecting-ip">What happens to the connecting IP</h2>
@@ -172,10 +172,16 @@
       </p>
       <p>
         Origin nginx and the ingress controller have access logs turned off. We do
-        not keep a separate access-log archive. Nginx error logging is not given
-        its own off switch in this configuration, so a failed request can still
-        produce an error line. Cloudflare may retain its own edge logs. We do not
-        control that retention, and we do not keep a copy.
+        not keep a separate access-log archive. Origin nginx sends its error log
+        to /dev/null, so a failed request is not kept with the client IP. This
+        nginx build cannot redact the client address inside an error line, and a
+        pipe to a filter can refuse to start, so the log is discarded instead.
+        The ingress controller's own error log is not turned off in this
+        repository. A failed request there can still produce a line that includes
+        the client IP. That line stays in the controller process log. This
+        repository does not set how long the platform keeps it, and we do not
+        copy it. Cloudflare may retain its own edge logs. We do not control that
+        retention, and we do not keep a copy.
       </p>
       <p>
         The Stealth listener is started at error log level, on the VPN node and in
@@ -227,12 +233,12 @@
         peer endpoints from WireGuard text they copy.
       </p>
       <p>
-        The <a href="/privacy.html">Privacy Policy</a> still says an archive made
-        by the previous backup script can contain a WireGuard endpoint until that
-        archive expires, on the windows above. This page does not claim those
-        older archives have already been deleted. The repository shows how new
-        archives are built and how old ones age out. It does not record a separate
-        purge.
+        No backup contains a real user IP. On October 24, 2026 an operator deleted
+        every older backup that contained a WireGuard endpoint or a real user IP,
+        both on the server and in off-site Cloudflare R2. Only a clean backup taken
+        after that fix remained. The repository does not perform that deletion by
+        itself. The operator did. New archives follow the retention windows above,
+        and the current scripts still refuse to archive a peer endpoint.
       </p>
       <p>
         A deleted account can remain inside a backup until that backup expires.
@@ -264,7 +270,7 @@
         user turns them on. A block is an NXDOMAIN answer. It does not remove ads
         or trackers inside a page.
       </p>
-      <p>Allowed lookups are not stored. When a name is blocked:</p>
+      <p>Allowed lookups are not stored. A block is not written to a log. When a name is blocked:</p>
       <ul>
         <li>The gateway keeps that name in a deduplication map for up to 10 minutes, together with the tunnel IP and the category, so the same block is not announced again. The notice the app can show stays in gateway memory for up to 90 seconds.</li>
         <li>A Redis key holds that notice for 2 minutes (120 seconds), keyed by the tunnel IP. Redis is not writing snapshots or an append-only file. The key is deleted when the peer is removed.</li>
@@ -349,7 +355,9 @@
       <p>
         We cannot produce browsing history, a DNS query log, traffic contents, or
         your real connection IP from the account database, the connect log, or a
-        backup built by the current scripts. A live look at WireGuard on the
+        backup. No backup contains a real user IP. On October 24, 2026 an operator
+        deleted every older backup that contained a WireGuard endpoint or a real
+        user IP, on the server and in off-site R2. A live look at WireGuard on the
         server can show the current endpoint of a peer that is connected at that
         moment. A blocked name can exist only for the short windows above. Redis
         rate-limit keys and a Turnstile check exist only for their windows.
@@ -363,7 +371,7 @@
         <li>One operator runs the service. There is no second organization holding the keys.</li>
         <li>No independent audit has been published.</li>
         <li>We keep accounts, payments, peer metadata, operational logs, and aggregate metrics. This page does not say otherwise.</li>
-        <li>The database, Prometheus, the DNS filter-list cache, and backups are on disk. The connecting IP is not written into those stores by the current code. Live kernel state on the VPN server still has the current endpoint of a connected peer.</li>
+        <li>The database, Prometheus, the DNS filter-list cache, and backups are on disk. No backup contains a real user IP. Live kernel state on the VPN server still has the current endpoint of a connected peer.</li>
         <li>Cloudflare and the upstream DNS providers see data that we do not store ourselves.</li>
         <li>Paraguay is not the subject of a European Commission adequacy decision. We have not appointed an EU or UK representative. Using the VPN means account and tunnel metadata are processed in Paraguay, because that is where the service runs.</li>
       </ul>

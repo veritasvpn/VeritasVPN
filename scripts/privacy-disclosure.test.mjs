@@ -28,6 +28,10 @@ test("transparency page is linked from the privacy policy and does not overclaim
   assert.match(flat, /No independent audit/);
   assert.match(flat, /not a claim that we keep zero logs/i);
   assert.match(flat, /not a claim that the service is RAM-only/);
+  assert.match(flat, /No backup contains a real user IP/);
+  assert.match(flat, /On October 24, 2026 an operator deleted/);
+  assert.match(flat, /error log to \/dev\/null/);
+  assert.equal(flat.includes("previous backup script"), false);
   assert.equal(/audited/i.test(flat), false);
   assert.equal(flat.includes("zero logs ever"), false);
 });
@@ -36,8 +40,9 @@ test("terms and privacy name the operator and are not drafts", () => {
   for (const page of [privacy, terms]) {
     assert.match(page, /Veritas Ark/);
     assert.equal(/starting point|legal counsel|legal advice|open item|early.stage/i.test(page), false);
-    assert.match(page, /Last updated: October 24, 2026/);
   }
+  assert.match(terms, /Last updated: October 24, 2026/);
+  assert.match(privacy, /Last updated: October 25, 2026/);
   assert.match(terms, /Republic of Paraguay/);
   assert.match(terms, /courts of Asunción/);
   assert.match(terms, /Google Play/);
@@ -56,9 +61,24 @@ test("privacy policy lists Android and Linux IP-check hosts and the install id",
   assert.match(privacy, /about 3 months/);
   assert.match(privacy, /real connection IP/);
   assert.match(privacy, /not written to the account database, the connect log, or backups/);
-  assert.match(privacy, /previous script/);
+  assert.match(privacy, /No backup contains a real user IP/);
+  assert.match(privacy, /On October 24, 2026 an operator deleted/);
   assert.match(privacy, /14 days on the server/);
   assert.match(privacy, /60 days off site/);
+  assert.match(privacy, /10-minute in-memory deduplication entry/);
+  assert.match(privacy, /90-second in-memory app notice/);
+  assert.match(privacy, /2-minute Redis key/);
+  assert.match(privacy, /not written to a log/);
+  assert.match(privacy, /Google Play purchase token/);
+  assert.match(privacy, /provider transaction id/);
+  assert.match(privacy, /publishes those same hashes to NATS/);
+  assert.match(privacy, /no persistent stream is configured for those subjects/);
+  assert.match(privacy, /stun\.l\.google\.com/);
+  assert.match(privacy, /api64\.ipify\.org/);
+  assert.match(privacy, /holds the visitor IP in memory for one minute/);
+  assert.match(privacy, /internal peer id/);
+  assert.match(privacy, /sends it to \/dev\/null/);
+  assert.equal(privacy.includes("previous script"), false);
   assert.equal(privacy.includes("status snapshot"), false);
 });
 
