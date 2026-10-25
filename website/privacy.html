@@ -48,17 +48,18 @@
   <main class="legal-page">
     <div class="container">
       <h1>Privacy Policy</h1>
-      <p class="legal-meta">Effective date: October 21, 2026. Last updated: October 24, 2026. Published at https://veritasvpn.cloud/privacy.html. <a href="#no-logs">No-logs policy</a>.</p>
+      <p class="legal-meta">Effective date: October 21, 2026. Last updated: October 25, 2026. Published at https://veritasvpn.cloud/privacy.html. <a href="#no-logs">No-logs policy</a>. <a href="/transparency.html">Transparency</a>.</p>
 
       <h2 id="no-logs">No-logs policy</h2>
       <ul>
-        <li>We do not store browsing history, a log of the DNS names you look up, the contents of your VPN traffic, or your real connection IP. That address is not written to the account database, the connect log, or backups. A backup made by the previous script can still contain a WireGuard endpoint until that archive expires: 14 days on the server, and 60 days off site. It is not a connection history. See Retention.</li>
-        <li>When a peer is created, the log and the internal event store a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint. They do not store those values in the clear, and they do not store your real public IP.</li>
+        <li>We do not store browsing history, a log of the DNS names you look up, the contents of your VPN traffic, or your real connection IP. That address is not written to the account database, the connect log, or backups. No backup contains a real user IP. On October 24, 2026 an operator deleted every older backup that contained a WireGuard endpoint or a real user IP, on the server and in off-site Cloudflare R2. Only a clean backup taken after that fix remained. Cluster archives are still removed after 14 days on the server and 60 days off site. It is not a connection history. See Retention.</li>
+        <li>When a peer is created, the log stores a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint. An internal event publishes those same hashes to NATS. JetStream is enabled on the server, but no persistent stream is configured for those subjects, so that publish is not stored. The log and the event do not store those values in the clear, and they do not store your real public IP.</li>
         <li>The Stealth listener is started at error log level, on the VPN node and in the cluster, so a rejected connection does not record the stealth path. Error lines can still be written. This is not a browsing log.</li>
         <li>We do keep an email address if you register with one. Email is optional. An anonymous Account ID has no email. We keep that Account ID, and we keep purchase history, for the life of the account.</li>
         <li>Shield per-category block counts are optional. They are kept, with no domain names, for an account that uses Veritas Shield. A free account cannot connect, so those counts are not kept for it.</li>
         <li>Crash logs and diagnostics are optional. They stay on the device unless you turn sharing on and send the report yourself, from your own email app. The report can include crash lines. We do not receive it unless you send that email. It does not include WireGuard keys or session tokens.</li>
       </ul>
+      <p>The <a href="/transparency.html">transparency page</a> explains these controls in plain language, including the limits. It does not change this policy.</p>
 
       <h2>1. Who we are</h2>
       <p>
@@ -98,13 +99,14 @@
         record query names. Session block totals are keyed by the temporary WireGuard
         tunnel IP, expire after about 2 hours without a heartbeat, and are cleared
         when the peer is removed. Account totals by category, with no domain names,
-        are kept for about 8 days. When Shield blocks a name, that name is held in
-        gateway memory for up to about 10 minutes, so the same block is not announced
-        again, and in a Redis cache for about 2 minutes, keyed by the tunnel IP, so
-        the app can show a notice. That cache is not written to disk, is not your
-        public IP, and is deleted when the peer is removed. It is not a query log:
-        lookups that are allowed are not stored. Upstream DNS-over-HTTPS resolvers
-        still see hostnames we forward for lookups that are not blocked.
+        are kept for about 8 days. When Shield blocks a name, the gateway keeps that
+        name in memory for 10 minutes, with the tunnel IP and the category, so the
+        same block is not announced again. The notice the app can show stays in
+        gateway memory for 90 seconds. A Redis key holds that notice for 2 minutes,
+        keyed by the tunnel IP. None of this is written to a log or to disk. It is
+        not your public IP, and it is deleted when the peer is removed. It is not a
+        query log: lookups that are allowed are not stored. Upstream DNS-over-HTTPS
+        resolvers still see hostnames we forward for lookups that are not blocked.
       </p>
 
       <h2>3. Data we collect</h2>
@@ -169,18 +171,25 @@
         <li>
           Google Play app: Google Play Billing. Google processes the payment. We
           receive purchase and subscription status, not your full card details.
-          The app sends Google a one-way hash of the Account ID so the purchase
-          can be matched to the account. That hash is not the Account ID and
-          cannot be used to sign in. Purchases started before this change may
-          still be matched using the Account ID that was sent with them.
+          We store the Google Play purchase token with the subscription so we can
+          check that purchase with Google, and so the same token is not linked to
+          a second account. We do not send the token back to the app. We also store
+          a provider transaction id on the payment row. For Google Play that id is
+          the purchase token, so a repeat notice updates the same row instead of
+          creating another one. The app sends Google a one-way hash of the Account
+          ID so the purchase can be matched to the account. That hash is not the
+          Account ID and cannot be used to sign in. Purchases started before this
+          change may still be matched using the Account ID that was sent with them.
           Deleting the account does not cancel the Google Play subscription.
         </li>
         <li>
           Website, Linux app, and the Android app installed from this website
           rather than Google Play: self-hosted BTCPay, paid in Bitcoin. There is
           no card checkout on this path. We store the amount, currency, plan,
-          status, and timestamps against your account. The BTCPay invoice is
-          tagged with your account ID.
+          status, timestamps, and a provider transaction id against your account.
+          That id is the BTCPay invoice id. We keep it so a later payment notice
+          is matched to that checkout and is not applied twice. The BTCPay invoice
+          is tagged with your account ID.
         </li>
       </ul>
       <p>
@@ -205,6 +214,8 @@
       <h3>Website checks and the Chrome extension</h3>
       <ul>
         <li>The IP check on /check returns the request IP and coarse Cloudflare edge metadata for that page view. We do not build a profile from it. If coordinates are present, your browser loads OpenStreetMap tiles.</li>
+        <li>The browser check can open a WebRTC connection to a Google STUN server (stun.l.google.com) and can ask api64.ipify.org about IPv6. Those calls run in your browser. We do not store the result.</li>
+        <li>The phishing check holds the visitor IP in memory for one minute, as the key for that rate limit, and sends that IP to Cloudflare Turnstile with the challenge token. It does not write the IP or the checked URL to a log.</li>
         <li>The DNS leak test resolves short-lived names through edns.ip-api.com. We do not operate that DNS authority and we do not store those query names.</li>
         <li>The breach check sends the email you type to our edge function and then to XposedOrNot. We do not store that email.</li>
         <li>After the Android app connects, it asks api.ipify.org, ifconfig.me, and icanhazip.com for the public address seen through the VPN. Those requests are bound to the VPN network. They are not sent on the network outside the tunnel, including in Stealth mode. We do not store the address they return. The app can show it as the VPN address.</li>
@@ -231,11 +242,12 @@
       <p>We do not sell personal data. We use these processors and recipients:</p>
       <ul>
         <li><strong>Cloudflare</strong> — website hosting (Pages), Tunnel in front of the origin, Turnstile, R2 backup storage, and DNS-over-HTTPS (cloudflare-dns.com) for names Veritas Shield forwards</li>
-        <li><strong>Google</strong> — DNS-over-HTTPS (dns.google) as the other Shield upstream; Google Play Billing for the Play app, including a one-way hash of the Account ID on new purchases; a preconnect to fonts.gstatic.com on some download pages. That preconnect can send your IP address to Google. Those pages do not load a font stylesheet, and the marketing homepage does not preconnect</li>
+        <li><strong>Google</strong> — DNS-over-HTTPS (dns.google) as the other Shield upstream; Google Play Billing for the Play app, including a one-way hash of the Account ID on new purchases; a STUN server (stun.l.google.com) used by the browser check on this website; a preconnect to fonts.gstatic.com on some download pages. That preconnect can send your IP address to Google. Those pages do not load a font stylesheet, and the marketing homepage does not preconnect</li>
         <li><strong>Resend</strong> — verification and password-reset email</li>
         <li><strong>The mailbox provider for contact@veritasvpn.cloud</strong> — messages you send us</li>
         <li><strong>BTCPay</strong> — self-hosted by us, for Bitcoin invoices on the website and Linux app</li>
         <li><strong>api.ipify.org</strong> — egress check from the Android app and the Linux app, and optionally the extension</li>
+        <li><strong>api64.ipify.org</strong> — IPv6 check in the browser on this website</li>
         <li><strong>ifconfig.me</strong> — egress check from the Android app</li>
         <li><strong>icanhazip.com</strong> — egress check from the Android app</li>
         <li><strong>ipwho.is</strong> — approximate location for the Chrome extension map</li>
@@ -279,12 +291,13 @@
         <li><strong>Redis IP rate-limit keys</strong> — at most 1 hour</li>
         <li><strong>Tunnel-IP block counters</strong> — about 2 hours, or until the peer is removed. These are totals, not names</li>
         <li><strong>Account category block counts</strong> — about 8 days in the Redis cache, with no domain names. Memory pressure can drop them sooner. Deleted when the account is deleted</li>
-        <li><strong>Blocked names for a notice</strong> — gateway memory for up to about 10 minutes, and a Redis cache for about 2 minutes, keyed by the tunnel IP. Not written to disk. Deleted when the peer is removed. Not a query log and not your public IP</li>
+        <li><strong>Blocked names for a notice</strong> — a 10-minute in-memory deduplication entry, a 90-second in-memory app notice, and a 2-minute Redis key, keyed by the tunnel IP. Not written to disk and not written to a log. Deleted when the peer is removed. Not a query log and not your public IP</li>
         <li><strong>Prometheus</strong> — 21 days of aggregate metrics, without query names or your real IP</li>
-        <li><strong>Cluster backups</strong> — an encrypted archive is kept for 14 days on the server. Encrypted copies in Cloudflare R2 are removed after 60 days. The archive includes the Veritas database and the BTCPay database. It does not include a peer endpoint or the address from a last handshake. A backup made by the previous script can still contain a WireGuard endpoint until that archive expires. It is not a log written when you connect</li>
+        <li><strong>Cluster backups</strong> — an encrypted archive is kept for 14 days on the server. Encrypted copies in Cloudflare R2 are removed after 60 days. The archive includes the Veritas database and the BTCPay database. It does not include a peer endpoint or the address from a last handshake. No backup contains a real user IP. On October 24, 2026 an operator deleted every older backup that contained a WireGuard endpoint or a real user IP, both on the server and in off-site R2. Only a clean backup taken after that fix remained. It is not a log written when you connect</li>
         <li><strong>Other backup copies</strong> — the postgres backup script, where it is used, keeps 7 daily, 4 weekly, and 3 monthly copies (monthly copies are removed after about 93 days, about 3 months). Single-node recovery snapshots are removed after 35 days</li>
-        <li><strong>Application container logs</strong> — connect logs do not include your real public IP. The peer-created log and internal event store a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint, not the raw values</li>
+        <li><strong>Application container logs</strong> — connect logs do not include your real public IP. The peer-created log stores a short hash of the per-install device ID, the assigned tunnel IP, and the server endpoint, not the raw values. The internal event for that peer is a NATS publish, and no persistent stream is configured for those subjects, so the publish is not stored. A line written when the VPN agent expires a stale peer can include the internal peer id. It does not include your real public IP</li>
         <li><strong>Origin nginx and ingress access logs</strong> — disabled. They are not written to our disks. Cloudflare may still retain edge logs under Cloudflare’s own policies. We do not keep a separate access-log archive</li>
+        <li><strong>Origin nginx error log</strong> — discarded. The configuration sends it to /dev/null, so a failed request is not kept with the client IP. The ingress controller’s own error log is not turned off in this repository. A failed request there can still produce a line that includes the client IP. That line stays in the controller process log. This repository does not set how long the platform keeps it, and we do not copy it into an archive</li>
       </ul>
       <p>
         A deleted account can remain inside a backup until that backup expires.
@@ -427,9 +440,10 @@
         last handshake time, and payment records. BTCPay could produce invoices
         tagged with an account ID. We cannot produce browsing history, a DNS query
         log, traffic contents, or your real connection IP from the account
-        database, the connect log, or a current backup. A backup made by the
-        previous script can still contain a WireGuard endpoint until it expires,
-        for the windows in section 7. A
+        database, the connect log, or a backup. No backup contains a real user
+        IP. On October 24, 2026 an operator deleted every older backup that
+        contained a WireGuard endpoint or a real user IP, on the server and in
+        off-site R2. Only a clean backup taken after that fix remained. A
         blocked name held so the app can show a notice may exist only for the
         short windows in section 7. Short-lived Redis rate-limit keys and a
         Turnstile check may exist only for those windows too. Our
@@ -457,7 +471,7 @@
   <footer class="footer">
     <div class="container">
       <div class="footer-bottom">
-        <p>&copy; 2026 VeritasVPN. <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+        <p>&copy; 2026 VeritasVPN. <a href="/privacy.html">Privacy</a> · <a href="/transparency.html">Transparency</a> · <a href="/terms.html">Terms</a></p>
       </div>
     </div>
   </footer>

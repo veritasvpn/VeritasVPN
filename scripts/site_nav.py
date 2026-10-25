@@ -66,7 +66,7 @@ def active_key_for_path(path: str) -> str:
         return "check"
     if p == "downloads.html" or p.startswith("install/") or p.startswith("install-staging/"):
         return "download"
-    if p in {"terms.html", "privacy.html", "cookies.html", "contact.html"}:
+    if p in {"terms.html", "privacy.html", "transparency.html", "cookies.html", "contact.html"}:
         return ""
     if p in {"", "index.html"}:
         return ""

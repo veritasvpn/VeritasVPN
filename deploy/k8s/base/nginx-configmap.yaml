@@ -8,6 +8,13 @@ data:
     worker_processes auto;
     pid /var/run/nginx.pid;
 
+    # Discard error lines. This build cannot redact the client address
+    # inside an error line, and a pipe to a filter can refuse to start if
+    # the filter is missing. /dev/null stays writable for uid 101 when the
+    # root filesystem is read-only. A bad config still prints on stderr
+    # before this log is opened. /healthz does not read the error log.
+    error_log /dev/null;
+
     events {
         worker_connections 1024;
     }
@@ -63,6 +70,7 @@ data:
 
         # Do not write client IPs to disk. Cloudflare may still keep edge logs.
         access_log off;
+        error_log /dev/null;
 
         root /usr/share/nginx/html;
         index index.html;
