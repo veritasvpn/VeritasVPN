@@ -126,11 +126,28 @@ test("API host does not serve the marketing site and www redirects at the origin
   assert.match(nginx, /location \/api\/v1\/wg\//);
 });
 
+function linksChromeWebStore(html) {
+  const tokens = html.split(/[\s"'<>]+/);
+  for (const token of tokens) {
+    const trimmed = token.replace(/[),.;]+$/g, "");
+    if (trimmed === "") continue;
+    let absolute = trimmed;
+    if (absolute.startsWith("//")) absolute = `https:${absolute}`;
+    else if (!absolute.includes("://")) absolute = `https://${absolute}`;
+    try {
+      if (new URL(absolute).hostname === "chrome.google.com") return true;
+    } catch {
+      // Not an absolute URL. Keep scanning.
+    }
+  }
+  return false;
+}
+
 test("Chrome extension is labeled not yet available and is not given a store link", () => {
   for (const path of ["website/privacy.html", "website/terms.html", "website/support.html", "website/downloads.html"]) {
     const html = read(path);
     assert.match(html, /not yet available/, path);
-    assert.equal(html.includes("chrome.google.com"), false, path);
+    assert.equal(linksChromeWebStore(html), false, path);
     assert.equal(html.includes("veritasvpn-chrome.zip"), false, path);
   }
 });
