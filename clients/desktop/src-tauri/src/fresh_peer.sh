@@ -39,6 +39,16 @@ read_fresh_lines() {
   if [[ -z "$gw" || -z "$gif" ]]; then
     read -r gw gif < <(detect_underlay_pair || true)
   fi
+  [[ "$api_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || api_ip=""
+  # Soft teardown deletes iface.meta, so a reconnect has no stored API address.
+  # Plain DNS is usable then: the kill switch is already down.
+  if [[ -z "$api_ip" ]]; then
+    if command -v timeout >/dev/null 2>&1; then
+      api_ip="$(timeout 2 getent ahostsv4 api.veritasvpn.cloud 2>/dev/null | awk '{print $1; exit}' || true)"
+    else
+      api_ip="$(getent ahostsv4 api.veritasvpn.cloud 2>/dev/null | awk '{print $1; exit}' || true)"
+    fi
+  fi
   [[ "$api_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { printf '0\n\n\n'; return 0; }
   [[ "$gif" =~ ^[A-Za-z0-9_.:-]{1,15}$ ]] || { printf '0\n\n\n'; return 0; }
   [[ "$gw" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { printf '0\n\n\n'; return 0; }

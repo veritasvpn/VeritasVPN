@@ -1688,7 +1688,13 @@ fn run_saved_reconnect_helper() -> Result<(), String> {
     if !Path::new(SOFT_RECONNECT_HELPER).is_file() {
         return Err("reconnect helper is not installed".into());
     }
-    if command_succeeded("timeout", &["45", "sudo", "-n", SOFT_RECONNECT_HELPER]) {
+    // The helper reads the peer on the current underlay. The token is removed
+    // when this function returns, including when the helper fails.
+    let _token = PeerCheckTokenGuard::install();
+    if command_succeeded(
+        "timeout",
+        &["-k", "2", "45", "sudo", "-n", SOFT_RECONNECT_HELPER],
+    ) {
         Ok(())
     } else {
         Err("reconnect helper failed".into())
@@ -2315,6 +2321,7 @@ install -d -m 0755 "$RUNTIME_DIR"
 rm -f "$RUNTIME_DIR/fresh-read"
 
 {endpoint_fns}
+{fresh_fns}
 {handshake_fns}
 {dns_fns}
 {underlay_fns}
@@ -2435,42 +2442,17 @@ ip route del 128.0.0.0/1 2>/dev/null || true
 ip route del blackhole default metric 1 2>/dev/null || true
 rm -f /var/run/wireguard/*.sock 2>/dev/null || true
 
-# Find the default gateway before adding tunnel routes
-GW="$(ip route show default | awk '/default via/ {{print $3; exit}}')"
-GW_IF="$(ip route show default | awk '/dev/ {{print $5; exit}}')"
-
-# Host/port used for the outside-tunnel exception (UDP direct or TCP stealth).
-if [[ -n "$STEALTH_REMOTE" ]]; then
-  ROUTE_HOST="${{STEALTH_REMOTE%%:*}}"
-  ROUTE_PORT="${{STEALTH_REMOTE##*:}}"
-else
-  ROUTE_HOST="${{ENDPOINT%%:*}}"
-  ROUTE_PORT="${{ENDPOINT##*:}}"
-fi
+# Gateway and interface are chosen at run time, after the helpers below.
+GW=""
+GW_IF=""
+UNDERLAY_SRC=""
 ROUTE_IP=""
-if [[ -n "$ROUTE_HOST" ]]; then
-  if [[ "$ROUTE_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    ROUTE_IP="$ROUTE_HOST"
-  else
-    ROUTE_IP="$(dig +short "$ROUTE_HOST" 2>/dev/null | head -1 || true)"
-    if [[ -z "$ROUTE_IP" ]]; then
-      ROUTE_IP="$(getent hosts "$ROUTE_HOST" 2>/dev/null | awk '{{print $1; exit}}' || true)"
-    fi
-  fi
-fi
-ENDPOINT_IP="$ROUTE_IP"
+ROUTE_HOST=""
+ROUTE_PORT=""
+ENDPOINT_IP=""
 API_IP=""
-API_IP="$(getent ahostsv4 api.veritasvpn.cloud 2>/dev/null | awk '{{print $1; exit}}' || true)"
-[[ "$API_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || API_IP=""
-LAN_HOST="${{ENDPOINT_LAN%%:*}}"
-WAN_HOST="${{ENDPOINT_WAN%%:*}}"
-[[ "$LAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || LAN_HOST=""
-[[ "$WAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || WAN_HOST=""
-# Older APIs only sent the current endpoint. Treat a private one as LAN.
-if [[ -z "$LAN_HOST" && "$ROUTE_IP" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.) ]]; then
-  LAN_HOST="$ROUTE_IP"
-  [[ -n "$ENDPOINT_LAN" ]] || ENDPOINT_LAN="$ENDPOINT"
-fi
+LAN_HOST=""
+WAN_HOST=""
 
 same_ipv4_24() {{
   local a="$1" b="$2"
@@ -2501,6 +2483,117 @@ unbind_host_routes() {{
     ip route del "$ip/32" 2>/dev/null || true
   done
 }}
+
+rewrite_saved_endpoint() {{
+  local ep="$1" file="$2" tmp=""
+  [[ "$ep" =~ ^[A-Za-z0-9.-]+:[0-9]{{1,5}}$ ]] || return 1
+  [[ -f "$file" && ! -L "$file" ]] || return 0
+  tmp="$(mktemp)"
+  awk -v ep="$ep" '
+    /^endpoint=/ {{ print "endpoint=" ep; next }}
+    /^Endpoint = / {{ print "Endpoint = " ep; next }}
+    {{ print }}
+  ' "$file" > "$tmp" || {{ rm -f "$tmp"; return 1; }}
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}}
+
+# The saved reconnect helper is this script. Each run reads the underlay the
+# OS is using now. A connect-time gateway, interface, or source address is
+# never reused. A stored LAN endpoint is kept only when this source is still
+# on that /24; otherwise the public WAN endpoint is installed before the
+# handshake. A peer read, when the access token is present, can override both.
+for _ in 1 2 3 4; do
+  if read -r GW GW_IF <<<"$(pick_underlay "$IFACE_NAME" 2>/dev/null || true)"; then
+    [[ -n "$GW" && -n "$GW_IF" ]] && break
+  fi
+  GW=""
+  GW_IF=""
+  sleep 0.25
+done
+if [[ -z "$GW" || -z "$GW_IF" ]]; then
+  echo "underlay not ready" >&2
+  exit 1
+fi
+UNDERLAY_SRC="$(ip -4 -o addr show dev "$GW_IF" 2>/dev/null | awk '{{print $4; exit}}')"
+UNDERLAY_SRC="${{UNDERLAY_SRC%%/*}}"
+[[ "$UNDERLAY_SRC" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || UNDERLAY_SRC=""
+LAN_HOST="${{ENDPOINT_LAN%%:*}}"
+WAN_HOST="${{ENDPOINT_WAN%%:*}}"
+[[ "$LAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || LAN_HOST=""
+[[ "$WAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || WAN_HOST=""
+if [[ -z "$LAN_HOST" ]]; then
+  _baked="${{ENDPOINT%%:*}}"
+  if is_rfc1918 "$_baked"; then
+    LAN_HOST="$_baked"
+    [[ -n "$ENDPOINT_LAN" ]] || ENDPOINT_LAN="$ENDPOINT"
+  fi
+fi
+if command -v timeout >/dev/null 2>&1; then
+  API_IP="$(timeout 2 getent ahostsv4 api.veritasvpn.cloud 2>/dev/null | awk '{{print $1; exit}}' || true)"
+else
+  API_IP="$(getent ahostsv4 api.veritasvpn.cloud 2>/dev/null | awk '{{print $1; exit}}' || true)"
+fi
+[[ "$API_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || API_IP=""
+STATE_DIR="$RUNTIME_DIR"
+FRESH_EP=""
+FRESH_STEALTH=""
+NEW_SRC="$UNDERLAY_SRC"
+NEW_GW="$GW"
+NEW_GW_IF="$GW_IF"
+_fresh="$(maybe_fresh_lines "$GW" "$GW_IF" "$UNDERLAY_SRC" || true)"
+_fresh_code="$(printf '%s\n' "$_fresh" | sed -n '1p')"
+CHOOSE_EP=""
+CHOOSE_IP=""
+STEALTH_DIAL=""
+if [[ "$_fresh_code" == "200" ]]; then
+  FRESH_EP="$(printf '%s\n' "$_fresh" | sed -n '2p')"
+  FRESH_STEALTH="$(printf '%s\n' "$_fresh" | sed -n '3p')"
+fi
+if [[ "$_fresh_code" == "200" ]]; then
+  apply_endpoint_choice
+elif [[ -n "$STEALTH_REMOTE" ]]; then
+  _shost="${{STEALTH_REMOTE%%:*}}"
+  if is_rfc1918 "$_shost" && [[ -n "$UNDERLAY_SRC" ]] && [[ "$(same_ipv4_24 "$_shost" "$UNDERLAY_SRC")" == yes ]]; then
+    CHOOSE_IP="$(resolve_ipv4 "$_shost")"
+    CHOOSE_EP="127.0.0.1:41820"
+    STEALTH_DIAL=""
+  else
+    apply_endpoint_choice
+  fi
+else
+  _ehost="${{ENDPOINT%%:*}}"
+  if is_rfc1918 "$_ehost" && [[ -n "$UNDERLAY_SRC" ]] && [[ "$(same_ipv4_24 "$_ehost" "$UNDERLAY_SRC")" == yes ]]; then
+    CHOOSE_EP="$ENDPOINT"
+    CHOOSE_IP="$_ehost"
+  else
+    apply_endpoint_choice
+  fi
+fi
+if [[ -n "$STEALTH_REMOTE" ]]; then
+  [[ -n "${{STEALTH_DIAL:-}}" ]] && STEALTH_REMOTE="$STEALTH_DIAL"
+  ROUTE_HOST="${{STEALTH_REMOTE%%:*}}"
+  ROUTE_PORT="${{STEALTH_REMOTE##*:}}"
+  ROUTE_IP="$CHOOSE_IP"
+  ENDPOINT="127.0.0.1:41820"
+else
+  ENDPOINT="$CHOOSE_EP"
+  ROUTE_HOST="${{ENDPOINT%%:*}}"
+  ROUTE_PORT="${{ENDPOINT##*:}}"
+  ROUTE_IP="$CHOOSE_IP"
+fi
+if [[ ! "$ROUTE_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  ROUTE_IP="$(resolve_ipv4 "$ROUTE_HOST")"
+fi
+ENDPOINT_IP="$ROUTE_IP"
+if [[ ! "$ROUTE_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$ROUTE_IP" == "127.0.0.1" ]]; then
+  echo "WireGuard handshake with the VPN server failed; normal internet was left unchanged" >&2
+  exit 1
+fi
+if [[ -z "$STEALTH_REMOTE" ]]; then
+  rewrite_saved_endpoint "$ENDPOINT" "$WG_CONF" || true
+  rewrite_saved_endpoint "$ENDPOINT" "$UAPI" || true
+fi
 
 # Optional stealth sidecar: local UDP → TLS/WebSocket → server WG
 if [[ -n "$STEALTH_REMOTE" ]]; then
@@ -2553,6 +2646,20 @@ if [[ -n "$STEALTH_REMOTE" ]]; then
   chmod 600 "$RUNTIME_DIR/stealth-roam" 2>/dev/null || true
 fi
 
+# Pin the endpoint through the current gateway before WireGuard starts.
+# The handshake check below runs before the tunnel owns the default route,
+# and a host route from the previous network would still point at that NIC.
+prepare_repath "$GW_IF" ""
+if ! follow_underlay_route "$ROUTE_IP" "$GW" "$GW_IF" "$UNDERLAY_SRC"; then
+  unbind_host_routes
+  safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
+  echo "endpoint route missing" >&2
+  exit 1
+fi
+if [[ -n "$WAN_HOST" && "$WAN_HOST" != "$ROUTE_IP" && "$WAN_HOST" != "127.0.0.1" ]]; then
+  follow_underlay_route "$WAN_HOST" "$GW" "$GW_IF" "$UNDERLAY_SRC" || true
+fi
+
 # Start WireGuard: prefer in-kernel (stable under pkexec). wireguard-go's
 # self-daemonize can drop the UAPI socket before we configure it, which
 # produced FileNotFoundError + "Cannot find device veritas0" for users.
@@ -2562,6 +2669,7 @@ if command -v wg >/dev/null 2>&1 && ip link add "$IFACE_NAME" type wireguard 2>/
   IFACE="$IFACE_NAME"
   if ! wg setconf "$IFACE_NAME" "$WG_CONF" 2>>/tmp/veritas-wg-kernel.log; then
     ip link delete "$IFACE_NAME" 2>/dev/null || true
+    unbind_host_routes
     echo "failed to configure kernel WireGuard" >&2
     cat /tmp/veritas-wg-kernel.log >&2 || true
     safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
@@ -2588,6 +2696,7 @@ else
     echo "failed to start WireGuard engine" >&2
     cat /tmp/veritas-wg-go.log >&2 || true
     cat /tmp/veritas-wg-kernel.log >&2 || true
+    unbind_host_routes
     safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
     exit 1
   fi
@@ -2615,12 +2724,17 @@ PY
     safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
     rm -f "$PID_FILE" "$IFACE_FILE" /var/run/wireguard/*.sock
     ip link delete "$IFACE_NAME" 2>/dev/null || true
+    unbind_host_routes
     exit 1
   fi
 fi
 echo "$IFACE_NAME" > "$IFACE_FILE"
 
 if ! ip addr replace "$ADDR" dev "$IFACE_NAME" >/tmp/veritas-wg-addr.log 2>&1; then
+  unbind_host_routes
+  ip link delete "$IFACE_NAME" 2>/dev/null || true
+  safe_stop_pid_file "$PID_FILE" "wireguard-go"
+  safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
   echo "Could not start the tunnel. Try connecting again." >&2
   exit 1
 fi
@@ -2635,6 +2749,7 @@ prepare_repath "$GW_IF" ""
 ip route add 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null
 if ! ping -c 3 -W 1 10.0.0.1 >/tmp/veritas-wg-handshake.log 2>&1; then
   ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
+  unbind_host_routes
   ip link set "$IFACE_NAME" down 2>/dev/null || true
   safe_stop_pid_file "$PID_FILE" "wireguard-go"
   safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
@@ -2644,19 +2759,18 @@ if ! ping -c 3 -W 1 10.0.0.1 >/tmp/veritas-wg-handshake.log 2>&1; then
   exit 1
 fi
 
-# Host route so VPN transport stays reachable outside the tunnel.
-# Same-subnet (home LAN node) must be on-link — via the default gateway
-# hairpins and often blackholes 192.168.0.6.
-UNDERLAY_SRC=""
-if [[ -n "$GW_IF" ]]; then
-  UNDERLAY_SRC="$(ip -4 -o addr show dev "$GW_IF" 2>/dev/null | awk '{{print $4; exit}}')"
-  UNDERLAY_SRC="${{UNDERLAY_SRC%%/*}}"
-fi
-if [[ -n "$ROUTE_IP" && "$ROUTE_IP" != "127.0.0.1" ]]; then
-  bind_host_route "$ROUTE_IP" "$GW" "$GW_IF" "$UNDERLAY_SRC"
-fi
-if [[ -n "$WAN_HOST" && "$WAN_HOST" != "$ROUTE_IP" ]]; then
-  bind_host_route "$WAN_HOST" "$GW" "$GW_IF" "$UNDERLAY_SRC"
+# The host route was installed before WireGuard started. Refuse to add the
+# tunnel default routes if that pin is no longer on the current underlay.
+if ! endpoint_route_ok "$ROUTE_IP" "$GW_IF"; then
+  ip route del 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null || true
+  unbind_host_routes
+  ip link set "$IFACE_NAME" down 2>/dev/null || true
+  safe_stop_pid_file "$PID_FILE" "wireguard-go"
+  safe_stop_pid_file "$STEALTH_PID_FILE" "wstunnel"
+  ip link delete "$IFACE_NAME" 2>/dev/null || true
+  rm -f "$PID_FILE" "$STEALTH_PID_FILE" "$IFACE_FILE" "$META_FILE" /var/run/wireguard/*.sock
+  echo "endpoint route missing" >&2
+  exit 1
 fi
 
 # Split default via the tunnel
@@ -4057,6 +4171,41 @@ mod security_tests {
             assert!(status.success(), "{name} has a syntax error");
         };
         check("veritas-bringup-syntax.sh", &script);
+        // reconnect.sh is this script, saved at the first connect. It must
+        // not snapshot that connect's gateway or interface.
+        assert!(
+            !script.contains("awk '/default via/"),
+            "reconnect helper still reads only the first default route"
+        );
+        assert!(!script.contains("eno1"), "reconnect helper hardcodes an interface");
+        assert!(
+            !script.contains("198.51.100.1"),
+            "reconnect helper hardcodes a gateway"
+        );
+        assert!(!script.contains("wlx90de802153e1"));
+        assert!(!script.contains("GW='"));
+        assert!(!script.contains("GW_IF='"));
+        let pick_at = script
+            .find("pick_underlay \"$IFACE_NAME\"")
+            .expect("runtime underlay selection");
+        let choose_at = script
+            .find("apply_endpoint_choice\n")
+            .expect("runtime endpoint choice");
+        let pin_at = script
+            .find("follow_underlay_route \"$ROUTE_IP\"")
+            .expect("endpoint pin");
+        let setconf_at = script.find("wg setconf").expect("wg setconf");
+        let ping_at = script
+            .find("ping -c 3 -W 1 10.0.0.1")
+            .expect("handshake ping");
+        assert!(
+            pick_at < choose_at && choose_at < pin_at && pin_at < setconf_at && setconf_at < ping_at,
+            "endpoint choice and the current host route must precede the handshake"
+        );
+        assert!(
+            script.contains("maybe_fresh_lines \"$GW\""),
+            "reconnect does not re-read the peer on the current underlay"
+        );
         let heredoc = |marker: &str| {
             let start_token = format!("<<'{marker}'\n");
             let start = script

@@ -748,6 +748,24 @@ fi
 if ! grep -q -- '-k", "2", "10", "sudo", "-n", SOFT_PATH_ADAPT_HELPER' "$lib"; then
   fail "path-adapt sudo is not killed when it ignores SIGTERM"
 fi
+if ! grep -q -- '-k", "2", "45", "sudo", "-n", SOFT_RECONNECT_HELPER' "$lib"; then
+  fail "reconnect sudo is not killed when it ignores SIGTERM"
+fi
+
+# The body saved as reconnect.sh is the bring-up script. It must compute the
+# underlay when it runs, not embed the gateway or interface from connect time.
+bringup_section="$(sed -n '1,/<<'\''SOFT_CLEANUP'\''/p' "$lib")"
+if printf '%s\n' "$bringup_section" | grep -q "awk '/default via/"; then
+  fail "reconnect helper snapshots the connect-time gateway"
+fi
+printf '%s\n' "$bringup_section" | grep -q 'pick_underlay "$IFACE_NAME"' || fail "reconnect helper does not read the current underlay"
+printf '%s\n' "$bringup_section" | grep -q 'follow_underlay_route "$ROUTE_IP"' || fail "reconnect helper does not pin the endpoint before the handshake"
+printf '%s\n' "$bringup_section" | grep -q 'apply_endpoint_choice' || fail "reconnect helper does not choose the endpoint for this underlay"
+printf '%s\n' "$bringup_section" | grep -q 'maybe_fresh_lines "$GW"' || fail "reconnect helper does not re-read the peer"
+pick_line="$(printf '%s\n' "$bringup_section" | awk '/pick_underlay "\$IFACE_NAME"/{print NR; exit}')"
+pin_line="$(printf '%s\n' "$bringup_section" | awk '/follow_underlay_route "\$ROUTE_IP"/{print NR; exit}')"
+ping_line="$(printf '%s\n' "$bringup_section" | awk '/ping -c 3 -W 1 10.0.0.1/{print NR; exit}')"
+[[ -n "$pick_line" && -n "$pin_line" && -n "$ping_line" && "$pick_line" -lt "$pin_line" && "$pin_line" -lt "$ping_line" ]] || fail "the endpoint host route is installed after the handshake ping"
 
 teardown_section="$(sed -n "/<<'SOFT_TEARDOWN'/,/^SOFT_TEARDOWN$/p" "$lib")"
 printf '%s\n' "$teardown_section" | grep -q 'clear_tunnel_input' || fail "disconnect leaves the veritas0 input accept"
