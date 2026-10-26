@@ -11,47 +11,47 @@
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/check/ip.html</loc>
+    <loc>https://veritasvpn.cloud/check/ip</loc>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/check/dns.html</loc>
+    <loc>https://veritasvpn.cloud/check/dns</loc>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/check/vpn.html</loc>
+    <loc>https://veritasvpn.cloud/check/vpn</loc>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/check/browser.html</loc>
+    <loc>https://veritasvpn.cloud/check/browser</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/check/breach.html</loc>
+    <loc>https://veritasvpn.cloud/check/breach</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/check/report.html</loc>
+    <loc>https://veritasvpn.cloud/check/report</loc>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/downloads.html</loc>
+    <loc>https://veritasvpn.cloud/downloads</loc>
     <changefreq>weekly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/install/android.html</loc>
+    <loc>https://veritasvpn.cloud/install/android</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/install/linux.html</loc>
+    <loc>https://veritasvpn.cloud/install/linux</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
@@ -61,32 +61,32 @@
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/privacy.html</loc>
+    <loc>https://veritasvpn.cloud/privacy</loc>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/transparency.html</loc>
+    <loc>https://veritasvpn.cloud/transparency</loc>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/terms.html</loc>
+    <loc>https://veritasvpn.cloud/terms</loc>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/cookies.html</loc>
+    <loc>https://veritasvpn.cloud/cookies</loc>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/contact.html</loc>
+    <loc>https://veritasvpn.cloud/contact</loc>
     <changefreq>yearly</changefreq>
     <priority>0.4</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/support.html</loc>
+    <loc>https://veritasvpn.cloud/support</loc>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
@@ -102,107 +102,107 @@
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/can-isp-see-vpn-traffic.html</loc>
+    <loc>https://veritasvpn.cloud/learn/can-isp-see-vpn-traffic</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/can-vpn-see-your-history.html</loc>
+    <loc>https://veritasvpn.cloud/learn/can-vpn-see-your-history</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/how-does-a-vpn-work.html</loc>
+    <loc>https://veritasvpn.cloud/learn/how-does-a-vpn-work</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/how-to-choose-a-vpn.html</loc>
+    <loc>https://veritasvpn.cloud/learn/how-to-choose-a-vpn</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/how-to-secure-your-wifi.html</loc>
+    <loc>https://veritasvpn.cloud/learn/how-to-secure-your-wifi</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/is-public-wifi-safe.html</loc>
+    <loc>https://veritasvpn.cloud/learn/is-public-wifi-safe</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/vpn-logging-explained.html</loc>
+    <loc>https://veritasvpn.cloud/learn/vpn-logging-explained</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/vpn-vs-proxy.html</loc>
+    <loc>https://veritasvpn.cloud/learn/vpn-vs-proxy</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/vpn-vs-tor.html</loc>
+    <loc>https://veritasvpn.cloud/learn/vpn-vs-tor</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/what-is-a-kill-switch.html</loc>
+    <loc>https://veritasvpn.cloud/learn/what-is-a-kill-switch</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/what-is-a-vpn.html</loc>
+    <loc>https://veritasvpn.cloud/learn/what-is-a-vpn</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/what-is-an-ip-address.html</loc>
+    <loc>https://veritasvpn.cloud/learn/what-is-an-ip-address</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/what-is-dns-leak.html</loc>
+    <loc>https://veritasvpn.cloud/learn/what-is-dns-leak</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/what-is-dns.html</loc>
+    <loc>https://veritasvpn.cloud/learn/what-is-dns</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/what-is-encryption.html</loc>
+    <loc>https://veritasvpn.cloud/learn/what-is-encryption</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/what-is-protected-dns.html</loc>
+    <loc>https://veritasvpn.cloud/learn/what-is-protected-dns</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/what-is-split-tunneling.html</loc>
+    <loc>https://veritasvpn.cloud/learn/what-is-split-tunneling</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/what-is-veritas-shield.html</loc>
+    <loc>https://veritasvpn.cloud/learn/what-is-veritas-shield</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/what-is-webrtc-leak.html</loc>
+    <loc>https://veritasvpn.cloud/learn/what-is-webrtc-leak</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/what-is-wireguard.html</loc>
+    <loc>https://veritasvpn.cloud/learn/what-is-wireguard</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://veritasvpn.cloud/learn/why-server-location-matters.html</loc>
+    <loc>https://veritasvpn.cloud/learn/why-server-location-matters</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>

@@ -343,7 +343,10 @@ jobs:
           ! grep -RInP '<script(?![^>]*\bsrc=)' website --include='*.html'
           ! grep -RIn 'minlength="[0-9]"' website clients/browser-extension
       - name: Security regression tests
-        run: node --test website/functions/_lib/*.test.mjs scripts/verify-release-source.test.mjs scripts/privacy-disclosure.test.mjs scripts/verify-android-play-cta.test.mjs monitoring/uptime-worker/src/state.test.mjs
+        run: node --test website/functions/_lib/*.test.mjs scripts/verify-release-source.test.mjs scripts/privacy-disclosure.test.mjs scripts/verify-android-play-cta.test.mjs scripts/site-audit.test.mjs monitoring/uptime-worker/src/state.test.mjs
+
+      - name: Check Cloudflare zone hardening logic
+        run: python3 scripts/cloudflare-zone-hardening.py --self-test
       - name: Validate shell scripts
         run: |
           find deploy -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n

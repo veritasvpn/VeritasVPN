@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>What is Veritas Shield? — VeritasVPN Learn</title>
   <meta name="description" content="DNS security layered on VeritasVPN. Premium toggles for malicious sites, trackers, ads, and adult sites. Blocking is DNS NXDOMAIN only.">
-  <link rel="canonical" href="https://veritasvpn.cloud/learn/what-is-veritas-shield.html">
+  <link rel="canonical" href="https://veritasvpn.cloud/learn/what-is-veritas-shield">
   <link rel="stylesheet" href="/css/style-typography1.css">
   <link rel="stylesheet" href="/css/learn.css">
-  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/assets/favicon.png">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -22,7 +23,7 @@
                 <li><a href="/learn/" aria-current="page">Learn</a></li>
                 <li><a href="/check/">Check</a></li>
                 <li><a href="/#pricing">Pricing</a></li>
-                <li><a href="/downloads.html">Download</a></li>
+                <li><a href="/downloads">Download</a></li>
                 <li><a href="/#faq">FAQ</a></li>
       </ul>
       <div class="nav-auth">
@@ -65,35 +66,35 @@
 <p>On Android and Linux, Settings → Veritas Shield has four Premium controls. They change which domain lists the gateway enforces for your tunnel. They do not edit the page.</p>
 <ul><li><strong>Block malicious sites</strong> (default on) — malware, phishing, scam, and cryptomining domains</li><li><strong>Block trackers</strong> (default on) — known tracker domains only. This list is separate from ads</li><li><strong>Block ads</strong> (default off) — known ad domains</li><li><strong>Block adult sites</strong> (default off) — known adult domains</li></ul>
 <p>Ads stay off by default because ad lists cause more false positives (CDNs, banks, captive portals). Adult filtering is off until you turn it on. Operators can still publish a small allowlist for known false positives.</p>
-<p>Free accounts see Upgrade on these controls and the API rejects a change. A connected peer that never saved toggles keeps today's Standard coverage: malicious sites and trackers on, ads and adult sites off. Peers that already saved the older three controls keep tracker blocking on, so the new toggle does not weaken that policy.</p>
+<p>Free accounts see Upgrade on these controls and the API rejects a change. A connected peer that never saved toggles keeps today&#x27;s Standard coverage: malicious sites and trackers on, ads and adult sites off. Peers that already saved the older three controls keep tracker blocking on, so the new toggle does not weaken that policy.</p>
 <p>Changing a toggle updates DNS for the current connection. You do not need to rebuild the tunnel.</p>
 <h2>Honesty limits</h2>
 <ul><li>This is <strong>DNS domain blocking</strong>, not full-page ad removal and not in-page tracker removal. An ad or tracker served from the same host as the page can still appear.</li><li>Upstream DoH resolvers still see hostnames we forward for <strong>non-blocked</strong> lookups</li><li>Uncommon or custom DoH endpoints remain a <strong>residual</strong> bypass risk</li><li>Shield does not inspect HTTPS bodies or replace browser updates</li></ul>
 <h2>Privacy</h2>
-<p>We do not keep a DNS query log. When Shield blocks a name, that name is held in gateway memory for up to about 10 minutes and in a Redis cache for about 2 minutes, keyed by your temporary tunnel IP, so the app can show a notice. It is not your public IP, it is not written to disk, and it is deleted when the peer is removed. Account block counts by category, with no names, are kept for about eight days. Session totals stay on the tunnel IP and clear with the peer. Prometheus keeps aggregate counts without query names. The toggles are stored with peer metadata so the gateway can apply them. Details: <a href="/privacy.html">Privacy Policy</a>.</p>
+<p>We do not keep a DNS query log. When Shield blocks a name, that name is held in gateway memory for up to about 10 minutes and in a Redis cache for about 2 minutes, keyed by your temporary tunnel IP, so the app can show a notice. It is not your public IP, it is not written to disk, and it is deleted when the peer is removed. Account block counts by category, with no names, are kept for about eight days. Session totals stay on the tunnel IP and clear with the peer. Prometheus keeps aggregate counts without query names. The toggles are stored with peer metadata so the gateway can apply them. Details: <a href="/privacy">Privacy Policy</a>.</p>
 <h2>How to verify</h2>
-<p>Connect on Android or Linux with Premium, then run a <a href="/check/dns.html">DNS leak test</a>. Resolvers should show the provider path.</p>
+<p>Connect on Android or Linux with Premium, then run a <a href="/check/dns">DNS leak test</a>. Resolvers should show the provider path.</p>
 <p>With <strong>Block malicious sites</strong> on (the default), this harmless name must return NXDOMAIN:</p>
 <p><code>dns-protection-test.veritasvpn.invalid</code></p>
 <p>With <strong>Block adult sites</strong> on, this reserved name must return NXDOMAIN, and it should resolve when that toggle is off:</p>
 <p><code>adult-protection-test.veritasvpn.invalid</code></p>
 <h2>Related</h2>
-<p>For the general idea of filtering DNS inside a VPN (not product-specific), see <a href="/learn/what-is-protected-dns.html">What is protected DNS?</a>.</p>
+<p>For the general idea of filtering DNS inside a VPN (not product-specific), see <a href="/learn/what-is-protected-dns">What is protected DNS?</a>.</p>
         </div>
       <nav class="learn-related" aria-label="Related articles">
         <h2>Keep learning</h2>
         <ul>
-        <li><a href="/learn/what-is-protected-dns.html">What is protected DNS?</a></li>
-        <li><a href="/learn/what-is-dns.html">What is DNS?</a></li>
-        <li><a href="/learn/what-is-dns-leak.html">What is a DNS leak?</a></li>
-        <li><a href="/learn/vpn-logging-explained.html">VPN logging explained</a></li>
+        <li><a href="/learn/what-is-protected-dns">What is protected DNS?</a></li>
+        <li><a href="/learn/what-is-dns">What is DNS?</a></li>
+        <li><a href="/learn/what-is-dns-leak">What is a DNS leak?</a></li>
+        <li><a href="/learn/vpn-logging-explained">VPN logging explained</a></li>
         </ul>
       </nav>
         <aside class="learn-cta" aria-label="Need protection">
           <h2>Need protection? Try VeritasVPN</h2>
           <p>When you want the concepts on this page applied on your device: WireGuard tunnel, Veritas Shield, and clear limits—not inflated claims.</p>
           <div class="cta-row">
-            <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+            <a class="btn btn-primary" href="/downloads">Download VeritasVPN</a>
             <a class="btn btn-outline" href="/#pricing">Pricing</a>
             <a class="btn btn-outline" href="/check/">Run a privacy check</a>
           </div>
@@ -102,13 +103,60 @@
       </article>
     </div>
   </main>
-  <footer class="footer">
+<footer class="footer">
     <div class="container">
-      <div class="footer-bottom">
-        <p>&copy; 2026 VeritasVPN. <a href="/learn/">Learn</a> · <a href="/check/">Privacy check</a> · <a href="/privacy.html">Privacy</a> · <a href="/transparency.html">Transparency</a> · <a href="/terms.html">Terms</a></p>
-      </div>
+        <div class="footer-grid">
+            <div class="footer-brand">
+                <a href="/" class="logo">
+                    <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="40" height="40">
+                    <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+                </a>
+                <p>The truth about online privacy. WireGuard from Paraguay plus Veritas Shield. Source-available under BSL.</p>
+                <div class="footer-social">
+                    <a href="https://github.com/veritasvpn/VeritasVPN" target="_blank" rel="noopener" aria-label="GitHub">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                    </a>
+                </div>
+            </div>
+            <div class="footer-links">
+                <h4>Product</h4>
+                <ul>
+                    <li><a href="/learn/">Learn</a></li>
+                    <li><a href="/check/">Privacy check</a></li>
+                    <li><a href="/#network">Network</a></li>
+                    <li><a href="/#dns">Veritas Shield</a></li>
+                    <li><a href="/#pricing">Pricing</a></li>
+                    <li><a href="/downloads">Download</a></li>
+                    <li><a href="/downloads">Install guides</a></li>
+                </ul>
+            </div>
+            <div class="footer-links">
+                <h4>Trust</h4>
+                <ul>
+                    <li><a href="/transparency">Transparency</a></li>
+                    <li><a href="/canary.txt">Warrant Canary</a></li>
+                    <li><a href="https://github.com/veritasvpn/VeritasVPN" target="_blank" rel="noopener">Source (BSL)</a></li>
+                    <li><a href="/contact">Contact</a></li>
+                    <li><a href="/support">Support</a></li>
+                </ul>
+            </div>
+            <div class="footer-links">
+                <h4>Legal</h4>
+                <ul>
+                    <li><a href="/privacy">Privacy</a></li>
+                    <li><a href="/terms">Terms</a></li>
+                    <li><a href="/transparency">Transparency</a></li>
+                    <li><a href="/cookies">Cookies</a></li>
+                    <li><a href="/contact">Contact</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2026 VeritasVPN. All rights reserved.</p>
+            <p class="footer-tagline">Paraguay · WireGuard · BSL on GitHub</p>
+        </div>
     </div>
-  </footer>
+</footer>
   <script type="module" src="/js/site-nav.js?v=mobilefix1"></script>
 </body>
 </html>

@@ -25,7 +25,7 @@ SITEMAP = ROOT / "website" / "sitemap.xml"
 SITE = "https://veritasvpn.cloud"
 
 sys.path.insert(0, str(ROOT / "scripts"))
-from site_nav import nav_html  # noqa: E402
+from site_nav import ICON_LINKS, clean_site_url, footer_html, nav_html  # noqa: E402
 
 CATEGORIES = [
     ("basics", "Basics", "Core ideas behind private networking."),
@@ -62,7 +62,12 @@ def parse_frontmatter(raw: str) -> tuple[dict, str]:
 
 def inline_md(text: str) -> str:
     text = html.escape(text)
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
+
+    def link(match: re.Match) -> str:
+        url = clean_site_url(html.unescape(match.group(2)))
+        return f'<a href="{html.escape(url, quote=True)}">{match.group(1)}</a>'
+
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", link, text)
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     return text
@@ -112,16 +117,6 @@ def markdown_to_html(md: str) -> str:
     return "\n".join(out)
 
 
-def footer_html() -> str:
-    return """  <footer class="footer">
-    <div class="container">
-      <div class="footer-bottom">
-        <p>&copy; 2026 VeritasVPN. <a href="/learn/">Learn</a> · <a href="/check/">Privacy check</a> · <a href="/privacy.html">Privacy</a> · <a href="/transparency.html">Transparency</a> · <a href="/terms.html">Terms</a></p>
-      </div>
-    </div>
-  </footer>"""
-
-
 def page_shell(title: str, description: str, canonical: str, body: str, active: str = "learn") -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -133,7 +128,7 @@ def page_shell(title: str, description: str, canonical: str, body: str, active: 
   <link rel="canonical" href="{html.escape(canonical)}">
   <link rel="stylesheet" href="/css/style-typography1.css">
   <link rel="stylesheet" href="/css/learn.css">
-  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  {ICON_LINKS}
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -189,7 +184,7 @@ def render_hub(articles: list[dict]) -> str:
         for a in items:
             links.append(
                 f"""        <li>
-          <a href="/learn/{html.escape(a['slug'])}.html">
+          <a href="/learn/{html.escape(a['slug'])}">
             <span class="learn-list-title">{html.escape(a['title'])}</span>
             <span class="learn-list-desc">{html.escape(a['description'])}</span>
             <span class="learn-list-meta">Read</span>
@@ -216,7 +211,7 @@ def render_hub(articles: list[dict]) -> str:
         <p class="learn-lede">Clear guides on VPNs, DNS, leaks, and everyday privacy—so you can understand the risks before you buy protection.</p>
         <div class="learn-hero-actions">
           <a class="btn btn-primary" href="#basics">Browse topics</a>
-          <a class="btn btn-outline" href="/downloads.html">Get VeritasVPN</a>
+          <a class="btn btn-outline" href="/downloads">Get VeritasVPN</a>
         </div>
       </header>
 {chr(10).join(sections)}
@@ -224,7 +219,7 @@ def render_hub(articles: list[dict]) -> str:
         <h2>Need protection on the next hop?</h2>
         <p>VeritasVPN is WireGuard from Paraguay plus Veritas Shield DNS security while connected. Honest docs. Source on GitHub.</p>
         <div class="cta-row">
-          <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+          <a class="btn btn-primary" href="/downloads">Download VeritasVPN</a>
           <a class="btn btn-outline" href="/check/">Privacy check</a>
           <a class="btn btn-outline" href="/#pricing">Pricing</a>
         </div>
@@ -243,7 +238,7 @@ def render_article(a: dict) -> str:
     related = ""
     if a["related_resolved"]:
         links = "\n".join(
-            f'        <li><a href="/learn/{html.escape(r["slug"])}.html">{html.escape(r["title"])}</a></li>'
+            f'        <li><a href="/learn/{html.escape(r["slug"])}">{html.escape(r["title"])}</a></li>'
             for r in a["related_resolved"]
         )
         related = f"""      <nav class="learn-related" aria-label="Related articles">
@@ -270,7 +265,7 @@ def render_article(a: dict) -> str:
           <h2>Need protection? Try VeritasVPN</h2>
           <p>When you want the concepts on this page applied on your device: WireGuard tunnel, Veritas Shield, and clear limits—not inflated claims.</p>
           <div class="cta-row">
-            <a class="btn btn-primary" href="/downloads.html">Download VeritasVPN</a>
+            <a class="btn btn-primary" href="/downloads">Download VeritasVPN</a>
             <a class="btn btn-outline" href="/#pricing">Pricing</a>
             <a class="btn btn-outline" href="/check/">Run a privacy check</a>
           </div>
@@ -279,7 +274,7 @@ def render_article(a: dict) -> str:
       </article>
     </div>
   </main>"""
-    return page_shell(a["title"], a["description"], f"{SITE}/learn/{a['slug']}.html", body)
+    return page_shell(a["title"], a["description"], f"{SITE}/learn/{a['slug']}", body)
 
 
 LEARN_SITEMAP_START = "  <!-- LEARN_SITEMAP_START -->"
@@ -298,7 +293,7 @@ def update_sitemap(articles: list[dict]) -> None:
         entries.extend(
             [
                 "  <url>",
-                f"    <loc>{SITE}/learn/{a['slug']}.html</loc>",
+                f"    <loc>{SITE}/learn/{a['slug']}</loc>",
                 "    <changefreq>monthly</changefreq>",
                 "    <priority>0.7</priority>",
                 "  </url>",

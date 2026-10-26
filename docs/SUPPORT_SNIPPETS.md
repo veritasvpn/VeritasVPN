@@ -49,7 +49,7 @@ If it stays stuck after you paid, email contact@veritasvpn.cloud with the invoic
 ## Chrome versus a full tunnel
 
 ```
-The Chrome extension is a browser-only HTTP CONNECT proxy. It can cover traffic inside Chrome. Other apps on the device stay unprotected, and it is not a device kill switch.
+The Chrome extension is not yet available (coming soon). When it is offered, it is a browser-only HTTP CONNECT proxy. It can cover traffic inside Chrome. Other apps on the device stay unprotected, and it is not a device kill switch.
 
 A full tunnel is the Android or Linux WireGuard client. Android asks for VPN permission first so VeritasVPN is listed, then requires Always-on VPN and Block connections without VPN before the tunnel starts. Linux keeps a firewall and routing kill switch on while connected, with no in-app off. Current downloads on the site are those two clients.
 ```

@@ -22,7 +22,7 @@ test("public pages do not publish the operator legal name, RUC, or a street addr
 
 test("transparency page is linked from the privacy policy and does not overclaim", () => {
   const flat = transparency.replace(/\s+/g, " ");
-  assert.match(privacy, /href="\/transparency\.html"/);
+  assert.match(privacy, /href="\/transparency"/);
   assert.match(flat, /Veritas Ark/);
   assert.match(flat, /Last updated: October 25, 2026/);
   assert.match(flat, /No independent audit/);

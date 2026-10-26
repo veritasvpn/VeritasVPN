@@ -2,7 +2,8 @@
 @font-face{font-family:Inter;font-style:normal;font-weight:600;src:url("/assets/fonts/inter_600.ttf") format("truetype")}
 @font-face{font-family:"Space Grotesk";font-style:normal;font-weight:700;src:url("/assets/fonts/space_grotesk_700.ttf") format("truetype")}
 *{box-sizing:border-box}
-body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#030915;color:#eaf7ff;font-family:Inter,system-ui,sans-serif}
+body{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;background:#030915;color:#eaf7ff;font-family:Inter,system-ui,sans-serif}
+body>.footer{width:100%;margin-top:28px}
 .card{width:min(520px,100%);padding:38px;border:1px solid rgba(9,199,245,.25);border-radius:24px;background:linear-gradient(145deg,#091426,#050b17);box-shadow:0 25px 80px #0008}
 .card-centered{text-align:center;padding:42px}
 .logo{width:78px}
