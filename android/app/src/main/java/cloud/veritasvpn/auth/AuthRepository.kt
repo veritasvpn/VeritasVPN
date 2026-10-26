@@ -98,7 +98,7 @@ class AuthRepository(context: Context) {
     private fun persist(user: User, data: AuthResponse) {
         prefs.edit()
             .putString("account_id", data.accountId)
-            .putString("email", data.email)
+            .putString("email", emailToPersist(data.email, user.email))
             .putBoolean("is_anonymous", user.isAnonymous)
             .putString("access_token", data.accessToken)
             .putString("refresh_token", data.refreshToken)
@@ -136,7 +136,10 @@ class AuthRepository(context: Context) {
             ApiClient.parse<AuthResponse>(res)
                 ?: throw Error("The server returned an invalid sign-in response.")
         }
-        val user = User(email = data.email ?: normalized, accountId = data.accountId)
+        val user = User(
+            email = data.email?.trim()?.takeIf { it.isNotEmpty() } ?: normalized,
+            accountId = data.accountId,
+        )
         persist(user, data)
         return user
     }
@@ -366,6 +369,33 @@ class AuthRepository(context: Context) {
         }
     }
 
+    /**
+     * Fills a missing email from GET /auth/me. Release builds that signed in
+     * before the sign-in response kept `email` stored nothing, even though
+     * accounts.email is set. A failure leaves the stored user unchanged.
+     */
+    suspend fun refreshStoredEmail(): User? {
+        val existing = getStoredUser() ?: return null
+        if (!existing.email.isNullOrBlank()) return existing
+        val token = getValidAccessToken() ?: return existing
+        return try {
+            ApiClient.get("/api/v1/auth/me", token).use { res ->
+                if (!res.isSuccessful) return existing
+                val email = ApiClient.parse<cloud.veritasvpn.api.AccountProfile>(res)
+                    ?.email
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: return existing
+                prefs.edit().putString("email", email).apply()
+                existing.copy(email = email)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            existing
+        }
+    }
+
     fun signOut() {
         prefs.edit().clear().apply()
     }
@@ -432,4 +462,10 @@ class AuthRepository(context: Context) {
     class TurnstileRequired : Exception("Security check required.")
 
     class Error(override val userMessage: String) : Exception(userMessage), cloud.veritasvpn.api.UserVisibleError
+}
+
+/** The address to store after sign-in. The typed email covers a response that omitted it. */
+internal fun emailToPersist(responseEmail: String?, knownEmail: String?): String? {
+    responseEmail?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+    return knownEmail?.trim()?.takeIf { it.isNotEmpty() }
 }

@@ -31,8 +31,11 @@ var (
 
 // PlayStore is the persistence Play Billing needs. *repository.Postgres implements it.
 type PlayStore interface {
-	PaymentAccount(ctx context.Context, providerTxnID string) (string, error)
-	UpdateGooglePlay(ctx context.Context, accountID, token string, apply func(sub *model.Subscription, existing *model.PaymentRecord) (*model.PaymentRecord, string, error)) (string, error)
+	PaymentAccount(ctx context.Context, purchaseToken string) (string, error)
+	// UpdateGooglePlay locks the subscription and every payment row for this
+	// purchase token. apply returns the one order row to insert or update.
+	// Other linked rows stay as they are.
+	UpdateGooglePlay(ctx context.Context, accountID, token string, apply func(sub *model.Subscription, linked []model.PaymentRecord) (*model.PaymentRecord, string, error)) (string, error)
 }
 
 // PlayVerifyResult tells the app whether Premium is active and whether the
@@ -107,7 +110,7 @@ func (p *PlayBilling) Verify(ctx context.Context, accountID, productID, purchase
 	if !playAccountMatches(accountID, purchase.ObfuscatedAccountID) {
 		return nil, ErrPlayAccountMismatch
 	}
-	return p.apply(ctx, accountID, productID, purchaseToken, purchase, false)
+	return p.apply(ctx, accountID, productID, purchaseToken, purchase, false, "")
 }
 
 func (p *PlayBilling) ProcessNotification(ctx context.Context, body []byte, authorization string) error {
@@ -139,7 +142,7 @@ func (p *PlayBilling) ProcessNotification(ctx context.Context, body []byte, auth
 	if accountID == "" {
 		return ErrPlayAccountUnbound
 	}
-	_, err = p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke)
+	_, err = p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke, note.RefundOrderID)
 	return err
 }
 
@@ -157,15 +160,15 @@ func (p *PlayBilling) lookup(ctx context.Context, token string) (*provider.Subsc
 	return purchase, nil
 }
 
-func (p *PlayBilling) apply(ctx context.Context, accountID, requestedProduct, token string, purchase *provider.SubscriptionPurchase, forceRevoke bool) (*PlayVerifyResult, error) {
+func (p *PlayBilling) apply(ctx context.Context, accountID, requestedProduct, token string, purchase *provider.SubscriptionPurchase, forceRevoke bool, refundOrderID string) (*PlayVerifyResult, error) {
 	now := p.now().UTC()
 	var result PlayVerifyResult
 	var planID string
 	var periodDays int
 	var periodEnd time.Time
 	var isTrialStart, isConversion bool
-	event, err := p.store.UpdateGooglePlay(ctx, accountID, token, func(sub *model.Subscription, existing *model.PaymentRecord) (*model.PaymentRecord, string, error) {
-		payment, ev, trialStart, conversion, res, err := decidePlayEntitlement(now, accountID, requestedProduct, token, purchase, sub, existing, forceRevoke)
+	event, err := p.store.UpdateGooglePlay(ctx, accountID, token, func(sub *model.Subscription, linked []model.PaymentRecord) (*model.PaymentRecord, string, error) {
+		payment, ev, trialStart, conversion, res, err := decidePlayEntitlement(now, accountID, requestedProduct, token, purchase, sub, linked, forceRevoke, refundOrderID)
 		if err != nil {
 			return nil, "", err
 		}
@@ -236,7 +239,7 @@ func (p *PlayBilling) accountForPurchase(ctx context.Context, token, obfuscated 
 	return obfuscated, nil
 }
 
-func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token string, purchase *provider.SubscriptionPurchase, sub *model.Subscription, existing *model.PaymentRecord, forceRevoke bool) (*model.PaymentRecord, string, bool, bool, PlayVerifyResult, error) {
+func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token string, purchase *provider.SubscriptionPurchase, sub *model.Subscription, linked []model.PaymentRecord, forceRevoke bool, refundOrderID string) (*model.PaymentRecord, string, bool, bool, PlayVerifyResult, error) {
 	if purchase.ObfuscatedAccountID != "" && !playAccountMatches(accountID, purchase.ObfuscatedAccountID) {
 		return nil, "", false, false, PlayVerifyResult{}, ErrPlayAccountMismatch
 	}
@@ -260,30 +263,68 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 	pending := state == "SUBSCRIPTION_STATE_PENDING"
 	entitled := !forceRevoke && !pending && playEntitled(state, line.Expiry, now)
 
-	amount := product.PriceCents
-	currency := "usd"
-	if line.HasPrice && line.PriceCents > 0 {
-		amount = line.PriceCents
-		if line.Currency != "" {
-			currency = line.Currency
+	orderKey := playChargeOrderID(purchase, line)
+	if forceRevoke {
+		if id := strings.TrimSpace(refundOrderID); id != "" {
+			orderKey = id
 		}
 	}
-	// Trials are free: set amount to 0 and mark as trial
-	isTrial := line.InTrial
+	if orderKey == "" {
+		orderKey = token
+	}
+	renewalOrder := isPlayRenewalOrder(orderKey)
+	// A renewal order is a real charge. License-tester renewals happen in
+	// minutes, while the line item still carries the trial offer and
+	// PLAY_TRIAL_DAYS has not elapsed. The base order stays the trial.
+	isTrial := line.InTrial && !renewalOrder
+	amount := product.PriceCents
+	currency := "usd"
+	if line.HasPrice {
+		amount = line.PriceCents
+		if line.Currency != "" {
+			currency = strings.ToLower(line.Currency)
+		}
+	}
 	if isTrial {
 		amount = 0
 	}
+
+	existing := matchPlayPayment(linked, token, orderKey, renewalOrder)
+	if existing != nil && existing.IsTrial && !renewalOrder && !forceRevoke {
+		isTrial = true
+		amount = 0
+	}
+	status := playPaymentStatus(state, forceRevoke, entitled)
+	if state == "SUBSCRIPTION_STATE_EXPIRED" && orderKey != token {
+		// The charge succeeded. Expiry only removes Premium.
+		status = model.PaymentCompleted
+	}
+	if existing != nil && existing.Status == model.PaymentCompleted && status == model.PaymentFailed && !forceRevoke {
+		status = model.PaymentCompleted
+	}
+	if forceRevoke {
+		status = model.PaymentRefunded
+		if existing != nil {
+			amount = existing.Amount
+			if existing.Currency != "" {
+				currency = existing.Currency
+			}
+			isTrial = existing.IsTrial
+		}
+	}
+
 	payment := &model.PaymentRecord{
 		SubscriptionID:        sub.ID,
 		AccountID:             accountID,
 		Amount:                amount,
 		Currency:              currency,
-		ProviderTransactionID: token,
+		ProviderTransactionID: orderKey,
 		PlanID:                product.PlanID,
 		PeriodDays:            product.PeriodDays,
 		Provider:              model.PaymentGooglePlay,
-		Status:                playPaymentStatus(state, forceRevoke, entitled),
+		Status:                status,
 		IsTrial:               isTrial,
+		PurchaseToken:         token,
 	}
 	if existing != nil {
 		payment.ID = existing.ID
@@ -304,10 +345,10 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 			assignPlaySubscription(sub, product, token, line, newEnd, now, state)
 		}
 	} else if playOwnsEntitlement(sub, token) {
-		revokePlaySubscription(sub, now, state, forceRevoke)
+		revokePlaySubscription(sub, now, state, forceRevoke, purchase.PauseResumesAt)
 	}
 
-	event, isTrialStart, isConversion := playEvent(before, sub, payment.IsTrial, existing)
+	event, isTrialStart, isConversion := playEvent(before, sub, payment.IsTrial, conversionMarker(linked, existing, payment.IsTrial))
 	premium := sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
 	result := PlayVerifyResult{
 		IsPremium:   premium,
@@ -316,6 +357,74 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 		Status:      sub.Status,
 	}
 	return payment, event, isTrialStart, isConversion, result, nil
+}
+
+// playChargeOrderID is the idempotency key for one successful charge.
+// Renewals use a new Google order id (GPA.xxxx..0) on the same purchase token.
+func playChargeOrderID(purchase *provider.SubscriptionPurchase, line provider.PlayLineItem) string {
+	if id := strings.TrimSpace(line.LatestSuccessfulOrderID); id != "" {
+		return id
+	}
+	if purchase != nil {
+		if id := strings.TrimSpace(purchase.LatestOrderID); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func isPlayRenewalOrder(orderID string) bool {
+	return strings.Contains(orderID, "..")
+}
+
+// matchPlayPayment finds the row for this order. A renewal never rewrites the
+// trial row that older builds stored under the purchase token. The original
+// order may still be that token-keyed row until it is retargeted.
+func matchPlayPayment(linked []model.PaymentRecord, token, orderKey string, renewalOrder bool) *model.PaymentRecord {
+	for i := range linked {
+		if linked[i].ProviderTransactionID == orderKey {
+			cp := linked[i]
+			return &cp
+		}
+	}
+	if renewalOrder {
+		return nil
+	}
+	for i := range linked {
+		if linked[i].ProviderTransactionID == token {
+			cp := linked[i]
+			return &cp
+		}
+	}
+	return nil
+}
+
+// conversionMarker is non-nil only for the first paid order after a trial,
+// so a later renewal is not reported as a second conversion.
+func conversionMarker(linked []model.PaymentRecord, existing *model.PaymentRecord, isTrial bool) *model.PaymentRecord {
+	if isTrial {
+		return nil
+	}
+	if existing != nil && existing.IsTrial {
+		return existing
+	}
+	if existing != nil {
+		return nil
+	}
+	priorTrial := false
+	for _, row := range linked {
+		if row.IsTrial {
+			priorTrial = true
+			continue
+		}
+		if row.Amount > 0 && (row.Status == model.PaymentCompleted || row.Status == model.PaymentRefunded) {
+			return nil
+		}
+	}
+	if !priorTrial {
+		return nil
+	}
+	return &model.PaymentRecord{IsTrial: true}
 }
 
 func selectPlayLine(purchase *provider.SubscriptionPurchase, requestedProduct string) (provider.PlayLineItem, error) {
@@ -372,8 +481,6 @@ func playPaymentStatus(state string, forceRevoke, entitled bool) string {
 		return model.PaymentPending
 	case "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED":
 		return model.PaymentFailed
-	case "SUBSCRIPTION_STATE_EXPIRED":
-		return model.PaymentFailed
 	default:
 		if entitled {
 			return model.PaymentCompleted
@@ -408,14 +515,31 @@ func assignPlaySubscription(sub *model.Subscription, product model.PlayProduct, 
 	sub.CurrentPeriodEnd = newEnd
 	sub.ExternalRef = token
 	sub.CancelAtPeriodEnd = state == "SUBSCRIPTION_STATE_CANCELED" || !line.AutoRenewEnabled
+	sub.AccessState = ""
+	sub.PauseResumesAt = nil
 }
 
-func revokePlaySubscription(sub *model.Subscription, now time.Time, state string, forceRevoke bool) {
-	if !forceRevoke && (state == "SUBSCRIPTION_STATE_ON_HOLD" || state == "SUBSCRIPTION_STATE_PAUSED") {
+func revokePlaySubscription(sub *model.Subscription, now time.Time, state string, forceRevoke bool, pauseResumesAt *time.Time) {
+	if !forceRevoke && state == "SUBSCRIPTION_STATE_PAUSED" {
 		sub.Tier = model.TierPremium
 		sub.Status = model.StatusPastDue
 		sub.PaymentMethod = model.PaymentGooglePlay
 		sub.CancelAtPeriodEnd = false
+		sub.AccessState = model.AccessPaused
+		sub.PauseResumesAt = nil
+		if pauseResumesAt != nil {
+			utc := pauseResumesAt.UTC()
+			sub.PauseResumesAt = &utc
+		}
+		return
+	}
+	if !forceRevoke && state == "SUBSCRIPTION_STATE_ON_HOLD" {
+		sub.Tier = model.TierPremium
+		sub.Status = model.StatusPastDue
+		sub.PaymentMethod = model.PaymentGooglePlay
+		sub.CancelAtPeriodEnd = false
+		sub.AccessState = ""
+		sub.PauseResumesAt = nil
 		return
 	}
 	if !forceRevoke && state == "SUBSCRIPTION_STATE_PENDING" {
@@ -432,6 +556,8 @@ func revokePlaySubscription(sub *model.Subscription, now time.Time, state string
 	sub.CurrentPeriodEnd = now.Add(100 * 365 * 24 * time.Hour)
 	sub.CancelAtPeriodEnd = false
 	sub.ExternalRef = ""
+	sub.AccessState = ""
+	sub.PauseResumesAt = nil
 }
 
 type playSnap struct {
@@ -484,6 +610,7 @@ type developerNote struct {
 	Type          int
 	Test          bool
 	ForceRevoke   bool
+	RefundOrderID string
 }
 
 func decodeDeveloperNotification(body []byte) (developerNote, error) {
@@ -517,6 +644,7 @@ func decodeDeveloperNotification(body []byte) (developerNote, error) {
 		} `json:"subscriptionNotification"`
 		VoidedPurchaseNotification *struct {
 			PurchaseToken string `json:"purchaseToken"`
+			OrderID       string `json:"orderId"`
 			ProductType   int    `json:"productType"`
 		} `json:"voidedPurchaseNotification"`
 	}
@@ -540,6 +668,7 @@ func decodeDeveloperNotification(body []byte) (developerNote, error) {
 			return out, nil
 		}
 		out.PurchaseToken = note.VoidedPurchaseNotification.PurchaseToken
+		out.RefundOrderID = strings.TrimSpace(note.VoidedPurchaseNotification.OrderID)
 		out.ForceRevoke = true
 		out.Type = 12
 		return out, nil

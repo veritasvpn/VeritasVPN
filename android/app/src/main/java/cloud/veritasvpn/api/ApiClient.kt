@@ -263,12 +263,21 @@ data class AuthResponse(
     @SerializedName("refresh_token") val refreshToken: String = "",
     @SerializedName("account_id") val accountId: String = "",
     @SerializedName("expires_at") val expiresAt: Long = 0,
-    val email: String? = null,
+    // Release R8 renames this field. Without @SerializedName, Gson 2.11 drops
+    // the sign-in "email" and the Account screen has nothing to show.
+    @SerializedName("email") val email: String? = null,
     @SerializedName("verification_required") val verificationRequired: Boolean = false,
-    val message: String? = null
+    @SerializedName("message") val message: String? = null
 )
 
-data class AuthError(val error: String)
+data class AccountProfile(
+    @SerializedName("account_id") val accountId: String = "",
+    @SerializedName("email") val email: String? = null,
+)
+
+data class AuthError(
+    @SerializedName("error") val error: String? = null,
+)
 
 data class PurchaseHistoryItem(
     @SerializedName("created_at") val createdAt: String? = null,
@@ -278,7 +287,8 @@ data class PurchaseHistoryItem(
     @SerializedName("currency") val currency: String? = null,
     @SerializedName("plan") val plan: String? = null,
     @SerializedName("status") val status: String? = null,
-    @SerializedName("provider") val provider: String? = null
+    @SerializedName("provider") val provider: String? = null,
+    @SerializedName("is_trial") val isTrial: Boolean = false,
 )
 
 data class BillingStatus(
@@ -297,6 +307,8 @@ data class BillingStatus(
     // shows as purchase history that was never sent.
     @SerializedName("payments") val payments: List<PurchaseHistoryItem>? = null,
     @SerializedName("trial_eligible") val trialEligible: Boolean = false,
+    @SerializedName("access_state") val accessState: String? = null,
+    @SerializedName("resumes_at") val resumesAt: String? = null,
     val error: String? = null
 )
 

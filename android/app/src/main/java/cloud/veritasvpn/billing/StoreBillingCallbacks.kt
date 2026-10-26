@@ -13,6 +13,7 @@ interface StoreBillingCallbacks {
     fun onError(message: String) {}
     fun onSessionExpired() {}
     fun onTrialOffers(offers: Map<String, TrialOffer>) {}
+    fun onPlanPrices(prices: Map<String, PlayPlanPrice>) {}
 }
 
 /**

@@ -74,6 +74,38 @@ func TestParseSubscriptionPurchase_TrialInsideWindow(t *testing.T) {
 	}
 }
 
+func TestParseSubscriptionPurchase_OrderAndPause(t *testing.T) {
+	body := []byte(`{
+	  "subscriptionState": "SUBSCRIPTION_STATE_PAUSED",
+	  "latestOrderId": "GPA.1234-5678-9012-34567..0",
+	  "startTime": "2026-10-01T00:00:00Z",
+	  "pausedStateContext": {"autoResumeTime": "2026-11-15T00:00:00Z"},
+	  "lineItems": [{
+	    "productId": "premium_monthly",
+	    "expiryTime": "2026-11-01T00:00:00Z",
+	    "latestSuccessfulOrderId": "GPA.1234-5678-9012-34567..0",
+	    "autoRenewingPlan": {
+	      "autoRenewEnabled": true,
+	      "recurringPrice": {"currencyCode": "PYG", "units": "20000", "nanos": 0}
+	    }
+	  }]
+	}`)
+	got, err := ParseSubscriptionPurchase(body, time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "SUBSCRIPTION_STATE_PAUSED" || got.LatestOrderID != "GPA.1234-5678-9012-34567..0" {
+		t.Fatalf("purchase = %+v", got)
+	}
+	if got.PauseResumesAt == nil || !got.PauseResumesAt.Equal(time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("resume = %v", got.PauseResumesAt)
+	}
+	line := got.LineItems[0]
+	if line.LatestSuccessfulOrderID != "GPA.1234-5678-9012-34567..0" || !line.HasPrice || line.PriceCents != 2000000 || line.Currency != "pyg" {
+		t.Fatalf("line = %+v", line)
+	}
+}
+
 func TestParseSubscriptionPurchase_TrialOutsideWindow(t *testing.T) {
 	// Trial started 8 days ago, outside 7-day window → InTrial=false
 	body := []byte(`{

@@ -191,13 +191,30 @@ class PlayStoreBilling(
     }
 
     override fun queryTrialOffers(planIds: List<String>, callbacks: StoreBillingCallbacks) {
-        if (!client.isReady || planIds.isEmpty()) {
-            main.post { callbacks.onTrialOffers(emptyMap()) }
+        if (planIds.isEmpty()) {
+            main.post {
+                callbacks.onTrialOffers(emptyMap())
+                callbacks.onPlanPrices(emptyMap())
+            }
+            return
+        }
+        if (!client.isReady) {
+            connect()
+            main.postDelayed({
+                if (closed.get()) return@postDelayed
+                if (!client.isReady) {
+                    callbacks.onTrialOffers(emptyMap())
+                    callbacks.onPlanPrices(emptyMap())
+                    return@postDelayed
+                }
+                queryTrialOffers(planIds, callbacks)
+            }, 600)
             return
         }
         io.execute {
             if (closed.get()) return@execute
             val offers = mutableMapOf<String, TrialOffer>()
+            val prices = mutableMapOf<String, PlayPlanPrice>()
             for (planId in planIds) {
                 val entry = PlayCatalog.byPlanId(planId) ?: continue
                 val params = QueryProductDetailsParams.newBuilder()
@@ -222,9 +239,10 @@ class PlayStoreBilling(
                     done.countDown()
                 }
                 done.await(20, java.util.concurrent.TimeUnit.SECONDS)
-                val error = errorResult.get()
-                if (error != null) continue
+                // A Play catalog miss hides the price. It is not shown as an error.
+                if (errorResult.get() != null) continue
                 val details = detailsResult.get() ?: continue
+                regularBasePlanPrice(planId, entry.basePlanId, pricePhases(details))?.let { prices[planId] = it }
                 val offerChoice = offerToken(details, entry.basePlanId, true) ?: continue
                 if (offerChoice.trialDays != null && offerChoice.priceAfterTrial != null && offerChoice.period != null) {
                     offers[planId] = TrialOffer(
@@ -235,7 +253,10 @@ class PlayStoreBilling(
                     )
                 }
             }
-            main.post { callbacks.onTrialOffers(offers) }
+            main.post {
+                callbacks.onTrialOffers(offers)
+                callbacks.onPlanPrices(prices)
+            }
         }
     }
 
@@ -333,6 +354,24 @@ class PlayStoreBilling(
         }
         done.await(20, java.util.concurrent.TimeUnit.SECONDS)
         if (failed != null) throw BillingRepository.Error(failed!!)
+    }
+
+    private fun pricePhases(details: ProductDetails): List<StorePricePhase> {
+        val offers = details.subscriptionOfferDetails ?: return emptyList()
+        return offers.flatMap { offer ->
+            val phases = offer.pricingPhases?.pricingPhaseList ?: emptyList()
+            phases.map { phase ->
+                StorePricePhase(
+                    basePlanId = offer.basePlanId,
+                    offerId = offer.offerId,
+                    formattedPrice = phase.formattedPrice,
+                    priceAmountMicros = phase.priceAmountMicros,
+                    billingPeriod = phase.billingPeriod,
+                    infiniteRecurring = phase.recurrenceMode ==
+                        ProductDetails.RecurrenceMode.INFINITE_RECURRING,
+                )
+            }
+        }
     }
 
     private data class OfferChoice(
