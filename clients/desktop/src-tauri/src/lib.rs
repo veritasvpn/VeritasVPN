@@ -528,6 +528,7 @@ async fn connect_wireguard(app: AppHandle, mut config: WgTunnelConfig) -> Connec
         Ok(msg) => {
             // Store AppHandle so soft reconnect can re-bring the tunnel up.
             let _ = APP_HANDLE_FOR_RECOVER.set(app.clone());
+            network_switch::mark_reconnect_wanted();
             network_switch::clear_underlay_notice();
             // Start background watcher (Phase 1) for underlay flaps.
             start_network_switch_watcher_if_needed();
@@ -593,6 +594,12 @@ pub struct WgTransferStats {
     /// Empty the rest of the time. Read once.
     #[serde(default)]
     pub underlay_notice: String,
+    /// True while a connected session is waiting to follow the network.
+    #[serde(default)]
+    pub underlay_reconnecting: bool,
+    /// True after automatic reconnect gave up. The user has to tap connect.
+    #[serde(default)]
+    pub underlay_gave_up: bool,
 }
 
 #[tauri::command]
@@ -609,6 +616,8 @@ fn wireguard_stats() -> WgTransferStats {
             last_handshake_sec: 0,
             interface_up: false,
             underlay_notice: String::new(),
+            underlay_reconnecting: false,
+            underlay_gave_up: false,
         }
     }
 }
@@ -678,6 +687,8 @@ fn wireguard_stats_linux() -> WgTransferStats {
             last_handshake_sec: 0,
             interface_up: false,
             underlay_notice: network_switch::take_underlay_notice(),
+            underlay_reconnecting: network_switch::underlay_reconnecting(),
+            underlay_gave_up: network_switch::underlay_gave_up(),
         };
     }
 
@@ -691,6 +702,8 @@ fn wireguard_stats_linux() -> WgTransferStats {
         last_handshake_sec: read_published_handshake(),
         interface_up: sys_up,
         underlay_notice: network_switch::take_underlay_notice(),
+        underlay_reconnecting: network_switch::underlay_reconnecting(),
+        underlay_gave_up: network_switch::underlay_gave_up(),
     }
 }
 
@@ -701,6 +714,8 @@ async fn disconnect_wireguard(app: AppHandle, soft: Option<bool>) -> ConnectResu
     // Intentional disconnect prefers the passwordless teardown helper and only
     // falls back to interactive elevation when that helper is missing.
     if !soft {
+        // Intentional disconnect is the only path that drops reconnect intent.
+        network_switch::clear_reconnect_wanted();
         stop_network_switch_watcher();
         network_switch::clear_underlay_notice();
     }
@@ -1015,10 +1030,6 @@ echo "ok refreshed endpoint=$ENDPOINT_IP via=$NEW_GW dev=$NEW_GW_IF iface=$IFACE
 // Network-switch recovery helpers (Phase 1–3)
 // ---------------------------------------------------------------------------
 
-pub(crate) fn last_config_path() -> Result<PathBuf, String> {
-    Ok(state_dir()?.join("last-config.json"))
-}
-
 pub(crate) fn write_last_config_json(
     dir: &Path,
     config: &network_switch::SavedTunnelConfig,
@@ -1028,116 +1039,11 @@ pub(crate) fn write_last_config_json(
     write_secret_file(&path, raw.as_bytes()).map_err(|e| format!("write last-config: {e}"))
 }
 
-pub(crate) fn reapply_dns_from_saved() -> Result<RouteRefreshResult, String> {
-    // Re-apply DNS after underlay switch. Prefer the DNS value from last-config.
-    // Soft recovery must never use interactive elevation — noninteractive only.
-    let dns = load_dns_from_last_config().unwrap_or_default();
-    if dns.is_empty() {
-        return Ok(RouteRefreshResult {
-            refreshed: false,
-            gateway: String::new(),
-            message: "no DNS in last-config".into(),
-        });
-    }
-    if dns.parse::<IpAddr>().is_err() {
-        return Err("saved DNS address is invalid".into());
-    }
-
-    let dir = state_dir()?;
-    let meta_file = privileged_state_dir()?.join("iface.meta");
-    let mut gw_if = String::new();
-    if meta_file.exists() {
-        for line in fs::read_to_string(&meta_file).unwrap_or_default().lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                if k.trim() == "gw_if" {
-                    gw_if = v.trim().to_string();
-                    break;
-                }
-            }
-        }
-    }
-    // Prefer the tunnel resolver. The physical link keeps its own servers.
-    if Command::new("resolvectl")
-        .args(["dns", "veritas0", &dns])
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .is_some()
-    {
-        let _ = Command::new("resolvectl")
-            .args(["domain", "veritas0", "~."])
-            .output();
-        let _ = Command::new("resolvectl")
-            .args(["default-route", "veritas0", "true"])
-            .output();
-        if !gw_if.is_empty() {
-            let _ = Command::new("resolvectl")
-                .args(["default-route", &gw_if, "false"])
-                .output();
-        }
-        return Ok(RouteRefreshResult {
-            refreshed: true,
-            gateway: gw_if,
-            message: "DNS re-applied on the tunnel".into(),
-        });
-    }
-    // Fallback: write the DNS server into resolv.conf if writable.
-    // Soft recovery must never hang on elevated — use noninteractive only.
-    let script = format!(
-        r#"#!/bin/bash
-set -uo pipefail
-if command -v resolvectl >/dev/null 2>&1; then
-  DNS="{dns}"
-  GW_IF="{gw_if}"
-  resolvectl dns veritas0 "$DNS" 2>/dev/null || true
-  resolvectl domain veritas0 '~.' 2>/dev/null || true
-  resolvectl default-route veritas0 true 2>/dev/null || true
-  if [[ -n "$GW_IF" ]]; then
-    resolvectl default-route "$GW_IF" false 2>/dev/null || true
-  fi
-  resolvectl flush-caches 2>/dev/null || true
-fi
-"#,
-        gw_if = gw_if.replace('\'', "'\\''"),
-        dns = dns.replace('\'', "'\\''"),
-    );
-    let script_path = dir.join("reapply-dns.sh");
-    if fs::write(&script_path, &script).is_ok() {
-        let _ = Command::new("chmod")
-            .args(["0700", &script_path.to_string_lossy()])
-            .status();
-        // Soft recovery: noninteractive elevated only — never pkexec.
-        if let Ok(()) = run_elevated_noninteractive(&script) {
-            return Ok(RouteRefreshResult {
-                refreshed: true,
-                gateway: gw_if,
-                message: format!("DNS re-applied: {dns}"),
-            });
-        }
-    }
-    Ok(RouteRefreshResult {
-        refreshed: false,
-        gateway: gw_if,
-        message: "DNS re-apply failed".into(),
-    })
-}
-
-fn load_dns_from_last_config() -> Option<String> {
-    let path = match last_config_path() {
-        Ok(p) => p,
-        Err(_) => return None,
-    };
-    let raw = fs::read_to_string(&path).ok()?;
-    let cfg: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    cfg.get("dns")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
 /// True if the tunnel is healthy enough for soft recovery to skip.
 pub(crate) fn tunnel_is_healthy() -> Result<bool, String> {
-    let stats = wireguard_stats_linux();
-    if !stats.interface_up {
+    // Do not go through wireguard_stats_linux: that consumes the reconnect notice.
+    let (up, _, _) = linux_iface_sysfs_stats("veritas0");
+    if !up {
         return Ok(false);
     }
     // Always require working public egress. A recent handshake alone is NOT
@@ -1165,6 +1071,7 @@ const PACKAGED_KILLSWITCH_CLEANUP: &str = "/usr/lib/veritasvpn/killswitch-cleanu
 const SOFT_PATH_ADAPT_HELPER: &str = "/var/lib/veritasvpn/path-adapt.sh";
 const SOFT_TEARDOWN_HELPER: &str = "/var/lib/veritasvpn/teardown.sh";
 const SOFT_RECOVER_HELPER: &str = "/var/lib/veritasvpn/recover-swap.sh";
+const SOFT_RECONNECT_HELPER: &str = "/var/lib/veritasvpn/reconnect.sh";
 
 fn peer_check_token_path() -> Result<PathBuf, String> {
     Ok(state_dir()?.join("peer-check.token"))
@@ -1411,6 +1318,7 @@ fn recover_wireguard_blocking(app: AppHandle, mut config: WgTunnelConfig, timeou
         return false;
     }
     let _ = APP_HANDLE_FOR_RECOVER.set(app);
+    network_switch::mark_reconnect_wanted();
     start_network_switch_watcher_if_needed();
     true
 }
@@ -1660,10 +1568,8 @@ pub(crate) fn cleanup_kill_switch_noninteractive() -> Result<bool, String> {
     }
 }
 
-/// Soft reconnect using last-config.json (Phase 3).
-/// Kept for a full rebuild if the interface is gone; network-switch recovery
-/// no longer calls this — it rebinds the existing tunnel like Android.
-#[allow(dead_code)]
+/// Full rebuild from last-config.json when the tunnel was released and a
+/// default route is back. Passwordless only: the caller holds soft-elevated.
 pub(crate) fn bring_up_from_saved_config_soft() -> Result<String, String> {
     let saved = network_switch::load_last_config().map_err(|e| e)?;
     let mut config = WgTunnelConfig {
@@ -1749,6 +1655,39 @@ fn bring_up_wireguard(app: &AppHandle, config: &WgTunnelConfig) -> Result<String
 #[cfg(target_os = "linux")]
 fn bring_up_wireguard(app: &AppHandle, config: &WgTunnelConfig) -> Result<String, String> {
     bring_up_wireguard_linux_full(app, config)
+}
+
+/// Save the bring-up script as a root-only helper, then run that helper.
+/// The saved file is what `sudo -n` is allowed to execute later.
+#[cfg(target_os = "linux")]
+fn wrap_reconnect_helper(script: &str) -> Result<String, String> {
+    if script.lines().any(|line| line == "VERITAS_RECONNECT_BODY") {
+        return Err("could not store the reconnect helper".into());
+    }
+    let mut wrapped = String::with_capacity(script.len() + 320);
+    wrapped.push_str(
+        "#!/bin/bash\nset -euo pipefail\ninstall -d -m 755 /var/lib/veritasvpn\ncat > /var/lib/veritasvpn/reconnect.sh <<'VERITAS_RECONNECT_BODY'\n",
+    );
+    wrapped.push_str(script);
+    if !script.ends_with('\n') {
+        wrapped.push('\n');
+    }
+    wrapped.push_str(
+        "VERITAS_RECONNECT_BODY\nchmod 700 /var/lib/veritasvpn/reconnect.sh\nchown root:root /var/lib/veritasvpn/reconnect.sh\nbash /var/lib/veritasvpn/reconnect.sh\n",
+    );
+    Ok(wrapped)
+}
+
+#[cfg(target_os = "linux")]
+fn run_saved_reconnect_helper() -> Result<(), String> {
+    if !Path::new(SOFT_RECONNECT_HELPER).is_file() {
+        return Err("reconnect helper is not installed".into());
+    }
+    if command_succeeded("timeout", &["45", "sudo", "-n", SOFT_RECONNECT_HELPER]) {
+        Ok(())
+    } else {
+        Err("reconnect helper failed".into())
+    }
 }
 
 fn bring_up_wireguard_impl(
@@ -2309,11 +2248,13 @@ fn bring_up_wireguard_linux_full(
         fs::set_permissions(&script_path, perms).ok();
     }
 
-    // Soft recovery never freezes the UI — never fall back to interactive pkexec.
+    // The first connect installs a root-owned copy. A later network return runs
+    // that copy with sudo -n, so resolved changes stay inside the helper and
+    // polkit is never asked.
     if is_soft_elevated() {
-        run_elevated_noninteractive(&script)?;
+        run_saved_reconnect_helper()?;
     } else {
-        run_elevated(&script)?;
+        run_elevated(&wrap_reconnect_helper(&script)?)?;
     }
     if stealth_remote.is_empty() {
         Ok("WireGuard connected".into())
@@ -3273,7 +3214,7 @@ restore_veritas_dns "${{META_FILE}}.links" "$DNS_BACKUP" "$META_FILE" "$GW_IF" |
 if [[ "${{1:-}}" == "--purge" ]]; then
   rm -f /etc/sudoers.d/veritasvpn-soft
   rm -f /etc/NetworkManager/dispatcher.d/50-veritasvpn
-  rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh /var/lib/veritasvpn/handshake.sh
+  rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh /var/lib/veritasvpn/handshake.sh /var/lib/veritasvpn/reconnect.sh
   rmdir /var/lib/veritasvpn 2>/dev/null || true
 fi
 echo ok
@@ -3281,8 +3222,8 @@ SOFT_TEARDOWN
   chmod 755 "$SOFT_DIR/teardown.sh"
   chown root:root "$SOFT_DIR/teardown.sh"
 
-  printf '%s ALL=(root) NOPASSWD: %s/path-adapt.sh, %s/teardown.sh, %s/recover-swap.sh\n' \
-    "$DESKTOP_USER" "$SOFT_DIR" "$SOFT_DIR" "$SOFT_DIR" > /etc/sudoers.d/veritasvpn-soft
+  printf '%s ALL=(root) NOPASSWD: %s/path-adapt.sh, %s/teardown.sh, %s/recover-swap.sh, %s/reconnect.sh\n' \
+    "$DESKTOP_USER" "$SOFT_DIR" "$SOFT_DIR" "$SOFT_DIR" "$SOFT_DIR" > /etc/sudoers.d/veritasvpn-soft
   chmod 440 /etc/sudoers.d/veritasvpn-soft
 fi
 
@@ -3577,7 +3518,7 @@ ip -6 route del blackhole default metric 1 2>/dev/null || true
 # Soft-recovery helpers (installed at connect) — remove on intentional disconnect.
 rm -f /etc/sudoers.d/veritasvpn-soft
 rm -f /etc/NetworkManager/dispatcher.d/50-veritasvpn
-rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh /var/lib/veritasvpn/handshake.sh
+rm -f /var/lib/veritasvpn/cleanup-killswitch.sh /var/lib/veritasvpn/path-adapt.sh /var/lib/veritasvpn/teardown.sh /var/lib/veritasvpn/peer-check.sh /var/lib/veritasvpn/recover-swap.sh /var/lib/veritasvpn/handshake.sh /var/lib/veritasvpn/reconnect.sh
 rm -f "$(dirname "$META_FILE")/stealth-roam"
 rmdir /var/lib/veritasvpn 2>/dev/null || true
 
@@ -4160,6 +4101,10 @@ mod security_tests {
         assert!(
             !sudoers_line.contains("handshake.sh"),
             "handshake publisher must not be passwordless sudo"
+        );
+        assert!(
+            script.contains("%s/reconnect.sh"),
+            "reconnect helper must be passwordless so a network return does not prompt"
         );
         assert!(!sudoers_line.contains("cleanup-killswitch.sh"));
         assert!(!sudoers_line.contains("killswitch-cleanup.sh"));

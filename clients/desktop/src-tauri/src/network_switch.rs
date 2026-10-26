@@ -4,14 +4,15 @@
 //! Soft recovery never freezes the UI and never prompts for a password.
 
 use std::fs;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use super::{
-    privileged_state_dir, reapply_dns_from_saved, refresh_endpoint_route_linux, state_dir,
-    tunnel_is_healthy, write_last_config_json,
+    bring_up_from_saved_config_soft, privileged_state_dir, refresh_endpoint_route_linux,
+    soft_release_tunnel, state_dir, tunnel_is_healthy, write_last_config_json,
 };
 
 /// Last successful tunnel config so soft reconnect can re-bring the peer up.
@@ -133,22 +134,175 @@ pub(crate) fn recovery_lock_abandon(token: u64) {
     recovery_lock_release(token);
 }
 
-/// How long a diverged underlay may stay behind the kill switch.
-/// Past this, release the tunnel (no purge, no password) so the internet works.
+/// How long a missing underlay may stay behind the kill switch.
+/// Past this, drop the kill switch (no purge, no password) and keep reconnecting.
 pub(crate) const UNDERLAY_RELEASE_AFTER: Duration = Duration::from_secs(18);
+/// Give up only after the underlay has been back this long and rebuilds failed.
+pub(crate) const UNDERLAY_GIVE_UP_AFTER: Duration = Duration::from_secs(120);
 
-pub(crate) const UNDERLAY_RELEASED_NOTICE: &str =
-    "The network changed and the VPN couldn't follow it. Internet is back. Tap to reconnect.";
+pub(crate) const RECONNECTING_NOTICE: &str = "Reconnecting…";
+pub(crate) const UNDERLAY_GAVE_UP_NOTICE: &str = "Tap to reconnect";
 pub(crate) const UNDERLAY_BLOCKED_NOTICE: &str =
     "The network changed and the VPN couldn't follow it. Tap Restore internet, then connect again.";
 
-static DIVERGED_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
-static RELEASE_LATCHED: Mutex<bool> = Mutex::new(false);
+const RECONNECT_WANTED_FILE: &str = "reconnect-wanted";
+
+/// What one watcher tick should do. Pure so tests can cover it without root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnderlayFollow {
+    Idle,
+    Rebind,
+    Wait,
+    ReleaseKeepIntent,
+    Rebuild,
+    GiveUp,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FollowInput {
+    pub user_disconnected: bool,
+    pub tunnel_up: bool,
+    pub underlay_present: bool,
+    pub underlay_changed: bool,
+    pub diverged_for: Duration,
+    pub reconnect_wanted: bool,
+    pub released: bool,
+    pub underlay_back_for: Option<Duration>,
+    pub failed_attempts: u32,
+    pub since_last_attempt: Option<Duration>,
+    pub gave_up: bool,
+}
+
+pub(crate) fn reconnect_backoff(failed_attempts: u32) -> Duration {
+    match failed_attempts {
+        0 => Duration::ZERO,
+        1 => Duration::from_secs(2),
+        2 => Duration::from_secs(5),
+        3 => Duration::from_secs(15),
+        _ => Duration::from_secs(30),
+    }
+}
+
+/// Connected sessions follow the network. A user disconnect is Idle even when
+/// a route is available. Release happens only while the underlay is gone.
+pub(crate) fn decide_underlay_follow(input: FollowInput) -> UnderlayFollow {
+    if input.user_disconnected || input.gave_up {
+        return UnderlayFollow::Idle;
+    }
+    if input.tunnel_up {
+        if !input.underlay_present {
+            if input.diverged_for >= UNDERLAY_RELEASE_AFTER && !input.released {
+                return UnderlayFollow::ReleaseKeepIntent;
+            }
+            return UnderlayFollow::Wait;
+        }
+        if input.underlay_changed {
+            return UnderlayFollow::Rebind;
+        }
+        return UnderlayFollow::Idle;
+    }
+    if !input.reconnect_wanted {
+        return UnderlayFollow::Idle;
+    }
+    if !input.underlay_present {
+        return UnderlayFollow::Wait;
+    }
+    let back_for = input.underlay_back_for.unwrap_or_default();
+    if back_for >= UNDERLAY_GIVE_UP_AFTER && input.failed_attempts >= 4 {
+        return UnderlayFollow::GiveUp;
+    }
+    let wait = reconnect_backoff(input.failed_attempts);
+    let elapsed = input.since_last_attempt.unwrap_or(Duration::MAX);
+    if input.failed_attempts == 0 || elapsed >= wait {
+        return UnderlayFollow::Rebuild;
+    }
+    UnderlayFollow::Wait
+}
+
+struct FollowMemory {
+    diverged_since: Option<Instant>,
+    released: bool,
+    underlay_back_since: Option<Instant>,
+    failed_attempts: u32,
+    last_attempt: Option<Instant>,
+    gave_up: bool,
+    /// False only when a soft release left the kill switch in place.
+    release_cleared: bool,
+}
+
+static FOLLOW: Mutex<FollowMemory> = Mutex::new(FollowMemory {
+    diverged_since: None,
+    released: false,
+    underlay_back_since: None,
+    failed_attempts: 0,
+    last_attempt: None,
+    gave_up: false,
+    release_cleared: true,
+});
 static UNDERLAY_NOTICE: Mutex<String> = Mutex::new(String::new());
+static UNDERLAY_RECONNECTING: AtomicBool = AtomicBool::new(false);
+static UNDERLAY_GAVE_UP: AtomicBool = AtomicBool::new(false);
+static USER_HOLD: AtomicBool = AtomicBool::new(false);
+
+fn follow_lock() -> std::sync::MutexGuard<'static, FollowMemory> {
+    FOLLOW.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn clear_clocks(mem: &mut FollowMemory) {
+    mem.diverged_since = None;
+    mem.released = false;
+    mem.underlay_back_since = None;
+    mem.failed_attempts = 0;
+    mem.last_attempt = None;
+    mem.release_cleared = true;
+}
 
 pub(crate) fn clear_underlay_watch() {
-    *DIVERGED_SINCE.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    *RELEASE_LATCHED.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    clear_clocks(&mut follow_lock());
+    set_underlay_reconnecting(false);
+}
+
+/// Remember that this connected session should come back after a network change.
+pub(crate) fn mark_reconnect_wanted() {
+    USER_HOLD.store(false, Ordering::SeqCst);
+    {
+        let mut mem = follow_lock();
+        mem.gave_up = false;
+        clear_clocks(&mut mem);
+    }
+    UNDERLAY_GAVE_UP.store(false, Ordering::SeqCst);
+    set_underlay_reconnecting(false);
+    if let Ok(dir) = state_dir() {
+        let _ = fs::write(dir.join(RECONNECT_WANTED_FILE), b"1\n");
+    }
+}
+
+/// User Disconnect. The watcher must not bring the tunnel back.
+pub(crate) fn clear_reconnect_wanted() {
+    USER_HOLD.store(true, Ordering::SeqCst);
+    UNDERLAY_GAVE_UP.store(false, Ordering::SeqCst);
+    set_underlay_reconnecting(false);
+    {
+        let mut mem = follow_lock();
+        mem.gave_up = false;
+        clear_clocks(&mut mem);
+    }
+    if let Ok(dir) = state_dir() {
+        let _ = fs::remove_file(dir.join(RECONNECT_WANTED_FILE));
+    }
+}
+
+fn reconnect_wanted() -> bool {
+    if USER_HOLD.load(Ordering::SeqCst) {
+        return false;
+    }
+    state_dir()
+        .map(|dir| dir.join(RECONNECT_WANTED_FILE).is_file())
+        .unwrap_or(false)
+}
+
+fn user_disconnected_now() -> bool {
+    USER_HOLD.load(Ordering::SeqCst)
 }
 
 pub(crate) fn clear_underlay_notice() {
@@ -178,29 +332,6 @@ pub(crate) fn underlay_release_due(diverged_for: Duration) -> bool {
     diverged_for >= UNDERLAY_RELEASE_AFTER
 }
 
-fn note_divergence(diverged: bool) -> Option<Duration> {
-    let mut since = DIVERGED_SINCE.lock().unwrap_or_else(|e| e.into_inner());
-    if !diverged {
-        *since = None;
-        return None;
-    }
-    let start = since.get_or_insert_with(Instant::now);
-    Some(start.elapsed())
-}
-
-fn release_latched() -> bool {
-    *RELEASE_LATCHED.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-fn latch_release() -> bool {
-    let mut latched = RELEASE_LATCHED.lock().unwrap_or_else(|e| e.into_inner());
-    if *latched {
-        return false;
-    }
-    *latched = true;
-    true
-}
-
 fn recorded_underlay_fingerprint() -> String {
     let Ok(dir) = privileged_state_dir() else {
         return String::new();
@@ -227,82 +358,90 @@ fn recorded_underlay_fingerprint() -> String {
     }
 }
 
-fn release_diverged_tunnel() -> NetworkRecoverResult {
-    if !latch_release() {
-        return NetworkRecoverResult {
-            changed: false,
-            message: "underlay release already attempted".into(),
-            action: "released".into(),
-        };
-    }
-    let cleared = super::soft_release_tunnel();
-    let notice = if cleared {
-        UNDERLAY_RELEASED_NOTICE
-    } else {
-        UNDERLAY_BLOCKED_NOTICE
-    };
-    set_underlay_notice(notice);
+fn noop(action: &str, message: &str) -> NetworkRecoverResult {
     NetworkRecoverResult {
-        changed: true,
-        message: notice.to_string(),
-        action: "released".into(),
+        changed: false,
+        message: message.into(),
+        action: action.into(),
     }
 }
 
-fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
-    let meta_path = privileged_state_dir()?.join("iface.meta");
-    if !meta_path.exists() {
-        clear_underlay_watch();
-        return Ok(NetworkRecoverResult {
-            changed: false,
-            message: "not connected".into(),
-            action: "noop".into(),
-        });
+fn tunnel_iface_up() -> bool {
+    std::path::Path::new("/sys/class/net/veritas0").exists()
+}
+
+fn set_underlay_reconnecting(on: bool) {
+    UNDERLAY_RECONNECTING.store(on, Ordering::SeqCst);
+}
+
+pub(crate) fn underlay_reconnecting() -> bool {
+    UNDERLAY_RECONNECTING.load(Ordering::SeqCst)
+}
+
+pub(crate) fn underlay_gave_up() -> bool {
+    UNDERLAY_GAVE_UP.load(Ordering::SeqCst)
+}
+
+fn show_reconnecting() {
+    if user_disconnected_now() {
+        return;
     }
+    set_underlay_reconnecting(true);
+    set_underlay_notice(RECONNECTING_NOTICE);
+}
 
-    let recorded = recorded_underlay_fingerprint();
-    let detected = detect_underlay_fingerprint();
-    let underlay_changed = underlay_fingerprint_diverged(&recorded, detected.as_deref());
-    let healthy = tunnel_is_healthy().unwrap_or(false);
-
-    if !underlay_changed {
-        let _ = note_divergence(false);
-        if healthy {
-            return Ok(NetworkRecoverResult {
-                changed: false,
-                message: "underlay unchanged; tunnel healthy".into(),
-                action: "noop".into(),
-            });
+fn follow_snapshot(tunnel_up: bool, present: bool, changed: bool) -> FollowInput {
+    let mut mem = follow_lock();
+    if !present {
+        mem.underlay_back_since = None;
+        mem.failed_attempts = 0;
+        mem.last_attempt = None;
+    } else if mem.underlay_back_since.is_none() {
+        mem.underlay_back_since = Some(Instant::now());
+    }
+    let diverged = tunnel_up && (!present || changed);
+    let diverged_for = if diverged {
+        mem.diverged_since.get_or_insert_with(Instant::now).elapsed()
+    } else {
+        if tunnel_up && present {
+            mem.diverged_since = None;
+            mem.released = false;
         }
-    } else if release_latched() {
-        return Ok(NetworkRecoverResult {
-            changed: false,
-            message: "underlay release already attempted".into(),
-            action: "released".into(),
-        });
-    } else if underlay_release_due(note_divergence(true).unwrap_or_default()) {
-        return Ok(release_diverged_tunnel());
+        Duration::ZERO
+    };
+    if tunnel_up && present && !changed {
+        mem.failed_attempts = 0;
+        mem.last_attempt = None;
+        mem.underlay_back_since = None;
     }
+    FollowInput {
+        user_disconnected: user_disconnected_now(),
+        tunnel_up,
+        underlay_present: present,
+        underlay_changed: changed,
+        diverged_for,
+        reconnect_wanted: reconnect_wanted(),
+        released: mem.released,
+        underlay_back_for: mem.underlay_back_since.map(|started| started.elapsed()),
+        failed_attempts: mem.failed_attempts,
+        since_last_attempt: mem.last_attempt.map(|started| started.elapsed()),
+        gave_up: mem.gave_up,
+    }
+}
 
+/// In-place re-path through the passwordless helper. DNS stays inside that helper.
+fn rebind_underlay(force: bool) -> Result<NetworkRecoverResult, String> {
     let owner = {
         let mut in_flight = REBIND_IN_FLIGHT.lock().map_err(|e| e.to_string())?;
         if rebind_lock_held(&in_flight) {
-            return Ok(NetworkRecoverResult {
-                changed: false,
-                message: "path rebind already in progress".into(),
-                action: "in_progress".into(),
-            });
+            return Ok(noop("in_progress", "path rebind already in progress"));
         }
         let mut last = LAST_REBIND.lock().map_err(|e| e.to_string())?;
         let now = Instant::now();
-        if !underlay_changed {
+        if !force {
             if let Some(t) = *last {
                 if now.duration_since(t) < REBIND_MIN_INTERVAL {
-                    return Ok(NetworkRecoverResult {
-                        changed: false,
-                        message: "path rebind throttled".into(),
-                        action: "throttle".into(),
-                    });
+                    return Ok(noop("throttle", "path rebind throttled"));
                 }
             }
         }
@@ -311,39 +450,159 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
         *in_flight = Some((now, token));
         token
     };
-
-    // Keep the same tunnel and follow the OS default route. A rebind that
-    // still has not landed after UNDERLAY_RELEASE_AFTER drops the kill switch
-    // without --purge so the internet works. That fallback is not a reconnect.
     let endpoint = refresh_endpoint_route_linux();
-    let dns = reapply_dns_from_saved();
     recovery_lock_release(owner);
-
-    let still = underlay_fingerprint_diverged(
-        &recorded_underlay_fingerprint(),
-        detect_underlay_fingerprint().as_deref(),
-    );
-    if !still {
-        let _ = note_divergence(false);
-    } else if underlay_release_due(note_divergence(true).unwrap_or_default()) {
-        return Ok(release_diverged_tunnel());
-    }
-
-    let mut msg = endpoint.message.clone();
-    if let Ok(dns) = dns {
-        if dns.refreshed {
-            msg.push_str("; DNS re-applied");
-        }
+    if endpoint.refreshed {
+        clear_clocks(&mut follow_lock());
+        set_underlay_reconnecting(false);
+        clear_underlay_notice();
     }
     Ok(NetworkRecoverResult {
-        changed: endpoint.refreshed || underlay_changed,
-        message: msg,
+        changed: endpoint.refreshed,
+        message: if endpoint.refreshed {
+            "path updated".into()
+        } else {
+            RECONNECTING_NOTICE.into()
+        },
         action: if endpoint.refreshed {
             "soft_path".into()
         } else {
             "soft_path_pending".into()
         },
     })
+}
+
+fn release_keep_intent() -> NetworkRecoverResult {
+    let cleared = soft_release_tunnel();
+    {
+        let mut mem = follow_lock();
+        mem.release_cleared = cleared;
+        if cleared {
+            mem.released = true;
+        }
+    }
+    show_reconnecting();
+    NetworkRecoverResult {
+        changed: true,
+        message: RECONNECTING_NOTICE.into(),
+        action: "released".into(),
+    }
+}
+
+fn rebuild_from_saved() -> NetworkRecoverResult {
+    if user_disconnected_now() {
+        return noop("idle", "user disconnected");
+    }
+    show_reconnecting();
+    let Some(_guard) = FlightGuard::enter(FlightKind::Rebind) else {
+        return noop("in_progress", "reconnect already in progress");
+    };
+    if user_disconnected_now() {
+        return noop("idle", "user disconnected");
+    }
+    match bring_up_from_saved_config_soft() {
+        Ok(_) => {
+            if user_disconnected_now() {
+                return noop("idle", "user disconnected");
+            }
+            let mut mem = follow_lock();
+            clear_clocks(&mut mem);
+            set_underlay_reconnecting(false);
+            clear_underlay_notice();
+            NetworkRecoverResult {
+                changed: true,
+                message: "reconnected".into(),
+                action: "rebuilt".into(),
+            }
+        }
+        Err(_) => {
+            let mut mem = follow_lock();
+            mem.failed_attempts = mem.failed_attempts.saturating_add(1);
+            mem.last_attempt = Some(Instant::now());
+            show_reconnecting();
+            NetworkRecoverResult {
+                changed: false,
+                message: RECONNECTING_NOTICE.into(),
+                action: "rebuild_failed".into(),
+            }
+        }
+    }
+}
+
+fn give_up_reconnect() -> NetworkRecoverResult {
+    let blocked = !follow_lock().release_cleared;
+    follow_lock().gave_up = true;
+    set_underlay_reconnecting(false);
+    UNDERLAY_GAVE_UP.store(true, Ordering::SeqCst);
+    let notice = if blocked {
+        UNDERLAY_BLOCKED_NOTICE
+    } else {
+        UNDERLAY_GAVE_UP_NOTICE
+    };
+    set_underlay_notice(notice);
+    NetworkRecoverResult {
+        changed: true,
+        message: notice.into(),
+        action: "gave_up".into(),
+    }
+}
+
+fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
+    if user_disconnected_now() {
+        set_underlay_reconnecting(false);
+        return Ok(noop("idle", "user disconnected"));
+    }
+
+    let tunnel_up = tunnel_iface_up();
+    let detected = detect_underlay_fingerprint();
+    let present = detected.is_some();
+    let recorded = if tunnel_up {
+        recorded_underlay_fingerprint()
+    } else {
+        String::new()
+    };
+    let changed = tunnel_up && underlay_fingerprint_diverged(&recorded, detected.as_deref());
+    let input = follow_snapshot(tunnel_up, present, changed);
+
+    match decide_underlay_follow(input) {
+        UnderlayFollow::Idle => {
+            if !input.gave_up {
+                set_underlay_reconnecting(false);
+                clear_underlay_notice();
+            }
+            if !input.gave_up
+                && tunnel_up
+                && present
+                && !changed
+                && !tunnel_is_healthy().unwrap_or(false)
+            {
+                return rebind_underlay(false);
+            }
+            Ok(noop("noop", "underlay unchanged"))
+        }
+        UnderlayFollow::Rebind => {
+            let result = rebind_underlay(true)?;
+            if !result.changed {
+                show_reconnecting();
+            }
+            Ok(result)
+        }
+        UnderlayFollow::Wait => {
+            show_reconnecting();
+            if tunnel_up {
+                let result = rebind_underlay(true)?;
+                if result.changed {
+                    set_underlay_reconnecting(false);
+                    clear_underlay_notice();
+                }
+                return Ok(result);
+            }
+            Ok(noop("wait", RECONNECTING_NOTICE))
+        }
+        UnderlayFollow::ReleaseKeepIntent => Ok(release_keep_intent()),
+        UnderlayFollow::Rebuild => Ok(rebuild_from_saved()),
+        UnderlayFollow::GiveUp => Ok(give_up_reconnect()),
+    }
 }
 
 /// One privileged helper at a time. Teardown and recover-close coalesce so a
@@ -490,10 +749,29 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        recovery_lock_abandon, recovery_lock_acquire, recovery_lock_acquire_owned,
-        recovery_lock_release, recovery_lock_release_owned, underlay_fingerprint_diverged,
-        underlay_release_due, FlightGuard, FlightKind, UNDERLAY_RELEASE_AFTER,
+        decide_underlay_follow, recovery_lock_abandon, recovery_lock_acquire,
+        recovery_lock_acquire_owned, recovery_lock_release, recovery_lock_release_owned,
+        reconnect_backoff, underlay_fingerprint_diverged, underlay_release_due, FlightGuard,
+        FlightKind, FollowInput, UnderlayFollow, UNDERLAY_GIVE_UP_AFTER, UNDERLAY_RELEASE_AFTER,
     };
+
+    fn follow(mut set: impl FnMut(&mut FollowInput)) -> UnderlayFollow {
+        let mut input = FollowInput {
+            user_disconnected: false,
+            tunnel_up: true,
+            underlay_present: true,
+            underlay_changed: false,
+            diverged_for: Duration::ZERO,
+            reconnect_wanted: true,
+            released: false,
+            underlay_back_for: None,
+            failed_attempts: 0,
+            since_last_attempt: None,
+            gave_up: false,
+        };
+        set(&mut input);
+        decide_underlay_follow(input)
+    }
 
     #[test]
     fn underlay_switch_retries_then_releases() {
@@ -509,6 +787,109 @@ mod tests {
         assert!(!underlay_release_due(Duration::from_secs(17)));
         assert!(underlay_release_due(Duration::from_secs(18)));
         assert!(underlay_release_due(UNDERLAY_RELEASE_AFTER));
+    }
+
+    #[test]
+    fn underlay_loss_then_return_reconnects() {
+        assert_eq!(
+            follow(|input| {
+                input.underlay_present = false;
+                input.underlay_changed = true;
+                input.diverged_for = Duration::ZERO;
+            }),
+            UnderlayFollow::Wait
+        );
+        assert_eq!(
+            follow(|input| {
+                input.underlay_present = false;
+                input.underlay_changed = true;
+                input.diverged_for = Duration::from_secs(18);
+            }),
+            UnderlayFollow::ReleaseKeepIntent
+        );
+        assert_eq!(
+            follow(|input| {
+                input.tunnel_up = false;
+                input.underlay_present = false;
+                input.released = true;
+            }),
+            UnderlayFollow::Wait,
+            "a released tunnel keeps reconnect intent while the underlay is gone"
+        );
+        assert_eq!(
+            follow(|input| {
+                input.tunnel_up = false;
+                input.underlay_present = true;
+                input.released = true;
+                input.underlay_back_for = Some(Duration::from_secs(1));
+                input.failed_attempts = 0;
+            }),
+            UnderlayFollow::Rebuild
+        );
+        assert_eq!(reconnect_backoff(1), Duration::from_secs(2));
+        assert_eq!(
+            follow(|input| {
+                input.tunnel_up = false;
+                input.underlay_present = true;
+                input.underlay_back_for = Some(Duration::from_secs(10));
+                input.failed_attempts = 1;
+                input.since_last_attempt = Some(Duration::from_secs(1));
+            }),
+            UnderlayFollow::Wait
+        );
+        assert_eq!(
+            follow(|input| {
+                input.tunnel_up = false;
+                input.underlay_present = true;
+                input.underlay_back_for = Some(UNDERLAY_GIVE_UP_AFTER);
+                input.failed_attempts = 4;
+                input.since_last_attempt = Some(Duration::from_secs(30));
+            }),
+            UnderlayFollow::GiveUp
+        );
+    }
+
+    #[test]
+    fn wired_to_wifi_rebinds_while_both_are_up() {
+        let decision = follow(|input| {
+            input.underlay_present = true;
+            input.underlay_changed = true;
+            input.diverged_for = Duration::from_secs(60);
+        });
+        assert_eq!(decision, UnderlayFollow::Rebind);
+        assert_ne!(decision, UnderlayFollow::ReleaseKeepIntent);
+    }
+
+    #[test]
+    fn user_disconnect_does_not_auto_reconnect() {
+        assert_eq!(
+            follow(|input| {
+                input.user_disconnected = true;
+                input.tunnel_up = false;
+                input.underlay_present = true;
+                input.reconnect_wanted = true;
+                input.underlay_back_for = Some(Duration::from_secs(5));
+            }),
+            UnderlayFollow::Idle
+        );
+        assert_eq!(
+            follow(|input| {
+                input.tunnel_up = false;
+                input.underlay_present = true;
+                input.reconnect_wanted = false;
+                input.underlay_back_for = Some(Duration::ZERO);
+            }),
+            UnderlayFollow::Idle
+        );
+    }
+
+    #[test]
+    fn resolvectl_is_not_spawned_unprivileged() {
+        let src = include_str!("lib.rs");
+        assert!(
+            !src.contains("Command::new(\"resolvectl\")"),
+            "dns, domain, and default-route must run inside the root helper"
+        );
     }
 
     #[test]

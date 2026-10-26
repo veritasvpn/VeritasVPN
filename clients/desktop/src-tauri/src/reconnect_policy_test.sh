@@ -609,6 +609,21 @@ fi
 rm -f "$route_log"
 unset -f ip
 
+if grep -q 'Command::new("resolvectl")' "$lib"; then
+  fail "resolvectl is invoked from the desktop process"
+fi
+if ! grep -q 'mark_reconnect_wanted' "$lib"; then
+  fail "connect does not keep reconnect intent"
+fi
+if ! grep -q 'clear_reconnect_wanted' "$lib"; then
+  fail "disconnect does not clear reconnect intent"
+fi
+# clear_reconnect_wanted sits inside `if !soft`, the intentional disconnect.
+clear_line="$(grep -n 'clear_reconnect_wanted' "$lib" | head -1 | cut -d: -f1)"
+if ! awk -v n="$clear_line" 'NR>=n-8 && NR<=n && /if !soft/ { found=1 } END { exit !found }' "$lib"; then
+  fail "reconnect intent is cleared outside an intentional disconnect"
+fi
+
 path_section="$(sed -n "/<<'SOFT_PATH'/,/^SOFT_PATH$/p" "$lib")"
 follow_line="$(printf '%s\n' "$path_section" | awk '/follow_underlay_route/{print NR; exit}')"
 fresh_line="$(printf '%s\n' "$path_section" | awk '/maybe_fresh_lines/{print NR; exit}')"

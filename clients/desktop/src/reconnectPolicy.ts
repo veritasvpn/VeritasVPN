@@ -9,6 +9,11 @@ export function classifyPeerCheck(status: number | null | undefined, networkErro
   return "network";
 }
 
+/** "Reconnecting…" keeps the session. "Tap to reconnect" means auto-reconnect gave up. */
+export function underlayNoticeKeepsSession(notice: string | null | undefined): boolean {
+  return /^reconnecting\b/i.test((notice ?? "").trim());
+}
+
 /** Recovery opens the API exception on every try. Stop after this many. */
 export const RECOVERY_MAX_ATTEMPTS = 3;
 

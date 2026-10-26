@@ -296,4 +296,6 @@ for dir in /var/lib/veritasvpn/state/[0-9]*; do
 done
 shopt -u nullglob
 
+rm -f /var/lib/veritasvpn/reconnect.sh
+
 exit 0

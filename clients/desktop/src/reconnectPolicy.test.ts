@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyPeerCheck,
   displayStatus,
+  underlayNoticeKeepsSession,
   peerGoneAction,
   peerGoneLatchHeld,
   recoveryRetryAction,
@@ -101,5 +102,18 @@ describe("status text", () => {
     expect(displayStatus("An active subscription is required. Open Account to subscribe.")).toBe(
       "An active subscription is required. Open Account to subscribe.",
     );
+  });
+
+  it("keeps the session on Reconnecting and only gives up on the tap message", () => {
+    expect(underlayNoticeKeepsSession("Reconnecting…")).toBe(true);
+    expect(underlayNoticeKeepsSession("reconnecting")).toBe(true);
+    expect(underlayNoticeKeepsSession("Tap to reconnect")).toBe(false);
+    expect(
+      underlayNoticeKeepsSession(
+        "The network changed and the VPN couldn't follow it. Internet is back. Tap to reconnect.",
+      ),
+    ).toBe(false);
+    expect(underlayNoticeKeepsSession("")).toBe(false);
+    expect(underlayNoticeKeepsSession(null)).toBe(false);
   });
 });

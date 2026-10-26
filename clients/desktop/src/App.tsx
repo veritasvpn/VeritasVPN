@@ -31,7 +31,7 @@ import {
   type PurchaseHistoryItem,
 } from "./billing";
 import { AUTH_API } from "./config";
-import { classifyPeerCheck, displayStatus, peerGoneAction, peerGoneLatchHeld, recoveryRetryAction, tunnelAddress } from "./reconnectPolicy";
+import { classifyPeerCheck, displayStatus, peerGoneAction, peerGoneLatchHeld, recoveryRetryAction, tunnelAddress, underlayNoticeKeepsSession } from "./reconnectPolicy";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
 import {
   advanceBlocked,
@@ -178,6 +178,8 @@ interface WgTransferStats {
   last_handshake_sec: number;
   interface_up: boolean;
   underlay_notice?: string;
+  underlay_reconnecting?: boolean;
+  underlay_gave_up?: boolean;
 }
 
 interface PeerInfo {
@@ -835,7 +837,8 @@ function HomeStage({
   onDismissStatus: () => void;
   restorePending: boolean;
 }) {
-  const phase: HeroPhase = connected
+  const reconnectHold = /^reconnecting/i.test(statusMsg);
+  const phase: HeroPhase = connected && !reconnectHold
     ? "protected"
     : connecting
       ? "connecting"
@@ -844,21 +847,21 @@ function HomeStage({
         : subscriptionActive
           ? "ready"
           : "upsell";
-  const onClick = connecting || !subscriptionChecked || (restorePending && !connected)
+  const onClick = (connecting && !reconnectHold) || !subscriptionChecked || (restorePending && !connected)
     ? null
-    : connected
+    : connected || reconnectHold
       ? onDisconnect
       : subscriptionActive
         ? onConnect
         : onGetPremium;
   const copy = connectingCopy(transport);
   const label = transportLabel(transport);
-  const hideStatus = connecting && /^(connecting|reconnecting|creating secure)/i.test(statusMsg);
+  const hideStatus = reconnectHold || (connecting && /^(connecting|creating secure)/i.test(statusMsg));
   return (
     <section className="home-stage">
       {(connected || connecting) && (
         <div className="home-status">
-          {connected ? (
+          {connected && !reconnectHold ? (
             <>
               <p className="home-kicker">CONNECTION SECURED</p>
               {label && (
@@ -867,8 +870,8 @@ function HomeStage({
             </>
           ) : (
             <>
-              <p className="home-kicker is-connecting">{copy.title}</p>
-              <p className="home-status-body">{copy.body}</p>
+              <p className="home-kicker is-connecting">{reconnectHold ? "Reconnecting…" : copy.title}</p>
+              <p className="home-status-body">{reconnectHold ? "The network changed. The VPN will reconnect on its own." : copy.body}</p>
             </>
           )}
         </div>
@@ -888,7 +891,7 @@ function HomeStage({
           </button>
         </div>
       )}
-      {connected && wgStats && (
+      {connected && wgStats && !reconnectHold && (
         <div className="live-stats" aria-label="Live tunnel statistics">
           <span className="live-stats-label">LIVE STATS</span>
           <div className="live-stats-row">
@@ -1938,9 +1941,12 @@ function App() {
       try {
         const stats = await invoke<WgTransferStats>("wireguard_stats");
         if (cancelled) return;
+        if (userDisconnectedRef.current || disconnectInFlightRef.current) return;
         const notice = (stats.underlay_notice || "").trim();
-        if (notice) {
-          const shown = displayStatus(notice);
+        const gaveUp = stats.underlay_gave_up === true;
+        const keepSession = stats.underlay_reconnecting === true || underlayNoticeKeepsSession(notice);
+        if (gaveUp || (notice && !keepSession)) {
+          const shown = displayStatus(notice || "Tap to reconnect");
           const oldPeer = peerIdRef.current;
           userDisconnectedRef.current = false;
           reconnectingRef.current = false;
@@ -1958,6 +1964,21 @@ function App() {
           setStatusMsg(shown);
           if (oldPeer) void deletePeer(oldPeer);
           return;
+        }
+        if (keepSession) {
+          userDisconnectedRef.current = false;
+          reconnectingRef.current = true;
+          setReconnecting(true);
+          setStatusSticky(false);
+          setStatusMsg("Reconnecting…");
+          setWgStats(stats);
+          return;
+        }
+        if (reconnectingRef.current) {
+          reconnectingRef.current = false;
+          setReconnecting(false);
+          setStatusSticky(false);
+          setStatusMsg((current) => (/^reconnecting/i.test(current) ? "" : current));
         }
         setWgStats(stats);
 
