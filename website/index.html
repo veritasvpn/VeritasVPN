@@ -10,8 +10,15 @@
     <meta property="og:description" content="WireGuard from Paraguay plus Veritas Shield DNS security. Private Account IDs. Bitcoin subscriptions. Source-available under BSL.">
     <meta property="og:url" content="https://veritasvpn.cloud/">
     <meta name="twitter:card" content="summary_large_image">
+    <meta property="og:image" content="https://veritasvpn.cloud/assets/og-image.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="VeritasVPN">
+    <meta name="twitter:image" content="https://veritasvpn.cloud/assets/og-image.png">
+    <meta name="twitter:image:alt" content="VeritasVPN">
     <link rel="stylesheet" href="css/style-typography1.css">
-    <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
 </head>
 <body class="homepage-premium">
     <a class="skip-link" href="#main">Skip to content</a>
@@ -25,7 +32,7 @@
                 <li><a href="/learn/">Learn</a></li>
                 <li><a href="/check/">Check</a></li>
                 <li><a href="/#pricing">Pricing</a></li>
-                <li><a href="/downloads.html">Download</a></li>
+                <li><a href="/downloads">Download</a></li>
                 <li><a href="/#faq">FAQ</a></li>
       </ul>
       <div class="nav-auth">
@@ -126,7 +133,7 @@
                     <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3zM9 12l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="reality-label">Protocol</span><h3>WireGuard tunnels</h3><p>Linux and Android establish real encrypted WireGuard peers on the live Paraguay node today. Full-device Veritas Shield applies to WireGuard clients—see <a href="#dns">Veritas Shield</a>.</p></div></article>
                     <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 13a4 4 0 100-8 4 4 0 000 8zM5 21a7 7 0 0114 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><span class="reality-label">Identity</span><h3>Minimal identity</h3><p>Create a private Account ID without an email, or choose verified email access. An Account ID reduces required disclosure; it does not by itself make all activity anonymous, and it cannot be recovered if lost.</p></div></article>
                     <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M8 7h8M6 12h12M9 17h6M12 3v18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><span class="reality-label">Plan</span><h3>One honest price</h3><p>$3 per month gives you the complete service on up to five devices. No feature maze and no artificially limited free tier.</p></div></article>
-                    <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 12s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5zM4 4l16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><span class="reality-label">Privacy</span><h3>No browsing history</h3><p>We do not retain destinations, DNS contents, browsing activity, or your real IP when you connect. Account, billing, and peer metadata is documented in our <a href="privacy.html">Privacy Policy</a>.</p></div></article>
+                    <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 12s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5zM4 4l16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><div><span class="reality-label">Privacy</span><h3>No browsing history</h3><p>We do not retain destinations, DNS contents, browsing activity, or your real IP when you connect. Account, billing, and peer metadata is documented in our <a href="/privacy">Privacy Policy</a>.</p></div></article>
                     <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M14 5l-4 14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="reality-label">Source</span><h3>Code you can inspect</h3><p>Clients, agent, and infrastructure are published under Business Source License 1.1. Read the implementation and follow every change.</p></div></article>
                     <article class="reality-item"><span class="reality-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M5 19L19 5M8 5h11v11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="reality-label">Roadmap</span><h3>Expanding transparently</h3><p>New locations and features appear only after they ship. Follow our <a href="/canary.txt">warrant canary</a> and public repository for current status.</p></div></article>
                 </div>
@@ -168,7 +175,7 @@
                             <svg viewBox="0 0 24 24" fill="none"><path d="M4 12s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5zM4 4l16 16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
                         </div>
                         <h3>No query logs</h3>
-                        <p>We keep aggregate block counts and list freshness. We do not keep a DNS query log. A blocked name is held for about two minutes so the app can show a notice, then deleted. Upstream DoH resolvers still see hostnames we forward. Custom DoH remains a residual bypass. Details in the <a href="privacy.html">Privacy Policy</a> and <a href="/learn/what-is-veritas-shield.html">Learn</a>.</p>
+                        <p>We keep aggregate block counts and list freshness. We do not keep a DNS query log. A blocked name is held for about two minutes so the app can show a notice, then deleted. Upstream DoH resolvers still see hostnames we forward. Custom DoH remains a residual bypass. Details in the <a href="/privacy">Privacy Policy</a> and <a href="/learn/what-is-veritas-shield">Learn</a>.</p>
                     </article>
                 </div>
                 <div class="how-it-works-foot">
@@ -256,7 +263,7 @@
                     <article class="transparency-row"><span class="transparency-index">01</span><span class="transparency-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3z" stroke="currentColor" stroke-width="1.8"/></svg></span><div><span class="transparency-status">Published</span><h3>Warrant canary</h3><p>A public statement for legal-request transparency. Read its current status directly—silence or unexplained changes should be treated seriously.</p></div><a href="/canary.txt">View canary <span>→</span></a></article>
                     <article class="transparency-row"><span class="transparency-index">02</span><span class="transparency-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M14 5l-4 14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="transparency-status">Public repository</span><h3>Source under BSL 1.1</h3><p>Inspect the clients, server agent, and infrastructure. Commercial competing use is restricted until the license Change Date.</p></div><a href="https://github.com/veritasvpn/VeritasVPN" target="_blank" rel="noopener">Browse GitHub <span>→</span></a></article>
                     <article class="transparency-row"><span class="transparency-index">03</span><span class="transparency-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M5 5h14v11H9l-4 4V5zM9 9h6M9 12h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="transparency-status is-pending">Audit pending</span><h3>Open issues and reviews</h3><p>No independent audit report is published yet. Review the code, report problems publicly, and track the work without marketing spin.</p></div><a href="https://github.com/veritasvpn/VeritasVPN/issues" target="_blank" rel="noopener">Open issues <span>→</span></a></article>
-                    <article class="transparency-row"><span class="transparency-index">04</span><span class="transparency-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="transparency-status">Published</span><h3>What we store</h3><p>A plain account of the connecting IP, logs, backups, DNS filtering, and what we could hand over. It follows the code, and it states the limits.</p></div><a href="/transparency.html">Read the report <span>→</span></a></article>
+                    <article class="transparency-row"><span class="transparency-index">04</span><span class="transparency-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><span class="transparency-status">Published</span><h3>What we store</h3><p>A plain account of the connecting IP, logs, backups, DNS filtering, and what we could hand over. It follows the code, and it states the limits.</p></div><a href="/transparency">Read the report <span>→</span></a></article>
                 </div>
             </div>
         </div>
@@ -265,12 +272,12 @@
     <section class="section downloads downloads-teaser" id="downloads">
         <div class="container">
             <div class="downloads-shell reveal">
-                <div class="section-header downloads-header"><div><span class="section-kicker">Available clients</span><h2>Protection wherever you connect.</h2></div><div><p>Choose the client that fits your device. Every available app connects to the same VeritasVPN service in Paraguay.</p><a href="downloads.html" class="text-link">Compare all clients →</a></div></div>
+                <div class="section-header downloads-header"><div><span class="section-kicker">Available clients</span><h2>Protection wherever you connect.</h2></div><div><p>Choose the client that fits your device. Every available app connects to the same VeritasVPN service in Paraguay.</p><a href="/downloads" class="text-link">Compare all clients →</a></div></div>
                 <div class="download-featured">
-                    <article class="download-featured-card"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-android-veritas.svg" alt=""></span><h3>Android</h3><p>Full-device WireGuard with Veritas Shield—malware, phishing, scam, crypto, and tracker blocking on the Paraguay node.</p><span class="download-card-action download-card-action--play"><a class="play-badge" href="https://play.google.com/store/apps/details?id=cloud.veritasvpn" target="_blank" rel="noopener"><img src="assets/google-play-badge.png" alt="Get it on Google Play" width="646" height="250"></a><a class="install-notes-link" href="install/android.html">Installation steps</a></span></article>
-                    <a class="download-featured-card" href="install/linux.html"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-linux-veritas.svg" alt=""></span><h3>Linux</h3><p>Native WireGuard client with Premium Veritas Shield toggles for malicious sites, trackers, ads, and adult sites.</p><span class="download-card-action">Get Linux <b>→</b></span></a>
+                    <article class="download-featured-card"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-android-veritas.svg" alt=""></span><h3>Android</h3><p>Full-device WireGuard with Veritas Shield—malware, phishing, scam, crypto, and tracker blocking on the Paraguay node.</p><span class="download-card-action download-card-action--play"><a class="play-badge" href="https://play.google.com/store/apps/details?id=cloud.veritasvpn" target="_blank" rel="noopener"><img src="assets/google-play-badge.png" alt="Get it on Google Play" width="646" height="250"></a><a class="install-notes-link" href="/install/android">Installation steps</a></span></article>
+                    <a class="download-featured-card" href="/install/linux"><span class="download-featured-badge is-live"><i></i>Available now</span><span class="download-featured-icon"><img src="assets/icon-linux-veritas.svg" alt=""></span><h3>Linux</h3><p>Native WireGuard client with Premium Veritas Shield toggles for malicious sites, trackers, ads, and adult sites.</p><span class="download-card-action">Get Linux <b>→</b></span></a>
                 </div>
-                <div class="downloads-platform-note"><span><i></i>2 clients available today</span><span>Windows and macOS are coming soon.</span></div>
+                <div class="downloads-platform-note"><span><i></i>2 clients available today</span><span>Windows, macOS, and the Chrome extension are coming soon.</span></div>
             </div>
         </div>
     </section>
@@ -278,15 +285,15 @@
     <section class="section faq" id="faq">
         <div class="container">
             <div class="faq-shell reveal">
-                <aside class="faq-intro"><span class="section-kicker">FAQ</span><h2>Questions,<br>answered clearly.</h2><p>Everything important about our infrastructure, privacy claims, platforms, and roadmap—without fine-print evasions.</p><div class="faq-help"><span>Still have a question?</span><a href="/support.html">Support answers</a><a href="https://github.com/veritasvpn/VeritasVPN/issues" target="_blank" rel="noopener">Ask it publicly →</a></div></aside>
+                <aside class="faq-intro"><span class="section-kicker">FAQ</span><h2>Questions,<br>answered clearly.</h2><p>Everything important about our infrastructure, privacy claims, platforms, and roadmap—without fine-print evasions.</p><div class="faq-help"><span>Still have a question?</span><a href="/support">Support answers</a><a href="https://github.com/veritasvpn/VeritasVPN/issues" target="_blank" rel="noopener">Ask it publicly →</a></div></aside>
                 <div class="faq-list">
                     <div class="faq-item"><button type="button" class="faq-question" id="faq-q-01" aria-expanded="false" aria-controls="faq-a-01"><span><b>01</b>Where are your servers?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-01" role="region" aria-labelledby="faq-q-01"><p>One live WireGuard egress in Paraguay today. We add locations to the network map only after they are online and tested.</p></div></div>
                     <div class="faq-item"><button type="button" class="faq-question" id="faq-q-02" aria-expanded="false" aria-controls="faq-a-02"><span><b>02</b>How is VeritasVPN different?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-02" role="region" aria-labelledby="faq-q-02"><p>WireGuard connections with Veritas Shield, email accounts or an Account ID with no email, Bitcoin on the website and Linux app, Google Play Billing in the Play app, and public source under BSL 1.1. We do not advertise infrastructure or audits that do not exist.</p></div></div>
-                    <div class="faq-item"><button type="button" class="faq-question" id="faq-q-03" aria-expanded="false" aria-controls="faq-a-03"><span><b>03</b>What connection data do you store?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-03" role="region" aria-labelledby="faq-q-03"><p>We do not store browsing history, a DNS query log, destination traffic, or your real public IP when you connect. We do store account data (including email if you use it), billing records, and WireGuard peer metadata such as device details and last handshake time. Veritas Shield keeps aggregate counts, tunnel-IP session totals, and account category counts with no domain names. A blocked name is held about two minutes, keyed by the tunnel IP, so the app can show a notice. Upstream DoH resolvers see hostnames we forward. See the <a href="privacy.html">Privacy Policy</a>.</p></div></div>
-                    <div class="faq-item"><button type="button" class="faq-question" id="faq-q-04" aria-expanded="false" aria-controls="faq-a-04"><span><b>04</b>What is Veritas Shield?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-04" role="region" aria-labelledby="faq-q-04"><p>Veritas Shield is our in-tunnel DNS security layer (always on while connected on Android and Linux). Lookups go to <code>10.0.0.1</code>, then over DNS-over-HTTPS for names we allow. Refreshed feeds can NXDOMAIN malware, phishing, scam, cryptomining, and tracker hostnames. Premium toggles control those lists separately: malicious sites and trackers start on, and known ad domains and adult domains stay off until you turn them on. This is DNS blocking, not full-page ad removal or in-page tracker removal. Ordinary DNS, DNS-over-TLS, and well-known public DoH resolvers are blocked so apps cannot easily bypass Shield; uncommon custom DoH remains a residual risk. Upstream resolvers still see hostnames we forward. The app shows a session total for this tunnel and account totals for today and this week by category, without a query log. A blocked name is held about two minutes so the app can show a notice, keyed by the tunnel IP, not your public WAN IP. This is DNS filtering, not antivirus. Probe with <code>https://dns-protection-test.veritasvpn.invalid</code> while connected, read <a href="/learn/what-is-veritas-shield.html">What is Veritas Shield?</a>, or try our free <a href="/check/dns.html">DNS leak test</a>.</p></div></div>
+                    <div class="faq-item"><button type="button" class="faq-question" id="faq-q-03" aria-expanded="false" aria-controls="faq-a-03"><span><b>03</b>What connection data do you store?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-03" role="region" aria-labelledby="faq-q-03"><p>We do not store browsing history, a DNS query log, destination traffic, or your real public IP when you connect. We do store account data (including email if you use it), billing records, and WireGuard peer metadata such as device details and last handshake time. Veritas Shield keeps aggregate counts, tunnel-IP session totals, and account category counts with no domain names. A blocked name is held about two minutes, keyed by the tunnel IP, so the app can show a notice. Upstream DoH resolvers see hostnames we forward. See the <a href="/privacy">Privacy Policy</a>.</p></div></div>
+                    <div class="faq-item"><button type="button" class="faq-question" id="faq-q-04" aria-expanded="false" aria-controls="faq-a-04"><span><b>04</b>What is Veritas Shield?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-04" role="region" aria-labelledby="faq-q-04"><p>Veritas Shield is our in-tunnel DNS security layer (always on while connected on Android and Linux). Lookups go to <code>10.0.0.1</code>, then over DNS-over-HTTPS for names we allow. Refreshed feeds can NXDOMAIN malware, phishing, scam, cryptomining, and tracker hostnames. Premium toggles control those lists separately: malicious sites and trackers start on, and known ad domains and adult domains stay off until you turn them on. This is DNS blocking, not full-page ad removal or in-page tracker removal. Ordinary DNS, DNS-over-TLS, and well-known public DoH resolvers are blocked so apps cannot easily bypass Shield; uncommon custom DoH remains a residual risk. Upstream resolvers still see hostnames we forward. The app shows a session total for this tunnel and account totals for today and this week by category, without a query log. A blocked name is held about two minutes so the app can show a notice, keyed by the tunnel IP, not your public WAN IP. This is DNS filtering, not antivirus. Probe with <code>https://dns-protection-test.veritasvpn.invalid</code> while connected, read <a href="/learn/what-is-veritas-shield">What is Veritas Shield?</a>, or try our free <a href="/check/dns">DNS leak test</a>.</p></div></div>
                     <div class="faq-item"><button type="button" class="faq-question" id="faq-q-05" aria-expanded="false" aria-controls="faq-a-05"><span><b>05</b>Is VeritasVPN open source?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-05" role="region" aria-labelledby="faq-q-05"><p>The source is public under Business Source License 1.1. It is source-available rather than OSI open source, with competing commercial use restricted until the Change Date.</p></div></div>
                     <div class="faq-item"><button type="button" class="faq-question" id="faq-q-06" aria-expanded="false" aria-controls="faq-a-06"><span><b>06</b>Which platforms work today?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-06" role="region" aria-labelledby="faq-q-06"><p>Android and Linux are available now. Windows and macOS remain marked Coming soon until their production clients are ready.</p></div></div>
-                    <div class="faq-item"><button type="button" class="faq-question" id="faq-q-07" aria-expanded="false" aria-controls="faq-a-07"><span><b>07</b>Do you have a kill switch?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-07" role="region" aria-labelledby="faq-q-07"><p>A kill switch blocks clear-network traffic if protection fails. Linux uses firewall and fail-closed routes while connected. On Android, the first Connect requests VPN permission so VeritasVPN appears in system VPN settings, then requires Always-on VPN plus Block connections without VPN before the tunnel starts (apps cannot force those toggles on; the app keeps the tunnel blocked and opens system VPN settings until both are on; no in-app off option). Auto-reconnect is always on for Android and Linux. The current VPN egress is IPv4-only, so managed full-device clients route or block IPv6 while connected instead of allowing an IPv6 bypass. Coverage is platform-specific. Paste-ready steps: <a href="/support.html#android-always-on">Android Always-on</a> and <a href="/support.html#chrome-vs-full-tunnel">Chrome versus a full tunnel</a>.</p></div></div>
+                    <div class="faq-item"><button type="button" class="faq-question" id="faq-q-07" aria-expanded="false" aria-controls="faq-a-07"><span><b>07</b>Do you have a kill switch?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-07" role="region" aria-labelledby="faq-q-07"><p>A kill switch blocks clear-network traffic if protection fails. Linux uses firewall and fail-closed routes while connected. On Android, the first Connect requests VPN permission so VeritasVPN appears in system VPN settings, then requires Always-on VPN plus Block connections without VPN before the tunnel starts (apps cannot force those toggles on; the app keeps the tunnel blocked and opens system VPN settings until both are on; no in-app off option). Auto-reconnect is always on for Android and Linux. The current VPN egress is IPv4-only, so managed full-device clients route or block IPv6 while connected instead of allowing an IPv6 bypass. Coverage is platform-specific. The Chrome extension is not yet available. Paste-ready steps: <a href="/support#android-always-on">Android Always-on</a> and <a href="/support#chrome-vs-full-tunnel">Chrome versus a full tunnel</a>.</p></div></div>
                     <div class="faq-item"><button type="button" class="faq-question" id="faq-q-08" aria-expanded="false" aria-controls="faq-a-08"><span><b>08</b>Do you support split tunneling?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-08" role="region" aria-labelledby="faq-q-08"><p>Yes on Android and Linux. You can use full-tunnel mode, or exclude private LAN ranges so local devices (printers, NAS) stay reachable. Android also supports bypassing selected apps. Reconnect after changing split-tunnel settings.</p></div></div>
                     <div class="faq-item"><button type="button" class="faq-question" id="faq-q-10" aria-expanded="false" aria-controls="faq-a-10"><span><b>10</b>What is Stealth mode?</span><svg width="20" height="20" viewBox="0 0 20 20" fill="none" class="faq-icon" aria-hidden="true"><path d="M5 7.5l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="faq-answer" id="faq-a-10" role="region" aria-labelledby="faq-q-10"><p>Stealth wraps WireGuard inside a TLS WebSocket on port 443 so it looks more like ordinary HTTPS. Use it on networks that block or throttle plain WireGuard UDP. On Android, Auto (the default) tries UDP first and switches to Stealth if that handshake does not complete. UDP only and Stealth always are in connection settings; reconnect to apply. On Linux, open Settings → Stealth and choose Auto, UDP only, or Stealth always, then reconnect from Home. Tap the lock to connect. There is no separate Connect button. This helps on restrictive networks; it is not a claim of undetectability.</p></div></div>
                 </div>
@@ -307,59 +314,59 @@
     </main>
 
     <footer class="footer">
-        <div class="container">
-            <div class="footer-grid">
-                <div class="footer-brand">
-                    <a href="/" class="logo">
-                        <img src="assets/logo-mark.png" alt="" class="logo-mark" width="40" height="40">
-                        <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+    <div class="container">
+        <div class="footer-grid">
+            <div class="footer-brand">
+                <a href="/" class="logo">
+                    <img src="/assets/logo-mark.png" alt="" class="logo-mark" width="40" height="40">
+                    <span class="logo-text">Veritas<span class="logo-highlight">VPN</span></span>
+                </a>
+                <p>The truth about online privacy. WireGuard from Paraguay plus Veritas Shield. Source-available under BSL.</p>
+                <div class="footer-social">
+                    <a href="https://github.com/veritasvpn/VeritasVPN" target="_blank" rel="noopener" aria-label="GitHub">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
                     </a>
-                    <p>The truth about online privacy. WireGuard from Paraguay plus Veritas Shield. Source-available under BSL.</p>
-                    <div class="footer-social">
-                        <a href="https://github.com/veritasvpn/VeritasVPN" target="_blank" rel="noopener" aria-label="GitHub">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-                        </a>
-                    </div>
-                </div>
-                <div class="footer-links">
-                    <h4>Product</h4>
-                    <ul>
-                        <li><a href="/learn/">Learn</a></li>
-                        <li><a href="/check/">Privacy check</a></li>
-                        <li><a href="#network">Network</a></li>
-                        <li><a href="#dns">Veritas Shield</a></li>
-                        <li><a href="#pricing">Pricing</a></li>
-                        <li><a href="downloads.html">Download</a></li>
-                        <li><a href="downloads.html">Install guides</a></li>
-                    </ul>
-                </div>
-                <div class="footer-links">
-                    <h4>Trust</h4>
-                    <ul>
-                        <li><a href="/transparency.html">Transparency</a></li>
-                        <li><a href="/canary.txt">Warrant Canary</a></li>
-                        <li><a href="https://github.com/veritasvpn/VeritasVPN" target="_blank" rel="noopener">Source (BSL)</a></li>
-                        <li><a href="contact.html">Contact</a></li>
-                        <li><a href="/support.html">Support</a></li>
-                    </ul>
-                </div>
-                <div class="footer-links">
-                    <h4>Legal</h4>
-                    <ul>
-                        <li><a href="privacy.html">Privacy Policy</a></li>
-                        <li><a href="/transparency.html">Transparency</a></li>
-                        <li><a href="terms.html">Terms of Service</a></li>
-                        <li><a href="cookies.html">Cookie Policy</a></li>
-                        <li><a href="contact.html">Contact</a></li>
-                    </ul>
                 </div>
             </div>
-            <div class="footer-bottom">
-                <p>&copy; 2026 VeritasVPN. All rights reserved.</p>
-                <p class="footer-tagline">Paraguay · WireGuard · BSL on GitHub</p>
+            <div class="footer-links">
+                <h4>Product</h4>
+                <ul>
+                    <li><a href="/learn/">Learn</a></li>
+                    <li><a href="/check/">Privacy check</a></li>
+                    <li><a href="/#network">Network</a></li>
+                    <li><a href="/#dns">Veritas Shield</a></li>
+                    <li><a href="/#pricing">Pricing</a></li>
+                    <li><a href="/downloads">Download</a></li>
+                    <li><a href="/downloads">Install guides</a></li>
+                </ul>
+            </div>
+            <div class="footer-links">
+                <h4>Trust</h4>
+                <ul>
+                    <li><a href="/transparency">Transparency</a></li>
+                    <li><a href="/canary.txt">Warrant Canary</a></li>
+                    <li><a href="https://github.com/veritasvpn/VeritasVPN" target="_blank" rel="noopener">Source (BSL)</a></li>
+                    <li><a href="/contact">Contact</a></li>
+                    <li><a href="/support">Support</a></li>
+                </ul>
+            </div>
+            <div class="footer-links">
+                <h4>Legal</h4>
+                <ul>
+                    <li><a href="/privacy">Privacy</a></li>
+                    <li><a href="/terms">Terms</a></li>
+                    <li><a href="/transparency">Transparency</a></li>
+                    <li><a href="/cookies">Cookies</a></li>
+                    <li><a href="/contact">Contact</a></li>
+                </ul>
             </div>
         </div>
-    </footer>
+        <div class="footer-bottom">
+            <p>&copy; 2026 VeritasVPN. All rights reserved.</p>
+            <p class="footer-tagline">Paraguay · WireGuard · BSL on GitHub</p>
+        </div>
+    </div>
+</footer>
 
     <div class="auth-modal" id="authModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="authTitle">
         <div class="auth-dialog">

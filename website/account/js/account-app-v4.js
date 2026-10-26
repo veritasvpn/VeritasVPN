@@ -404,7 +404,7 @@ function renderDownloads() {
         </div>
       </div>
       <div class="download-grid">
-        <a class="download-tile" href="/install/linux.html">
+        <a class="download-tile" href="/install/linux">
           <h3>Linux</h3>
           <p>Full-device protection with the .deb or AppImage release.</p>
           <span class="btn btn-primary btn-sm">Download for Linux</span>
@@ -413,7 +413,7 @@ function renderDownloads() {
           <h3>Android</h3>
           <p>Full-device WireGuard protection for Android phones and tablets. Google Play is the recommended install.</p>
           <a class="play-badge" href="https://play.google.com/store/apps/details?id=cloud.veritasvpn" target="_blank" rel="noopener"><img src="/assets/google-play-badge.png" alt="Get it on Google Play" width="646" height="250"></a>
-          <a class="install-notes-link" href="/install/android.html">Installation steps</a>
+          <a class="install-notes-link" href="/install/android">Installation steps</a>
         </article>
       </div>
     </section>
@@ -559,7 +559,7 @@ function renderSecurity() {
           <li>Split tunnel</li>
           <li>No browsing or traffic-content logs — see the Privacy Policy for operational data</li>
           <li>Bitcoin on the website and Linux app. The Google Play app uses Google Play Billing.</li>
-          <li><a href="/canary.txt">Warrant canary</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></li>
+          <li><a href="/canary.txt">Warrant canary</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></li>
         </ul>
         <div class="account-actions">
           <a class="btn btn-outline" href="/#transparency">Transparency</a>

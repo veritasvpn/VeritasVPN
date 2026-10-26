@@ -87,7 +87,7 @@ test("Linux downloads and the APK endpoint stay in place", async () => {
   assert.doesNotMatch(linux, /https:\/\/play\.google\.com\//);
 
   const chrome = await read("website/install/chrome.html");
-  assert.match(chrome, /href="\/install\/linux\.html"/);
+  assert.match(chrome, /href="\/install\/linux"/);
   assert.equal(chrome.includes("veritasvpn-chrome.zip"), false);
 
   const status = await read("website/js/status.js");

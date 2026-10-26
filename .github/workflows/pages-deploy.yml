@@ -8,6 +8,7 @@ on:
       - "scripts/build-learn.py"
       - "scripts/site_nav.py"
       - "scripts/inject-site-nav.py"
+      - "scripts/cloudflare-zone-hardening.py"
       - ".github/workflows/pages-deploy.yml"
 
 jobs:
@@ -96,3 +97,9 @@ jobs:
           --commit-hash="$PAGES_COMMIT"
           --commit-message="$PAGES_MESSAGE"
           --commit-dirty=true
+
+      - name: Apply Cloudflare zone hardening when the token can edit the zone
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python3 scripts/cloudflare-zone-hardening.py
