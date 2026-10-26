@@ -56,6 +56,23 @@ pick_underlay() {
   return 1
 }
 
+# iface|gateway of the route that actually reaches this host.
+# Metric and source address are ignored. Empty when the route is missing
+# or the kernel would send the packet into the tunnel.
+endpoint_path_key() {
+  local ip="$1" line="" dev="" gw=""
+  [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  [[ "$ip" == "127.0.0.1" ]] && return 1
+  line="$(ip -4 route get "$ip" 2>/dev/null | head -1 || true)"
+  [[ -n "$line" ]] || return 1
+  dev="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }' <<<"$line")"
+  gw="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit } }' <<<"$line")"
+  [[ "$dev" == "veritas0" || "$dev" == "lo" || -z "$dev" ]] && return 1
+  iface_name_ok "$dev" || return 1
+  [[ -z "$gw" || "$gw" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || gw=""
+  printf '%s|%s\n' "$dev" "$gw"
+}
+
 # True when `ip route get` sends this host via the underlay, not the tunnel.
 endpoint_route_ok() {
   local endpoint_ip="${1:-}" iface="${2:-}" got="" dev=""
@@ -157,6 +174,42 @@ prepare_repath() {
 }
 
 # A path-adapt that outlives `timeout` must not reinstall routes after teardown.
+# NetworkManager adds 20000 to a device route when its connectivity probe
+# fails. The probe is bound to the physical NIC, so the kill switch drops it
+# and the metric flaps without the gateway or interface changing. Disable the
+# check for this session only. The previous value is restored on disconnect
+# and by package cleanup. Nothing under /etc/NetworkManager is written.
+hold_nm_connectivity() {
+  local stamp="/var/lib/veritasvpn/nm-connectivity.held" cur="" value=""
+  command -v busctl >/dev/null 2>&1 || return 0
+  [[ -f "$stamp" ]] && return 0
+  cur="$(busctl get-property org.freedesktop.NetworkManager /org/freedesktop/NetworkManager org.freedesktop.NetworkManager ConnectivityCheckEnabled 2>/dev/null || true)"
+  case "$cur" in
+    "b true") value="true" ;;
+    "b false") value="false" ;;
+    *) return 0 ;;
+  esac
+  install -d -m 755 /var/lib/veritasvpn
+  printf '%s\n' "$value" > "$stamp" || return 0
+  chmod 644 "$stamp" || true
+  if ! busctl set-property org.freedesktop.NetworkManager /org/freedesktop/NetworkManager org.freedesktop.NetworkManager ConnectivityCheckEnabled b false >/dev/null 2>&1; then
+    rm -f "$stamp"
+  fi
+}
+
+release_nm_connectivity() {
+  local stamp="/var/lib/veritasvpn/nm-connectivity.held" value=""
+  [[ -f "$stamp" ]] || return 0
+  value="$(head -n 1 "$stamp" 2>/dev/null || true)"
+  rm -f "$stamp"
+  command -v busctl >/dev/null 2>&1 || return 0
+  case "$value" in
+    true|false)
+      busctl set-property org.freedesktop.NetworkManager /org/freedesktop/NetworkManager org.freedesktop.NetworkManager ConnectivityCheckEnabled b "$value" >/dev/null 2>&1 || true
+      ;;
+  esac
+}
+
 stop_path_adapt() {
   local pid=""
   command -v pgrep >/dev/null 2>&1 || return 0

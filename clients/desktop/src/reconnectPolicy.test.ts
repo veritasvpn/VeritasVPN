@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyPeerCheck,
+  connectWatchdogAction,
   displayStatus,
   connectControlDisconnects,
+  sessionLooksConnected,
   underlayNoticeKeepsSession,
   peerGoneAction,
   peerGoneLatchHeld,
@@ -116,6 +118,61 @@ describe("status text", () => {
     ).toBe(false);
     expect(underlayNoticeKeepsSession("")).toBe(false);
     expect(underlayNoticeKeepsSession(null)).toBe(false);
+  });
+
+  it("stays Connected when the handshake and the endpoint path are fine", () => {
+    const now = 1_700_000_000;
+    expect(sessionLooksConnected({
+      interfaceUp: true,
+      lastHandshakeSec: now - 30,
+      nowSec: now,
+      pathOk: true,
+    })).toBe(true);
+    expect(sessionLooksConnected({
+      interfaceUp: true,
+      lastHandshakeSec: now - 30,
+      nowSec: now,
+      pathOk: false,
+    })).toBe(false);
+    expect(sessionLooksConnected({
+      interfaceUp: true,
+      lastHandshakeSec: now - 181,
+      nowSec: now,
+      pathOk: true,
+    })).toBe(false);
+    expect(sessionLooksConnected({
+      interfaceUp: false,
+      lastHandshakeSec: now - 5,
+      nowSec: now,
+      pathOk: true,
+    })).toBe(false);
+  });
+
+  it("does not fail a connect that is still in pkexec or already succeeded", () => {
+    expect(connectWatchdogAction({
+      epoch: 1,
+      activeEpoch: 1,
+      connecting: true,
+      disconnectMessage: "WireGuard connect still in progress",
+    })).toBe("wait");
+    expect(connectWatchdogAction({
+      epoch: 1,
+      activeEpoch: 2,
+      connecting: true,
+      disconnectMessage: "",
+    })).toBe("ignore");
+    expect(connectWatchdogAction({
+      epoch: 1,
+      activeEpoch: 1,
+      connecting: false,
+      disconnectMessage: "",
+    })).toBe("ignore");
+    expect(connectWatchdogAction({
+      epoch: 1,
+      activeEpoch: 1,
+      connecting: true,
+      disconnectMessage: "WireGuard disconnected",
+    })).toBe("fail");
   });
 
   it("lets Disconnect cancel Reconnecting and leaves the first connect spinner alone", () => {

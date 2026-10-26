@@ -311,4 +311,20 @@ shopt -u nullglob
 
 rm -f /var/lib/veritasvpn/reconnect.sh
 
+# Restore NetworkManager's connectivity check if a connect session disabled it.
+# The stamp is the only record. Nothing under /etc/NetworkManager is touched.
+release_nm_connectivity() {
+  local stamp="/var/lib/veritasvpn/nm-connectivity.held" value=""
+  [ -f "$stamp" ] || return 0
+  value="$(head -n 1 "$stamp" 2>/dev/null || true)"
+  rm -f "$stamp"
+  command -v busctl >/dev/null 2>&1 || return 0
+  case "$value" in
+    true|false)
+      busctl set-property org.freedesktop.NetworkManager /org/freedesktop/NetworkManager org.freedesktop.NetworkManager ConnectivityCheckEnabled b "$value" >/dev/null 2>&1 || true
+      ;;
+  esac
+}
+release_nm_connectivity || true
+
 exit 0

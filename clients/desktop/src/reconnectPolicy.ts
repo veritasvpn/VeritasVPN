@@ -19,6 +19,42 @@ export function connectControlDisconnects(phase: string | null | undefined): boo
   return phase === "protected" || phase === "reconnecting";
 }
 
+/** Handshake age at or under this is recent enough to call the tunnel up. */
+export const HANDSHAKE_FRESH_SEC = 180;
+
+/**
+ * Connected comes from the tunnel, not from a helper having run.
+ * The path check is the iface and gateway of `ip route get`, so a metric
+ * change does not count as unhealthy.
+ */
+export function sessionLooksConnected(input: {
+  interfaceUp: boolean;
+  lastHandshakeSec: number;
+  nowSec: number;
+  pathOk: boolean;
+}): boolean {
+  if (!input.interfaceUp || !input.pathOk) return false;
+  if (!Number.isFinite(input.lastHandshakeSec) || input.lastHandshakeSec <= 0) return false;
+  if (!Number.isFinite(input.nowSec)) return false;
+  const age = input.nowSec - input.lastHandshakeSec;
+  return age >= 0 && age <= HANDSHAKE_FRESH_SEC;
+}
+
+/**
+ * The connect watchdog must not turn a bring-up that is still inside pkexec,
+ * or one that already succeeded, into Not connected.
+ */
+export function connectWatchdogAction(input: {
+  epoch: number;
+  activeEpoch: number;
+  connecting: boolean;
+  disconnectMessage?: string | null;
+}): "wait" | "fail" | "ignore" {
+  if (input.epoch !== input.activeEpoch || !input.connecting) return "ignore";
+  if (/still in progress/i.test(input.disconnectMessage ?? "")) return "wait";
+  return "fail";
+}
+
 /** Recovery opens the API exception on every try. Stop after this many. */
 export const RECOVERY_MAX_ATTEMPTS = 3;
 

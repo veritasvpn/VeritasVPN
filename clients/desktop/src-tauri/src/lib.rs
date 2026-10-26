@@ -11,7 +11,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -489,6 +489,14 @@ fn b64_key_to_hex(b64: &str) -> Result<String, String> {
 
 #[tauri::command]
 async fn connect_wireguard(app: AppHandle, mut config: WgTunnelConfig) -> ConnectResult {
+    CONNECT_IN_FLIGHT.store(true, Ordering::SeqCst);
+    struct ConnectFlight;
+    impl Drop for ConnectFlight {
+        fn drop(&mut self) {
+            mark_connect_finished();
+        }
+    }
+    let _flight = ConnectFlight;
     let _ = tauri::async_runtime::spawn_blocking(close_recovery_exception_quiet).await;
     config.normalize_addresses();
     if let Err(message) = config.validate() {
@@ -524,7 +532,7 @@ async fn connect_wireguard(app: AppHandle, mut config: WgTunnelConfig) -> Connec
             .await
             .unwrap_or_else(|e| Err(format!("connect task failed: {e}")));
 
-    match result {
+    let connect_result = match result {
         Ok(msg) => {
             // Store AppHandle so soft reconnect can re-bring the tunnel up.
             let _ = APP_HANDLE_FOR_RECOVER.set(app.clone());
@@ -545,7 +553,8 @@ async fn connect_wireguard(app: AppHandle, mut config: WgTunnelConfig) -> Connec
             mode: "wireguard".into(),
             peer_id,
         },
-    }
+    };
+    connect_result
 }
 
 /// Start the network-switch recovery watcher if not already running.
@@ -600,6 +609,10 @@ pub struct WgTransferStats {
     /// True after automatic reconnect gave up. The user has to tap connect.
     #[serde(default)]
     pub underlay_gave_up: bool,
+    /// True when `ip route get` to the endpoint still uses the recorded
+    /// interface and gateway. Metric is not part of this.
+    #[serde(default)]
+    pub underlay_path_ok: bool,
 }
 
 #[tauri::command]
@@ -618,6 +631,7 @@ fn wireguard_stats() -> WgTransferStats {
             underlay_notice: String::new(),
             underlay_reconnecting: false,
             underlay_gave_up: false,
+            underlay_path_ok: false,
         }
     }
 }
@@ -672,6 +686,47 @@ fn read_published_handshake() -> i64 {
     parse_published_handshake(&text)
 }
 
+/// A handshake newer than three minutes means the peer is answering.
+/// Unprivileged callers use the published integer, never `wg show dump`.
+pub(crate) fn published_handshake_fresh() -> bool {
+    let ts = read_published_handshake();
+    if ts <= 0 {
+        return false;
+    }
+    let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+        return false;
+    };
+    let age = (now.as_secs() as i64).saturating_sub(ts);
+    (0..180).contains(&age)
+}
+
+fn passwordless_sudoers_installed() -> bool {
+    Path::new("/etc/sudoers.d/veritasvpn-soft").is_file()
+}
+
+/// True while connect_wireguard is inside its elevated bring-up, and for a
+/// few seconds after it returns, so a connect watchdog cannot tear the tunnel
+/// down on the way back to the UI.
+static CONNECT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static CONNECT_GUARD_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn connect_holds_tunnel() -> bool {
+    if CONNECT_IN_FLIGHT.load(Ordering::SeqCst) {
+        return true;
+    }
+    CONNECT_GUARD_UNTIL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .map(|until| Instant::now() < until)
+        .unwrap_or(false)
+}
+
+fn mark_connect_finished() {
+    CONNECT_IN_FLIGHT.store(false, Ordering::SeqCst);
+    let mut until = CONNECT_GUARD_UNTIL.lock().unwrap_or_else(|e| e.into_inner());
+    *until = Some(Instant::now() + Duration::from_secs(5));
+}
+
 #[cfg(target_os = "linux")]
 fn wireguard_stats_linux() -> WgTransferStats {
     let iface = iface_path()
@@ -689,6 +744,7 @@ fn wireguard_stats_linux() -> WgTransferStats {
             underlay_notice: network_switch::take_underlay_notice(),
             underlay_reconnecting: network_switch::underlay_reconnecting(),
             underlay_gave_up: network_switch::underlay_gave_up(),
+            underlay_path_ok: false,
         };
     }
 
@@ -696,6 +752,10 @@ fn wireguard_stats_linux() -> WgTransferStats {
     // integer: unprivileged `wg show dump` is EPERM on in-kernel WireGuard,
     // and that dump's first line is the interface private key.
     let (sys_up, sys_rx, sys_tx) = linux_iface_sysfs_stats(&iface);
+    let path_ok = network_switch::underlay_path_matches();
+    if sys_up && path_ok {
+        network_switch::note_healthy_session();
+    }
     WgTransferStats {
         rx_bytes: sys_rx,
         tx_bytes: sys_tx,
@@ -704,6 +764,7 @@ fn wireguard_stats_linux() -> WgTransferStats {
         underlay_notice: network_switch::take_underlay_notice(),
         underlay_reconnecting: network_switch::underlay_reconnecting(),
         underlay_gave_up: network_switch::underlay_gave_up(),
+        underlay_path_ok: path_ok,
     }
 }
 
@@ -720,6 +781,9 @@ async fn disconnect_wireguard(app: AppHandle, soft: Option<bool>) -> ConnectResu
         network_switch::clear_underlay_notice();
     }
     let result = tauri::async_runtime::spawn_blocking(move || {
+        if soft && connect_holds_tunnel() {
+            return Ok("WireGuard connect still in progress".into());
+        }
         close_recovery_exception_quiet();
         if soft {
             let _guard = SoftElevatedGuard::enter();
@@ -1171,6 +1235,12 @@ fn recovery_open_blocking(timeout_secs: u64) -> bool {
 }
 
 fn close_recovery_exception_quiet() {
+    // Before the first successful connect, postinst has removed the sudoers
+    // grant. `sudo -n recover-swap.sh` cannot succeed and only logs
+    // "a password is required". There is nothing to close yet.
+    if !passwordless_sudoers_installed() {
+        return;
+    }
     let _ = run_recover_helper(&["close"], 8);
 }
 
@@ -3262,6 +3332,7 @@ set -uo pipefail
 {handshake_fns}
 {dns_fns}
 {underlay_fns}
+release_nm_connectivity || true
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || {{ echo "SUDO_USER is required" >&2; exit 1; }}
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || {{ echo "invalid runtime uid" >&2; exit 1; }}
@@ -3365,6 +3436,7 @@ SOFT_TEARDOWN
   chmod 440 /etc/sudoers.d/veritasvpn-soft
 fi
 
+hold_nm_connectivity || true
 start_handshake_publisher "$RUNTIME_DIR" || true
 echo "ok iface=$IFACE_NAME engine=$ENGINE"
 "#,
@@ -3891,13 +3963,10 @@ fn run_elevated(script: &str) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        let mut sudo = Command::new("sudo");
-        sudo.args(["-n", "bash", "-s", "--"]);
-        if let Ok(out) = command_with_script(sudo, script) {
-            if out.status.success() {
-                return Ok(());
-            }
-        }
+        // `sudo -n bash -s` is not a passwordless helper. Trying it before the
+        // sudoers file exists only logs "a password is required" and can make
+        // the first tap look failed. After sudoers exists it still is not
+        // allowed, so the interactive path is the one pkexec prompt.
         if is_soft_elevated() {
             return Err("soft recovery cannot use interactive elevation".into());
         }

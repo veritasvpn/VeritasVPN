@@ -31,7 +31,7 @@ import {
   type PurchaseHistoryItem,
 } from "./billing";
 import { AUTH_API } from "./config";
-import { classifyPeerCheck, displayStatus, peerGoneAction, peerGoneLatchHeld, recoveryRetryAction, tunnelAddress, underlayNoticeKeepsSession } from "./reconnectPolicy";
+import { classifyPeerCheck, connectWatchdogAction, displayStatus, peerGoneAction, peerGoneLatchHeld, recoveryRetryAction, sessionLooksConnected, tunnelAddress, underlayNoticeKeepsSession } from "./reconnectPolicy";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
 import {
   advanceBlocked,
@@ -110,6 +110,8 @@ interface PeerResponse {
 }
 
 const CONNECT_TIMEOUT_MS = 25_000;
+/** Covers one password prompt plus handshake and egress checks. */
+const CONNECT_WATCHDOG_MS = 90_000;
 const RECOVERY_REQUEST_MS = 10_000;
 const STATS_POLL_MS = 1_500;
 const PEERS_POLL_MS = 5_000;
@@ -180,6 +182,7 @@ interface WgTransferStats {
   underlay_notice?: string;
   underlay_reconnecting?: boolean;
   underlay_gave_up?: boolean;
+  underlay_path_ok?: boolean;
 }
 
 interface PeerInfo {
@@ -1227,7 +1230,15 @@ function App() {
 
   useEffect(() => {
     if (!connecting) return;
+    const epoch = connectEpochRef.current;
     const timer = window.setTimeout(async () => {
+      const preliminary = connectWatchdogAction({
+        epoch,
+        activeEpoch: connectEpochRef.current,
+        connecting: connectingRef.current,
+        disconnectMessage: "",
+      });
+      if (preliminary === "ignore" && !recoveryAttemptRef.current) return;
       if (!connectingRef.current && !recoveryAttemptRef.current) return;
       if (recoveryAttemptRef.current) {
         if (recoveryActiveRef.current) {
@@ -1242,7 +1253,14 @@ function App() {
       }
       const timedOutPeer = connectPeerRef.current;
       connectPeerRef.current = "";
-      await invoke<ConnectResult>("disconnect_wireguard", { soft: true }).catch(() => undefined);
+      const disconnected = await invoke<ConnectResult>("disconnect_wireguard", { soft: true }).catch(() => undefined);
+      const action = connectWatchdogAction({
+        epoch,
+        activeEpoch: connectEpochRef.current,
+        connecting: connectingRef.current,
+        disconnectMessage: disconnected?.message ?? "",
+      });
+      if (action !== "fail") return;
       if (timedOutPeer) {
         await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${timedOutPeer}`, {
           method: "DELETE",
@@ -1253,10 +1271,11 @@ function App() {
       setTunnelMode("");
       setTransport("");
       setPeerId("");
+      setStatusSticky(true);
       setStatusMsg("Connection timed out. Check your network and try again.");
-    }, CONNECT_TIMEOUT_MS);
+    }, linuxDesktop ? CONNECT_WATCHDOG_MS : CONNECT_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
-  }, [connecting, transport]);
+  }, [connecting, transport, linuxDesktop]);
 
   useEffect(() => {
     if ((!checkoutUrl && !checkoutSettlementPending) || !user) return;
@@ -1545,6 +1564,7 @@ function App() {
       recoveryAttemptRef.current = true;
       recoveryGaveUpRef.current = false;
     }
+    connectEpochRef.current += 1;
     connectingRef.current = true;
     setConnecting(true);
     setTransport(choice === "stealth" ? "stealth" : "");
@@ -1663,6 +1683,7 @@ function App() {
         return false;
       }
       if (!result.success) throw new Error(result.message || "WireGuard connection failed");
+      connectEpochRef.current += 1;
       usedStealth = useStealth;
       setTransport(usedStealth ? "stealth" : "udp");
 
@@ -1721,6 +1742,7 @@ function App() {
   }, [user, deletePeer, linuxDesktop, showStatus, expireAndReturnToSignIn]);
 
   const connectInFlightRef = useRef(false);
+  const connectEpochRef = useRef(0);
   const handleConnect = useCallback(async () => {
     if (connectInFlightRef.current || connectingRef.current) return;
     connectInFlightRef.current = true;
@@ -1946,8 +1968,24 @@ function App() {
         if (userDisconnectedRef.current || disconnectInFlightRef.current) return;
         const notice = (stats.underlay_notice || "").trim();
         const gaveUp = stats.underlay_gave_up === true;
-        const keepSession = stats.underlay_reconnecting === true || underlayNoticeKeepsSession(notice);
-        if (gaveUp || (notice && !keepSession)) {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const healthy = sessionLooksConnected({
+          interfaceUp: stats.interface_up,
+          lastHandshakeSec: stats.last_handshake_sec,
+          nowSec,
+          pathOk: stats.underlay_path_ok !== false,
+        });
+        const reconnectNotice = underlayNoticeKeepsSession(notice);
+        const keepSession = !healthy && (stats.underlay_reconnecting === true || reconnectNotice);
+        if (healthy && !gaveUp) {
+          if (reconnectingRef.current) {
+            reconnectingRef.current = false;
+            setReconnecting(false);
+            setStatusSticky(false);
+          }
+          setStatusMsg((current) => (/^reconnecting/i.test(current) ? "" : current));
+        }
+        if (gaveUp || (notice && !reconnectNotice)) {
           const shown = displayStatus(notice || "Tap to reconnect");
           const oldPeer = peerIdRef.current;
           userDisconnectedRef.current = false;
@@ -1988,7 +2026,6 @@ function App() {
         // watcher. Never call elevated recovery from the UI poll — that freezes
         // the app with "veritasvpn is not responding".
 
-        const nowSec = Math.floor(Date.now() / 1000);
         const handshakeAge =
           stats.last_handshake_sec > 0 ? Math.max(0, nowSec - stats.last_handshake_sec) : Number.POSITIVE_INFINITY;
 

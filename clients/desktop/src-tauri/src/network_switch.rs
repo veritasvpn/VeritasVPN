@@ -240,6 +240,10 @@ struct FollowMemory {
     gave_up: bool,
     /// False only when a soft release left the kill switch in place.
     release_cleared: bool,
+    /// Unconfirmed iface|gateway. A metric bump must not become a change
+    /// until the new path has been the same for UNDERLAY_CHANGE_DEBOUNCE.
+    pending_key: String,
+    pending_since: Option<Instant>,
 }
 
 static FOLLOW: Mutex<FollowMemory> = Mutex::new(FollowMemory {
@@ -250,6 +254,8 @@ static FOLLOW: Mutex<FollowMemory> = Mutex::new(FollowMemory {
     last_attempt: None,
     gave_up: false,
     release_cleared: true,
+    pending_key: String::new(),
+    pending_since: None,
 });
 static UNDERLAY_NOTICE: Mutex<String> = Mutex::new(String::new());
 static UNDERLAY_RECONNECTING: AtomicBool = AtomicBool::new(false);
@@ -267,6 +273,8 @@ fn clear_clocks(mem: &mut FollowMemory) {
     mem.failed_attempts = 0;
     mem.last_attempt = None;
     mem.release_cleared = true;
+    mem.pending_key.clear();
+    mem.pending_since = None;
 }
 
 pub(crate) fn clear_underlay_watch() {
@@ -329,15 +337,142 @@ fn set_underlay_notice(msg: &str) {
     *UNDERLAY_NOTICE.lock().unwrap_or_else(|e| e.into_inner()) = msg.to_string();
 }
 
-/// `recorded` and `detected` are `gateway|iface|src`.
+/// How long a new iface|gateway must stay before it is an underlay change.
+/// A NetworkManager metric penalty (+20000) on the same path never qualifies.
+pub(crate) const UNDERLAY_CHANGE_DEBOUNCE: Duration = Duration::from_secs(2);
+
+/// `iface|gateway` for either the live `ip route get` key or the older
+/// `gateway|iface|src` record. Metric and source address are dropped.
+pub(crate) fn underlay_path_key(raw: &str) -> String {
+    let parts: Vec<&str> = raw.trim().split('|').map(str::trim).collect();
+    let (iface, gw) = if parts.len() >= 3 {
+        (parts[1], parts[0])
+    } else if parts.len() == 2 {
+        (parts[0], parts[1])
+    } else if parts.len() == 1 && !parts[0].is_empty() {
+        (parts[0], "")
+    } else {
+        return String::new();
+    };
+    if iface.is_empty() || iface == "veritas0" || iface == "lo" {
+        return String::new();
+    }
+    format!("{iface}|{gw}")
+}
+
+fn split_path_key(raw: &str) -> Option<(String, String)> {
+    let key = underlay_path_key(raw);
+    let (iface, gw) = key.split_once('|')?;
+    if iface.is_empty() {
+        None
+    } else {
+        Some((iface.to_string(), gw.to_string()))
+    }
+}
+
+/// Same NIC and same next hop. An on-link route (no via) on that NIC is the
+/// same path. A different metric is not a difference.
+pub(crate) fn underlay_same(recorded: &str, detected: &str) -> bool {
+    let Some((recorded_iface, recorded_gw)) = split_path_key(recorded) else {
+        return false;
+    };
+    let Some((detected_iface, detected_gw)) = split_path_key(detected) else {
+        return false;
+    };
+    if recorded_iface != detected_iface {
+        return false;
+    }
+    detected_gw.is_empty() || recorded_gw.is_empty() || detected_gw == recorded_gw
+}
+
+/// `recorded` and `detected` identify the underlay by interface and gateway.
 /// A missing detection counts as a change once a tunnel underlay was recorded,
 /// so an interface that disappeared is retried instead of ignored.
 pub(crate) fn underlay_fingerprint_diverged(recorded: &str, detected: Option<&str>) -> bool {
-    let recorded = recorded.trim();
-    match detected.map(str::trim).filter(|s| !s.is_empty()) {
-        None => !recorded.is_empty(),
-        Some(now) => recorded.is_empty() || now != recorded,
+    let recorded_key = underlay_path_key(recorded);
+    match detected.map(underlay_path_key).filter(|s| !s.is_empty()) {
+        None => !recorded_key.is_empty(),
+        Some(now) => recorded_key.is_empty() || !underlay_same(&recorded_key, &now),
     }
+}
+
+/// `(present, changed)` after the new path has stayed put for `debounce`.
+/// The first sample of a different iface or gateway is not a change yet, so a
+/// one-tick metric reorder cannot run path-adapt or move the UI.
+pub(crate) fn debounced_path_change(
+    recorded: &str,
+    detected: Option<&str>,
+    pending_key: &mut String,
+    pending_since: &mut Option<Instant>,
+    now: Instant,
+    debounce: Duration,
+) -> (bool, bool) {
+    let recorded_key = underlay_path_key(recorded);
+    let detected_key = detected.map(underlay_path_key).filter(|s| !s.is_empty());
+    if recorded_key.is_empty() {
+        pending_key.clear();
+        *pending_since = None;
+        return (detected_key.is_some(), false);
+    }
+    if let Some(now_key) = detected_key.as_ref() {
+        if underlay_same(&recorded_key, now_key) {
+            pending_key.clear();
+            *pending_since = None;
+            return (true, false);
+        }
+    }
+    let key = detected_key.clone().unwrap_or_default();
+    if pending_key != &key {
+        *pending_key = key;
+        *pending_since = Some(now);
+        return (true, false);
+    }
+    let started = pending_since.unwrap_or(now);
+    if now.saturating_duration_since(started) < debounce {
+        return (true, false);
+    }
+    (detected_key.is_some(), true)
+}
+
+/// First line of `ip route get`. Metric and src are ignored. The tunnel
+/// device is not an underlay.
+pub(crate) fn path_key_from_route_get(text: &str) -> Option<String> {
+    let line = text.lines().next().unwrap_or("").trim();
+    if line.is_empty() {
+        return None;
+    }
+    let mut dev = "";
+    let mut gw = "";
+    let mut parts = line.split_whitespace();
+    while let Some(word) = parts.next() {
+        match word {
+            "dev" => dev = parts.next().unwrap_or(""),
+            "via" => gw = parts.next().unwrap_or(""),
+            _ => {}
+        }
+    }
+    if dev.is_empty() || dev == "veritas0" || dev == "lo" {
+        return None;
+    }
+    if !dev
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':' | b'-'))
+    {
+        return None;
+    }
+    if !gw.is_empty()
+        && !gw
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b == b'.')
+    {
+        gw = "";
+    }
+    Some(format!("{dev}|{gw}"))
+}
+
+/// After a helper returns, Reconnecting stays only while the path is still down.
+pub(crate) fn reconnecting_after_rebind(healthy: bool, user_disconnected: bool) -> bool {
+    !user_disconnected && !healthy
 }
 
 pub(crate) fn underlay_release_due(diverged_for: Duration) -> bool {
@@ -351,7 +486,6 @@ fn recorded_underlay_fingerprint() -> String {
     let meta = fs::read_to_string(dir.join("iface.meta")).unwrap_or_default();
     let mut gw = String::new();
     let mut gif = String::new();
-    let mut src = String::new();
     for line in meta.lines() {
         let Some((k, v)) = line.split_once('=') else {
             continue;
@@ -359,14 +493,13 @@ fn recorded_underlay_fingerprint() -> String {
         match k.trim() {
             "gateway" => gw = v.trim().to_string(),
             "gw_if" => gif = v.trim().to_string(),
-            "underlay_src" => src = v.trim().to_string(),
             _ => {}
         }
     }
     if gw.is_empty() && gif.is_empty() {
         String::new()
     } else {
-        format!("{gw}|{gif}|{src}")
+        format!("{gif}|{gw}")
     }
 }
 
@@ -576,6 +709,72 @@ fn give_up_reconnect() -> NetworkRecoverResult {
     }
 }
 
+fn current_session_healthy() -> bool {
+    if !tunnel_iface_up() || !super::published_handshake_fresh() {
+        return false;
+    }
+    let Some(detected) = detect_underlay_fingerprint() else {
+        return false;
+    };
+    let recorded = recorded_underlay_fingerprint();
+    if !recorded.is_empty() && !underlay_same(&recorded, &detected) {
+        return false;
+    }
+    let Some(iface) = fingerprint_iface(&detected) else {
+        return false;
+    };
+    endpoint_route_on_underlay(&iface)
+}
+
+/// The UI reads this every poll. A healthy tunnel must not stay on Reconnecting
+/// just because a helper ran earlier.
+pub(crate) fn note_healthy_session() {
+    if user_disconnected_now() || !current_session_healthy() {
+        return;
+    }
+    set_underlay_reconnecting(false);
+    let mut notice = UNDERLAY_NOTICE.lock().unwrap_or_else(|e| e.into_inner());
+    if notice.trim() == RECONNECTING_NOTICE {
+        notice.clear();
+    }
+}
+
+pub(crate) fn underlay_path_matches() -> bool {
+    let Some(detected) = detect_underlay_fingerprint() else {
+        return false;
+    };
+    let recorded = recorded_underlay_fingerprint();
+    if recorded.is_empty() {
+        return true;
+    }
+    if !underlay_same(&recorded, &detected) {
+        return false;
+    }
+    fingerprint_iface(&detected)
+        .map(|iface| endpoint_route_on_underlay(&iface))
+        .unwrap_or(false)
+}
+
+fn finish_rebind(result: NetworkRecoverResult) -> Result<NetworkRecoverResult, String> {
+    if user_disconnected_now() {
+        set_underlay_reconnecting(false);
+        clear_underlay_notice();
+        return Ok(noop("idle", "user disconnected"));
+    }
+    let healthy = current_session_healthy();
+    if reconnecting_after_rebind(healthy, false) {
+        show_reconnecting();
+    } else {
+        set_underlay_reconnecting(false);
+        clear_underlay_notice();
+        let mut mem = follow_lock();
+        mem.diverged_since = None;
+        mem.pending_key.clear();
+        mem.pending_since = None;
+    }
+    Ok(result)
+}
+
 fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
     if user_disconnected_now() {
         set_underlay_reconnecting(false);
@@ -584,28 +783,63 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
 
     let tunnel_up = tunnel_iface_up();
     let detected = detect_underlay_fingerprint();
-    let present = detected.is_some();
     let recorded = if tunnel_up {
         recorded_underlay_fingerprint()
     } else {
         String::new()
     };
-    let changed = tunnel_up && underlay_fingerprint_diverged(&recorded, detected.as_deref());
-    let underlay_if = detected
-        .as_deref()
-        .and_then(fingerprint_iface)
-        .unwrap_or("");
-    let route_ok = !tunnel_up || !present || endpoint_route_on_underlay(underlay_if);
+    let (present, changed) = {
+        let mut mem = follow_lock();
+        let now = Instant::now();
+        let mut pending_key = std::mem::take(&mut mem.pending_key);
+        let mut pending_since = mem.pending_since.take();
+        let result = debounced_path_change(
+            &recorded,
+            detected.as_deref(),
+            &mut pending_key,
+            &mut pending_since,
+            now,
+            UNDERLAY_CHANGE_DEBOUNCE,
+        );
+        mem.pending_key = pending_key;
+        mem.pending_since = pending_since;
+        result
+    };
+    // Until a new iface|gateway has persisted, keep the recorded path. A
+    // metric-only sample then cannot start path-adapt or the outage clock.
+    let unconfirmed = tunnel_up
+        && !changed
+        && underlay_fingerprint_diverged(&recorded, detected.as_deref());
+    let underlay_if = if unconfirmed {
+        fingerprint_iface(&recorded).unwrap_or_default()
+    } else {
+        detected
+            .as_deref()
+            .and_then(fingerprint_iface)
+            .unwrap_or_default()
+    };
+    let route_ok = if unconfirmed {
+        true
+    } else if !tunnel_up || !present || underlay_if.is_empty() {
+        !tunnel_up || !present
+    } else {
+        endpoint_route_on_underlay(&underlay_if)
+    };
     // Probe egress only during an outage, and skip the probe when the host
     // route is already on the wrong interface so the next try stays fast.
     let outage_active = follow_lock().diverged_since.is_some();
     let probing = tunnel_up && (changed || !present || !route_ok || outage_active);
+    // A fresh handshake on the recorded iface|gateway is health. A failed
+    // public-IP probe must not run path-adapt while that path is unchanged.
+    let handshake_ok = super::published_handshake_fresh();
     let traffic_ok = if !probing {
         true
     } else if !present || !route_ok {
         false
+    } else if !changed && handshake_ok {
+        true
     } else {
-        tunnel_is_healthy().unwrap_or(false)
+        handshake_ok || tunnel_is_healthy().unwrap_or(false)
     };
     let input = follow_snapshot(tunnel_up, present, changed, route_ok, traffic_ok);
 
@@ -619,39 +853,20 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
                 set_underlay_reconnecting(false);
                 clear_underlay_notice();
             }
-            if !input.gave_up
-                && tunnel_up
-                && present
-                && !changed
-                && route_ok
-                && !tunnel_is_healthy().unwrap_or(false)
-            {
-                return rebind_underlay(false);
-            }
+            // Same iface and gateway: do not path-adapt and do not change the UI,
+            // even when a connectivity probe just failed.
             Ok(noop("noop", "underlay unchanged"))
         }
         UnderlayFollow::Rebind => {
             show_reconnecting();
             let result = rebind_underlay(true)?;
-            if user_disconnected_now() {
-                set_underlay_reconnecting(false);
-                clear_underlay_notice();
-                return Ok(noop("idle", "user disconnected"));
-            }
-            show_reconnecting();
-            Ok(result)
+            finish_rebind(result)
         }
         UnderlayFollow::Wait => {
             show_reconnecting();
             if tunnel_up {
                 let result = rebind_underlay(true)?;
-                if user_disconnected_now() {
-                    set_underlay_reconnecting(false);
-                    clear_underlay_notice();
-                    return Ok(noop("idle", "user disconnected"));
-                }
-                show_reconnecting();
-                return Ok(result);
+                return finish_rebind(result);
             }
             Ok(noop("wait", RECONNECTING_NOTICE))
         }
@@ -736,13 +951,8 @@ impl Drop for FlightGuard {
     }
 }
 
-fn fingerprint_iface(fp: &str) -> Option<&str> {
-    let iface = fp.split('|').nth(1)?.trim();
-    if iface.is_empty() {
-        None
-    } else {
-        Some(iface)
-    }
+fn fingerprint_iface(fp: &str) -> Option<String> {
+    split_path_key(fp).map(|(iface, _)| iface)
 }
 
 /// `ip route get` output uses this device. The first `dev` token is the one
@@ -794,76 +1004,64 @@ fn endpoint_route_on_underlay(iface: &str) -> bool {
     route_dev_is(&String::from_utf8_lossy(&out.stdout), iface)
 }
 
-/// Detect underlay path as `gateway|iface|src` (best-effort, non-elevated).
-fn detect_underlay_fingerprint() -> Option<String> {
-    let out = std::process::Command::new("bash")
-        .arg("-c")
-        .arg(
-            r#"
-IFACE="veritas0"
-gw=""; gif=""; src=""
-# The OS default route is the underlay. Skip a down NIC so a stale Wi-Fi
-# default does not hide an Ethernet default that is already up.
-while IFS= read -r line; do
-  case "$line" in *blackhole*) continue ;; esac
-  case "$line" in *" via "*) ;; *) continue ;; esac
-  gw="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit } }' <<<"$line")"
-  gif="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }' <<<"$line")"
-  case "$gif" in
-    ""|lo|"$IFACE") gw=""; gif=""; continue ;;
-  esac
-  case "$gif" in
-    *[!A-Za-z0-9_.:-]*) gw=""; gif=""; continue ;;
-  esac
-  state="$(cat "/sys/class/net/$gif/operstate" 2>/dev/null || true)"
-  if [ "$state" = "down" ]; then
-    gw=""; gif=""
-    continue
-  fi
-  break
-done <<EOF
-$(ip -4 route show default 2>/dev/null)
-EOF
-if [ -z "$gw" ] && command -v nmcli >/dev/null 2>&1; then
-  if command -v timeout >/dev/null 2>&1; then
-    nm_list="$(timeout 2 nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null || true)"
-  else
-    nm_list="$(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null || true)"
-  fi
-  while IFS=: read -r dev type state; do
-    [ "$state" = "connected" ] || continue
-    case "$type" in wifi|ethernet|802-11-wireless|802-3-ethernet) ;; *) continue ;; esac
-    [ -n "$dev" ] && [ "$dev" != "$IFACE" ] && [ "$dev" != "lo" ] || continue
-    oper="$(cat "/sys/class/net/$dev/operstate" 2>/dev/null || true)"
-    [ "$oper" = "down" ] && continue
-    if command -v timeout >/dev/null 2>&1; then
-      gw="$(timeout 2 nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1 || true)"
-      src="$(timeout 2 nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1 || true)"
-    else
-      gw="$(nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1 || true)"
-      src="$(nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1 || true)"
-    fi
-    src="${src%%/*}"
-    gif="$dev"
-    [ -n "$gw" ] && break
-  done <<<"$nm_list"
-fi
-if [ -z "$src" ] && [ -n "$gif" ]; then
-  src="$(ip -4 -o addr show dev "$gif" 2>/dev/null | awk '{print $4; exit}')"
-  src="${src%%/*}"
-fi
-[ -n "$gw" ] || exit 0
-printf '%s|%s|%s\n' "$gw" "$gif" "$src"
-"#,
-        )
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&out.stdout);
-    let fp = s.trim();
-    if fp.is_empty() {
+fn iface_is_down(iface: &str) -> bool {
+    let path = format!("/sys/class/net/{iface}/operstate");
+    fs::read_to_string(path)
+        .map(|state| state.trim().eq_ignore_ascii_case("down"))
+        .unwrap_or(false)
+}
+
+fn command_stdout(args: &[&str]) -> Option<String> {
+    let (bin, rest) = args.split_first()?;
+    let out = std::process::Command::new(bin).args(rest).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() {
         None
     } else {
-        Some(fp.to_string())
+        Some(text)
+    }
+}
+
+/// First usable default route, as `iface|gateway`. Metric is not read.
+fn default_route_key(text: &str) -> Option<String> {
+    for line in text.lines() {
+        if line.contains("blackhole") || !line.contains(" via ") {
+            continue;
+        }
+        let key = path_key_from_route_get(line)?;
+        let iface = key.split('|').next().unwrap_or("");
+        if iface.is_empty() || iface_is_down(iface) {
+            continue;
+        }
+        return Some(key);
+    }
+    None
+}
+
+/// Underlay identity is `iface|gateway` with the metric stripped.
+///
+/// The default route is what the OS just selected. A NetworkManager
+/// connectivity penalty changes only the metric, so it is not a new underlay.
+/// `ip route get ENDPOINT` is the pin check: a host route left on the previous
+/// gateway does not hide a new default route, and a pin that has fallen into
+/// the tunnel is not healthy.
+fn detect_underlay_fingerprint() -> Option<String> {
+    if let Some(text) = command_stdout(&["ip", "-4", "route", "show", "default"]) {
+        if let Some(key) = default_route_key(&text) {
+            return Some(key);
+        }
+    }
+    let endpoint = recorded_endpoint_ip();
+    if endpoint.is_empty() || endpoint == "127.0.0.1" {
+        return None;
+    }
+    let text = command_stdout(&["ip", "-4", "route", "get", &endpoint])?;
+    let key = path_key_from_route_get(&text)?;
+    let iface = key.split('|').next().unwrap_or("");
+    if iface.is_empty() || iface_is_down(iface) {
+        None
+    } else {
+        Some(key)
     }
 }
 
@@ -880,12 +1078,14 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        decide_underlay_follow, recovery_lock_abandon, recovery_lock_acquire,
+        debounced_path_change, decide_underlay_follow, default_route_key, path_key_from_route_get,
+        reconnecting_after_rebind, recovery_lock_abandon, recovery_lock_acquire,
         recovery_lock_acquire_owned, recovery_lock_release, recovery_lock_release_owned,
-        reconnect_backoff, route_dev_is, underlay_fingerprint_diverged, underlay_release_due,
-        FlightGuard, FlightKind, FollowInput, UnderlayFollow, UNDERLAY_GIVE_UP_AFTER,
-        UNDERLAY_RELEASE_AFTER,
+        reconnect_backoff, route_dev_is, underlay_fingerprint_diverged, underlay_path_key,
+        underlay_release_due, underlay_same, FlightGuard, FlightKind, FollowInput,
+        UnderlayFollow, UNDERLAY_CHANGE_DEBOUNCE, UNDERLAY_GIVE_UP_AFTER, UNDERLAY_RELEASE_AFTER,
     };
+    use std::time::Instant;
 
     fn follow(mut set: impl FnMut(&mut FollowInput)) -> UnderlayFollow {
         let mut input = FollowInput {
@@ -1027,6 +1227,119 @@ mod tests {
                 input.outage_for = Duration::ZERO;
             }),
             UnderlayFollow::Idle
+        );
+    }
+
+    #[test]
+    fn default_route_metric_is_not_a_new_underlay() {
+        let low = "default via 192.0.2.1 dev wlx90de802153e1 proto dhcp src 192.0.2.50 metric 600\n";
+        let high = "default via 192.0.2.1 dev wlx90de802153e1 proto dhcp src 192.0.2.50 metric 20600\n";
+        assert_eq!(default_route_key(low), default_route_key(high));
+        assert_eq!(
+            default_route_key(low).as_deref(),
+            Some("wlx90de802153e1|192.0.2.1")
+        );
+        let with_blackhole = "blackhole default metric 1\ndefault via 192.0.2.1 dev wlx90de802153e1 metric 20600\n";
+        assert_eq!(default_route_key(with_blackhole), default_route_key(low));
+    }
+
+    #[test]
+    fn metric_only_change_is_the_same_underlay() {
+        let low = path_key_from_route_get(
+            "203.0.113.10 via 192.0.2.1 dev wlx90de802153e1 src 192.0.2.50 uid 1000\n    cache",
+        )
+        .expect("low metric route");
+        let high = path_key_from_route_get(
+            "203.0.113.10 via 192.0.2.1 dev wlx90de802153e1 src 192.0.2.50 metric 20600",
+        )
+        .expect("penalized metric route");
+        assert_eq!(low, "wlx90de802153e1|192.0.2.1");
+        assert_eq!(low, high);
+        assert!(underlay_same(&low, &high));
+        assert!(!underlay_fingerprint_diverged(&low, Some(&high)));
+        // Older records were gateway|iface|src. A different source is still the same path.
+        assert!(!underlay_fingerprint_diverged(
+            "192.0.2.1|wlx90de802153e1|192.0.2.20",
+            Some("wlx90de802153e1|192.0.2.1")
+        ));
+        assert!(!underlay_fingerprint_diverged(
+            "192.0.2.1|wlx90de802153e1|192.0.2.20",
+            Some("192.0.2.1|wlx90de802153e1|192.0.2.99")
+        ));
+        assert!(path_key_from_route_get("203.0.113.10 dev veritas0 src 10.0.0.2").is_none());
+        assert_eq!(
+            underlay_path_key("eno1|198.51.100.1"),
+            "eno1|198.51.100.1"
+        );
+        assert!(underlay_fingerprint_diverged(
+            "wlx90de802153e1|192.0.2.1",
+            Some("eno1|198.51.100.1")
+        ));
+    }
+
+    #[test]
+    fn underlay_change_must_persist() {
+        let t0 = Instant::now();
+        let mut key = String::new();
+        let mut since = None;
+        let (present, changed) = debounced_path_change(
+            "wlx|192.0.2.1",
+            Some("wlx|192.0.2.1"),
+            &mut key,
+            &mut since,
+            t0,
+            UNDERLAY_CHANGE_DEBOUNCE,
+        );
+        assert!(present && !changed, "same iface and gateway is idle");
+        let (present, changed) = debounced_path_change(
+            "wlx|192.0.2.1",
+            Some("eno1|198.51.100.1"),
+            &mut key,
+            &mut since,
+            t0,
+            UNDERLAY_CHANGE_DEBOUNCE,
+        );
+        assert!(present && !changed, "the first sample is not a change");
+        let (present, changed) = debounced_path_change(
+            "wlx|192.0.2.1",
+            Some("eno1|198.51.100.1"),
+            &mut key,
+            &mut since,
+            t0 + UNDERLAY_CHANGE_DEBOUNCE,
+            UNDERLAY_CHANGE_DEBOUNCE,
+        );
+        assert!(present && changed, "a path that stays is a change");
+        let (present, changed) = debounced_path_change(
+            "wlx|192.0.2.1",
+            None,
+            &mut key,
+            &mut since,
+            t0,
+            UNDERLAY_CHANGE_DEBOUNCE,
+        );
+        assert!(present && !changed, "a one-sample loss does not drop the session");
+        let (present, changed) = debounced_path_change(
+            "wlx|192.0.2.1",
+            None,
+            &mut key,
+            &mut since,
+            t0 + UNDERLAY_CHANGE_DEBOUNCE,
+            UNDERLAY_CHANGE_DEBOUNCE,
+        );
+        assert!(!present && changed, "a loss that persists is a change");
+    }
+
+    #[test]
+    fn healthy_tunnel_leaves_reconnecting() {
+        assert!(!reconnecting_after_rebind(true, false));
+        assert!(!reconnecting_after_rebind(true, true));
+        assert!(!reconnecting_after_rebind(false, true));
+        assert!(reconnecting_after_rebind(false, false));
+        let src = include_str!("network_switch.rs");
+        let needle = format!("{}{}", "rebind_underlay", "(false)");
+        assert!(
+            !src.contains(&needle),
+            "a matching iface and gateway must not run path-adapt"
         );
     }
 

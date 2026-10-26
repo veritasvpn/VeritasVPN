@@ -779,5 +779,15 @@ printf '%s\n' "$teardown_section" | grep -q 'stop_path_adapt' || fail "disconnec
 printf '%s\n' "$teardown_section" | grep -q 'blackhole default metric 1' || fail "disconnect leaves the blackhole route"
 printf '%s\n' "$teardown_section" | grep -q '0.0.0.0/1' || fail "disconnect leaves the tunnel split route"
 printf '%s\n' "$teardown_section" | grep -q 'ip link delete' || fail "disconnect leaves veritas0"
+teardown_file="$(mktemp)"
+printf '%s\n' "$teardown_section" > "$teardown_file"
+grep -q 'release_nm_connectivity' "$teardown_file" || { rm -f "$teardown_file"; fail "disconnect does not restore NetworkManager connectivity checks"; }
+rm -f "$teardown_file"
+grep -q 'hold_nm_connectivity' "$lib" || fail "connect does not pause NetworkManager connectivity checks"
+grep -q 'passwordless_sudoers_installed' "$lib" || fail "first connect still calls sudo before sudoers exists"
+grep -q 'connect still in progress' "$lib" || fail "a connect watchdog can tear down an in-flight bring-up"
+if grep -q 'sudo.args(\["-n", "bash", "-s", "--"\])' "$lib"; then
+  fail "interactive elevation still tries sudo -n bash -s"
+fi
 
 printf 'ok\n'
