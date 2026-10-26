@@ -4397,14 +4397,19 @@ mod security_tests {
 
     #[test]
     fn reconnect_policy_matches_android() {
-        let status = std::process::Command::new("bash")
+        let output = std::process::Command::new("bash")
             .arg(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/src/reconnect_policy_test.sh"
             ))
-            .status()
+            .output()
             .expect("run reconnect policy tests");
-        assert!(status.success(), "reconnect policy tests failed");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "reconnect policy tests failed\n{stdout}{stderr}"
+        );
     }
 
     #[test]
