@@ -134,8 +134,10 @@ pub(crate) fn recovery_lock_abandon(token: u64) {
     recovery_lock_release(token);
 }
 
-/// How long a missing underlay may stay behind the kill switch.
-/// Past this, drop the kill switch (no purge, no password) and keep reconnecting.
+/// How long a network change may fail to restore traffic before the kill
+/// switch is dropped (no purge, no password) while reconnect intent stays.
+/// This also covers a second link that was already up: a path-adapt that
+/// did not actually move the endpoint route must not hold the internet.
 pub(crate) const UNDERLAY_RELEASE_AFTER: Duration = Duration::from_secs(18);
 /// Give up only after the underlay has been back this long and rebuilds failed.
 pub(crate) const UNDERLAY_GIVE_UP_AFTER: Duration = Duration::from_secs(120);
@@ -164,7 +166,13 @@ pub(crate) struct FollowInput {
     pub tunnel_up: bool,
     pub underlay_present: bool,
     pub underlay_changed: bool,
-    pub diverged_for: Duration,
+    /// How long this outage has lasted. Zero unless the underlay changed,
+    /// disappeared, or the endpoint host route is not on the underlay.
+    /// A stable tunnel that is briefly unhealthy stays at zero.
+    pub outage_for: Duration,
+    /// Route is on the current underlay and a short egress check succeeded.
+    /// Callers pass true when they are not in an outage and skipped the probe.
+    pub traffic_ok: bool,
     pub reconnect_wanted: bool,
     pub released: bool,
     pub underlay_back_for: Option<Duration>,
@@ -184,19 +192,23 @@ pub(crate) fn reconnect_backoff(failed_attempts: u32) -> Duration {
 }
 
 /// Connected sessions follow the network. A user disconnect is Idle even when
-/// a route is available. Release happens only while the underlay is gone.
+/// a route is available. Release happens when an outage has not restored
+/// traffic, including when another link is already up.
 pub(crate) fn decide_underlay_follow(input: FollowInput) -> UnderlayFollow {
     if input.user_disconnected || input.gave_up {
         return UnderlayFollow::Idle;
     }
     if input.tunnel_up {
+        // No underlay means traffic cannot be flowing, even if a caller
+        // left traffic_ok set from an earlier observation.
+        let traffic_ok = input.traffic_ok && input.underlay_present;
+        if !traffic_ok && input.outage_for >= UNDERLAY_RELEASE_AFTER && !input.released {
+            return UnderlayFollow::ReleaseKeepIntent;
+        }
         if !input.underlay_present {
-            if input.diverged_for >= UNDERLAY_RELEASE_AFTER && !input.released {
-                return UnderlayFollow::ReleaseKeepIntent;
-            }
             return UnderlayFollow::Wait;
         }
-        if input.underlay_changed {
+        if input.underlay_changed || (!input.traffic_ok && input.outage_for > Duration::ZERO) {
             return UnderlayFollow::Rebind;
         }
         return UnderlayFollow::Idle;
@@ -390,7 +402,13 @@ fn show_reconnecting() {
     set_underlay_notice(RECONNECTING_NOTICE);
 }
 
-fn follow_snapshot(tunnel_up: bool, present: bool, changed: bool) -> FollowInput {
+fn follow_snapshot(
+    tunnel_up: bool,
+    present: bool,
+    changed: bool,
+    route_ok: bool,
+    traffic_ok: bool,
+) -> FollowInput {
     let mut mem = follow_lock();
     if !present {
         mem.underlay_back_since = None;
@@ -399,17 +417,21 @@ fn follow_snapshot(tunnel_up: bool, present: bool, changed: bool) -> FollowInput
     } else if mem.underlay_back_since.is_none() {
         mem.underlay_back_since = Some(Instant::now());
     }
-    let diverged = tunnel_up && (!present || changed);
-    let diverged_for = if diverged {
-        mem.diverged_since.get_or_insert_with(Instant::now).elapsed()
-    } else {
-        if tunnel_up && present {
-            mem.diverged_since = None;
-            mem.released = false;
-        }
-        Duration::ZERO
-    };
-    if tunnel_up && present && !changed {
+    // A matching fingerprint is not traffic. Keep the outage clock until the
+    // endpoint route is on the underlay and egress works. Do not start it for
+    // a stable tunnel that is only briefly unhealthy.
+    let network_outage = !present || changed || !route_ok;
+    if tunnel_up && traffic_ok && route_ok && present {
+        mem.diverged_since = None;
+        mem.released = false;
+    } else if tunnel_up && !traffic_ok && (network_outage || mem.diverged_since.is_some()) {
+        mem.diverged_since.get_or_insert_with(Instant::now);
+    }
+    let outage_for = mem
+        .diverged_since
+        .map(|started| started.elapsed())
+        .unwrap_or(Duration::ZERO);
+    if tunnel_up && present && !changed && route_ok && traffic_ok {
         mem.failed_attempts = 0;
         mem.last_attempt = None;
         mem.underlay_back_since = None;
@@ -419,7 +441,8 @@ fn follow_snapshot(tunnel_up: bool, present: bool, changed: bool) -> FollowInput
         tunnel_up,
         underlay_present: present,
         underlay_changed: changed,
-        diverged_for,
+        outage_for,
+        traffic_ok,
         reconnect_wanted: reconnect_wanted(),
         released: mem.released,
         underlay_back_for: mem.underlay_back_since.map(|started| started.elapsed()),
@@ -452,8 +475,10 @@ fn rebind_underlay(force: bool) -> Result<NetworkRecoverResult, String> {
     };
     let endpoint = refresh_endpoint_route_linux();
     recovery_lock_release(owner);
-    if endpoint.refreshed {
-        clear_clocks(&mut follow_lock());
+    // "ok path-adapt" only means the helper exited. The outage clock stays
+    // until a later tick sees the host route on the new interface and egress.
+    // Clearing it here is what left the UI on Reconnecting with no further tries.
+    if user_disconnected_now() {
         set_underlay_reconnecting(false);
         clear_underlay_notice();
     }
@@ -473,6 +498,10 @@ fn rebind_underlay(force: bool) -> Result<NetworkRecoverResult, String> {
 }
 
 fn release_keep_intent() -> NetworkRecoverResult {
+    if user_disconnected_now() {
+        set_underlay_reconnecting(false);
+        return noop("idle", "user disconnected");
+    }
     let cleared = soft_release_tunnel();
     {
         let mut mem = follow_lock();
@@ -562,10 +591,30 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
         String::new()
     };
     let changed = tunnel_up && underlay_fingerprint_diverged(&recorded, detected.as_deref());
-    let input = follow_snapshot(tunnel_up, present, changed);
+    let underlay_if = detected
+        .as_deref()
+        .and_then(fingerprint_iface)
+        .unwrap_or("");
+    let route_ok = !tunnel_up || !present || endpoint_route_on_underlay(underlay_if);
+    // Probe egress only during an outage, and skip the probe when the host
+    // route is already on the wrong interface so the next try stays fast.
+    let outage_active = follow_lock().diverged_since.is_some();
+    let probing = tunnel_up && (changed || !present || !route_ok || outage_active);
+    let traffic_ok = if !probing {
+        true
+    } else if !present || !route_ok {
+        false
+    } else {
+        tunnel_is_healthy().unwrap_or(false)
+    };
+    let input = follow_snapshot(tunnel_up, present, changed, route_ok, traffic_ok);
 
     match decide_underlay_follow(input) {
         UnderlayFollow::Idle => {
+            if user_disconnected_now() {
+                set_underlay_reconnecting(false);
+                return Ok(noop("idle", "user disconnected"));
+            }
             if !input.gave_up {
                 set_underlay_reconnecting(false);
                 clear_underlay_notice();
@@ -574,6 +623,7 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
                 && tunnel_up
                 && present
                 && !changed
+                && route_ok
                 && !tunnel_is_healthy().unwrap_or(false)
             {
                 return rebind_underlay(false);
@@ -581,20 +631,26 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
             Ok(noop("noop", "underlay unchanged"))
         }
         UnderlayFollow::Rebind => {
+            show_reconnecting();
             let result = rebind_underlay(true)?;
-            if !result.changed {
-                show_reconnecting();
+            if user_disconnected_now() {
+                set_underlay_reconnecting(false);
+                clear_underlay_notice();
+                return Ok(noop("idle", "user disconnected"));
             }
+            show_reconnecting();
             Ok(result)
         }
         UnderlayFollow::Wait => {
             show_reconnecting();
             if tunnel_up {
                 let result = rebind_underlay(true)?;
-                if result.changed {
+                if user_disconnected_now() {
                     set_underlay_reconnecting(false);
                     clear_underlay_notice();
+                    return Ok(noop("idle", "user disconnected"));
                 }
+                show_reconnecting();
                 return Ok(result);
             }
             Ok(noop("wait", RECONNECTING_NOTICE))
@@ -680,6 +736,64 @@ impl Drop for FlightGuard {
     }
 }
 
+fn fingerprint_iface(fp: &str) -> Option<&str> {
+    let iface = fp.split('|').nth(1)?.trim();
+    if iface.is_empty() {
+        None
+    } else {
+        Some(iface)
+    }
+}
+
+/// `ip route get` output uses this device. The first `dev` token is the one
+/// the kernel will actually use.
+pub(crate) fn route_dev_is(text: &str, iface: &str) -> bool {
+    let line = text.lines().next().unwrap_or("");
+    let mut parts = line.split_whitespace();
+    while let Some(word) = parts.next() {
+        if word == "dev" {
+            return parts.next() == Some(iface);
+        }
+    }
+    false
+}
+
+fn recorded_endpoint_ip() -> String {
+    let Ok(dir) = privileged_state_dir() else {
+        return String::new();
+    };
+    let meta = fs::read_to_string(dir.join("iface.meta")).unwrap_or_default();
+    for line in meta.lines() {
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        if k.trim() == "endpoint_ip" {
+            return v.trim().to_string();
+        }
+    }
+    String::new()
+}
+
+/// True when the WireGuard endpoint host route exits via this underlay.
+/// Stealth (no public endpoint) has nothing to pin. A missing `ip` does not
+/// invent an outage; a route that lands on veritas0 is not ok.
+fn endpoint_route_on_underlay(iface: &str) -> bool {
+    let ip = recorded_endpoint_ip();
+    if ip.is_empty() || ip == "127.0.0.1" {
+        return true;
+    }
+    if iface.is_empty() || iface == "veritas0" {
+        return false;
+    }
+    let Ok(out) = std::process::Command::new("ip")
+        .args(["-4", "route", "get", &ip])
+        .output()
+    else {
+        return true;
+    };
+    route_dev_is(&String::from_utf8_lossy(&out.stdout), iface)
+}
+
 /// Detect underlay path as `gateway|iface|src` (best-effort, non-elevated).
 fn detect_underlay_fingerprint() -> Option<String> {
     let out = std::process::Command::new("bash")
@@ -688,34 +802,51 @@ fn detect_underlay_fingerprint() -> Option<String> {
             r#"
 IFACE="veritas0"
 gw=""; gif=""; src=""
-# The OS default route is the underlay. nmcli device order is not.
-gw="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
-  /blackhole/ { next }
-  /via/ {
-    for (i = 1; i <= NF; i++) if ($i == "dev") { d=$(i+1); break }
-    if (d == "" || d != iface) { print $3; exit }
-  }
-')"
-gif="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
-  /blackhole/ { next }
-  /via/ {
-    for (i = 1; i <= NF; i++) if ($i == "dev") { d=$(i+1); break }
-    if (d == "" || d != iface) { print d; exit }
-  }
-')"
+# The OS default route is the underlay. Skip a down NIC so a stale Wi-Fi
+# default does not hide an Ethernet default that is already up.
+while IFS= read -r line; do
+  case "$line" in *blackhole*) continue ;; esac
+  case "$line" in *" via "*) ;; *) continue ;; esac
+  gw="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit } }' <<<"$line")"
+  gif="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }' <<<"$line")"
+  case "$gif" in
+    ""|lo|"$IFACE") gw=""; gif=""; continue ;;
+  esac
+  case "$gif" in
+    *[!A-Za-z0-9_.:-]*) gw=""; gif=""; continue ;;
+  esac
+  state="$(cat "/sys/class/net/$gif/operstate" 2>/dev/null || true)"
+  if [ "$state" = "down" ]; then
+    gw=""; gif=""
+    continue
+  fi
+  break
+done <<EOF
+$(ip -4 route show default 2>/dev/null)
+EOF
 if [ -z "$gw" ] && command -v nmcli >/dev/null 2>&1; then
+  if command -v timeout >/dev/null 2>&1; then
+    nm_list="$(timeout 2 nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null || true)"
+  else
+    nm_list="$(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null || true)"
+  fi
   while IFS=: read -r dev type state; do
     [ "$state" = "connected" ] || continue
     case "$type" in wifi|ethernet|802-11-wireless|802-3-ethernet) ;; *) continue ;; esac
     [ -n "$dev" ] && [ "$dev" != "$IFACE" ] && [ "$dev" != "lo" ] || continue
-    gw="$(nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1)"
-    src="$(nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1)"
+    oper="$(cat "/sys/class/net/$dev/operstate" 2>/dev/null || true)"
+    [ "$oper" = "down" ] && continue
+    if command -v timeout >/dev/null 2>&1; then
+      gw="$(timeout 2 nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1 || true)"
+      src="$(timeout 2 nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1 || true)"
+    else
+      gw="$(nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1 || true)"
+      src="$(nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1 || true)"
+    fi
     src="${src%%/*}"
     gif="$dev"
     [ -n "$gw" ] && break
-  done <<EOF
-$(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null)
-EOF
+  done <<<"$nm_list"
 fi
 if [ -z "$src" ] && [ -n "$gif" ]; then
   src="$(ip -4 -o addr show dev "$gif" 2>/dev/null | awk '{print $4; exit}')"
@@ -751,8 +882,9 @@ mod tests {
     use super::{
         decide_underlay_follow, recovery_lock_abandon, recovery_lock_acquire,
         recovery_lock_acquire_owned, recovery_lock_release, recovery_lock_release_owned,
-        reconnect_backoff, underlay_fingerprint_diverged, underlay_release_due, FlightGuard,
-        FlightKind, FollowInput, UnderlayFollow, UNDERLAY_GIVE_UP_AFTER, UNDERLAY_RELEASE_AFTER,
+        reconnect_backoff, route_dev_is, underlay_fingerprint_diverged, underlay_release_due,
+        FlightGuard, FlightKind, FollowInput, UnderlayFollow, UNDERLAY_GIVE_UP_AFTER,
+        UNDERLAY_RELEASE_AFTER,
     };
 
     fn follow(mut set: impl FnMut(&mut FollowInput)) -> UnderlayFollow {
@@ -761,7 +893,8 @@ mod tests {
             tunnel_up: true,
             underlay_present: true,
             underlay_changed: false,
-            diverged_for: Duration::ZERO,
+            outage_for: Duration::ZERO,
+            traffic_ok: true,
             reconnect_wanted: true,
             released: false,
             underlay_back_for: None,
@@ -795,7 +928,8 @@ mod tests {
             follow(|input| {
                 input.underlay_present = false;
                 input.underlay_changed = true;
-                input.diverged_for = Duration::ZERO;
+                input.outage_for = Duration::ZERO;
+                input.traffic_ok = false;
             }),
             UnderlayFollow::Wait
         );
@@ -803,7 +937,8 @@ mod tests {
             follow(|input| {
                 input.underlay_present = false;
                 input.underlay_changed = true;
-                input.diverged_for = Duration::from_secs(18);
+                input.outage_for = Duration::from_secs(18);
+                input.traffic_ok = false;
             }),
             UnderlayFollow::ReleaseKeepIntent
         );
@@ -850,14 +985,81 @@ mod tests {
     }
 
     #[test]
-    fn wired_to_wifi_rebinds_while_both_are_up() {
-        let decision = follow(|input| {
-            input.underlay_present = true;
-            input.underlay_changed = true;
-            input.diverged_for = Duration::from_secs(60);
-        });
-        assert_eq!(decision, UnderlayFollow::Rebind);
-        assert_ne!(decision, UnderlayFollow::ReleaseKeepIntent);
+    fn wired_to_wifi_rebinds_then_releases_when_traffic_stays_down() {
+        assert_eq!(
+            follow(|input| {
+                input.underlay_present = true;
+                input.underlay_changed = true;
+                input.outage_for = Duration::ZERO;
+                input.traffic_ok = false;
+            }),
+            UnderlayFollow::Rebind
+        );
+        assert_eq!(
+            follow(|input| {
+                input.underlay_present = true;
+                input.underlay_changed = true;
+                input.outage_for = Duration::from_secs(18);
+                input.traffic_ok = false;
+            }),
+            UnderlayFollow::ReleaseKeepIntent,
+            "a live second link does not keep a dead path behind the kill switch"
+        );
+        assert_eq!(
+            follow(|input| {
+                input.underlay_present = true;
+                input.underlay_changed = true;
+                input.outage_for = Duration::from_secs(60);
+                input.traffic_ok = true;
+            }),
+            UnderlayFollow::Rebind,
+            "restored traffic still records the new underlay"
+        );
+    }
+
+    #[test]
+    fn stable_unhealthy_tunnel_does_not_drop_the_kill_switch() {
+        assert_eq!(
+            follow(|input| {
+                input.underlay_changed = false;
+                input.underlay_present = true;
+                input.traffic_ok = false;
+                input.outage_for = Duration::ZERO;
+            }),
+            UnderlayFollow::Idle
+        );
+    }
+
+    #[test]
+    fn endpoint_route_must_use_the_new_underlay() {
+        assert!(route_dev_is(
+            "203.0.113.10 via 198.51.100.1 dev eno1 src 198.51.100.20",
+            "eno1"
+        ));
+        assert!(!route_dev_is(
+            "203.0.113.10 dev veritas0 src 10.0.0.2",
+            "eno1"
+        ));
+        assert!(!route_dev_is(
+            "203.0.113.10 via 192.0.2.1 dev wlx90de802153e1 src 192.0.2.50",
+            "eno1"
+        ));
+    }
+
+    #[test]
+    fn disconnect_during_reconnect_does_not_rebuild() {
+        assert_eq!(
+            follow(|input| {
+                input.user_disconnected = true;
+                input.tunnel_up = true;
+                input.underlay_present = true;
+                input.underlay_changed = true;
+                input.outage_for = Duration::from_secs(30);
+                input.traffic_ok = false;
+                input.reconnect_wanted = true;
+            }),
+            UnderlayFollow::Idle
+        );
     }
 
     #[test]

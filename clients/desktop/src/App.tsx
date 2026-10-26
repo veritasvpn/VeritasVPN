@@ -838,15 +838,17 @@ function HomeStage({
   restorePending: boolean;
 }) {
   const reconnectHold = /^reconnecting/i.test(statusMsg);
-  const phase: HeroPhase = connected && !reconnectHold
-    ? "protected"
-    : connecting
-      ? "connecting"
-      : !subscriptionChecked
-        ? "checking"
-        : subscriptionActive
-          ? "ready"
-          : "upsell";
+  const phase: HeroPhase = reconnectHold
+    ? "reconnecting"
+    : connected
+      ? "protected"
+      : connecting
+        ? "connecting"
+        : !subscriptionChecked
+          ? "checking"
+          : subscriptionActive
+            ? "ready"
+            : "upsell";
   const onClick = (connecting && !reconnectHold) || !subscriptionChecked || (restorePending && !connected)
     ? null
     : connected || reconnectHold

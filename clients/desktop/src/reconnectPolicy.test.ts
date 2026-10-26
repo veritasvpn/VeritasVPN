@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyPeerCheck,
   displayStatus,
+  connectControlDisconnects,
   underlayNoticeKeepsSession,
   peerGoneAction,
   peerGoneLatchHeld,
@@ -115,5 +116,14 @@ describe("status text", () => {
     ).toBe(false);
     expect(underlayNoticeKeepsSession("")).toBe(false);
     expect(underlayNoticeKeepsSession(null)).toBe(false);
+  });
+
+  it("lets Disconnect cancel Reconnecting and leaves the first connect spinner alone", () => {
+    expect(connectControlDisconnects("reconnecting")).toBe(true);
+    expect(connectControlDisconnects("protected")).toBe(true);
+    expect(connectControlDisconnects("connecting")).toBe(false);
+    expect(connectControlDisconnects("ready")).toBe(false);
+    expect(connectControlDisconnects("checking")).toBe(false);
+    expect(connectControlDisconnects(null)).toBe(false);
   });
 });

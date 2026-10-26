@@ -854,7 +854,7 @@ pub(crate) fn refresh_endpoint_route_linux() -> RouteRefreshResult {
     if Path::new(SOFT_PATH_ADAPT_HELPER).exists() {
         let _token = PeerCheckTokenGuard::install();
         match Command::new("timeout")
-            .args(["12", "sudo", "-n", SOFT_PATH_ADAPT_HELPER])
+            .args(["-k", "2", "10", "sudo", "-n", SOFT_PATH_ADAPT_HELPER])
             .output()
         {
             Ok(out) if out.status.success() => {
@@ -970,12 +970,17 @@ NEW_GW='{gw}'
 NEW_GW_IF='{gw_if}'
 META_FILE='{meta}'
 IFACE='{iface}'
-# Replace the pinned endpoint host route for the new underlay.
-ip route del "$ENDPOINT_IP" 2>/dev/null || true
+# Replace the pinned endpoint host route. Do not delete it first: a failed
+# replace would leave the endpoint flowing into the tunnel /1 routes.
 if [[ -n "$NEW_GW_IF" ]]; then
-  ip route replace "$ENDPOINT_IP" via "$NEW_GW" dev "$NEW_GW_IF"
+  ip route replace "$ENDPOINT_IP/32" via "$NEW_GW" dev "$NEW_GW_IF"
 else
-  ip route replace "$ENDPOINT_IP" via "$NEW_GW"
+  ip route replace "$ENDPOINT_IP/32" via "$NEW_GW"
+fi
+got="$(ip -4 route get "$ENDPOINT_IP" 2>/dev/null | head -1 || true)"
+if [[ -n "$NEW_GW_IF" && "$got" != *"dev $NEW_GW_IF"* ]]; then
+  echo "endpoint route missing" >&2
+  exit 1
 fi
 # Keep meta in sync so the next change detects correctly.
 if [[ -f "$META_FILE" ]]; then
@@ -2312,6 +2317,7 @@ rm -f "$RUNTIME_DIR/fresh-read"
 {endpoint_fns}
 {handshake_fns}
 {dns_fns}
+{underlay_fns}
 
 safe_stop_pid_file() {{
   local file="$1" expected="$2" pid="" uid="" command=""
@@ -2333,6 +2339,7 @@ safe_stop_pid_file() {{
 }}
 
 cleanup_killswitch() {{
+  clear_tunnel_input || true
   if command -v nft >/dev/null 2>&1; then
     nft delete table inet "$KILLSWITCH_TABLE" 2>/dev/null || true
   fi
@@ -2620,6 +2627,9 @@ fi
 ip link set "$IFACE_NAME" up
 # Product default MTU 1280 (reliability on mobile/hostile paths); see docs/MTU_STRATEGY.md
 ip link set "$IFACE_NAME" mtu 1280
+# Accept decrypted packets on veritas0 and loosen rp_filter on this underlay
+# before any re-path. UFW's default deny otherwise drops return traffic.
+prepare_repath "$GW_IF" ""
 
 # Prove WireGuard handshake before changing system routes
 ip route add 10.0.0.0/24 dev "$IFACE_NAME" 2>/dev/null
@@ -2797,6 +2807,7 @@ cat > "$SOFT_DIR/cleanup-killswitch.sh" <<'SOFT_CLEANUP'
 #!/bin/bash
 set -uo pipefail
 {dns_fns}
+{underlay_fns}
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || exit 1
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || exit 1
@@ -2810,6 +2821,8 @@ if [[ -f "$META" && ! -L "$META" ]]; then
 fi
 [[ "$GW_IF" =~ ^[A-Za-z0-9_.:-]{{1,15}}$ ]] || GW_IF=""
 IFACE="veritas0"
+stop_path_adapt || true
+clear_tunnel_input || true
 if command -v nft >/dev/null 2>&1; then
   nft delete table inet veritasvpn_killswitch 2>/dev/null || true
 fi
@@ -2846,6 +2859,9 @@ cat > "$SOFT_DIR/path-adapt.sh" <<'SOFT_PATH'
 # the tunnel down. Same behavior as Android: stay connected across network
 # changes (including Wi-Fi→Wi-Fi with the same gateway IP).
 set -uo pipefail
+# Bound the helper itself. `timeout` around sudo does not always kill the
+# root script, and sudoers does not allow `sudo timeout`.
+ADAPT_DEADLINE=$((SECONDS + 8))
 {endpoint_fns}
 {fresh_fns}
 {stealth_fns}
@@ -2879,51 +2895,39 @@ WAN_HOST="${{ENDPOINT_WAN%%:*}}"
 [[ "$WAN_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || WAN_HOST=""
 [[ -n "$ENDPOINT_IP" ]] || exit 0
 
-detect_underlay() {{
-  local gw="" gif="" src=""
-  local dev type state oper
-  # Follow the OS default route. Device-list order is not the route the host uses.
-  gw="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
-    /blackhole/ {{ next }}
-    /via/ {{
-      for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
-      if (d == "" || d != iface) {{ print $3; exit }}
-    }}
-  ')"
-  gif="$(ip -4 route show default 2>/dev/null | awk -v iface="$IFACE" '
-    /blackhole/ {{ next }}
-    /via/ {{
-      for (i = 1; i <= NF; i++) if ($i == "dev") {{ d=$(i+1); break }}
-      if (d == "" || d != iface) {{ print d; exit }}
-    }}
-  ')"
-  if [[ -z "$gw" || -z "$gif" ]] && command -v nmcli >/dev/null 2>&1; then
-    while IFS=: read -r dev type state; do
-      [[ "$state" == "connected" ]] || continue
-      case "$type" in wifi|ethernet|802-11-wireless|802-3-ethernet) ;; *) continue ;; esac
-      [[ -n "$dev" && "$dev" != "$IFACE" && "$dev" != "lo" ]] || continue
-      oper="$(cat "/sys/class/net/$dev/operstate" 2>/dev/null || true)"
-      [[ "$oper" == "up" ]] || continue
-      gw="$(nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1)"
-      src="$(nmcli -g IP4.ADDRESS device show "$dev" 2>/dev/null | head -1)"
-      src="${{src%%/*}}"
-      gif="$dev"
-      [[ -n "$gw" && -n "$gif" ]] && break
-    done < <(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null)
-  fi
-  if [[ -z "$src" && -n "$gif" ]]; then
-    src="$(ip -4 -o addr show dev "$gif" 2>/dev/null | awk '{{print $4; exit}}')"
-    src="${{src%%/*}}"
-  fi
-  printf '%s %s %s\n' "$gw" "$gif" "$src"
-}}
-
 NEW_GW=""; NEW_GW_IF=""; NEW_SRC=""
-for _ in $(seq 1 8); do
-  read -r NEW_GW NEW_GW_IF NEW_SRC <<<"$(detect_underlay)"
-  [[ -n "$NEW_GW" && -n "$NEW_GW_IF" ]] && break
-  sleep 0.4
+for _ in 1 2 3 4; do
+  if read -r NEW_GW NEW_GW_IF <<<"$(pick_underlay "$IFACE" 2>/dev/null || true)"; then
+    [[ -n "$NEW_GW" && -n "$NEW_GW_IF" ]] && break
+  fi
+  NEW_GW=""; NEW_GW_IF=""
+  sleep 0.25
 done
+if [[ -z "$NEW_GW" || -z "$NEW_GW_IF" ]] && command -v nmcli >/dev/null 2>&1; then
+  if command -v timeout >/dev/null 2>&1; then
+    nm_list="$(timeout 2 nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null || true)"
+  else
+    nm_list="$(nmcli -t -f DEVICE,TYPE,STATE device 2>/dev/null || true)"
+  fi
+  while IFS=: read -r dev type state; do
+    [[ "$state" == "connected" ]] || continue
+    case "$type" in wifi|ethernet|802-11-wireless|802-3-ethernet) ;; *) continue ;; esac
+    [[ -n "$dev" && "$dev" != "$IFACE" && "$dev" != "lo" ]] || continue
+    iface_oper_up "$dev" || continue
+    if command -v timeout >/dev/null 2>&1; then
+      NEW_GW="$(timeout 2 nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1 || true)"
+    else
+      NEW_GW="$(nmcli -g IP4.GATEWAY device show "$dev" 2>/dev/null | head -1 || true)"
+    fi
+    NEW_GW_IF="$dev"
+    [[ -n "$NEW_GW" ]] && break
+    NEW_GW=""; NEW_GW_IF=""
+  done <<<"$nm_list"
+fi
+if [[ -n "$NEW_GW_IF" ]]; then
+  NEW_SRC="$(ip -4 -o addr show dev "$NEW_GW_IF" 2>/dev/null | awk '{{print $4; exit}}')"
+  NEW_SRC="${{NEW_SRC%%/*}}"
+fi
 # Not ready is a failure. Exit 0 here used to be reported as a successful
 # rebind, so the watcher stopped retrying while the kill switch still
 # pointed at the interface that had just disappeared.
@@ -2931,10 +2935,13 @@ if [[ -z "$NEW_GW" || -z "$NEW_GW_IF" ]]; then
   echo "underlay not ready" >&2
   exit 1
 fi
+# UFW/rp_filter/conntrack before the route move, so return packets on the
+# new path are not dropped while the host route is being replaced.
+prepare_repath "$NEW_GW_IF" "$OLD_IF"
 # Move the current endpoint before any peer read. The read needs this path,
 # and waiting for it first let the helper hit its deadline without rebinding.
 if ! follow_underlay_route "$ENDPOINT_IP" "$NEW_GW" "$NEW_GW_IF" "$NEW_SRC"; then
-  echo "underlay not ready" >&2
+  echo "endpoint route missing" >&2
   exit 1
 fi
 if [[ -n "$WAN_HOST" && "$WAN_HOST" != "$ENDPOINT_IP" && "$WAN_HOST" != "127.0.0.1" ]]; then
@@ -2980,11 +2987,19 @@ if [[ -z "$STEALTH_REMOTE" ]]; then
   _allow_port="$(port_of "$ENDPOINT" 2>/dev/null || true)"
   [[ -n "$_allow_port" ]] && allow_outside_ip "$ENDPOINT_IP" "$_allow_port" udp
 fi
+if [[ "$SECONDS" -ge "$ADAPT_DEADLINE" ]]; then
+  echo "path-adapt deadline" >&2
+  exit 1
+fi
 if [[ -n "$DNS" && "$NEW_GW_IF" != "$OLD_IF" ]]; then
   if [[ -n "$OLD_IF" ]] && dns_link_name_ok "$OLD_IF"; then
-    resolvectl default-route "$OLD_IF" true >/dev/null 2>&1 || true
+    dns_run 3 resolvectl default-route "$OLD_IF" true
   fi
   apply_tunnel_dns "$DNS" "$NEW_GW_IF" "$STATE_DIR/iface.meta.links" || true
+fi
+if [[ "$SECONDS" -ge "$ADAPT_DEADLINE" ]]; then
+  echo "path-adapt deadline" >&2
+  exit 1
 fi
 _fresh="$(maybe_fresh_lines "$NEW_GW" "$NEW_GW_IF" "$NEW_SRC" || true)"
 _fresh_code="$(printf '%s\n' "$_fresh" | sed -n '1p')"
@@ -3023,19 +3038,14 @@ if [[ ! "$CHOOSE_IP" =~ ^([0-9]{{1,3}}\.){{3}}[0-9]{{1,3}}$ || "$CHOOSE_IP" == "
 fi
 
 OLD_EP_IP="$ENDPOINT_IP"
-ip route del "$OLD_EP_IP" 2>/dev/null || true
-ip route del "$OLD_EP_IP/32" 2>/dev/null || true
-ip route del "$CHOOSE_IP" 2>/dev/null || true
-ip route del "$CHOOSE_IP/32" 2>/dev/null || true
+if ! follow_underlay_route "$CHOOSE_IP" "$NEW_GW" "$NEW_GW_IF" "$NEW_SRC"; then
+  echo "endpoint route missing" >&2
+  exit 1
+fi
 if [[ -n "$NEW_SRC" ]] && [[ "$(same_ipv4_24 "$CHOOSE_IP" "$NEW_SRC")" == "yes" ]]; then
-  ip route replace "$CHOOSE_IP/32" dev "$NEW_GW_IF" src "$NEW_SRC" 2>/dev/null || \
-    ip route replace "$CHOOSE_IP" dev "$NEW_GW_IF" 2>/dev/null || true
   # Refresh ARP for the on-link VPN node; do not flush the whole neighbor table.
   ip neigh del "$CHOOSE_IP" dev "$NEW_GW_IF" 2>/dev/null || true
   ping -c 1 -W 1 -I "$NEW_GW_IF" "$CHOOSE_IP" >/dev/null 2>&1 || true
-else
-  ip route replace "$CHOOSE_IP/32" via "$NEW_GW" dev "$NEW_GW_IF" 2>/dev/null || \
-    ip route replace "$CHOOSE_IP" via "$NEW_GW" ${{NEW_GW_IF:+dev $NEW_GW_IF}} 2>/dev/null || true
 fi
 if [[ -n "$WAN_HOST" && "$WAN_HOST" != "$CHOOSE_IP" ]]; then
   ip route del "$WAN_HOST" 2>/dev/null || true
@@ -3043,10 +3053,17 @@ if [[ -n "$WAN_HOST" && "$WAN_HOST" != "$CHOOSE_IP" ]]; then
   ip route replace "$WAN_HOST/32" via "$NEW_GW" ${{NEW_GW_IF:+dev $NEW_GW_IF}} 2>/dev/null || true
 fi
 if command -v conntrack >/dev/null 2>&1; then
-  conntrack -D -p udp --dst "$OLD_EP_IP" 2>/dev/null || true
-  conntrack -D -p tcp --dst "$OLD_EP_IP" 2>/dev/null || true
-  conntrack -D -p udp --dst "$CHOOSE_IP" 2>/dev/null || true
-  conntrack -D -p tcp --dst "$CHOOSE_IP" 2>/dev/null || true
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 2 conntrack -D -p udp --dst "$OLD_EP_IP" >/dev/null 2>&1 || true
+    timeout 2 conntrack -D -p tcp --dst "$OLD_EP_IP" >/dev/null 2>&1 || true
+    timeout 2 conntrack -D -p udp --dst "$CHOOSE_IP" >/dev/null 2>&1 || true
+    timeout 2 conntrack -D -p tcp --dst "$CHOOSE_IP" >/dev/null 2>&1 || true
+  else
+    conntrack -D -p udp --dst "$OLD_EP_IP" >/dev/null 2>&1 || true
+    conntrack -D -p tcp --dst "$OLD_EP_IP" >/dev/null 2>&1 || true
+    conntrack -D -p udp --dst "$CHOOSE_IP" >/dev/null 2>&1 || true
+    conntrack -D -p tcp --dst "$CHOOSE_IP" >/dev/null 2>&1 || true
+  fi
 fi
 if [[ -z "$STEALTH" ]] && [[ "$CHOOSE_EP" != 127.0.0.1:* ]] && command -v wg >/dev/null 2>&1 && ip link show "$IFACE" >/dev/null 2>&1; then
   PEER="$(wg show "$IFACE" peers 2>/dev/null | head -1)"
@@ -3065,9 +3082,13 @@ fi
 maybe_restart_stealth
 if [[ -n "$DNS" ]]; then
   if [[ -n "$OLD_IF" && "$OLD_IF" != "$NEW_GW_IF" ]] && dns_link_name_ok "$OLD_IF"; then
-    resolvectl default-route "$OLD_IF" true >/dev/null 2>&1 || true
+    dns_run 3 resolvectl default-route "$OLD_IF" true
   fi
   apply_tunnel_dns "$DNS" "$NEW_GW_IF" "$STATE_DIR/iface.meta.links" || true
+fi
+if ! endpoint_route_ok "$CHOOSE_IP" "$NEW_GW_IF"; then
+  echo "endpoint route missing" >&2
+  exit 1
 fi
 tmp="$(mktemp)"
 awk -v gw="$NEW_GW" -v gwif="$NEW_GW_IF" -v src="$NEW_SRC" -v epip="$CHOOSE_IP" -v ep="$CHOOSE_EP" -v bound="$STEALTH_BOUND_NOW" '
@@ -3126,6 +3147,7 @@ if [[ -n "$DESKTOP_USER" ]]; then
 set -uo pipefail
 {handshake_fns}
 {dns_fns}
+{underlay_fns}
 [[ -n "${{SUDO_USER:-}}" && "$SUDO_USER" != "root" ]] || {{ echo "SUDO_USER is required" >&2; exit 1; }}
 RUNTIME_UID="$(id -u "$SUDO_USER")"
 [[ "$RUNTIME_UID" =~ ^[0-9]+$ ]] || {{ echo "invalid runtime uid" >&2; exit 1; }}
@@ -3169,6 +3191,8 @@ IFACE="veritas0"
 if [[ -z "$IFACE" && -f "$IFACE_FILE" ]]; then
   IFACE="$(cat "$IFACE_FILE")"
 fi
+stop_path_adapt || true
+clear_tunnel_input || true
 ip route del blackhole default metric 1 2>/dev/null || true
 if command -v nft >/dev/null 2>&1; then
   nft delete table inet veritasvpn_killswitch 2>/dev/null || true
@@ -3458,6 +3482,7 @@ META_FILE={meta_file}
 DNS_BACKUP="${{META_FILE}}.dns"
 {handshake_fns}
 {dns_fns}
+{underlay_fns}
 stop_handshake_publisher "$(dirname "$IFACE_FILE")" || true
 
 ENDPOINT_IP=""
@@ -3492,6 +3517,8 @@ IFACE="veritas0"
 [[ -z "$GW" || "$GW" =~ ^[0-9A-Fa-f:.]+$ ]] || GW=""
 [[ -z "$GW_IF" || "$GW_IF" =~ ^[A-Za-z0-9_.:-]{{1,15}}$ ]] || GW_IF=""
 
+stop_path_adapt || true
+clear_tunnel_input || true
 # Remove the dedicated kill switch before intentionally restoring normal internet.
 ip route del blackhole default metric 1 2>/dev/null || true
 
@@ -3559,6 +3586,7 @@ echo ok
         meta_file = shell_quote(&meta_file.display().to_string()),
         handshake_fns = include_str!("handshake_publish.sh"),
         dns_fns = include_str!("dns_restore.sh"),
+        underlay_fns = include_str!("underlay_follow.sh"),
     );
     fs::write(&script_path, &script).map_err(|e| format!("write teardown: {e}"))?;
     #[cfg(unix)]
@@ -3577,11 +3605,11 @@ echo ok
     if Path::new(SOFT_TEARDOWN_HELPER).exists() {
         let helper = if is_soft_elevated() {
             Command::new("timeout")
-                .args(["20", "sudo", "-n", SOFT_TEARDOWN_HELPER])
+                .args(["-k", "2", "20", "sudo", "-n", SOFT_TEARDOWN_HELPER])
                 .output()
         } else {
             Command::new("timeout")
-                .args(["20", "sudo", "-n", SOFT_TEARDOWN_HELPER, "--purge"])
+                .args(["-k", "2", "20", "sudo", "-n", SOFT_TEARDOWN_HELPER, "--purge"])
                 .output()
         };
         match helper {
@@ -4047,7 +4075,16 @@ mod security_tests {
         assert!(path_adapt.contains("maybe_fresh_lines"));
         assert!(path_adapt.contains("maybe_restart_stealth"));
         assert!(path_adapt.contains("follow_underlay_route"));
+        assert!(path_adapt.contains("prepare_repath"));
+        assert!(path_adapt.contains("endpoint_route_ok"));
+        assert!(path_adapt.contains("dns_run 3 resolvectl default-route"));
+        assert!(
+            !path_adapt.contains("resolvectl default-route \"$OLD_IF\" true >/dev/null"),
+            "resolvectl on a dead interface must be wrapped in a timeout"
+        );
         assert!(path_adapt.contains("underlay not ready"));
+        let rust_src = include_str!("lib.rs");
+        assert!(rust_src.contains("[\"-k\", \"2\", \"10\", \"sudo\", \"-n\", SOFT_PATH_ADAPT_HELPER]"));
         let follow_at = path_adapt
             .find("follow_underlay_route \"$ENDPOINT_IP\"")
             .expect("follow call");
@@ -4163,6 +4200,7 @@ mod security_tests {
         assert!(script.contains("ip route del blackhole default metric 1"));
         assert!(script.contains("ip -6 route del blackhole default metric 1"));
         assert!(script.contains("ip link delete veritas0"));
+        assert!(script.contains("veritas-tun-in"));
         assert!(script.contains("exit 0"));
         assert!(script.contains("restore_veritas_dns"));
         assert!(script.contains("resolvectl default-route"));

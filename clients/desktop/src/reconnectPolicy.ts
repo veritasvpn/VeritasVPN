@@ -14,6 +14,11 @@ export function underlayNoticeKeepsSession(notice: string | null | undefined): b
   return /^reconnecting\b/i.test((notice ?? "").trim());
 }
 
+/** The connect circle disconnects while protected and while reconnecting. The first connect spinner stays non-clickable. */
+export function connectControlDisconnects(phase: string | null | undefined): boolean {
+  return phase === "protected" || phase === "reconnecting";
+}
+
 /** Recovery opens the API exception on every try. Stop after this many. */
 export const RECOVERY_MAX_ATTEMPTS = 3;
 

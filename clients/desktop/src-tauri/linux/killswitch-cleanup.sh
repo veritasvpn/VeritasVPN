@@ -107,6 +107,19 @@ if command -v ip6tables >/dev/null 2>&1; then
   ip6tables -X VERITASVPN_KILLSWITCH_V6 2>/dev/null || true
 fi
 
+# Drop the veritas0 INPUT accepts installed so UFW does not block the tunnel.
+# Leave every other firewall rule, including the OUTPUT kill switch, alone.
+if command -v iptables >/dev/null 2>&1; then
+  for _i in 1 2 3 4 5 6 7 8; do
+    iptables -C ufw-before-input -i veritas0 -m comment --comment veritas-tun-in -j ACCEPT >/dev/null 2>&1 || break
+    iptables -D ufw-before-input -i veritas0 -m comment --comment veritas-tun-in -j ACCEPT >/dev/null 2>&1 || break
+  done
+  for _i in 1 2 3 4 5 6 7 8; do
+    iptables -C INPUT -i veritas0 -m comment --comment veritas-tun-in -j ACCEPT >/dev/null 2>&1 || break
+    iptables -D INPUT -i veritas0 -m comment --comment veritas-tun-in -j ACCEPT >/dev/null 2>&1 || break
+  done
+fi
+
 # BEGIN dns_restore.sh
 # Undo VeritasVPN DNS changes on the links this app recorded.
 # While connected, global lookups are scoped to veritas0 and the underlay's

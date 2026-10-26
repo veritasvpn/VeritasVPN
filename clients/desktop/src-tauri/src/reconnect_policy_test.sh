@@ -594,9 +594,25 @@ source "$ROOT/endpoint_choice.sh"
 # shellcheck disable=SC1091
 source "$ROOT/underlay_follow.sh"
 route_log="$(mktemp)"
-ip() { printf '%s\n' "$*" >> "$route_log"; }
+ip() {
+  printf '%s\n' "$*" >> "$route_log"
+  if [[ "${1:-}" == "-4" && "${2:-}" == "route" && "${3:-}" == "get" ]]; then
+    local last="" dev=""
+    last="$(grep 'route replace' "$route_log" | tail -1 || true)"
+    dev="$(printf '%s\n' "$last" | sed -n 's/.* dev \([^ ]*\).*/\1/p')"
+    if [[ -n "$dev" ]]; then
+      printf '%s via 198.51.100.1 dev %s src 198.51.100.20\n' "${4:-}" "$dev"
+    else
+      printf '%s dev veritas0\n' "${4:-}"
+    fi
+  fi
+  return 0
+}
 follow_underlay_route 203.0.113.10 198.51.100.1 eno1 198.51.100.20 || fail "wired underlay was not ready"
 grep -q 'route replace 203.0.113.10/32 via 198.51.100.1 dev eno1' "$route_log" || fail "endpoint did not move to the wired underlay"
+if grep -q 'route del ' "$route_log"; then
+  fail "endpoint route was deleted before the replacement was verified"
+fi
 if grep -q 'wlx90de802153e1' "$route_log"; then
   fail "endpoint route stayed on the old wifi interface"
 fi
@@ -606,8 +622,102 @@ grep -q 'route replace 203.0.113.10/32 via 192.0.2.1 dev wlx90de802153e1' "$rout
 if follow_underlay_route 203.0.113.10 "" eno1 198.51.100.20; then
   fail "a missing gateway was treated as ready"
 fi
+
+# A failed replace must not look like success, and must not report the route gone.
+: > "$route_log"
+ip() {
+  printf '%s\n' "$*" >> "$route_log"
+  if [[ "${1:-}" == "route" && "${2:-}" == "replace" ]]; then
+    return 1
+  fi
+  if [[ "${1:-}" == "-4" && "${2:-}" == "route" && "${3:-}" == "get" ]]; then
+    printf '%s dev veritas0 src 10.0.0.2\n' "${4:-}"
+  fi
+  return 0
+}
+if follow_underlay_route 203.0.113.10 198.51.100.1 eno1 198.51.100.20; then
+  fail "a failed route replace was reported as a successful re-path"
+fi
+
+# Wi-Fi goes down while Ethernet is already up with its own default route.
+# The endpoint host route must move to Ethernet, not stay on the dead NIC.
+sys_root="$(mktemp -d)"
+mkdir -p "$sys_root/class/net/wlx90de802153e1" "$sys_root/class/net/eno1"
+printf 'down\n' > "$sys_root/class/net/wlx90de802153e1/operstate"
+printf 'up\n' > "$sys_root/class/net/eno1/operstate"
+: > "$route_log"
+ip() {
+  if [[ "${1:-}" == "-4" && "${2:-}" == "route" && "${3:-}" == "show" ]]; then
+    printf '%s\n' 'blackhole default metric 1'
+    printf '%s\n' 'default via 192.0.2.1 dev wlx90de802153e1 metric 600'
+    printf '%s\n' 'default via 198.51.100.1 dev eno1 proto dhcp metric 20100'
+    return 0
+  fi
+  printf '%s\n' "$*" >> "$route_log"
+  if [[ "${1:-}" == "-4" && "${2:-}" == "route" && "${3:-}" == "get" ]]; then
+    printf '%s\n' '203.0.113.10 via 198.51.100.1 dev eno1 src 198.51.100.20'
+  fi
+  return 0
+}
+export VERITAS_SYS_ROOT="$sys_root"
+picked="$(pick_underlay veritas0)" || fail "live ethernet underlay was not selected"
+[[ "$picked" == "198.51.100.1 eno1" ]] || fail "handover picked '$picked' instead of the up ethernet default"
+: > "$route_log"
+follow_underlay_route 203.0.113.10 198.51.100.1 eno1 198.51.100.20 || fail "handover did not install the ethernet host route"
+grep -q 'route replace 203.0.113.10/32 via 198.51.100.1 dev eno1' "$route_log" || fail "endpoint host route was not pointed at eno1"
+if grep -q 'wlx90de802153e1' "$route_log"; then
+  fail "handover left the endpoint on the down wifi interface"
+fi
+rm -rf "$sys_root"
+
+# UFW must accept decrypted packets on veritas0, and only that interface.
+# rp_filter is loosened on veritas0 and the new underlay, not globally.
+ufw_log="$(mktemp)"
+sysctl_root="$(mktemp -d)"
+iptables() {
+  printf '%s\n' "iptables $*" >> "$ufw_log"
+  if [[ "${1:-}" == "-S" && "${2:-}" == "ufw-before-input" ]]; then
+    return 0
+  fi
+  if [[ "${1:-}" == "-C" ]]; then
+    return 1
+  fi
+  return 0
+}
+timeout() { shift; "$@"; }
+conntrack() { printf '%s\n' "conntrack $*" >> "$ufw_log"; return 0; }
+VERITAS_SYSCTL_ROOT="$sysctl_root" prepare_repath eno1 wlx90de802153e1 || fail "repath firewall prep failed"
+grep -q 'iptables -I ufw-before-input 1 -i veritas0 -m comment --comment veritas-tun-in -j ACCEPT' "$ufw_log" || fail "ufw-before-input does not accept veritas0"
+grep -q 'iptables -I INPUT 1 -i veritas0 -m comment --comment veritas-tun-in -j ACCEPT' "$ufw_log" || fail "INPUT does not accept veritas0"
+if grep '^iptables ' "$ufw_log" | grep -q -e '-i eno1' -e '-i wlx'; then
+  fail "tunnel input accept was not limited to veritas0"
+fi
+[[ "$(cat "$sysctl_root/net/ipv4/conf/veritas0/rp_filter")" == "2" ]] || fail "veritas0 rp_filter was not loose"
+[[ "$(cat "$sysctl_root/net/ipv4/conf/eno1/rp_filter")" == "2" ]] || fail "underlay rp_filter was not loose"
+if [[ -e "$sysctl_root/net/ipv4/conf/all/rp_filter" ]]; then
+  fail "global rp_filter was changed"
+fi
+grep -q 'conntrack -D -i wlx90de802153e1' "$ufw_log" || fail "old underlay conntrack was kept"
+grep -q 'conntrack -D -o wlx90de802153e1' "$ufw_log" || fail "old underlay conntrack was kept"
+: > "$ufw_log"
+iptables() {
+  printf '%s\n' "iptables $*" >> "$ufw_log"
+  if [[ "${1:-}" == "-C" ]]; then
+    if grep -Fq "iptables -D ${2:-}" "$ufw_log"; then
+      return 1
+    fi
+    return 0
+  fi
+  return 0
+}
+clear_tunnel_input || fail "tunnel input cleanup failed"
+grep -q 'iptables -D ufw-before-input -i veritas0 -m comment --comment veritas-tun-in -j ACCEPT' "$ufw_log" || fail "disconnect did not remove the ufw accept"
+grep -q 'iptables -D INPUT -i veritas0 -m comment --comment veritas-tun-in -j ACCEPT' "$ufw_log" || fail "disconnect did not remove the INPUT accept"
+rm -rf "$sysctl_root"
+rm -f "$ufw_log"
+unset -f ip iptables timeout conntrack
+unset VERITAS_SYS_ROOT VERITAS_SYSCTL_ROOT
 rm -f "$route_log"
-unset -f ip
 
 if grep -q 'Command::new("resolvectl")' "$lib"; then
   fail "resolvectl is invoked from the desktop process"
@@ -629,5 +739,21 @@ follow_line="$(printf '%s\n' "$path_section" | awk '/follow_underlay_route/{prin
 fresh_line="$(printf '%s\n' "$path_section" | awk '/maybe_fresh_lines/{print NR; exit}')"
 [[ -n "$follow_line" && -n "$fresh_line" && "$follow_line" -lt "$fresh_line" ]] || fail "path-adapt reads the peer before moving the endpoint route"
 printf '%s\n' "$path_section" | grep -q 'underlay not ready' || fail "path-adapt treats a missing underlay as success"
+printf '%s\n' "$path_section" | grep -q 'endpoint_route_ok' || fail "path-adapt reports success without checking the host route"
+printf '%s\n' "$path_section" | grep -q 'prepare_repath' || fail "path-adapt does not prepare ufw and rp_filter"
+printf '%s\n' "$path_section" | grep -q 'dns_run 3 resolvectl default-route' || fail "path-adapt resolvectl is not bounded"
+if printf '%s\n' "$path_section" | grep -q 'resolvectl default-route "$OLD_IF" true >/dev/null'; then
+  fail "path-adapt calls resolvectl on the old interface without a timeout"
+fi
+if ! grep -q -- '-k", "2", "10", "sudo", "-n", SOFT_PATH_ADAPT_HELPER' "$lib"; then
+  fail "path-adapt sudo is not killed when it ignores SIGTERM"
+fi
+
+teardown_section="$(sed -n "/<<'SOFT_TEARDOWN'/,/^SOFT_TEARDOWN$/p" "$lib")"
+printf '%s\n' "$teardown_section" | grep -q 'clear_tunnel_input' || fail "disconnect leaves the veritas0 input accept"
+printf '%s\n' "$teardown_section" | grep -q 'stop_path_adapt' || fail "disconnect does not stop a late path-adapt"
+printf '%s\n' "$teardown_section" | grep -q 'blackhole default metric 1' || fail "disconnect leaves the blackhole route"
+printf '%s\n' "$teardown_section" | grep -q '0.0.0.0/1' || fail "disconnect leaves the tunnel split route"
+printf '%s\n' "$teardown_section" | grep -q 'ip link delete' || fail "disconnect leaves veritas0"
 
 printf 'ok\n'
