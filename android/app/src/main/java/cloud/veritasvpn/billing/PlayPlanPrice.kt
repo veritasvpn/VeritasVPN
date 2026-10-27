@@ -55,12 +55,37 @@ internal fun playPriceSuffix(period: String): String = when (period.uppercase())
     else -> ""
 }
 
+/** What the Play plan cards do while billing setup is in progress. */
+internal enum class PlayCatalogRequest { LOAD, WAIT, HIDE }
+
 /**
- * Play prices are fetched only after BillingClient is connected. While it is
- * not, the screen keeps the loading line. An empty plan list has nothing to ask.
+ * Prices load once Play Billing is connected. Until then the card says
+ * "Loading price…". If setup fails or times out, the price line is hidden.
+ * An empty plan list has nothing to ask, so it hides too.
  */
-internal fun playCatalogReadyToQuery(planIds: List<String>, clientReady: Boolean): Boolean =
-    planIds.isNotEmpty() && clientReady
+internal fun playCatalogRequest(hasPlans: Boolean, clientReady: Boolean, setupGaveUp: Boolean): PlayCatalogRequest =
+    when {
+        !hasPlans -> PlayCatalogRequest.HIDE
+        clientReady -> PlayCatalogRequest.LOAD
+        setupGaveUp -> PlayCatalogRequest.HIDE
+        else -> PlayCatalogRequest.WAIT
+    }
+
+/** A second connect() while BillingClient is already connecting is ignored. */
+internal fun shouldStartPlayBillingConnection(closed: Boolean, ready: Boolean, inProgress: Boolean): Boolean =
+    !closed && !ready && !inProgress
+
+/** Server verify errors that contain these words are not shown to the user. */
+internal fun playPurchaseErrorMessage(serverMessage: String?): String {
+    val raw = serverMessage?.trim().orEmpty()
+    if (raw.isEmpty() ||
+        raw.contains("invalid", ignoreCase = true) ||
+        raw.contains("required", ignoreCase = true)
+    ) {
+        return "Couldn't verify this Google Play purchase."
+    }
+    return raw
+}
 
 internal fun playPlanPriceLabel(price: PlayPlanPrice): String {
     val suffix = playPriceSuffix(price.billingPeriod)

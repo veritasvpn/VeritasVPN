@@ -5,11 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/veritasvpn/lib/logging"
 	"github.com/veritasvpn/services/billing-svc/internal/model"
 	"github.com/veritasvpn/services/billing-svc/internal/provider"
@@ -145,6 +147,20 @@ func (s *stubPlayClient) GetSubscription(ctx context.Context, purchaseToken stri
 		return nil, s.err
 	}
 	return s.purchase, nil
+}
+
+type uniqueConflictStore struct{}
+
+func (uniqueConflictStore) PaymentAccount(ctx context.Context, purchaseToken string) (string, error) {
+	return "", nil
+}
+
+func (uniqueConflictStore) UpdateGooglePlay(ctx context.Context, accountID, token string, apply func(sub *model.Subscription, linked []model.PaymentRecord) (*model.PaymentRecord, string, error)) (string, error) {
+	sub := &model.Subscription{ID: "sub", AccountID: accountID, Tier: model.TierFree, Status: model.StatusActive}
+	if _, _, err := apply(sub, nil); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("update google play payment: %w", &pgconn.PgError{Code: "23505"})
 }
 
 type allowPush struct{}
@@ -1039,16 +1055,173 @@ func TestVoidedOlderOrderKeepsPremiumUntilTheLatestChargeOrAccessEnds(t *testing
 		t.Fatalf("latest was refunded during grace: %+v", store.pays[latestRenewal])
 	}
 
-	// Refunding the latest order removes Premium even while the lookup says active.
+	// Refunding the latest order while Google still says active keeps Premium.
+	// A partial refund is not a revoke.
 	client.purchase.State = "SUBSCRIPTION_STATE_ACTIVE"
 	voided(latestRenewal)
 	sub = store.subs["acc-1"]
 	premium = sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
-	if premium || sub.Tier != model.TierFree || expired != 1 {
-		t.Fatalf("latest refund kept premium: sub=%+v expired=%d", sub, expired)
+	if !premium || expired != 0 || store.pays[latestRenewal].Status != model.PaymentRefunded || store.pays[latestRenewal].Amount != 300 {
+		t.Fatalf("latest refund while entitled: sub=%+v pay=%+v expired=%d", sub, store.pays[latestRenewal], expired)
 	}
-	if store.pays[latestRenewal].Status != model.PaymentRefunded || store.pays[olderRenewal].Status != model.PaymentRefunded {
-		t.Fatalf("rows = latest:%+v older:%+v", store.pays[latestRenewal], store.pays[olderRenewal])
+}
+
+func TestCanceledPlaySubscriptionKeepsPremiumWhenOlderOrderIsRefunded(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	const token = "token-canceled"
+	const older = "GPA.5151-5252-5353-54545"
+	const latest = "GPA.5151-5252-5353-54545..0"
+	end := now.Add(20 * 24 * time.Hour)
+	store := newMemPlayStore()
+	client := &stubPlayClient{pkg: "cloud.veritasvpn"}
+	var expired int
+	play := NewPlayBilling(testLog(t), store, client, allowPush{}, func(subject string, _ map[string]interface{}) {
+		if subject == "subscription.expired" {
+			expired++
+		}
+	})
+	play.now = func() time.Time { return now }
+	record := func(order string, when time.Time) {
+		t.Helper()
+		purchase := activePurchase("acc-1", "premium_monthly", when, "SUBSCRIPTION_STATE_ACTIVE")
+		purchase.LatestOrderID = order
+		purchase.LineItems[0].LatestSuccessfulOrderID = order
+		purchase.LineItems[0].HasPrice = true
+		purchase.LineItems[0].PriceCents = 300
+		purchase.LineItems[0].Currency = "usd"
+		client.purchase = purchase
+		if _, err := play.Verify(context.Background(), "acc-1", "premium_monthly", token); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(older, now.Add(10*24*time.Hour))
+	record(latest, end)
+
+	canceled := activePurchase("acc-1", "premium_monthly", end, "SUBSCRIPTION_STATE_CANCELED")
+	canceled.LatestOrderID = latest
+	canceled.LineItems[0].LatestSuccessfulOrderID = latest
+	canceled.LineItems[0].HasPrice = true
+	canceled.LineItems[0].PriceCents = 300
+	canceled.LineItems[0].Currency = "usd"
+	client.purchase = canceled
+	body := pubSubBody(t, map[string]any{
+		"packageName": "cloud.veritasvpn",
+		"voidedPurchaseNotification": map[string]any{
+			"purchaseToken": token,
+			"orderId":       older,
+			"productType":   1,
+		},
+	})
+	if err := play.ProcessNotification(context.Background(), body, "Bearer test"); err != nil {
+		t.Fatal(err)
+	}
+	sub := store.subs["acc-1"]
+	premium := sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
+	if !premium || !sub.CancelAtPeriodEnd || expired != 0 {
+		t.Fatalf("canceled refund removed premium: %+v expired=%d", sub, expired)
+	}
+	if store.pays[older].Status != model.PaymentRefunded || store.pays[latest].Status != model.PaymentCompleted {
+		t.Fatalf("older=%+v latest=%+v", store.pays[older], store.pays[latest])
+	}
+}
+
+func TestRefundedPlayOrderStaysRefundedWhileEntitledAndAfterExpiry(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	const token = "token-stay-refunded"
+	const orderID = "GPA.6161-6262-6363-64646..0"
+	end := now.Add(30 * 24 * time.Hour)
+	store := newMemPlayStore()
+	purchase := activePurchase("acc-1", "premium_monthly", end, "SUBSCRIPTION_STATE_ACTIVE")
+	purchase.LatestOrderID = orderID
+	purchase.LineItems[0].LatestSuccessfulOrderID = orderID
+	purchase.LineItems[0].HasPrice = true
+	purchase.LineItems[0].PriceCents = 300
+	purchase.LineItems[0].Currency = "usd"
+	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: purchase}
+	play := NewPlayBilling(testLog(t), store, client, allowPush{}, func(string, map[string]interface{}) {})
+	play.now = func() time.Time { return now }
+	if _, err := play.Verify(context.Background(), "acc-1", "premium_monthly", token); err != nil {
+		t.Fatal(err)
+	}
+	voided := pubSubBody(t, map[string]any{
+		"packageName": "cloud.veritasvpn",
+		"voidedPurchaseNotification": map[string]any{
+			"purchaseToken": token,
+			"orderId":       orderID,
+			"productType":   1,
+		},
+	})
+	if err := play.ProcessNotification(context.Background(), voided, "Bearer test"); err != nil {
+		t.Fatal(err)
+	}
+	renewed := pubSubBody(t, map[string]any{
+		"packageName": "cloud.veritasvpn",
+		"subscriptionNotification": map[string]any{
+			"notificationType": 2,
+			"purchaseToken":    token,
+			"subscriptionId":   "premium_monthly",
+		},
+	})
+	if err := play.ProcessNotification(context.Background(), renewed, "Bearer test"); err != nil {
+		t.Fatal(err)
+	}
+	sub := store.subs["acc-1"]
+	premium := sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
+	if !premium || store.pays[orderID].Status != model.PaymentRefunded || store.pays[orderID].Amount != 300 {
+		t.Fatalf("redelivery restored the charge: sub=%+v pay=%+v", sub, store.pays[orderID])
+	}
+	if _, err := play.Verify(context.Background(), "acc-1", "premium_monthly", token); err != nil {
+		t.Fatal(err)
+	}
+	if store.pays[orderID].Status != model.PaymentRefunded {
+		t.Fatalf("verify restored the charge: %+v", store.pays[orderID])
+	}
+
+	expiredPurchase := activePurchase("acc-1", "premium_monthly", now.Add(-time.Hour), "SUBSCRIPTION_STATE_EXPIRED")
+	expiredPurchase.LatestOrderID = orderID
+	expiredPurchase.LineItems[0].LatestSuccessfulOrderID = orderID
+	expiredPurchase.LineItems[0].HasPrice = true
+	expiredPurchase.LineItems[0].PriceCents = 300
+	expiredPurchase.LineItems[0].Currency = "usd"
+	client.purchase = expiredPurchase
+	note := pubSubBody(t, map[string]any{
+		"packageName": "cloud.veritasvpn",
+		"subscriptionNotification": map[string]any{
+			"notificationType": 13,
+			"purchaseToken":    token,
+			"subscriptionId":   "premium_monthly",
+		},
+	})
+	if err := play.ProcessNotification(context.Background(), note, "Bearer test"); err != nil {
+		t.Fatal(err)
+	}
+	sub = store.subs["acc-1"]
+	premium = sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
+	if premium || sub.Tier != model.TierFree || store.pays[orderID].Status != model.PaymentRefunded {
+		t.Fatalf("expiry: sub=%+v pay=%+v", sub, store.pays[orderID])
+	}
+}
+
+func TestPlayPaymentUniqueConflictIsAcknowledged(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	purchase := activePurchase("acc-1", "premium_monthly", now.Add(30*24*time.Hour), "SUBSCRIPTION_STATE_ACTIVE")
+	purchase.LatestOrderID = "GPA.7171-7272-7373-74747"
+	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: purchase}
+	play := NewPlayBilling(testLog(t), uniqueConflictStore{}, client, allowPush{}, func(string, map[string]interface{}) {})
+	play.now = func() time.Time { return now }
+	body := pubSubBody(t, map[string]any{
+		"packageName": "cloud.veritasvpn",
+		"subscriptionNotification": map[string]any{
+			"notificationType": 2,
+			"purchaseToken":    "token-conflict",
+			"subscriptionId":   "premium_monthly",
+		},
+	})
+	if err := play.ProcessNotification(context.Background(), body, "Bearer test"); err != nil {
+		t.Fatalf("unique conflict was retried: %v", err)
+	}
+	if _, err := play.Verify(context.Background(), "acc-1", "premium_monthly", "token-conflict"); !repository.IsPlayPaymentUniqueConflict(err) {
+		t.Fatalf("verify err = %v", err)
 	}
 }
 

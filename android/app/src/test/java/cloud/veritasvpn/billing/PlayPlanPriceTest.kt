@@ -106,9 +106,35 @@ class PlayPlanPriceTest {
     }
 
     @Test
-    fun catalogQueryWaitsUntilPlayIsConnected() {
-        assertFalse(playCatalogReadyToQuery(listOf("premium_monthly"), clientReady = false))
-        assertFalse(playCatalogReadyToQuery(emptyList(), clientReady = true))
-        assertTrue(playCatalogReadyToQuery(listOf("premium_monthly", "premium_annual"), clientReady = true))
+    fun catalogQueryWaitsHidesOrLoadsWithoutAnError() {
+        assertEquals(PlayCatalogRequest.WAIT, playCatalogRequest(hasPlans = true, clientReady = false, setupGaveUp = false))
+        assertEquals(PlayCatalogRequest.LOAD, playCatalogRequest(hasPlans = true, clientReady = true, setupGaveUp = false))
+        assertEquals(PlayCatalogRequest.HIDE, playCatalogRequest(hasPlans = true, clientReady = false, setupGaveUp = true))
+        assertEquals(PlayCatalogRequest.LOAD, playCatalogRequest(hasPlans = true, clientReady = true, setupGaveUp = true))
+        assertEquals(PlayCatalogRequest.HIDE, playCatalogRequest(hasPlans = false, clientReady = true, setupGaveUp = false))
+        val hidden = shownPlanPrice(true, pricesLoaded = true, price = null, directPrice = "$3", directSuffix = "/month")
+        assertFalse(hidden.loading)
+        assertNull(hidden.price)
+
+        assertFalse(shouldStartPlayBillingConnection(closed = false, ready = false, inProgress = true))
+        assertFalse(shouldStartPlayBillingConnection(closed = false, ready = true, inProgress = false))
+        assertFalse(shouldStartPlayBillingConnection(closed = true, ready = false, inProgress = false))
+        assertTrue(shouldStartPlayBillingConnection(closed = false, ready = false, inProgress = false))
+    }
+
+    @Test
+    fun purchaseVerifyErrorsDoNotShowRawServerText() {
+        val raw = "purchase_token is required and the product id is invalid"
+        val message = playPurchaseErrorMessage(raw)
+        assertEquals("Couldn't verify this Google Play purchase.", message)
+        assertFalse(message.contains("purchase_token"))
+        assertFalse(message.contains("invalid", ignoreCase = true))
+        assertFalse(message.contains("required", ignoreCase = true))
+        assertEquals("Couldn't verify this Google Play purchase.", playPurchaseErrorMessage("  "))
+        assertEquals("Couldn't verify this Google Play purchase.", playPurchaseErrorMessage(null))
+        assertEquals(
+            "Google Play is still processing this subscription.",
+            playPurchaseErrorMessage("Google Play is still processing this subscription."),
+        )
     }
 }

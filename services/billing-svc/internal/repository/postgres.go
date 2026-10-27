@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/veritasvpn/services/billing-svc/internal/model"
 )
@@ -522,8 +523,20 @@ func listPlayPaymentsForUpdate(ctx context.Context, tx pgx.Tx, token string) ([]
 	return out, nil
 }
 
+// IsPlayPaymentUniqueConflict is a duplicate payment_records.provider_transaction_id
+// (SQLSTATE 23505). Callers acknowledge the notification instead of returning
+// a retryable 502. The PostgreSQL error text can contain the stored key, so
+// it is not logged.
+func IsPlayPaymentUniqueConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
 func upsertPlayPayment(ctx context.Context, tx pgx.Tx, payment *model.PaymentRecord) error {
 	if strings.TrimSpace(payment.ID) != "" {
+		if _, err := tx.Exec(ctx, "SAVEPOINT play_payment_retarget"); err != nil {
+			return fmt.Errorf("play payment savepoint: %w", err)
+		}
 		query := `UPDATE payment_records SET
 		           provider_transaction_id = $2,
 		           amount = $3,
@@ -543,12 +556,26 @@ func upsertPlayPayment(ctx context.Context, tx pgx.Tx, payment *model.PaymentRec
 			payment.IsTrial, payment.PurchaseToken, payment.SubscriptionID, payment.AccountID,
 		)
 		if err != nil {
-			return fmt.Errorf("update google play payment: %w", err)
-		}
-		if ct.RowsAffected() == 1 {
-			return nil
+			if _, rbErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT play_payment_retarget"); rbErr != nil {
+				return fmt.Errorf("play payment savepoint rollback: %w", rbErr)
+			}
+			if !IsPlayPaymentUniqueConflict(err) {
+				return fmt.Errorf("update google play payment: %w", err)
+			}
+			// The order id is already on another row. Update that row below.
+		} else {
+			if _, relErr := tx.Exec(ctx, "RELEASE SAVEPOINT play_payment_retarget"); relErr != nil {
+				return fmt.Errorf("play payment savepoint release: %w", relErr)
+			}
+			if ct.RowsAffected() == 1 {
+				return nil
+			}
 		}
 	}
+	return insertPlayPayment(ctx, tx, payment)
+}
+
+func insertPlayPayment(ctx context.Context, tx pgx.Tx, payment *model.PaymentRecord) error {
 	createdAt := time.Now().UTC()
 	if !payment.CreatedAt.IsZero() {
 		createdAt = payment.CreatedAt
@@ -557,13 +584,13 @@ func upsertPlayPayment(ctx context.Context, tx pgx.Tx, payment *model.PaymentRec
 	           status, provider_transaction_id, plan_id, period_days, created_at, provider, is_trial, purchase_token)
 	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	           ON CONFLICT (provider_transaction_id) DO UPDATE SET
-	               status = EXCLUDED.status,
-	               amount = EXCLUDED.amount,
-	               currency = EXCLUDED.currency,
+	               status = CASE WHEN payment_records.status = 'refunded' THEN payment_records.status ELSE EXCLUDED.status END,
+	               amount = CASE WHEN payment_records.status = 'refunded' THEN payment_records.amount ELSE EXCLUDED.amount END,
+	               currency = CASE WHEN payment_records.status = 'refunded' THEN payment_records.currency ELSE EXCLUDED.currency END,
 	               plan_id = EXCLUDED.plan_id,
 	               period_days = EXCLUDED.period_days,
 	               provider = EXCLUDED.provider,
-	               is_trial = EXCLUDED.is_trial,
+	               is_trial = CASE WHEN payment_records.status = 'refunded' THEN payment_records.is_trial ELSE EXCLUDED.is_trial END,
 	               purchase_token = EXCLUDED.purchase_token,
 	               subscription_id = EXCLUDED.subscription_id,
 	               account_id = EXCLUDED.account_id`

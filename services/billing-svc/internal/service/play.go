@@ -143,6 +143,14 @@ func (p *PlayBilling) ProcessNotification(ctx context.Context, body []byte, auth
 		return ErrPlayAccountUnbound
 	}
 	_, err = p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke, note.RefundOrderID)
+	if repository.IsPlayPaymentUniqueConflict(err) {
+		// A duplicate order id must not 502. Pub/Sub would retry forever.
+		// The message has no purchase token or order id.
+		if p.log != nil {
+			p.log.Warn("google play payment order id already stored; acknowledging notification")
+		}
+		return nil
+	}
 	return err
 }
 
@@ -263,16 +271,11 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 	pending := state == "SUBSCRIPTION_STATE_PENDING"
 	latestOrder := strings.TrimSpace(playChargeOrderID(purchase, line))
 	refundID := strings.TrimSpace(refundOrderID)
-	// A voided older renewal must not remove Premium while Google still
-	// reports the subscription active or in grace. Refunding the latest
-	// order does. SUBSCRIPTION_REVOKED (forceRevoke) always does.
-	stillPaying := state == "SUBSCRIPTION_STATE_ACTIVE" || state == "SUBSCRIPTION_STATE_IN_GRACE_PERIOD"
-	latestForRefund := latestOrder
-	if latestForRefund == "" {
-		latestForRefund = token
-	}
-	revokeForRefund := refundID != "" && (forceRevoke || !stillPaying || refundID == latestForRefund)
-	entitled := !forceRevoke && !revokeForRefund && !pending && playEntitled(state, line.Expiry, now)
+	// A refund records that one order. Premium follows the fresh lookup:
+	// active, in grace, and canceled with time left stay entitled, including
+	// when the refunded order is the latest one. SUBSCRIPTION_REVOKED and a
+	// lookup that is no longer entitled still remove Premium.
+	entitled := !forceRevoke && !pending && playEntitled(state, line.Expiry, now)
 
 	orderKey := latestOrder
 	if refundID != "" {
@@ -328,6 +331,15 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 			isTrial = existing.IsTrial
 		}
 	}
+	// A later verify or RTDN must not turn a refund back into a completed charge.
+	if existing != nil && existing.Status == model.PaymentRefunded && status != model.PaymentRefunded {
+		status = model.PaymentRefunded
+		amount = existing.Amount
+		if existing.Currency != "" {
+			currency = existing.Currency
+		}
+		isTrial = existing.IsTrial
+	}
 
 	payment := &model.PaymentRecord{
 		SubscriptionID:        sub.ID,
@@ -361,7 +373,7 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 			assignPlaySubscription(sub, product, token, line, newEnd, now, state)
 		}
 	} else if playOwnsEntitlement(sub, token) {
-		revokePlaySubscription(sub, now, state, forceRevoke || revokeForRefund, purchase.PauseResumesAt)
+		revokePlaySubscription(sub, now, state, forceRevoke, purchase.PauseResumesAt)
 	}
 
 	event, isTrialStart, isConversion := playEvent(before, sub, payment.IsTrial, conversionMarker(linked, existing, payment.IsTrial))
@@ -706,8 +718,9 @@ func decodeDeveloperNotification(body []byte) (developerNote, error) {
 		}
 		out.PurchaseToken = note.VoidedPurchaseNotification.PurchaseToken
 		out.RefundOrderID = strings.TrimSpace(note.VoidedPurchaseNotification.OrderID)
-		// The fresh subscriptionsv2 lookup decides entitlement. An older
-		// order can be refunded while the subscription is still paying.
+		// The fresh subscriptionsv2 lookup decides entitlement. Refunding an
+		// order, including the latest one, does not revoke a subscription
+		// Google still reports as entitled.
 		out.ForceRevoke = false
 		return out, nil
 	}
