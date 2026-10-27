@@ -93,7 +93,7 @@ The server checks eligibility by looking for any `payment_records` row with `is_
 
 3. **Cancellation during trial**: If the user cancels before the trial ends, Google stops the subscription at the trial expiry. The server receives a cancellation notification and sets `cancel_at_period_end=true`. Premium continues until the trial ends, then expires.
 
-4. **Expired trial**: If the user cancels during the trial, or if the payment fails or is declined when the trial ends, Google ends the subscription. The server removes Premium. A successful charge stays completed. A voided purchase or `SUBSCRIPTION_REVOKED` marks that order refunded.
+4. **Expired trial**: If the user cancels during the trial, or if the payment fails or is declined when the trial ends, Google ends the subscription. The server removes Premium. A successful charge stays completed. A voided purchase marks that order refunded and removes Premium only when Google no longer reports the subscription as entitled. `SUBSCRIPTION_REVOKED` always removes Premium.
 
 ### Configuration
 
