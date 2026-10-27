@@ -17,8 +17,8 @@ images:
     digest: sha256:ffe74af6db018c37eb3038859b5a3763acd441ba876788064733a5e221e373bf
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    # Play account hash; unbound Play purchases return 503 (a1acc1c, 0.2.99).
-    digest: sha256:18d6c3270624dfb2b1ef1359bfdfa350532c52a53bd559a58dba1f825e1c50ce
+    # Play order payments, pause and refund entitlement (393364d, PR #270).
+    digest: sha256:ad91942c7f997fe56e1686126d38cddcd78f316624b232f16d4d25eb65698844
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     # Shield malware feed with disk-backed per-feed cache under 512Mi (5486bb8).
