@@ -17,6 +17,7 @@ func PurchaseHistoryFrom(records []PaymentRecord) []PurchaseHistoryItem {
 			Plan:        purchasePlan(record),
 			Status:      purchaseStatus(record.Status),
 			Provider:    purchaseProvider(record.Provider),
+			IsTrial:     record.IsTrial,
 		})
 	}
 	return out

@@ -35,6 +35,7 @@ import cloud.veritasvpn.auth.SessionExpiredException
 import cloud.veritasvpn.BuildConfig
 import cloud.veritasvpn.billing.BillingRepository
 import cloud.veritasvpn.billing.PlanEntitlement
+import cloud.veritasvpn.billing.PlayPlanPrice
 import cloud.veritasvpn.billing.StoreBillingCallbacks
 import cloud.veritasvpn.billing.createStoreBilling
 import java.io.IOException
@@ -319,6 +320,7 @@ class MainActivity : ComponentActivity() {
                 var playPurchasePending by remember { mutableStateOf(false) }
                 var waitingForCheckoutSettlement by remember { mutableStateOf(false) }
                 var trialOffers by remember { mutableStateOf<Map<String, cloud.veritasvpn.billing.TrialOffer>>(emptyMap()) }
+                var planPrices by remember { mutableStateOf<Map<String, PlayPlanPrice>?>(null) }
                 val observedBillingReturnVersion = billingReturnVersion
 
                 fun disconnectVpnService() {
@@ -392,6 +394,8 @@ class MainActivity : ComponentActivity() {
                     purchaseHistoryFailed = false
                     checkoutMethod = null
                     playPurchasePending = false
+                    trialOffers = emptyMap()
+                    planPrices = null
                     showPlans = false
                     showStealthSettings = false
                     showShieldSettings = false
@@ -579,6 +583,13 @@ class MainActivity : ComponentActivity() {
                     billingError = null
                     val trialAllowed = billingStatus?.trialEligible == true && trialOffers.containsKey(planId)
                     storeBilling.purchase(activity, planId, accountId, storeCallbacks(), trialAllowed)
+                }
+
+                LaunchedEffect(user?.accountId, showPlans) {
+                    val current = user ?: return@LaunchedEffect
+                    if (!current.email.isNullOrBlank()) return@LaunchedEffect
+                    val refreshed = withContext(Dispatchers.IO) { authRepo.refreshStoredEmail() }
+                    if (!refreshed?.email.isNullOrBlank()) user = refreshed
                 }
 
                 LaunchedEffect(user?.accountId) {
@@ -1403,6 +1414,10 @@ class MainActivity : ComponentActivity() {
                         override fun onTrialOffers(offers: Map<String, cloud.veritasvpn.billing.TrialOffer>) {
                             trialOffers = offers
                         }
+
+                        override fun onPlanPrices(prices: Map<String, PlayPlanPrice>) {
+                            planPrices = prices
+                        }
                     })
                 }
 
@@ -1650,6 +1665,7 @@ class MainActivity : ComponentActivity() {
                         deletingAccount = deletingAccount,
                         deleteError = deleteAccountError,
                         trialOffers = trialOffers,
+                        planPrices = planPrices,
                         onBack = { showPlans = false },
                         onRefresh = { refreshBilling() },
                         onPurchase = { plan -> startStorePurchase(plan) },

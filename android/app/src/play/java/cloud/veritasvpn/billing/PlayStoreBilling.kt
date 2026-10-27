@@ -22,6 +22,9 @@ import com.google.gson.annotations.SerializedName
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+
+private const val PLAY_CATALOG_SETUP_TIMEOUT_MS = 8_000L
 
 fun createStoreBilling(context: Context, billing: BillingRepository): StoreBilling =
     PlayStoreBilling(context, billing)
@@ -45,6 +48,20 @@ class PlayStoreBilling(
     private val closed = AtomicBoolean(false)
     private var setupError: String? = null
     private var purchaseCallbacks: StoreBillingCallbacks? = null
+
+    @Volatile
+    private var catalogQuery: CatalogQuery? = null
+    private val billingConnectionInProgress = AtomicBoolean(false)
+    private val catalogSetupGaveUp = AtomicBoolean(false)
+    private val catalogSettled = AtomicBoolean(false)
+    private val catalogTimeout = AtomicReference<Runnable?>(null)
+    private val billingReconnect = AtomicReference<Runnable?>(null)
+    private val reconnectScheduled = AtomicBoolean(false)
+
+    private data class CatalogQuery(
+        val planIds: List<String>,
+        val callbacks: StoreBillingCallbacks,
+    )
 
     private val purchasesUpdatedListener =
         com.android.billingclient.api.PurchasesUpdatedListener { result, purchases ->
@@ -73,26 +90,56 @@ class PlayStoreBilling(
         .enableAutoServiceReconnection()
         .build()
 
-    override fun connect() {
-        if (closed.get() || client.isReady) return
-        client.startConnection(object : com.android.billingclient.api.BillingClientStateListener {
-            override fun onBillingSetupFinished(result: BillingResult) {
-                if (result.responseCode == BillingClient.BillingResponseCode.OK) {
-                    setupError = null
-                } else {
-                    setupError = billingMessage(result)
-                }
+    private val billingStateListener = object : com.android.billingclient.api.BillingClientStateListener {
+        override fun onBillingSetupFinished(result: BillingResult) {
+            billingConnectionInProgress.set(false)
+            if (closed.get()) return
+            if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+                setupError = null
+                catalogSetupGaveUp.set(false)
+                reconnectScheduled.set(false)
+                cancelBillingReconnect()
+                cancelCatalogTimeout()
+                // Prices load when Play connects, and again after a reconnect.
+                main.post { loadRememberedCatalog() }
+            } else {
+                setupError = billingMessage(result)
+                catalogSetupGaveUp.set(true)
+                main.post { hideCatalogQuietly() }
             }
+        }
 
-            override fun onBillingServiceDisconnected() {
-                setupError = "Google Play Billing isn't available right now."
-            }
-        })
+        override fun onBillingServiceDisconnected() {
+            if (closed.get()) return
+            // The connection is gone. One delayed startConnection brings prices
+            // back. A second disconnect does not queue another attempt.
+            billingConnectionInProgress.set(false)
+            setupError = "Google Play Billing isn't available right now."
+            scheduleBillingReconnect()
+        }
+    }
+
+    override fun connect() {
+        if (!shouldStartPlayBillingConnection(
+                closed.get(),
+                client.isReady,
+                billingConnectionInProgress.get(),
+            )
+        ) {
+            return
+        }
+        if (!billingConnectionInProgress.compareAndSet(false, true)) return
+        client.startConnection(billingStateListener)
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         purchaseCallbacks = null
+        catalogQuery = null
+        billingConnectionInProgress.set(false)
+        reconnectScheduled.set(false)
+        cancelBillingReconnect()
+        cancelCatalogTimeout()
         io.shutdownNow()
         if (client.isReady) client.endConnection()
     }
@@ -191,13 +238,89 @@ class PlayStoreBilling(
     }
 
     override fun queryTrialOffers(planIds: List<String>, callbacks: StoreBillingCallbacks) {
-        if (!client.isReady || planIds.isEmpty()) {
-            main.post { callbacks.onTrialOffers(emptyMap()) }
-            return
+        catalogQuery = CatalogQuery(planIds, callbacks)
+        val ready = client.isReady
+        if (shouldArmPlayCatalogTimeout(planIds.isNotEmpty(), ready)) {
+            connect()
+            armCatalogTimeout()
         }
+        when (playCatalogRequest(planIds.isNotEmpty(), ready, catalogSetupGaveUp.get())) {
+            PlayCatalogRequest.HIDE -> {
+                main.post {
+                    callbacks.onTrialOffers(emptyMap())
+                    callbacks.onPlanPrices(emptyMap())
+                }
+            }
+            PlayCatalogRequest.WAIT -> Unit
+            PlayCatalogRequest.LOAD -> {
+                cancelCatalogTimeout()
+                catalogSettled.set(false)
+                loadCatalog(planIds, callbacks)
+            }
+        }
+    }
+
+    private fun scheduleBillingReconnect() {
+        if (closed.get()) return
+        if (playReconnectBackoffMs(reconnectScheduled.get()) == null) return
+        if (!reconnectScheduled.compareAndSet(false, true)) return
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!billingReconnect.compareAndSet(this, null)) return
+                if (closed.get()) return
+                if (client.isReady) {
+                    reconnectScheduled.set(false)
+                    loadRememberedCatalog()
+                    return
+                }
+                connect()
+            }
+        }
+        billingReconnect.set(runnable)
+        main.postDelayed(runnable, PLAY_BILLING_RECONNECT_BACKOFF_MS)
+    }
+
+    private fun cancelBillingReconnect() {
+        billingReconnect.getAndSet(null)?.let { main.removeCallbacks(it) }
+    }
+
+    private fun armCatalogTimeout() {
+        val timeout = object : Runnable {
+            override fun run() {
+                if (!catalogTimeout.compareAndSet(this, null)) return
+                if (closed.get() || client.isReady) return
+                catalogSetupGaveUp.set(true)
+                hideCatalogQuietly()
+            }
+        }
+        catalogTimeout.getAndSet(timeout)?.let { main.removeCallbacks(it) }
+        main.postDelayed(timeout, PLAY_CATALOG_SETUP_TIMEOUT_MS)
+    }
+
+    private fun cancelCatalogTimeout() {
+        catalogTimeout.getAndSet(null)?.let { main.removeCallbacks(it) }
+    }
+
+    private fun hideCatalogQuietly() {
+        catalogSettled.set(true)
+        cancelCatalogTimeout()
+        val callbacks = catalogQuery?.callbacks ?: return
+        callbacks.onTrialOffers(emptyMap())
+        callbacks.onPlanPrices(emptyMap())
+    }
+
+    private fun loadRememberedCatalog() {
+        if (closed.get() || !client.isReady) return
+        val query = catalogQuery ?: return
+        if (query.planIds.isEmpty()) return
+        loadCatalog(query.planIds, query.callbacks)
+    }
+
+    private fun loadCatalog(planIds: List<String>, callbacks: StoreBillingCallbacks) {
         io.execute {
             if (closed.get()) return@execute
             val offers = mutableMapOf<String, TrialOffer>()
+            val prices = mutableMapOf<String, PlayPlanPrice>()
             for (planId in planIds) {
                 val entry = PlayCatalog.byPlanId(planId) ?: continue
                 val params = QueryProductDetailsParams.newBuilder()
@@ -222,9 +345,10 @@ class PlayStoreBilling(
                     done.countDown()
                 }
                 done.await(20, java.util.concurrent.TimeUnit.SECONDS)
-                val error = errorResult.get()
-                if (error != null) continue
+                // A Play catalog miss hides the price. It is not shown as an error.
+                if (errorResult.get() != null) continue
                 val details = detailsResult.get() ?: continue
+                regularBasePlanPrice(planId, entry.basePlanId, pricePhases(details))?.let { prices[planId] = it }
                 val offerChoice = offerToken(details, entry.basePlanId, true) ?: continue
                 if (offerChoice.trialDays != null && offerChoice.priceAfterTrial != null && offerChoice.period != null) {
                     offers[planId] = TrialOffer(
@@ -235,7 +359,12 @@ class PlayStoreBilling(
                     )
                 }
             }
-            main.post { callbacks.onTrialOffers(offers) }
+            catalogSettled.set(true)
+            cancelCatalogTimeout()
+            main.post {
+                callbacks.onTrialOffers(offers)
+                callbacks.onPlanPrices(prices)
+            }
         }
     }
 
@@ -290,7 +419,7 @@ class PlayStoreBilling(
             } catch (e: SessionExpiredException) {
                 main.post { callbacks?.onSessionExpired() }
             } catch (e: Exception) {
-                main.post { callbacks?.onError(e.message ?: "Couldn't verify this Google Play purchase.") }
+                main.post { callbacks?.onError(playPurchaseErrorMessage(e.message)) }
             }
         }
     }
@@ -311,12 +440,9 @@ class PlayStoreBilling(
         ) { response ->
             val data = ApiClient.parse<PlayVerifyResponse>(response)
             if (!response.isSuccessful) {
-                throw BillingRepository.Error(
-                    data?.error?.takeIf { it.isNotBlank() }
-                        ?: "Couldn't verify this Google Play purchase.",
-                )
+                throw BillingRepository.Error(playPurchaseErrorMessage(data?.error))
             }
-            data ?: throw BillingRepository.Error("The server returned an invalid purchase response.")
+            data ?: throw BillingRepository.Error(playPurchaseErrorMessage("invalid"))
         }
 
     private fun acknowledge(purchaseToken: String) {
@@ -333,6 +459,24 @@ class PlayStoreBilling(
         }
         done.await(20, java.util.concurrent.TimeUnit.SECONDS)
         if (failed != null) throw BillingRepository.Error(failed!!)
+    }
+
+    private fun pricePhases(details: ProductDetails): List<StorePricePhase> {
+        val offers = details.subscriptionOfferDetails ?: return emptyList()
+        return offers.flatMap { offer ->
+            val phases = offer.pricingPhases?.pricingPhaseList ?: emptyList()
+            phases.map { phase ->
+                StorePricePhase(
+                    basePlanId = offer.basePlanId,
+                    offerId = offer.offerId,
+                    formattedPrice = phase.formattedPrice,
+                    priceAmountMicros = phase.priceAmountMicros,
+                    billingPeriod = phase.billingPeriod,
+                    infiniteRecurring = phase.recurrenceMode ==
+                        ProductDetails.RecurrenceMode.INFINITE_RECURRING,
+                )
+            }
+        }
     }
 
     private data class OfferChoice(
@@ -414,5 +558,5 @@ private data class PlayVerifyResponse(
     @SerializedName("is_premium") val isPremium: Boolean = false,
     @SerializedName("acknowledge") val acknowledge: Boolean = false,
     @SerializedName("pending") val pending: Boolean = false,
-    val error: String? = null,
+    @SerializedName("error") val error: String? = null,
 )

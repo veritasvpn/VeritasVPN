@@ -89,11 +89,11 @@ The server checks eligibility by looking for any `payment_records` row with `is_
 
 1. **Trial start**: User subscribes with the trial offer. Google charges nothing for 7 days. The server receives a subscription update with `InTrial=true`. It creates a `payment_records` row with `amount=0`, `is_trial=true`, and publishes a `subscription.renewed` event with `trial:true` in the payload. The user gets Premium immediately.
 
-2. **Trial conversion**: After 7 days, Google charges the regular subscription price. The server receives an update with `InTrial=false` and `amount>0`. It updates the existing `payment_records` row (same token) to `amount=300` (or 3000 for annual), `is_trial=false`, and publishes `subscription.renewed` with `converted:true` in the payload. The user's Premium extends for the paid period.
+2. **Trial conversion**: Google charges the regular price on the next order (`GPA.xxxx..0`), including a license-tester renewal that happens in minutes while the trial offer is still on the line item. The server inserts a second completed `payment_records` row for that order id, with Google's price and currency, leaves the trial row at amount 0, and publishes `subscription.renewed` with `converted:true`. The same order id is updated in place if verify and RTDN both see it.
 
 3. **Cancellation during trial**: If the user cancels before the trial ends, Google stops the subscription at the trial expiry. The server receives a cancellation notification and sets `cancel_at_period_end=true`. Premium continues until the trial ends, then expires.
 
-4. **Expired trial**: If the user cancels during the trial, or if the payment fails or is declined when the trial ends, Google revokes the subscription. The server receives an expiration notification and revokes Premium. The payment is marked as failed.
+4. **Expired trial**: If the user cancels during the trial, or if the payment fails or is declined when the trial ends, Google ends the subscription. The server removes Premium. A successful charge stays completed. A voided purchase marks that order refunded and removes Premium only when Google no longer reports the subscription as entitled. `SUBSCRIPTION_REVOKED` always removes Premium.
 
 ### Configuration
 
@@ -151,11 +151,16 @@ Notification handling, after `purchases.subscriptionsv2.get`:
 | Google state or notice | Entitlement |
 | --- | --- |
 | Active, canceled (still inside the period), in grace | Premium until Google's expiry. Canceled sets cancel-at-period-end. |
-| On hold, paused | Premium is removed until Google reports a recovery. |
-| Expired, revoked, voided | Premium from that Play token ends, and the payment is failed or refunded. |
+| Pause scheduled (`PAUSE_SCHEDULE_CHANGED` while still active) | Premium stays. The pause has not started. |
+| Paused | Premium is removed. The account screen says the subscription is paused and when it resumes. `SUBSCRIPTION_RESTARTED` restores Premium. |
+| On hold | Premium is removed until `SUBSCRIPTION_RECOVERED`. |
+| Expired | Premium from that Play token ends. A completed charge stays completed. A row already marked refunded stays refunded. |
+| `SUBSCRIPTION_REVOKED` | Premium ends, even if the fresh lookup still says active. The latest order row is marked refunded. |
+| Voided purchase while Google still reports the subscription entitled (active, in grace, or canceled with time left), including a refund of the latest order | That order is marked refunded. Premium stays. A later notification does not mark the row completed again. |
+| Voided purchase once Google reports the subscription is no longer entitled | Premium ends. That order stays refunded. |
 | Pending | No grant. The purchase stays unacknowledged. |
 
-A repeated call with the same purchase token updates that one `payment_records` row. It does not add another period on top of Google's expiry. A longer active Bitcoin period is not shortened by an earlier Play expiry.
+Each successful Play order id (`GPA.xxxx`, then `GPA.xxxx..0`, `GPA.xxxx..1`, …) is one `payment_records` row. A repeated notification for the same order updates that row. It does not add another period on top of Google's expiry. A subscription that already renewed on an older build has that charge on the purchase-token row. The first time the current order id is seen, that row is re-pointed to the order id instead of inserting a second history line, and it is not reported as another trial conversion. If that order id is already stored, the token-keyed row is removed only when it is the same charge (same amount, currency, trial flag, status, and plan). A different charge, including a token-keyed trial, is left in place. A duplicate `provider_transaction_id` (`idx_payment_records_provider_txn_unique`) is acknowledged. Any other unique violation is returned so Pub/Sub retries. A longer active Bitcoin period is not shortened by an earlier Play expiry. The purchase token stays on `purchase_token` (and on `subscriptions.external_ref` while that Play subscription is current) so an RTDN can find the account. An RTDN for a token that is not linked yet is not acknowledged, and Pub/Sub retries.
 
 ## Environment on the Dell deployment
 

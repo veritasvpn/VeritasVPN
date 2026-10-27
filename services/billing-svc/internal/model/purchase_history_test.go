@@ -106,13 +106,35 @@ func TestPurchaseHistoryOmitsPaymentReferences(t *testing.T) {
 	}
 	for key := range decoded[0] {
 		switch key {
-		case "created_at", "amount_cents", "currency", "plan", "status", "provider":
+		case "created_at", "amount_cents", "currency", "plan", "status", "provider", "is_trial":
 		default:
 			t.Fatalf("unexpected history field %q", key)
 		}
 	}
 	if decoded[0]["provider"] != "btcpay" {
 		t.Fatalf("provider = %v, want btcpay", decoded[0]["provider"])
+	}
+}
+
+func TestPurchaseHistoryMarksTrial(t *testing.T) {
+	items := PurchaseHistoryFrom([]PaymentRecord{{
+		Amount:    0,
+		Currency:  "usd",
+		Status:    PaymentCompleted,
+		PlanID:    PlanMonthly,
+		IsTrial:   true,
+		Provider:  PaymentGooglePlay,
+		CreatedAt: time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC),
+	}})
+	raw, err := json.Marshal(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"is_trial":true`) {
+		t.Fatalf("trial flag missing: %s", raw)
+	}
+	if items[0].AmountCents != 0 || items[0].Provider != PaymentGooglePlay || !items[0].IsTrial {
+		t.Fatalf("item = %+v", items[0])
 	}
 }
 

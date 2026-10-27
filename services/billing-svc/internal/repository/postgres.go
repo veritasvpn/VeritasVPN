@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/veritasvpn/services/billing-svc/internal/model"
 )
@@ -57,7 +59,7 @@ func (p *Postgres) GetSubscription(ctx context.Context, accountID string) (*mode
 	query := `SELECT id, account_id, tier, status, payment_method,
 	           current_period_start, current_period_end, cancel_at_period_end,
 	           plan_id, billing_period, price_cents, period_days,
-	           created_at, updated_at, external_ref
+	           created_at, updated_at, external_ref, COALESCE(access_state, ''), pause_resumes_at
 	           FROM subscriptions WHERE account_id = $1`
 
 	sub := &model.Subscription{}
@@ -65,7 +67,7 @@ func (p *Postgres) GetSubscription(ctx context.Context, accountID string) (*mode
 		&sub.ID, &sub.AccountID, &sub.Tier, &sub.Status, &sub.PaymentMethod,
 		&sub.CurrentPeriodStart, &sub.CurrentPeriodEnd, &sub.CancelAtPeriodEnd,
 		&sub.PlanID, &sub.BillingPeriod, &sub.PriceCents, &sub.PeriodDays,
-		&sub.CreatedAt, &sub.UpdatedAt, &sub.ExternalRef,
+		&sub.CreatedAt, &sub.UpdatedAt, &sub.ExternalRef, &sub.AccessState, &sub.PauseResumesAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -336,7 +338,7 @@ func getSubscriptionForUpdate(ctx context.Context, tx pgx.Tx, accountID string) 
 	query := `SELECT id, account_id, tier, status, payment_method,
 	           current_period_start, current_period_end, cancel_at_period_end,
 	           plan_id, billing_period, price_cents, period_days,
-	           created_at, updated_at, external_ref
+	           created_at, updated_at, external_ref, COALESCE(access_state, ''), pause_resumes_at
 	           FROM subscriptions WHERE account_id = $1 FOR UPDATE`
 
 	sub := &model.Subscription{}
@@ -344,7 +346,7 @@ func getSubscriptionForUpdate(ctx context.Context, tx pgx.Tx, accountID string) 
 		&sub.ID, &sub.AccountID, &sub.Tier, &sub.Status, &sub.PaymentMethod,
 		&sub.CurrentPeriodStart, &sub.CurrentPeriodEnd, &sub.CancelAtPeriodEnd,
 		&sub.PlanID, &sub.BillingPeriod, &sub.PriceCents, &sub.PeriodDays,
-		&sub.CreatedAt, &sub.UpdatedAt, &sub.ExternalRef,
+		&sub.CreatedAt, &sub.UpdatedAt, &sub.ExternalRef, &sub.AccessState, &sub.PauseResumesAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -389,26 +391,44 @@ func (p *Postgres) ListExpiredPremium(ctx context.Context, now time.Time) ([]*mo
 // stored for a different Veritas account.
 var ErrPurchaseAccountConflict = errors.New("purchase token is already linked to another account")
 
-// PaymentAccount returns the account stored for a provider transaction, or
-// empty when that transaction has not been recorded.
-func (p *Postgres) PaymentAccount(ctx context.Context, providerTxnID string) (string, error) {
-	payment, err := p.GetPaymentByProviderTxn(ctx, providerTxnID)
+// PaymentAccount returns the account linked to a Play purchase token, or empty
+// when that token has not been recorded. Newer rows key payments by Google
+// order id and keep the token on purchase_token. Older rows used the token as
+// provider_transaction_id. The subscription external_ref is the same token
+// while the Play subscription is the active method.
+func (p *Postgres) PaymentAccount(ctx context.Context, purchaseToken string) (string, error) {
+	query := `SELECT account_id FROM (
+	            SELECT COALESCE(account_id, '') AS account_id, created_at
+	            FROM payment_records
+	            WHERE provider_transaction_id = $1
+	               OR (purchase_token <> '' AND purchase_token = $1)
+	            UNION ALL
+	            SELECT account_id, updated_at
+	            FROM subscriptions
+	            WHERE external_ref <> '' AND external_ref = $1
+	          ) linked
+	          WHERE account_id <> ''
+	          ORDER BY created_at ASC
+	          LIMIT 1`
+	var accountID string
+	err := p.pool.QueryRow(ctx, query, purchaseToken).Scan(&accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	return payment.AccountID, nil
+	return accountID, nil
 }
 
-// UpdateGooglePlay locks the account subscription and the purchase-token row,
-// then lets apply decide the entitlement. The purchase token is the idempotency
-// key: a second call updates the same payment_records row.
+// UpdateGooglePlay locks the account subscription and every payment row for
+// this purchase token, then lets apply decide the entitlement. Each Google
+// order id is its own payment_records row. A second call for the same order
+// updates that row and does not insert another.
 func (p *Postgres) UpdateGooglePlay(
 	ctx context.Context,
 	accountID, token string,
-	apply func(sub *model.Subscription, existing *model.PaymentRecord) (*model.PaymentRecord, string, error),
+	apply func(sub *model.Subscription, linked []model.PaymentRecord) (*model.PaymentRecord, string, error),
 ) (string, error) {
 	if err := p.ensureSubscriptionRow(ctx, accountID); err != nil {
 		return "", err
@@ -423,70 +443,237 @@ func (p *Postgres) UpdateGooglePlay(
 	if err != nil {
 		return "", err
 	}
-	existing, err := getPaymentForUpdate(ctx, tx, token)
-	if errors.Is(err, pgx.ErrNoRows) {
-		existing = nil
-	} else if err != nil {
-		return "", err
-	}
-	if existing != nil && existing.AccountID != "" && existing.AccountID != accountID {
-		return "", ErrPurchaseAccountConflict
-	}
-
-	payment, event, err := apply(sub, existing)
+	linked, err := listPlayPaymentsForUpdate(ctx, tx, token)
 	if err != nil {
 		return "", err
 	}
-	if payment == nil || payment.ProviderTransactionID == "" {
+	for _, row := range linked {
+		if row.AccountID != "" && row.AccountID != accountID {
+			return "", ErrPurchaseAccountConflict
+		}
+	}
+
+	payment, event, err := apply(sub, linked)
+	if err != nil {
+		return "", err
+	}
+	if payment == nil || strings.TrimSpace(payment.ProviderTransactionID) == "" {
 		return "", fmt.Errorf("google play payment was not recorded")
 	}
 	payment.Provider = model.PaymentGooglePlay
-	payment.ProviderTransactionID = token
 	payment.AccountID = accountID
 	payment.SubscriptionID = sub.ID
+	if strings.TrimSpace(payment.PurchaseToken) == "" {
+		payment.PurchaseToken = token
+	}
 
 	updateQuery := `UPDATE subscriptions SET
 	           tier = $2, status = $3, payment_method = $4,
 	           current_period_start = $5, current_period_end = $6,
 	           cancel_at_period_end = $7, plan_id = $8, billing_period = $9,
-	           price_cents = $10, period_days = $11, external_ref = $12, updated_at = NOW()
+	           price_cents = $10, period_days = $11, external_ref = $12,
+	           access_state = $13, pause_resumes_at = $14, updated_at = NOW()
 	           WHERE id = $1`
 	if _, err := tx.Exec(ctx, updateQuery,
 		sub.ID, sub.Tier, sub.Status, sub.PaymentMethod,
 		sub.CurrentPeriodStart, sub.CurrentPeriodEnd, sub.CancelAtPeriodEnd,
 		sub.PlanID, sub.BillingPeriod, sub.PriceCents, sub.PeriodDays, sub.ExternalRef,
+		sub.AccessState, sub.PauseResumesAt,
 	); err != nil {
 		return "", fmt.Errorf("update google play subscription: %w", err)
 	}
 
-	upsert := `INSERT INTO payment_records (subscription_id, account_id, amount, currency,
-	           status, provider_transaction_id, plan_id, period_days, created_at, provider, is_trial)
-	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	           ON CONFLICT (provider_transaction_id) DO UPDATE SET
-	               status = EXCLUDED.status,
-	               amount = EXCLUDED.amount,
-	               currency = EXCLUDED.currency,
-	               plan_id = EXCLUDED.plan_id,
-	               period_days = EXCLUDED.period_days,
-	               provider = EXCLUDED.provider,
-	               is_trial = EXCLUDED.is_trial,
-	               subscription_id = EXCLUDED.subscription_id,
-	               account_id = EXCLUDED.account_id`
-	createdAt := time.Now().UTC()
-	if existing != nil && !existing.CreatedAt.IsZero() {
-		createdAt = existing.CreatedAt
-	}
-	if _, err := tx.Exec(ctx, upsert,
-		payment.SubscriptionID, payment.AccountID, payment.Amount, payment.Currency,
-		payment.Status, payment.ProviderTransactionID, payment.PlanID, payment.PeriodDays,
-		createdAt, model.PaymentGooglePlay, payment.IsTrial,
-	); err != nil {
-		return "", fmt.Errorf("upsert google play payment: %w", err)
+	if err := upsertPlayPayment(ctx, tx, payment); err != nil {
+		return "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", err
 	}
 	return event, nil
+}
+
+func listPlayPaymentsForUpdate(ctx context.Context, tx pgx.Tx, token string) ([]model.PaymentRecord, error) {
+	query := `SELECT id, subscription_id, COALESCE(account_id, ''), amount, currency, status,
+	           provider_transaction_id, plan_id, period_days, created_at, COALESCE(is_trial, false),
+	           COALESCE(purchase_token, '')
+	           FROM payment_records
+	           WHERE provider_transaction_id = $1
+	              OR (purchase_token <> '' AND purchase_token = $1)
+	           FOR UPDATE`
+	rows, err := tx.Query(ctx, query, token)
+	if err != nil {
+		return nil, fmt.Errorf("lock google play payments: %w", err)
+	}
+	defer rows.Close()
+	var out []model.PaymentRecord
+	for rows.Next() {
+		var pr model.PaymentRecord
+		if err := rows.Scan(
+			&pr.ID, &pr.SubscriptionID, &pr.AccountID, &pr.Amount, &pr.Currency,
+			&pr.Status, &pr.ProviderTransactionID, &pr.PlanID, &pr.PeriodDays, &pr.CreatedAt,
+			&pr.IsTrial, &pr.PurchaseToken,
+		); err != nil {
+			return nil, fmt.Errorf("scan google play payment: %w", err)
+		}
+		out = append(out, pr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("lock google play payments: %w", err)
+	}
+	return out, nil
+}
+
+// playProviderTxnUniqueIndex is the unique index on payment_records.provider_transaction_id.
+// A 23505 from any other constraint (for example one subscription per account)
+// must stay retryable so a renewal or revoke is not acknowledged and dropped.
+const playProviderTxnUniqueIndex = "idx_payment_records_provider_txn_unique"
+
+// IsPlayPaymentUniqueConflict is a duplicate payment_records.provider_transaction_id.
+// Callers acknowledge that notification instead of returning a retryable 502.
+// The PostgreSQL error text can contain the stored key, so it is not logged.
+func IsPlayPaymentUniqueConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == playProviderTxnUniqueIndex
+}
+
+func upsertPlayPayment(ctx context.Context, tx pgx.Tx, payment *model.PaymentRecord) error {
+	if strings.TrimSpace(payment.ID) != "" {
+		if _, err := tx.Exec(ctx, "SAVEPOINT play_payment_retarget"); err != nil {
+			return fmt.Errorf("play payment savepoint: %w", err)
+		}
+		query := `UPDATE payment_records SET
+		           provider_transaction_id = $2,
+		           amount = $3,
+		           currency = $4,
+		           status = $5,
+		           plan_id = $6,
+		           period_days = $7,
+		           provider = $8,
+		           is_trial = $9,
+		           purchase_token = $10,
+		           subscription_id = $11,
+		           account_id = $12
+		           WHERE id = $1`
+		ct, err := tx.Exec(ctx, query,
+			payment.ID, payment.ProviderTransactionID, payment.Amount, payment.Currency,
+			payment.Status, payment.PlanID, payment.PeriodDays, model.PaymentGooglePlay,
+			payment.IsTrial, payment.PurchaseToken, payment.SubscriptionID, payment.AccountID,
+		)
+		if err != nil {
+			if _, rbErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT play_payment_retarget"); rbErr != nil {
+				return fmt.Errorf("play payment savepoint rollback: %w", rbErr)
+			}
+			if !IsPlayPaymentUniqueConflict(err) {
+				return fmt.Errorf("update google play payment: %w", err)
+			}
+			// The order id is already on another row. Update that row, then
+			// drop the token-keyed row only when it is the same charge.
+			if insErr := insertPlayPayment(ctx, tx, payment); insErr != nil {
+				return insErr
+			}
+			return deleteLegacyPlayChargeIfSame(ctx, tx, payment)
+		} else {
+			if _, relErr := tx.Exec(ctx, "RELEASE SAVEPOINT play_payment_retarget"); relErr != nil {
+				return fmt.Errorf("play payment savepoint release: %w", relErr)
+			}
+			if ct.RowsAffected() == 1 {
+				return nil
+			}
+		}
+	}
+	return insertPlayPayment(ctx, tx, payment)
+}
+
+func insertPlayPayment(ctx context.Context, tx pgx.Tx, payment *model.PaymentRecord) error {
+	createdAt := time.Now().UTC()
+	if !payment.CreatedAt.IsZero() {
+		createdAt = payment.CreatedAt
+	}
+	upsert := `INSERT INTO payment_records (subscription_id, account_id, amount, currency,
+	           status, provider_transaction_id, plan_id, period_days, created_at, provider, is_trial, purchase_token)
+	           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	           ON CONFLICT (provider_transaction_id) DO UPDATE SET
+	               status = CASE WHEN payment_records.status = 'refunded' THEN payment_records.status ELSE EXCLUDED.status END,
+	               amount = CASE WHEN payment_records.status = 'refunded' THEN payment_records.amount ELSE EXCLUDED.amount END,
+	               currency = CASE WHEN payment_records.status = 'refunded' THEN payment_records.currency ELSE EXCLUDED.currency END,
+	               plan_id = EXCLUDED.plan_id,
+	               period_days = EXCLUDED.period_days,
+	               provider = EXCLUDED.provider,
+	               is_trial = CASE WHEN payment_records.status = 'refunded' THEN payment_records.is_trial ELSE EXCLUDED.is_trial END,
+	               purchase_token = EXCLUDED.purchase_token,
+	               subscription_id = EXCLUDED.subscription_id,
+	               account_id = EXCLUDED.account_id`
+	if _, err := tx.Exec(ctx, upsert,
+		payment.SubscriptionID, payment.AccountID, payment.Amount, payment.Currency,
+		payment.Status, payment.ProviderTransactionID, payment.PlanID, payment.PeriodDays,
+		createdAt, model.PaymentGooglePlay, payment.IsTrial, payment.PurchaseToken,
+	); err != nil {
+		return fmt.Errorf("upsert google play payment: %w", err)
+	}
+	return nil
+}
+
+// samePlayCharge is true when the token-keyed row is the charge we just stored
+// under the Google order id. A different amount, currency, trial flag, status,
+// plan, or account is left in place so two real charges are not collapsed.
+func samePlayCharge(legacy, incoming model.PaymentRecord) bool {
+	if strings.TrimSpace(legacy.ID) == "" || legacy.ID != strings.TrimSpace(incoming.ID) {
+		return false
+	}
+	token := strings.TrimSpace(incoming.PurchaseToken)
+	orderID := strings.TrimSpace(incoming.ProviderTransactionID)
+	legacyKey := strings.TrimSpace(legacy.ProviderTransactionID)
+	if token == "" || orderID == "" || legacyKey == "" || legacyKey == orderID || legacyKey != token {
+		return false
+	}
+	if legacy.Amount != incoming.Amount || legacy.IsTrial != incoming.IsTrial || legacy.Status != incoming.Status {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(legacy.Currency), strings.TrimSpace(incoming.Currency)) {
+		return false
+	}
+	legacyPlan := strings.TrimSpace(legacy.PlanID)
+	incomingPlan := strings.TrimSpace(incoming.PlanID)
+	if legacyPlan != "" && incomingPlan != "" && legacyPlan != incomingPlan {
+		return false
+	}
+	legacyAccount := strings.TrimSpace(legacy.AccountID)
+	incomingAccount := strings.TrimSpace(incoming.AccountID)
+	if legacyAccount != "" && incomingAccount != "" && legacyAccount != incomingAccount {
+		return false
+	}
+	return true
+}
+
+func deleteLegacyPlayChargeIfSame(ctx context.Context, tx pgx.Tx, incoming *model.PaymentRecord) error {
+	if incoming == nil || strings.TrimSpace(incoming.ID) == "" {
+		return nil
+	}
+	var legacy model.PaymentRecord
+	err := tx.QueryRow(ctx, `SELECT id, account_id, amount, currency, status, provider_transaction_id, plan_id, is_trial
+	                          FROM payment_records WHERE id = $1`, incoming.ID).Scan(
+		&legacy.ID, &legacy.AccountID, &legacy.Amount, &legacy.Currency, &legacy.Status,
+		&legacy.ProviderTransactionID, &legacy.PlanID, &legacy.IsTrial,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read legacy play payment: %w", err)
+	}
+	if !samePlayCharge(legacy, *incoming) {
+		return nil
+	}
+	// id plus the token key, so the order-id row written above is not deleted.
+	if _, err := tx.Exec(ctx, `DELETE FROM payment_records
+	                           WHERE id = $1
+	                             AND provider_transaction_id = $2
+	                             AND provider_transaction_id <> $3`,
+		legacy.ID, legacy.ProviderTransactionID, incoming.ProviderTransactionID,
+	); err != nil {
+		return fmt.Errorf("delete legacy play payment: %w", err)
+	}
+	return nil
 }
 
 func (p *Postgres) ensureSubscriptionRow(ctx context.Context, accountID string) error {

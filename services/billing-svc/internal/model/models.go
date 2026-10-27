@@ -11,6 +11,10 @@ const (
 	StatusPastDue  = "past_due"
 	StatusPending  = "pending"
 
+	// AccessPaused is a Google Play subscription the user paused. Premium is off
+	// until Google resumes it. It is not an error and not a failed payment.
+	AccessPaused = "paused"
+
 	PaymentNone       = "none"
 	PaymentBTCPay     = "btcpay"
 	PaymentGooglePlay = "google_play"
@@ -48,9 +52,13 @@ type Subscription struct {
 	PeriodDays         int       `json:"period_days"`
 	// ExternalRef is the active Google Play purchase token when PaymentMethod
 	// is google_play. It is never returned to clients.
-	ExternalRef string    `json:"-"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ExternalRef string `json:"-"`
+	// AccessState is "paused" while a Play subscription is paused. Empty otherwise.
+	AccessState string `json:"-"`
+	// PauseResumesAt is when Google will resume a paused Play subscription.
+	PauseResumesAt *time.Time `json:"-"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type PaymentRecord struct {
@@ -66,6 +74,9 @@ type PaymentRecord struct {
 	PeriodDays            int       `json:"period_days"`
 	Provider              string    `json:"provider,omitempty"`
 	IsTrial               bool      `json:"is_trial,omitempty"`
+	// PurchaseToken links every order for one Play subscription. It is the
+	// lookup key for RTDN. It is never returned to clients.
+	PurchaseToken string `json:"-"`
 }
 
 // StatusResponse is returned by GET /billing/status.
@@ -90,6 +101,10 @@ type StatusResponse struct {
 	PollAfterSeconds   int                   `json:"poll_after_seconds,omitempty"`
 	Payments           []PurchaseHistoryItem `json:"payments"`
 	TrialEligible      bool                  `json:"trial_eligible"`
+	// AccessState is "paused" when a Play subscription is paused and Premium is off.
+	AccessState string `json:"access_state,omitempty"`
+	// ResumesAt is when a paused Play subscription resumes, from Google.
+	ResumesAt *time.Time `json:"resumes_at,omitempty"`
 }
 
 // PurchaseHistoryItem is one Bitcoin payment already stored for an account.
@@ -100,4 +115,5 @@ type PurchaseHistoryItem struct {
 	Plan        string    `json:"plan"`
 	Status      string    `json:"status"`
 	Provider    string    `json:"provider,omitempty"`
+	IsTrial     bool      `json:"is_trial,omitempty"`
 }

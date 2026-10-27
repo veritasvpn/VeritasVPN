@@ -34,20 +34,23 @@ type SubscriptionPurchase struct {
 	Start                time.Time
 	AcknowledgementState string
 	ObfuscatedAccountID  string
-	LineItems            []PlayLineItem
+	// PauseResumesAt is set when Google reports pausedStateContext.autoResumeTime.
+	PauseResumesAt *time.Time
+	LineItems      []PlayLineItem
 }
 
 type PlayLineItem struct {
-	ProductID        string
-	BasePlanID       string
-	OfferID          string
-	OfferTags        []string
-	Expiry           time.Time
-	AutoRenewEnabled bool
-	PriceCents       int64
-	Currency         string
-	HasPrice         bool
-	InTrial          bool
+	ProductID               string
+	BasePlanID              string
+	OfferID                 string
+	OfferTags               []string
+	Expiry                  time.Time
+	AutoRenewEnabled        bool
+	PriceCents              int64
+	Currency                string
+	HasPrice                bool
+	InTrial                 bool
+	LatestSuccessfulOrderID string
 }
 
 // PlayClient fetches a subscription purchase from the Google Play Developer API.
@@ -256,10 +259,14 @@ func ParseSubscriptionPurchase(body []byte, now time.Time, trialDays int) (*Subs
 		ExternalAccountIdentifiers struct {
 			ObfuscatedExternalAccountID string `json:"obfuscatedExternalAccountId"`
 		} `json:"externalAccountIdentifiers"`
+		PausedStateContext *struct {
+			AutoResumeTime string `json:"autoResumeTime"`
+		} `json:"pausedStateContext"`
 		LineItems []struct {
-			ProductID        string `json:"productId"`
-			ExpiryTime       string `json:"expiryTime"`
-			AutoRenewingPlan *struct {
+			ProductID               string `json:"productId"`
+			ExpiryTime              string `json:"expiryTime"`
+			LatestSuccessfulOrderID string `json:"latestSuccessfulOrderId"`
+			AutoRenewingPlan        *struct {
 				AutoRenewEnabled bool `json:"autoRenewEnabled"`
 				RecurringPrice   *struct {
 					CurrencyCode string `json:"currencyCode"`
@@ -293,14 +300,23 @@ func ParseSubscriptionPurchase(body []byte, now time.Time, trialDays int) (*Subs
 		}
 		out.Start = start.UTC()
 	}
+	if raw.PausedStateContext != nil && strings.TrimSpace(raw.PausedStateContext.AutoResumeTime) != "" {
+		// A bad resume timestamp must not fail the lookup. Pause still removes
+		// Premium; the app then says to resume in Google Play.
+		if resumes, err := time.Parse(time.RFC3339, strings.TrimSpace(raw.PausedStateContext.AutoResumeTime)); err == nil {
+			utc := resumes.UTC()
+			out.PauseResumesAt = &utc
+		}
+	}
 	for _, item := range raw.LineItems {
 		expiry, err := time.Parse(time.RFC3339, item.ExpiryTime)
 		if err != nil {
 			return nil, fmt.Errorf("google play expiry time: %w", err)
 		}
 		line := PlayLineItem{
-			ProductID: item.ProductID,
-			Expiry:    expiry.UTC(),
+			ProductID:               item.ProductID,
+			Expiry:                  expiry.UTC(),
+			LatestSuccessfulOrderID: strings.TrimSpace(item.LatestSuccessfulOrderID),
 		}
 		if item.AutoRenewingPlan != nil {
 			line.AutoRenewEnabled = item.AutoRenewingPlan.AutoRenewEnabled
