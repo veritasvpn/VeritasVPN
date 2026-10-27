@@ -33,6 +33,7 @@ import cloud.veritasvpn.auth.ControlAccess
 import cloud.veritasvpn.auth.ControlRefresh
 import cloud.veritasvpn.auth.SessionExpiredException
 import cloud.veritasvpn.BuildConfig
+import cloud.veritasvpn.billing.AccountBillingRefresh
 import cloud.veritasvpn.billing.BillingRepository
 import cloud.veritasvpn.billing.PlanEntitlement
 import cloud.veritasvpn.billing.PlayPlanPrice
@@ -80,10 +81,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.wireguard.crypto.KeyPair
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import cloud.veritasvpn.secure.SecurePrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -312,6 +315,8 @@ class MainActivity : ComponentActivity() {
                 var billingStatus by remember { mutableStateOf<BillingStatus?>(null) }
                 var billingSettled by remember { mutableStateOf(false) }
                 var billingRefreshing by remember { mutableStateOf(false) }
+                val billingRefreshInFlight = remember { intArrayOf(0) }
+                val billingRefreshGeneration = remember { intArrayOf(0) }
                 var cancellationInProgress by remember { mutableStateOf(false) }
                 var billingError by remember { mutableStateOf<String?>(null) }
                 var purchaseHistoryFailed by remember { mutableStateOf(false) }
@@ -510,10 +515,23 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                fun refreshBilling(force: Boolean = false) {
-                    if (user == null || (billingRefreshing && !force)) return
-                    billingRefreshing = true
-                    billingError = null
+                fun refreshBilling(force: Boolean = false, silent: Boolean = false) {
+                    if (user == null) return
+                    // A silent read (account open, or the once-a-minute poll)
+                    // must not stack on a request already in flight, and must
+                    // not swap the screen for a spinner or an error.
+                    if (silent) {
+                        if (billingRefreshInFlight[0] > 0) return
+                    } else if (billingRefreshing && !force) {
+                        return
+                    }
+                    billingRefreshInFlight[0] += 1
+                    val generation = ++billingRefreshGeneration[0]
+                    val showIndicator = !silent
+                    if (showIndicator) {
+                        billingRefreshing = true
+                        billingError = null
+                    }
                     scope.launch {
                         try {
                             val status = withTimeout(8_000) {
@@ -521,25 +539,58 @@ class MainActivity : ComponentActivity() {
                                     billingRepo.status()
                                 }
                             }
-                            billingStatus = status
+                            if (generation != billingRefreshGeneration[0]) return@launch
+                            val shown = AccountBillingRefresh.apply(
+                                current = AccountBillingRefresh.Shown(
+                                    status = billingStatus,
+                                    error = billingError,
+                                    historyFailed = purchaseHistoryFailed,
+                                    refreshing = billingRefreshing,
+                                ),
+                                loaded = status,
+                                failureMessage = null,
+                                silent = silent,
+                                showIndicator = showIndicator,
+                            )
+                            billingStatus = shown.status
+                            billingError = shown.error
+                            purchaseHistoryFailed = shown.historyFailed
+                            billingRefreshing = shown.refreshing
                             billingSettled = true
                             writeCachedBillingStatus(context, user!!.accountId, status)
-                            billingError = null
-                            purchaseHistoryFailed = false
                         } catch (e: Exception) {
+                            if (e is CancellationException && e !is TimeoutCancellationException) throw e
                             if (e is SessionExpiredException) {
                                 handleSessionExpired()
                                 return@launch
                             }
+                            if (generation != billingRefreshGeneration[0]) return@launch
                             // A failed read is not a free plan. Installing the
                             // default status makes the home say Premium required
-                            // before the account endpoint has answered.
-                            if (billingStatus == null) {
-                                billingError = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context)
-                            }
-                            if (billingStatus?.payments == null) purchaseHistoryFailed = true
+                            // before the account endpoint has answered. Keep the
+                            // last status and purchase history, and do not surface
+                            // a raw exception or timeout.
+                            val shown = AccountBillingRefresh.apply(
+                                current = AccountBillingRefresh.Shown(
+                                    status = billingStatus,
+                                    error = billingError,
+                                    historyFailed = purchaseHistoryFailed,
+                                    refreshing = billingRefreshing,
+                                ),
+                                loaded = null,
+                                failureMessage = cloud.veritasvpn.api.UserFacingError.toUserMessage(e, context),
+                                silent = silent,
+                                showIndicator = showIndicator,
+                            )
+                            billingStatus = shown.status
+                            billingError = shown.error
+                            purchaseHistoryFailed = shown.historyFailed
+                            billingRefreshing = shown.refreshing
                         } finally {
-                            billingRefreshing = false
+                            if (billingRefreshInFlight[0] > 0) billingRefreshInFlight[0] -= 1
+                            if (showIndicator && generation == billingRefreshGeneration[0]) {
+                                billingRefreshing = false
+                            }
                         }
                     }
                 }
@@ -1286,8 +1337,13 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val lifecycleOwner = LocalLifecycleOwner.current
+                var accountForeground by remember {
+                    mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+                }
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
+                            if (event == Lifecycle.Event.ON_START) accountForeground = true
+                            if (event == Lifecycle.Event.ON_STOP) accountForeground = false
                             if (event == Lifecycle.Event.ON_START ||
                                 event == Lifecycle.Event.ON_RESUME
                             ) {
@@ -1374,6 +1430,32 @@ class MainActivity : ComponentActivity() {
                     }
                     lifecycleOwner.lifecycle.addObserver(observer)
                     onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                }
+
+                // Play renewals are recorded server-side. Opening Account is the
+                // signal to read them. Keep whatever is already on screen.
+                LaunchedEffect(showPlans, user?.accountId) {
+                    if (!showPlans || user == null) return@LaunchedEffect
+                    refreshBilling(silent = AccountBillingRefresh.silentOnOpen(billingStatus != null))
+                }
+
+                // One read a minute, and only while Account is visible and the
+                // activity is started. Leaving the screen or stopping the
+                // activity cancels this effect, so the delay does not keep running.
+                LaunchedEffect(showPlans, accountForeground, user?.accountId) {
+                    if (!AccountBillingRefresh.shouldPoll(
+                            accountVisible = showPlans,
+                            appInForeground = accountForeground,
+                            signedIn = user != null,
+                        )
+                    ) {
+                        return@LaunchedEffect
+                    }
+                    while (isActive) {
+                        delay(AccountBillingRefresh.POLL_INTERVAL_MS)
+                        if (!isActive) return@LaunchedEffect
+                        refreshBilling(silent = true)
+                    }
                 }
 
                 val splitTunnelDirty =
@@ -1595,7 +1677,6 @@ class MainActivity : ComponentActivity() {
                         onUpgrade = {
                             showShieldSettings = false
                             showPlans = true
-                            if (billingStatus == null) refreshBilling()
                         },
                         onBack = { showShieldSettings = false }
                     )
@@ -1744,10 +1825,7 @@ class MainActivity : ComponentActivity() {
                             clearLocalSessionUi()
                             noteIntentionalDisconnect()
                         },
-                        onPlans = {
-                            showPlans = true
-                            if (billingStatus == null) refreshBilling()
-                        },
+                        onPlans = { showPlans = true },
                         onStealthSettings = { showStealthSettings = true },
                         onShieldSettings = { showShieldSettings = true },
                         onTunnelSettings = { showTunnelSettings = true },
