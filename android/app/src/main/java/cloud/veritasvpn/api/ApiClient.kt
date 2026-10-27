@@ -309,12 +309,12 @@ data class BillingStatus(
     @SerializedName("trial_eligible") val trialEligible: Boolean = false,
     @SerializedName("access_state") val accessState: String? = null,
     @SerializedName("resumes_at") val resumesAt: String? = null,
-    val error: String? = null
+    @SerializedName("error") val error: String? = null
 )
 
 data class CheckoutResponse(
     @SerializedName("checkout_url") val checkoutUrl: String? = null,
-    val error: String? = null
+    @SerializedName("error") val error: String? = null
 )
 
 data class PeerResponse(
@@ -331,7 +331,7 @@ data class PeerResponse(
     @SerializedName("preshared_key") val presharedKey: String?,
     @SerializedName("client_allowed_ips") val clientAllowedIps: List<String>?,
     @SerializedName("allowed_ips") val allowedIps: List<String>?,
-    val error: String? = null
+    @SerializedName("error") val error: String? = null
 )
 
 /** GET /api/v1/wg/peers/{id}: the endpoint fields for the caller’s current address. */

@@ -46,6 +46,14 @@ class PlayStoreBilling(
     private var setupError: String? = null
     private var purchaseCallbacks: StoreBillingCallbacks? = null
 
+    @Volatile
+    private var catalogQuery: CatalogQuery? = null
+
+    private data class CatalogQuery(
+        val planIds: List<String>,
+        val callbacks: StoreBillingCallbacks,
+    )
+
     private val purchasesUpdatedListener =
         com.android.billingclient.api.PurchasesUpdatedListener { result, purchases ->
             when (result.responseCode) {
@@ -73,26 +81,35 @@ class PlayStoreBilling(
         .enableAutoServiceReconnection()
         .build()
 
-    override fun connect() {
-        if (closed.get() || client.isReady) return
-        client.startConnection(object : com.android.billingclient.api.BillingClientStateListener {
-            override fun onBillingSetupFinished(result: BillingResult) {
-                if (result.responseCode == BillingClient.BillingResponseCode.OK) {
-                    setupError = null
-                } else {
-                    setupError = billingMessage(result)
-                }
+    private val billingStateListener = object : com.android.billingclient.api.BillingClientStateListener {
+        override fun onBillingSetupFinished(result: BillingResult) {
+            if (closed.get()) return
+            if (result.responseCode == BillingClient.BillingResponseCode.OK) {
+                setupError = null
+                // Prices load when Play connects, and again after a reconnect.
+                // A setup failure leaves the card on "Loading price…".
+                main.post { loadRememberedCatalog() }
+            } else {
+                setupError = billingMessage(result)
             }
+        }
 
-            override fun onBillingServiceDisconnected() {
+        override fun onBillingServiceDisconnected() {
+            if (!closed.get()) {
                 setupError = "Google Play Billing isn't available right now."
             }
-        })
+        }
+    }
+
+    override fun connect() {
+        if (closed.get() || client.isReady) return
+        client.startConnection(billingStateListener)
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         purchaseCallbacks = null
+        catalogQuery = null
         io.shutdownNow()
         if (client.isReady) client.endConnection()
     }
@@ -191,6 +208,7 @@ class PlayStoreBilling(
     }
 
     override fun queryTrialOffers(planIds: List<String>, callbacks: StoreBillingCallbacks) {
+        catalogQuery = CatalogQuery(planIds, callbacks)
         if (planIds.isEmpty()) {
             main.post {
                 callbacks.onTrialOffers(emptyMap())
@@ -198,19 +216,21 @@ class PlayStoreBilling(
             }
             return
         }
-        if (!client.isReady) {
+        if (!playCatalogReadyToQuery(planIds, client.isReady)) {
             connect()
-            main.postDelayed({
-                if (closed.get()) return@postDelayed
-                if (!client.isReady) {
-                    callbacks.onTrialOffers(emptyMap())
-                    callbacks.onPlanPrices(emptyMap())
-                    return@postDelayed
-                }
-                queryTrialOffers(planIds, callbacks)
-            }, 600)
             return
         }
+        loadCatalog(planIds, callbacks)
+    }
+
+    private fun loadRememberedCatalog() {
+        if (closed.get() || !client.isReady) return
+        val query = catalogQuery ?: return
+        if (query.planIds.isEmpty()) return
+        loadCatalog(query.planIds, query.callbacks)
+    }
+
+    private fun loadCatalog(planIds: List<String>, callbacks: StoreBillingCallbacks) {
         io.execute {
             if (closed.get()) return@execute
             val offers = mutableMapOf<String, TrialOffer>()
@@ -453,5 +473,5 @@ private data class PlayVerifyResponse(
     @SerializedName("is_premium") val isPremium: Boolean = false,
     @SerializedName("acknowledge") val acknowledge: Boolean = false,
     @SerializedName("pending") val pending: Boolean = false,
-    val error: String? = null,
+    @SerializedName("error") val error: String? = null,
 )

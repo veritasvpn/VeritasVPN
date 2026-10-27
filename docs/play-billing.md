@@ -155,10 +155,12 @@ Notification handling, after `purchases.subscriptionsv2.get`:
 | Paused | Premium is removed. The account screen says the subscription is paused and when it resumes. `SUBSCRIPTION_RESTARTED` restores Premium. |
 | On hold | Premium is removed until `SUBSCRIPTION_RECOVERED`. |
 | Expired | Premium from that Play token ends. Completed charges stay completed. |
-| Revoked, voided | Premium ends. The matching order row is marked refunded. |
+| `SUBSCRIPTION_REVOKED` | Premium ends, even if the fresh lookup still says active. The latest order row is marked refunded. |
+| Voided purchase of the latest order, or a void while the subscription is not active or in grace | Premium ends. That order row is marked refunded. |
+| Voided purchase of an older order while Google still reports active or in grace | That order is marked refunded. Premium stays. |
 | Pending | No grant. The purchase stays unacknowledged. |
 
-Each successful Play order id (`GPA.xxxx`, then `GPA.xxxx..0`, `GPA.xxxx..1`, …) is one `payment_records` row. A repeated notification for the same order updates that row. It does not add another period on top of Google's expiry. A longer active Bitcoin period is not shortened by an earlier Play expiry. The purchase token stays on `purchase_token` (and on `subscriptions.external_ref` while that Play subscription is current) so an RTDN can find the account. An RTDN for a token that is not linked yet is not acknowledged, and Pub/Sub retries.
+Each successful Play order id (`GPA.xxxx`, then `GPA.xxxx..0`, `GPA.xxxx..1`, …) is one `payment_records` row. A repeated notification for the same order updates that row. It does not add another period on top of Google's expiry. A subscription that already renewed on an older build has that charge on the purchase-token row. The first time the current order id is seen, that row is re-pointed to the order id instead of inserting a second history line, and it is not reported as another trial conversion. A token-keyed trial row is left in place when the paid renewal is a different charge. A longer active Bitcoin period is not shortened by an earlier Play expiry. The purchase token stays on `purchase_token` (and on `subscriptions.external_ref` while that Play subscription is current) so an RTDN can find the account. An RTDN for a token that is not linked yet is not acknowledged, and Pub/Sub retries.
 
 ## Environment on the Dell deployment
 

@@ -55,6 +55,13 @@ internal fun playPriceSuffix(period: String): String = when (period.uppercase())
     else -> ""
 }
 
+/**
+ * Play prices are fetched only after BillingClient is connected. While it is
+ * not, the screen keeps the loading line. An empty plan list has nothing to ask.
+ */
+internal fun playCatalogReadyToQuery(planIds: List<String>, clientReady: Boolean): Boolean =
+    planIds.isNotEmpty() && clientReady
+
 internal fun playPlanPriceLabel(price: PlayPlanPrice): String {
     val suffix = playPriceSuffix(price.billingPeriod)
     return if (suffix.isEmpty()) price.formattedPrice else "${price.formattedPrice} $suffix"

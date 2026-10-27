@@ -952,6 +952,244 @@ func TestPlayPauseRemovesPremiumUntilRestart(t *testing.T) {
 	}
 }
 
+func TestVoidedOlderOrderKeepsPremiumUntilTheLatestChargeOrAccessEnds(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	const token = "token-refund"
+	const baseOrder = "GPA.4444-5555-6666-77777"
+	const olderRenewal = "GPA.4444-5555-6666-77777..0"
+	const latestRenewal = "GPA.4444-5555-6666-77777..1"
+	store := newMemPlayStore()
+	client := &stubPlayClient{pkg: "cloud.veritasvpn"}
+	var expired int
+	play := NewPlayBilling(testLog(t), store, client, allowPush{}, func(subject string, _ map[string]interface{}) {
+		if subject == "subscription.expired" {
+			expired++
+		}
+	})
+	play.now = func() time.Time { return now }
+
+	record := func(order string, end time.Time, state string) {
+		t.Helper()
+		purchase := activePurchase("acc-1", "premium_monthly", end, state)
+		purchase.LatestOrderID = order
+		purchase.LineItems[0].LatestSuccessfulOrderID = order
+		purchase.LineItems[0].HasPrice = true
+		purchase.LineItems[0].PriceCents = 300
+		purchase.LineItems[0].Currency = "usd"
+		client.purchase = purchase
+		if _, err := play.Verify(context.Background(), "acc-1", "premium_monthly", token); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(baseOrder, now.Add(30*24*time.Hour), "SUBSCRIPTION_STATE_ACTIVE")
+	record(olderRenewal, now.Add(60*24*time.Hour), "SUBSCRIPTION_STATE_ACTIVE")
+	latestEnd := now.Add(90 * 24 * time.Hour)
+	record(latestRenewal, latestEnd, "SUBSCRIPTION_STATE_ACTIVE")
+	if store.paymentCount() != 3 {
+		t.Fatalf("payments = %d, want 3", store.paymentCount())
+	}
+
+	voided := func(orderID string) {
+		t.Helper()
+		body := pubSubBody(t, map[string]any{
+			"packageName": "cloud.veritasvpn",
+			"voidedPurchaseNotification": map[string]any{
+				"purchaseToken": token,
+				"orderId":       orderID,
+				"productType":   1,
+			},
+		})
+		if err := play.ProcessNotification(context.Background(), body, "Bearer test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Google still reports the latest renewal as active. Refunding ..0 only.
+	client.purchase = activePurchase("acc-1", "premium_monthly", latestEnd, "SUBSCRIPTION_STATE_ACTIVE")
+	client.purchase.LatestOrderID = latestRenewal
+	client.purchase.LineItems[0].LatestSuccessfulOrderID = latestRenewal
+	client.purchase.LineItems[0].HasPrice = true
+	client.purchase.LineItems[0].PriceCents = 300
+	client.purchase.LineItems[0].Currency = "usd"
+	voided(olderRenewal)
+	sub := store.subs["acc-1"]
+	premium := sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
+	if !premium || !sub.CurrentPeriodEnd.Equal(latestEnd) || expired != 0 {
+		t.Fatalf("older refund removed premium: sub=%+v expired=%d", sub, expired)
+	}
+	if store.pays[olderRenewal].Status != model.PaymentRefunded || store.pays[olderRenewal].Amount != 300 {
+		t.Fatalf("older renewal = %+v", store.pays[olderRenewal])
+	}
+	if store.pays[latestRenewal].Status != model.PaymentCompleted || store.pays[baseOrder].Status != model.PaymentCompleted {
+		t.Fatalf("other rows changed: latest=%+v base=%+v", store.pays[latestRenewal], store.pays[baseOrder])
+	}
+	if store.paymentCount() != 3 {
+		t.Fatalf("payments = %d, want 3", store.paymentCount())
+	}
+
+	// In grace is still paying. Refunding the base order keeps Premium.
+	client.purchase.State = "SUBSCRIPTION_STATE_IN_GRACE_PERIOD"
+	voided(baseOrder)
+	sub = store.subs["acc-1"]
+	premium = sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
+	if !premium || store.pays[baseOrder].Status != model.PaymentRefunded || store.pays[baseOrder].Amount != 300 || expired != 0 {
+		t.Fatalf("grace refund: sub=%+v base=%+v expired=%d", sub, store.pays[baseOrder], expired)
+	}
+	if store.pays[latestRenewal].Status != model.PaymentCompleted {
+		t.Fatalf("latest was refunded during grace: %+v", store.pays[latestRenewal])
+	}
+
+	// Refunding the latest order removes Premium even while the lookup says active.
+	client.purchase.State = "SUBSCRIPTION_STATE_ACTIVE"
+	voided(latestRenewal)
+	sub = store.subs["acc-1"]
+	premium = sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
+	if premium || sub.Tier != model.TierFree || expired != 1 {
+		t.Fatalf("latest refund kept premium: sub=%+v expired=%d", sub, expired)
+	}
+	if store.pays[latestRenewal].Status != model.PaymentRefunded || store.pays[olderRenewal].Status != model.PaymentRefunded {
+		t.Fatalf("rows = latest:%+v older:%+v", store.pays[latestRenewal], store.pays[olderRenewal])
+	}
+}
+
+func TestSubscriptionRevokedNotificationRevokesWhileLookupIsActive(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	expiry := now.Add(20 * 24 * time.Hour)
+	const token = "token-revoke"
+	const orderID = "GPA.8888-9999-0000-11111"
+	store := newMemPlayStore()
+	purchase := activePurchase("acc-1", "premium_monthly", expiry, "SUBSCRIPTION_STATE_ACTIVE")
+	purchase.LatestOrderID = orderID
+	purchase.LineItems[0].LatestSuccessfulOrderID = orderID
+	purchase.LineItems[0].HasPrice = true
+	purchase.LineItems[0].PriceCents = 300
+	purchase.LineItems[0].Currency = "usd"
+	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: purchase}
+	var expired int
+	play := NewPlayBilling(testLog(t), store, client, allowPush{}, func(subject string, _ map[string]interface{}) {
+		if subject == "subscription.expired" {
+			expired++
+		}
+	})
+	play.now = func() time.Time { return now }
+	if _, err := play.Verify(context.Background(), "acc-1", "premium_monthly", token); err != nil {
+		t.Fatal(err)
+	}
+	// The notification is type 12. The fresh lookup still says active.
+	body := pubSubBody(t, map[string]any{
+		"packageName": "cloud.veritasvpn",
+		"subscriptionNotification": map[string]any{
+			"notificationType": 12,
+			"purchaseToken":    token,
+			"subscriptionId":   "premium_monthly",
+		},
+	})
+	if err := play.ProcessNotification(context.Background(), body, "Bearer test"); err != nil {
+		t.Fatal(err)
+	}
+	sub := store.subs["acc-1"]
+	premium := sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
+	if premium || sub.Tier != model.TierFree || expired != 1 {
+		t.Fatalf("revoke kept premium: sub=%+v expired=%d", sub, expired)
+	}
+	if store.pays[orderID] == nil || store.pays[orderID].Status != model.PaymentRefunded || store.pays[orderID].Amount != 300 {
+		t.Fatalf("payment = %+v", store.pays[orderID])
+	}
+}
+
+func TestLegacyRenewalRowIsRetargetedWithoutASecondConversion(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	expiry := now.Add(30 * 24 * time.Hour)
+	const token = "token-legacy-paid"
+	const renewal = "GPA.1212-3434-5656-78787..0"
+	store := newMemPlayStore()
+	store.subs["acc-1"] = &model.Subscription{
+		ID:                 "sub-acc-1",
+		AccountID:          "acc-1",
+		Tier:               model.TierPremium,
+		Status:             model.StatusActive,
+		PaymentMethod:      model.PaymentGooglePlay,
+		PlanID:             model.PlanMonthly,
+		BillingPeriod:      "monthly",
+		PriceCents:         300,
+		PeriodDays:         30,
+		CurrentPeriodStart: now.Add(-24 * time.Hour),
+		CurrentPeriodEnd:   expiry,
+		ExternalRef:        token,
+	}
+	store.pays[token] = &model.PaymentRecord{
+		ID:                    "pay-legacy",
+		SubscriptionID:        "sub-acc-1",
+		AccountID:             "acc-1",
+		Amount:                300,
+		Currency:              "usd",
+		Status:                model.PaymentCompleted,
+		ProviderTransactionID: token,
+		PlanID:                model.PlanMonthly,
+		PeriodDays:            30,
+		Provider:              model.PaymentGooglePlay,
+		PurchaseToken:         token,
+		CreatedAt:             now.Add(-24 * time.Hour),
+	}
+	purchase := activePurchase("acc-1", "premium_monthly", expiry, "SUBSCRIPTION_STATE_ACTIVE")
+	purchase.LatestOrderID = renewal
+	purchase.LineItems[0].LatestSuccessfulOrderID = renewal
+	purchase.LineItems[0].HasPrice = true
+	purchase.LineItems[0].PriceCents = 300
+	purchase.LineItems[0].Currency = "usd"
+	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: purchase}
+	var converted int
+	play := NewPlayBilling(testLog(t), store, client, allowPush{}, func(subject string, payload map[string]interface{}) {
+		if subject == "subscription.renewed" {
+			if _, ok := payload["converted"]; ok {
+				converted++
+			}
+		}
+	})
+	play.now = func() time.Time { return now }
+	if _, err := play.Verify(context.Background(), "acc-1", "premium_monthly", token); err != nil {
+		t.Fatal(err)
+	}
+	if store.paymentCount() != 1 {
+		t.Fatalf("payments = %d, want 1 (%v)", store.paymentCount(), store.pays)
+	}
+	retargeted := store.pays[renewal]
+	if retargeted == nil || retargeted.ID != "pay-legacy" || retargeted.Amount != 300 || retargeted.IsTrial || retargeted.PurchaseToken != token {
+		t.Fatalf("retargeted = %+v leftover=%+v", retargeted, store.pays[token])
+	}
+	if store.pays[token] != nil {
+		t.Fatalf("token row duplicated the charge: %+v", store.pays[token])
+	}
+	if converted != 0 {
+		t.Fatalf("second conversion events = %d", converted)
+	}
+	sub := store.subs["acc-1"]
+	premium := sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
+	if !premium || !sub.CurrentPeriodEnd.Equal(expiry) {
+		t.Fatalf("sub = %+v", sub)
+	}
+
+	// A later renewal is a new charge. It does not reuse the retargeted row.
+	nextEnd := expiry.Add(30 * 24 * time.Hour)
+	nextOrder := "GPA.1212-3434-5656-78787..1"
+	next := activePurchase("acc-1", "premium_monthly", nextEnd, "SUBSCRIPTION_STATE_ACTIVE")
+	next.LatestOrderID = nextOrder
+	next.LineItems[0].LatestSuccessfulOrderID = nextOrder
+	next.LineItems[0].HasPrice = true
+	next.LineItems[0].PriceCents = 300
+	next.LineItems[0].Currency = "usd"
+	client.purchase = next
+	if _, err := play.Verify(context.Background(), "acc-1", "premium_monthly", token); err != nil {
+		t.Fatal(err)
+	}
+	if store.paymentCount() != 2 || store.pays[renewal] == nil || store.pays[nextOrder] == nil {
+		t.Fatalf("next renewal payments = %+v", store.pays)
+	}
+	if converted != 0 {
+		t.Fatalf("later renewal emitted conversion: %d", converted)
+	}
+}
+
 func pubSubBody(t *testing.T, note map[string]any) []byte {
 	t.Helper()
 	raw, err := json.Marshal(note)

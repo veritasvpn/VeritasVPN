@@ -261,13 +261,22 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 	before := snapPlay(sub)
 	state := purchase.State
 	pending := state == "SUBSCRIPTION_STATE_PENDING"
-	entitled := !forceRevoke && !pending && playEntitled(state, line.Expiry, now)
+	latestOrder := strings.TrimSpace(playChargeOrderID(purchase, line))
+	refundID := strings.TrimSpace(refundOrderID)
+	// A voided older renewal must not remove Premium while Google still
+	// reports the subscription active or in grace. Refunding the latest
+	// order does. SUBSCRIPTION_REVOKED (forceRevoke) always does.
+	stillPaying := state == "SUBSCRIPTION_STATE_ACTIVE" || state == "SUBSCRIPTION_STATE_IN_GRACE_PERIOD"
+	latestForRefund := latestOrder
+	if latestForRefund == "" {
+		latestForRefund = token
+	}
+	revokeForRefund := refundID != "" && (forceRevoke || !stillPaying || refundID == latestForRefund)
+	entitled := !forceRevoke && !revokeForRefund && !pending && playEntitled(state, line.Expiry, now)
 
-	orderKey := playChargeOrderID(purchase, line)
-	if forceRevoke {
-		if id := strings.TrimSpace(refundOrderID); id != "" {
-			orderKey = id
-		}
+	orderKey := latestOrder
+	if refundID != "" {
+		orderKey = refundID
 	}
 	if orderKey == "" {
 		orderKey = token
@@ -289,20 +298,27 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 		amount = 0
 	}
 
-	existing := matchPlayPayment(linked, token, orderKey, renewalOrder)
-	if existing != nil && existing.IsTrial && !renewalOrder && !forceRevoke {
+	// Older builds stored every renewal on the purchase-token row. Re-point
+	// that row when it already is this charge. A different charge, including
+	// a token-keyed trial next to a paid renewal, stays put.
+	allowLegacy := !renewalOrder || legacyTokenRowIsThisCharge(linked, token, sub, line.Expiry)
+	if refundID != "" && renewalOrder && latestOrder != "" && refundID != latestOrder {
+		allowLegacy = false
+	}
+	existing := matchPlayPayment(linked, token, orderKey, allowLegacy)
+	if existing != nil && existing.IsTrial && !renewalOrder && !forceRevoke && refundID == "" {
 		isTrial = true
 		amount = 0
 	}
 	status := playPaymentStatus(state, forceRevoke, entitled)
-	if state == "SUBSCRIPTION_STATE_EXPIRED" && orderKey != token {
+	if state == "SUBSCRIPTION_STATE_EXPIRED" && orderKey != token && refundID == "" && !forceRevoke {
 		// The charge succeeded. Expiry only removes Premium.
 		status = model.PaymentCompleted
 	}
-	if existing != nil && existing.Status == model.PaymentCompleted && status == model.PaymentFailed && !forceRevoke {
+	if existing != nil && existing.Status == model.PaymentCompleted && status == model.PaymentFailed && !forceRevoke && refundID == "" {
 		status = model.PaymentCompleted
 	}
-	if forceRevoke {
+	if forceRevoke || refundID != "" {
 		status = model.PaymentRefunded
 		if existing != nil {
 			amount = existing.Amount
@@ -345,7 +361,7 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 			assignPlaySubscription(sub, product, token, line, newEnd, now, state)
 		}
 	} else if playOwnsEntitlement(sub, token) {
-		revokePlaySubscription(sub, now, state, forceRevoke, purchase.PauseResumesAt)
+		revokePlaySubscription(sub, now, state, forceRevoke || revokeForRefund, purchase.PauseResumesAt)
 	}
 
 	event, isTrialStart, isConversion := playEvent(before, sub, payment.IsTrial, conversionMarker(linked, existing, payment.IsTrial))
@@ -377,17 +393,16 @@ func isPlayRenewalOrder(orderID string) bool {
 	return strings.Contains(orderID, "..")
 }
 
-// matchPlayPayment finds the row for this order. A renewal never rewrites the
-// trial row that older builds stored under the purchase token. The original
-// order may still be that token-keyed row until it is retargeted.
-func matchPlayPayment(linked []model.PaymentRecord, token, orderKey string, renewalOrder bool) *model.PaymentRecord {
+// matchPlayPayment finds the row for this order. allowLegacy also matches the
+// purchase-token row older builds used for every charge.
+func matchPlayPayment(linked []model.PaymentRecord, token, orderKey string, allowLegacy bool) *model.PaymentRecord {
 	for i := range linked {
 		if linked[i].ProviderTransactionID == orderKey {
 			cp := linked[i]
 			return &cp
 		}
 	}
-	if renewalOrder {
+	if !allowLegacy || token == "" || token == orderKey {
 		return nil
 	}
 	for i := range linked {
@@ -397,6 +412,28 @@ func matchPlayPayment(linked []model.PaymentRecord, token, orderKey string, rene
 		}
 	}
 	return nil
+}
+
+// legacyTokenRowIsThisCharge is true when the only pre-order-id row already
+// records this renewal. Old builds updated that token row and the period end
+// together, so a later unpaid renewal has a later expiry and must be a new row.
+func legacyTokenRowIsThisCharge(linked []model.PaymentRecord, token string, sub *model.Subscription, expiry time.Time) bool {
+	if token == "" || sub == nil || expiry.IsZero() || sub.CurrentPeriodEnd.IsZero() {
+		return false
+	}
+	var legacy *model.PaymentRecord
+	for i := range linked {
+		if linked[i].ProviderTransactionID != token {
+			continue
+		}
+		row := linked[i]
+		legacy = &row
+		break
+	}
+	if legacy == nil || legacy.IsTrial || legacy.Amount <= 0 || legacy.Status == model.PaymentRefunded {
+		return false
+	}
+	return !sub.CurrentPeriodEnd.UTC().Before(expiry.UTC())
 }
 
 // conversionMarker is non-nil only for the first paid order after a trial,
@@ -669,8 +706,9 @@ func decodeDeveloperNotification(body []byte) (developerNote, error) {
 		}
 		out.PurchaseToken = note.VoidedPurchaseNotification.PurchaseToken
 		out.RefundOrderID = strings.TrimSpace(note.VoidedPurchaseNotification.OrderID)
-		out.ForceRevoke = true
-		out.Type = 12
+		// The fresh subscriptionsv2 lookup decides entitlement. An older
+		// order can be refunded while the subscription is still paying.
+		out.ForceRevoke = false
 		return out, nil
 	}
 	return out, nil

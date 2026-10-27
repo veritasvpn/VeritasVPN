@@ -104,4 +104,11 @@ class PlayPlanPriceTest {
         assertEquals("/year", direct.suffix)
         assertFalse(direct.loading)
     }
+
+    @Test
+    fun catalogQueryWaitsUntilPlayIsConnected() {
+        assertFalse(playCatalogReadyToQuery(listOf("premium_monthly"), clientReady = false))
+        assertFalse(playCatalogReadyToQuery(emptyList(), clientReady = true))
+        assertTrue(playCatalogReadyToQuery(listOf("premium_monthly", "premium_annual"), clientReady = true))
+    }
 }
