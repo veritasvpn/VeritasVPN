@@ -75,6 +75,16 @@ internal fun playCatalogRequest(hasPlans: Boolean, clientReady: Boolean, setupGa
 internal fun shouldStartPlayBillingConnection(closed: Boolean, ready: Boolean, inProgress: Boolean): Boolean =
     !closed && !ready && !inProgress
 
+/** Arm the price timeout on every plan-screen request that is still disconnected. */
+internal fun shouldArmPlayCatalogTimeout(hasPlans: Boolean, clientReady: Boolean): Boolean =
+    hasPlans && !clientReady
+
+internal const val PLAY_BILLING_RECONNECT_BACKOFF_MS = 2_000L
+
+/** One delayed reconnect. A reconnect that is already scheduled is not queued again. */
+internal fun playReconnectBackoffMs(alreadyScheduled: Boolean): Long? =
+    if (alreadyScheduled) null else PLAY_BILLING_RECONNECT_BACKOFF_MS
+
 /** Server verify errors that contain these words are not shown to the user. */
 internal fun playPurchaseErrorMessage(serverMessage: String?): String {
     val raw = serverMessage?.trim().orEmpty()

@@ -120,6 +120,12 @@ class PlayPlanPriceTest {
         assertFalse(shouldStartPlayBillingConnection(closed = false, ready = true, inProgress = false))
         assertFalse(shouldStartPlayBillingConnection(closed = true, ready = false, inProgress = false))
         assertTrue(shouldStartPlayBillingConnection(closed = false, ready = false, inProgress = false))
+
+        assertTrue(shouldArmPlayCatalogTimeout(hasPlans = true, clientReady = false))
+        assertFalse(shouldArmPlayCatalogTimeout(hasPlans = true, clientReady = true))
+        assertFalse(shouldArmPlayCatalogTimeout(hasPlans = false, clientReady = false))
+        assertEquals(PLAY_BILLING_RECONNECT_BACKOFF_MS, playReconnectBackoffMs(alreadyScheduled = false))
+        assertNull(playReconnectBackoffMs(alreadyScheduled = true))
     }
 
     @Test

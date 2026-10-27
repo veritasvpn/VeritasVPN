@@ -149,18 +149,20 @@ func (s *stubPlayClient) GetSubscription(ctx context.Context, purchaseToken stri
 	return s.purchase, nil
 }
 
-type uniqueConflictStore struct{}
+type uniqueConflictStore struct {
+	constraint string
+}
 
 func (uniqueConflictStore) PaymentAccount(ctx context.Context, purchaseToken string) (string, error) {
 	return "", nil
 }
 
-func (uniqueConflictStore) UpdateGooglePlay(ctx context.Context, accountID, token string, apply func(sub *model.Subscription, linked []model.PaymentRecord) (*model.PaymentRecord, string, error)) (string, error) {
+func (s uniqueConflictStore) UpdateGooglePlay(ctx context.Context, accountID, token string, apply func(sub *model.Subscription, linked []model.PaymentRecord) (*model.PaymentRecord, string, error)) (string, error) {
 	sub := &model.Subscription{ID: "sub", AccountID: accountID, Tier: model.TierFree, Status: model.StatusActive}
 	if _, _, err := apply(sub, nil); err != nil {
 		return "", err
 	}
-	return "", fmt.Errorf("update google play payment: %w", &pgconn.PgError{Code: "23505"})
+	return "", fmt.Errorf("update google play payment: %w", &pgconn.PgError{Code: "23505", ConstraintName: s.constraint})
 }
 
 type allowPush struct{}
@@ -1207,7 +1209,7 @@ func TestPlayPaymentUniqueConflictIsAcknowledged(t *testing.T) {
 	purchase := activePurchase("acc-1", "premium_monthly", now.Add(30*24*time.Hour), "SUBSCRIPTION_STATE_ACTIVE")
 	purchase.LatestOrderID = "GPA.7171-7272-7373-74747"
 	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: purchase}
-	play := NewPlayBilling(testLog(t), uniqueConflictStore{}, client, allowPush{}, func(string, map[string]interface{}) {})
+	play := NewPlayBilling(testLog(t), uniqueConflictStore{constraint: "idx_payment_records_provider_txn_unique"}, client, allowPush{}, func(string, map[string]interface{}) {})
 	play.now = func() time.Time { return now }
 	body := pubSubBody(t, map[string]any{
 		"packageName": "cloud.veritasvpn",
@@ -1222,6 +1224,34 @@ func TestPlayPaymentUniqueConflictIsAcknowledged(t *testing.T) {
 	}
 	if _, err := play.Verify(context.Background(), "acc-1", "premium_monthly", "token-conflict"); !repository.IsPlayPaymentUniqueConflict(err) {
 		t.Fatalf("verify err = %v", err)
+	}
+}
+
+func TestPlayOtherUniqueConflictIsRetried(t *testing.T) {
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	purchase := activePurchase("acc-1", "premium_monthly", now.Add(30*24*time.Hour), "SUBSCRIPTION_STATE_ACTIVE")
+	purchase.LatestOrderID = "GPA.7171-7272-7373-74747"
+	client := &stubPlayClient{pkg: "cloud.veritasvpn", purchase: purchase}
+	play := NewPlayBilling(testLog(t), uniqueConflictStore{constraint: "subscriptions_account_id_key"}, client, allowPush{}, func(string, map[string]interface{}) {})
+	play.now = func() time.Time { return now }
+	body := pubSubBody(t, map[string]any{
+		"packageName": "cloud.veritasvpn",
+		"subscriptionNotification": map[string]any{
+			"notificationType": 2,
+			"purchaseToken":    "token-conflict",
+			"subscriptionId":   "premium_monthly",
+		},
+	})
+	err := play.ProcessNotification(context.Background(), body, "Bearer test")
+	if err == nil {
+		t.Fatal("a non-payment unique violation was acknowledged")
+	}
+	if repository.IsPlayPaymentUniqueConflict(err) {
+		t.Fatal("one-subscription-per-account was treated as a duplicate order id")
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" || pgErr.ConstraintName != "subscriptions_account_id_key" {
+		t.Fatalf("retryable err = %v", err)
 	}
 }
 

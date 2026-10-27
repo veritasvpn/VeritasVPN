@@ -144,8 +144,8 @@ func (p *PlayBilling) ProcessNotification(ctx context.Context, body []byte, auth
 	}
 	_, err = p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke, note.RefundOrderID)
 	if repository.IsPlayPaymentUniqueConflict(err) {
-		// A duplicate order id must not 502. Pub/Sub would retry forever.
-		// The message has no purchase token or order id.
+		// Only a duplicate provider_transaction_id is acknowledged. Any other
+		// unique violation stays retryable. The message has no token or order id.
 		if p.log != nil {
 			p.log.Warn("google play payment order id already stored; acknowledging notification")
 		}

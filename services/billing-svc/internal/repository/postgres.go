@@ -523,13 +523,17 @@ func listPlayPaymentsForUpdate(ctx context.Context, tx pgx.Tx, token string) ([]
 	return out, nil
 }
 
-// IsPlayPaymentUniqueConflict is a duplicate payment_records.provider_transaction_id
-// (SQLSTATE 23505). Callers acknowledge the notification instead of returning
-// a retryable 502. The PostgreSQL error text can contain the stored key, so
-// it is not logged.
+// playProviderTxnUniqueIndex is the unique index on payment_records.provider_transaction_id.
+// A 23505 from any other constraint (for example one subscription per account)
+// must stay retryable so a renewal or revoke is not acknowledged and dropped.
+const playProviderTxnUniqueIndex = "idx_payment_records_provider_txn_unique"
+
+// IsPlayPaymentUniqueConflict is a duplicate payment_records.provider_transaction_id.
+// Callers acknowledge that notification instead of returning a retryable 502.
+// The PostgreSQL error text can contain the stored key, so it is not logged.
 func IsPlayPaymentUniqueConflict(err error) bool {
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == playProviderTxnUniqueIndex
 }
 
 func upsertPlayPayment(ctx context.Context, tx pgx.Tx, payment *model.PaymentRecord) error {
@@ -562,7 +566,12 @@ func upsertPlayPayment(ctx context.Context, tx pgx.Tx, payment *model.PaymentRec
 			if !IsPlayPaymentUniqueConflict(err) {
 				return fmt.Errorf("update google play payment: %w", err)
 			}
-			// The order id is already on another row. Update that row below.
+			// The order id is already on another row. Update that row, then
+			// drop the token-keyed row only when it is the same charge.
+			if insErr := insertPlayPayment(ctx, tx, payment); insErr != nil {
+				return insErr
+			}
+			return deleteLegacyPlayChargeIfSame(ctx, tx, payment)
 		} else {
 			if _, relErr := tx.Exec(ctx, "RELEASE SAVEPOINT play_payment_retarget"); relErr != nil {
 				return fmt.Errorf("play payment savepoint release: %w", relErr)
@@ -600,6 +609,69 @@ func insertPlayPayment(ctx context.Context, tx pgx.Tx, payment *model.PaymentRec
 		createdAt, model.PaymentGooglePlay, payment.IsTrial, payment.PurchaseToken,
 	); err != nil {
 		return fmt.Errorf("upsert google play payment: %w", err)
+	}
+	return nil
+}
+
+// samePlayCharge is true when the token-keyed row is the charge we just stored
+// under the Google order id. A different amount, currency, trial flag, status,
+// plan, or account is left in place so two real charges are not collapsed.
+func samePlayCharge(legacy, incoming model.PaymentRecord) bool {
+	if strings.TrimSpace(legacy.ID) == "" || legacy.ID != strings.TrimSpace(incoming.ID) {
+		return false
+	}
+	token := strings.TrimSpace(incoming.PurchaseToken)
+	orderID := strings.TrimSpace(incoming.ProviderTransactionID)
+	legacyKey := strings.TrimSpace(legacy.ProviderTransactionID)
+	if token == "" || orderID == "" || legacyKey == "" || legacyKey == orderID || legacyKey != token {
+		return false
+	}
+	if legacy.Amount != incoming.Amount || legacy.IsTrial != incoming.IsTrial || legacy.Status != incoming.Status {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(legacy.Currency), strings.TrimSpace(incoming.Currency)) {
+		return false
+	}
+	legacyPlan := strings.TrimSpace(legacy.PlanID)
+	incomingPlan := strings.TrimSpace(incoming.PlanID)
+	if legacyPlan != "" && incomingPlan != "" && legacyPlan != incomingPlan {
+		return false
+	}
+	legacyAccount := strings.TrimSpace(legacy.AccountID)
+	incomingAccount := strings.TrimSpace(incoming.AccountID)
+	if legacyAccount != "" && incomingAccount != "" && legacyAccount != incomingAccount {
+		return false
+	}
+	return true
+}
+
+func deleteLegacyPlayChargeIfSame(ctx context.Context, tx pgx.Tx, incoming *model.PaymentRecord) error {
+	if incoming == nil || strings.TrimSpace(incoming.ID) == "" {
+		return nil
+	}
+	var legacy model.PaymentRecord
+	err := tx.QueryRow(ctx, `SELECT id, account_id, amount, currency, status, provider_transaction_id, plan_id, is_trial
+	                          FROM payment_records WHERE id = $1`, incoming.ID).Scan(
+		&legacy.ID, &legacy.AccountID, &legacy.Amount, &legacy.Currency, &legacy.Status,
+		&legacy.ProviderTransactionID, &legacy.PlanID, &legacy.IsTrial,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read legacy play payment: %w", err)
+	}
+	if !samePlayCharge(legacy, *incoming) {
+		return nil
+	}
+	// id plus the token key, so the order-id row written above is not deleted.
+	if _, err := tx.Exec(ctx, `DELETE FROM payment_records
+	                           WHERE id = $1
+	                             AND provider_transaction_id = $2
+	                             AND provider_transaction_id <> $3`,
+		legacy.ID, legacy.ProviderTransactionID, incoming.ProviderTransactionID,
+	); err != nil {
+		return fmt.Errorf("delete legacy play payment: %w", err)
 	}
 	return nil
 }

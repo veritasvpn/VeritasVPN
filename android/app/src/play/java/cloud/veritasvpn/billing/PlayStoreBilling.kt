@@ -22,6 +22,7 @@ import com.google.gson.annotations.SerializedName
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 private const val PLAY_CATALOG_SETUP_TIMEOUT_MS = 8_000L
 
@@ -53,7 +54,9 @@ class PlayStoreBilling(
     private val billingConnectionInProgress = AtomicBoolean(false)
     private val catalogSetupGaveUp = AtomicBoolean(false)
     private val catalogSettled = AtomicBoolean(false)
-    private var catalogTimeout: Runnable? = null
+    private val catalogTimeout = AtomicReference<Runnable?>(null)
+    private val billingReconnect = AtomicReference<Runnable?>(null)
+    private val reconnectScheduled = AtomicBoolean(false)
 
     private data class CatalogQuery(
         val planIds: List<String>,
@@ -94,6 +97,8 @@ class PlayStoreBilling(
             if (result.responseCode == BillingClient.BillingResponseCode.OK) {
                 setupError = null
                 catalogSetupGaveUp.set(false)
+                reconnectScheduled.set(false)
+                cancelBillingReconnect()
                 cancelCatalogTimeout()
                 // Prices load when Play connects, and again after a reconnect.
                 main.post { loadRememberedCatalog() }
@@ -105,12 +110,12 @@ class PlayStoreBilling(
         }
 
         override fun onBillingServiceDisconnected() {
-            // Auto-reconnect is already in progress. Another startConnection
-            // here surfaces a transient setup error.
-            if (!closed.get()) {
-                billingConnectionInProgress.set(true)
-                setupError = "Google Play Billing isn't available right now."
-            }
+            if (closed.get()) return
+            // The connection is gone. One delayed startConnection brings prices
+            // back. A second disconnect does not queue another attempt.
+            billingConnectionInProgress.set(false)
+            setupError = "Google Play Billing isn't available right now."
+            scheduleBillingReconnect()
         }
     }
 
@@ -132,6 +137,8 @@ class PlayStoreBilling(
         purchaseCallbacks = null
         catalogQuery = null
         billingConnectionInProgress.set(false)
+        reconnectScheduled.set(false)
+        cancelBillingReconnect()
         cancelCatalogTimeout()
         io.shutdownNow()
         if (client.isReady) client.endConnection()
@@ -232,44 +239,70 @@ class PlayStoreBilling(
 
     override fun queryTrialOffers(planIds: List<String>, callbacks: StoreBillingCallbacks) {
         catalogQuery = CatalogQuery(planIds, callbacks)
-        when (playCatalogRequest(planIds.isNotEmpty(), client.isReady, catalogSetupGaveUp.get())) {
+        val ready = client.isReady
+        if (shouldArmPlayCatalogTimeout(planIds.isNotEmpty(), ready)) {
+            connect()
+            armCatalogTimeout()
+        }
+        when (playCatalogRequest(planIds.isNotEmpty(), ready, catalogSetupGaveUp.get())) {
             PlayCatalogRequest.HIDE -> {
-                if (planIds.isNotEmpty()) connect()
                 main.post {
                     callbacks.onTrialOffers(emptyMap())
                     callbacks.onPlanPrices(emptyMap())
                 }
             }
-            PlayCatalogRequest.WAIT -> {
-                connect()
-                armCatalogTimeout()
-            }
+            PlayCatalogRequest.WAIT -> Unit
             PlayCatalogRequest.LOAD -> {
+                cancelCatalogTimeout()
                 catalogSettled.set(false)
                 loadCatalog(planIds, callbacks)
             }
         }
     }
 
-    private fun armCatalogTimeout() {
-        if (catalogTimeout != null || catalogSettled.get()) return
-        val timeout = Runnable {
-            catalogTimeout = null
-            if (closed.get() || client.isReady || catalogSettled.get()) return@Runnable
-            catalogSetupGaveUp.set(true)
-            hideCatalogQuietly()
+    private fun scheduleBillingReconnect() {
+        if (closed.get()) return
+        if (playReconnectBackoffMs(reconnectScheduled.get()) == null) return
+        if (!reconnectScheduled.compareAndSet(false, true)) return
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!billingReconnect.compareAndSet(this, null)) return
+                if (closed.get()) return
+                if (client.isReady) {
+                    reconnectScheduled.set(false)
+                    loadRememberedCatalog()
+                    return
+                }
+                connect()
+            }
         }
-        catalogTimeout = timeout
+        billingReconnect.set(runnable)
+        main.postDelayed(runnable, PLAY_BILLING_RECONNECT_BACKOFF_MS)
+    }
+
+    private fun cancelBillingReconnect() {
+        billingReconnect.getAndSet(null)?.let { main.removeCallbacks(it) }
+    }
+
+    private fun armCatalogTimeout() {
+        val timeout = object : Runnable {
+            override fun run() {
+                if (!catalogTimeout.compareAndSet(this, null)) return
+                if (closed.get() || client.isReady) return
+                catalogSetupGaveUp.set(true)
+                hideCatalogQuietly()
+            }
+        }
+        catalogTimeout.getAndSet(timeout)?.let { main.removeCallbacks(it) }
         main.postDelayed(timeout, PLAY_CATALOG_SETUP_TIMEOUT_MS)
     }
 
     private fun cancelCatalogTimeout() {
-        catalogTimeout?.let { main.removeCallbacks(it) }
-        catalogTimeout = null
+        catalogTimeout.getAndSet(null)?.let { main.removeCallbacks(it) }
     }
 
     private fun hideCatalogQuietly() {
-        if (!catalogSettled.compareAndSet(false, true)) return
+        catalogSettled.set(true)
         cancelCatalogTimeout()
         val callbacks = catalogQuery?.callbacks ?: return
         callbacks.onTrialOffers(emptyMap())
