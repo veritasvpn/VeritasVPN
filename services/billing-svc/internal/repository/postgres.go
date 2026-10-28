@@ -205,6 +205,39 @@ func (p *Postgres) ListAccountPayments(ctx context.Context, accountID string) ([
 	return out, nil
 }
 
+// ListCompletedPlayOrders returns recent completed Google Play charges, newest
+// first. Bitcoin rows are not selected. Purchase tokens are credentials.
+func (p *Postgres) ListCompletedPlayOrders(ctx context.Context, since time.Time, limit int) ([]model.PlayOrderRef, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	query := `SELECT provider_transaction_id, COALESCE(purchase_token, '')
+	          FROM payment_records
+	          WHERE provider = $1
+	            AND status = $2
+	            AND provider_transaction_id LIKE 'GPA.%'
+	            AND created_at >= $3
+	          ORDER BY created_at DESC
+	          LIMIT $4`
+	rows, err := p.pool.Query(ctx, query, model.PaymentGooglePlay, model.PaymentCompleted, since.UTC(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list completed play orders: %w", err)
+	}
+	defer rows.Close()
+	var out []model.PlayOrderRef
+	for rows.Next() {
+		var ref model.PlayOrderRef
+		if err := rows.Scan(&ref.OrderID, &ref.PurchaseToken); err != nil {
+			return nil, fmt.Errorf("scan completed play order: %w", err)
+		}
+		out = append(out, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list completed play orders: %w", err)
+	}
+	return out, nil
+}
+
 // FailStalePendingPayments marks still-pending Bitcoin payments created before
 // cutoff as failed. Completed, refunded, and already-failed rows are left
 // unchanged. It does not read or write subscriptions.

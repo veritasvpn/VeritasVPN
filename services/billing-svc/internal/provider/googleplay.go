@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"crypto/rsa"
 	"crypto/x509"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +59,19 @@ type PlayLineItem struct {
 type PlayClient interface {
 	PackageName() string
 	GetSubscription(ctx context.Context, purchaseToken string) (*SubscriptionPurchase, error)
+}
+
+// VoidedPurchase is one refunded, voided, or charged-back Play order.
+// PurchaseToken is a credential and must not be logged.
+type VoidedPurchase struct {
+	OrderID       string
+	PurchaseToken string
+}
+
+// VoidedPurchaseLister lists voided Play orders. purchases.voidedpurchases.list
+// returns only one-time products unless type=1, which also includes subscriptions.
+type VoidedPurchaseLister interface {
+	ListVoidedPurchases(ctx context.Context, start time.Time) ([]VoidedPurchase, error)
 }
 
 type serviceAccountKey struct {
@@ -182,6 +197,158 @@ func (c *GooglePlayClient) GetSubscription(ctx context.Context, purchaseToken st
 	default:
 		return nil, fmt.Errorf("google play subscription lookup returned %d", resp.StatusCode)
 	}
+}
+
+// VoidedPurchaseLookback stays inside the Voided Purchases API's 30-day window.
+const VoidedPurchaseLookback = 29 * 24 * time.Hour
+
+const voidedPurchasePageLimit = 20
+
+// ListVoidedPurchases calls purchases.voidedpurchases.list. type=1 is required:
+// the default (0) omits subscription refunds, including GPA.xxxx..N renewals.
+// The response body can contain purchase tokens, so errors do not include it.
+func (c *GooglePlayClient) ListVoidedPurchases(ctx context.Context, start time.Time) ([]VoidedPurchase, error) {
+	oldest := c.now().UTC().Add(-VoidedPurchaseLookback)
+	if start.IsZero() || start.Before(oldest) {
+		start = oldest
+	}
+	var out []VoidedPurchase
+	pageToken := ""
+	for page := 0; page < voidedPurchasePageLimit; page++ {
+		batch, next, err := c.listVoidedPurchasePage(ctx, start, pageToken)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, batch...)
+		if next == "" || next == pageToken {
+			break
+		}
+		pageToken = next
+	}
+	return out, nil
+}
+
+func (c *GooglePlayClient) listVoidedPurchasePage(ctx context.Context, start time.Time, pageToken string) ([]VoidedPurchase, string, error) {
+	access, err := c.accessToken(ctx)
+	if err != nil {
+		// The transport error can include an address. Do not return it.
+		return nil, "", fmt.Errorf("google play voided purchases lookup failed")
+	}
+	query := url.Values{}
+	// type=1: voided in-app products AND voided subscription orders.
+	query.Set("type", "1")
+	query.Set("maxResults", "1000")
+	if pageToken == "" {
+		query.Set("startTime", strconv.FormatInt(start.UTC().UnixMilli(), 10))
+	} else {
+		query.Set("token", pageToken)
+	}
+	endpoint := c.APIBase + "/androidpublisher/v3/applications/" + url.PathEscape(c.packageName) +
+		"/purchases/voidedpurchases?" + query.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+access)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("google play voided purchases lookup failed")
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, "", fmt.Errorf("google play voided purchases lookup failed")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("google play voided purchases returned %d", resp.StatusCode)
+	}
+	var raw struct {
+		VoidedPurchases []struct {
+			PurchaseToken string `json:"purchaseToken"`
+			OrderID       string `json:"orderId"`
+		} `json:"voidedPurchases"`
+		TokenPagination struct {
+			NextPageToken string `json:"nextPageToken"`
+		} `json:"tokenPagination"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, "", fmt.Errorf("google play voided purchases response was invalid")
+	}
+	out := make([]VoidedPurchase, 0, len(raw.VoidedPurchases))
+	for _, item := range raw.VoidedPurchases {
+		orderID := strings.TrimSpace(item.OrderID)
+		token := strings.TrimSpace(item.PurchaseToken)
+		if orderID == "" || token == "" {
+			continue
+		}
+		out = append(out, VoidedPurchase{OrderID: orderID, PurchaseToken: token})
+	}
+	return out, strings.TrimSpace(raw.TokenPagination.NextPageToken), nil
+}
+
+// PlayOrderStatus is the refund flag from orders.get. PurchaseToken comes from
+// the order payload and is a credential. Do not log it.
+type PlayOrderStatus struct {
+	Refunded      bool
+	PurchaseToken string
+}
+
+// OrderRefunded reports whether Play has fully refunded this order.
+// A refund that does not revoke access is omitted from voidedpurchases.list
+// and does not send voidedPurchaseNotification. orders.get still shows it as
+// REFUNDED, or with orderHistory.refundEvent. The response can contain a
+// purchase token and a buyer address, so errors do not include the body.
+func (c *GooglePlayClient) OrderRefunded(ctx context.Context, orderID string) (PlayOrderStatus, error) {
+	orderID = strings.TrimSpace(orderID)
+	if orderID == "" {
+		return PlayOrderStatus{}, fmt.Errorf("google play order id is empty")
+	}
+	access, err := c.accessToken(ctx)
+	if err != nil {
+		return PlayOrderStatus{}, fmt.Errorf("google play order lookup failed")
+	}
+	endpoint := c.APIBase + "/androidpublisher/v3/applications/" + url.PathEscape(c.packageName) +
+		"/orders/" + url.PathEscape(orderID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return PlayOrderStatus{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+access)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return PlayOrderStatus{}, fmt.Errorf("google play order lookup failed")
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return PlayOrderStatus{}, fmt.Errorf("google play order lookup failed")
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return PlayOrderStatus{}, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return PlayOrderStatus{}, fmt.Errorf("google play order lookup returned %d", resp.StatusCode)
+	}
+	return parsePlayOrderStatus(body)
+}
+
+func parsePlayOrderStatus(body []byte) (PlayOrderStatus, error) {
+	var raw struct {
+		State         string `json:"state"`
+		PurchaseToken string `json:"purchaseToken"`
+		OrderHistory  struct {
+			RefundEvent json.RawMessage `json:"refundEvent"`
+		} `json:"orderHistory"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return PlayOrderStatus{}, fmt.Errorf("google play order response was invalid")
+	}
+	refundEvent := bytes.TrimSpace(raw.OrderHistory.RefundEvent)
+	refunded := raw.State == "REFUNDED" || (len(refundEvent) > 0 && string(refundEvent) != "null")
+	return PlayOrderStatus{
+		Refunded:      refunded,
+		PurchaseToken: strings.TrimSpace(raw.PurchaseToken),
+	}, nil
 }
 
 func (c *GooglePlayClient) accessToken(ctx context.Context) (string, error) {

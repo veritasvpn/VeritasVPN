@@ -11,6 +11,8 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,6 +192,157 @@ func TestGooglePlayClientUsesMockedGoogle(t *testing.T) {
 	_, err = client.GetSubscription(context.Background(), "gone")
 	if err != ErrPlayPurchaseNotFound {
 		t.Fatalf("missing purchase err = %v", err)
+	}
+}
+
+func TestListVoidedPurchasesIncludesSubscriptionOrders(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
+	wantStart := strconv.FormatInt(now.Add(-VoidedPurchaseLookback).UnixMilli(), 10)
+	var pages int
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pages++
+		if r.URL.Path != "/androidpublisher/v3/applications/cloud.veritasvpn/purchases/voidedpurchases" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		if strings.Contains(r.URL.RawQuery, "purchaseToken") || strings.Contains(r.URL.Path, "tok-") {
+			t.Errorf("request exposed a purchase token: %s", r.URL.RequestURI())
+		}
+		q := r.URL.Query()
+		if q.Get("type") != "1" {
+			t.Errorf("type = %q, want 1 so subscription voids are included", q.Get("type"))
+		}
+		if r.Header.Get("Authorization") != "Bearer ya29.test" {
+			t.Errorf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if pages == 1 {
+			if q.Get("startTime") != wantStart {
+				t.Errorf("startTime = %q, want %s", q.Get("startTime"), wantStart)
+			}
+			if q.Get("token") != "" {
+				t.Errorf("first page token = %q", q.Get("token"))
+			}
+			_, _ = w.Write([]byte(`{
+			  "voidedPurchases": [
+			    {"orderId":"GPA.3305-8757-7634-59491","purchaseToken":"tok-initial","voidedReason":1},
+			    {"orderId":"GPA.3305-8757-7634-59491..2","purchaseToken":"tok-renewal","voidedReason":7}
+			  ],
+			  "tokenPagination": {"nextPageToken":"next-page"}
+			}`))
+			return
+		}
+		if q.Get("token") != "next-page" {
+			t.Errorf("page token = %q", q.Get("token"))
+		}
+		_, _ = w.Write([]byte(`{"voidedPurchases":[{"orderId":"GPA.3305-8757-7634-59491..3","purchaseToken":"tok-renewal"}]}`))
+	}))
+	defer apiSrv.Close()
+
+	pemKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	raw, err := json.Marshal(map[string]string{
+		"client_email": "play@example.iam.gserviceaccount.com",
+		"private_key":  string(pemKey),
+		"token_uri":    "https://oauth2.googleapis.com/token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := newGooglePlayClient("cloud.veritasvpn", raw, apiSrv.URL, "https://oauth2.googleapis.com/token", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.now = func() time.Time { return now }
+	client.token = "ya29.test"
+	client.tokenExp = now.Add(time.Hour)
+
+	got, err := client.ListVoidedPurchases(context.Background(), now.Add(-40*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages != 2 || len(got) != 3 {
+		t.Fatalf("pages=%d purchases=%d", pages, len(got))
+	}
+	if got[0].OrderID != "GPA.3305-8757-7634-59491" || got[1].OrderID != "GPA.3305-8757-7634-59491..2" || got[2].OrderID != "GPA.3305-8757-7634-59491..3" {
+		t.Fatalf("orders = %+v", got)
+	}
+	if got[1].PurchaseToken != "tok-renewal" {
+		t.Fatalf("renewal token was not kept for the subscription lookup")
+	}
+
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"purchaseToken":"secret-purchase-token"}`, http.StatusInternalServerError)
+	}))
+	defer failSrv.Close()
+	client.APIBase = failSrv.URL
+	_, err = client.ListVoidedPurchases(context.Background(), now)
+	if err == nil || strings.Contains(err.Error(), "secret-purchase-token") {
+		t.Fatalf("error = %v", err)
+	}
+	if err.Error() != "google play voided purchases returned 500" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParsePlayOrderStatusRefundWithoutRevoke(t *testing.T) {
+	refunded, err := parsePlayOrderStatus([]byte(`{
+	  "orderId":"GPA.3305-8757-7634-59491..2",
+	  "state":"REFUNDED",
+	  "purchaseToken":"secret-purchase-token",
+	  "orderHistory":{"refundEvent":{"eventTime":"2026-10-27T23:48:00Z","refundReason":"OTHER"}}
+	}`))
+	if err != nil || !refunded.Refunded || refunded.PurchaseToken != "secret-purchase-token" {
+		t.Fatalf("status = %+v err=%v", refunded, err)
+	}
+	open, err := parsePlayOrderStatus([]byte(`{"state":"PROCESSED","orderHistory":{"refundEvent":null}}`))
+	if err != nil || open.Refunded {
+		t.Fatalf("open order = %+v err=%v", open, err)
+	}
+	fromEvent, err := parsePlayOrderStatus([]byte(`{"state":"PROCESSED","orderHistory":{"refundEvent":{"refundReason":"CHARGEBACK"}}}`))
+	if err != nil || !fromEvent.Refunded {
+		t.Fatalf("chargeback = %+v err=%v", fromEvent, err)
+	}
+}
+
+func TestOrderRefundedOmitsTokenFromErrors(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
+	const orderID = "GPA.3305-8757-7634-59491..2"
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/androidpublisher/v3/applications/cloud.veritasvpn/orders/"+orderID {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		if strings.Contains(r.URL.Path, "secret-purchase-token") {
+			t.Errorf("path contained a purchase token")
+		}
+		http.Error(w, `{"purchaseToken":"secret-purchase-token","buyerAddress":{"buyerState":"x"}}`, http.StatusInternalServerError)
+	}))
+	defer apiSrv.Close()
+	pemKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	raw, err := json.Marshal(map[string]string{
+		"client_email": "play@example.iam.gserviceaccount.com",
+		"private_key":  string(pemKey),
+		"token_uri":    "https://oauth2.googleapis.com/token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := newGooglePlayClient("cloud.veritasvpn", raw, apiSrv.URL, "https://oauth2.googleapis.com/token", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.now = func() time.Time { return now }
+	client.token = "ya29.test"
+	client.tokenExp = now.Add(time.Hour)
+	_, err = client.OrderRefunded(context.Background(), orderID)
+	if err == nil || strings.Contains(err.Error(), "secret-purchase-token") || strings.Contains(err.Error(), "buyerAddress") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

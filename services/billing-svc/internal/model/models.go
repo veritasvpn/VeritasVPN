@@ -79,6 +79,13 @@ type PaymentRecord struct {
 	PurchaseToken string `json:"-"`
 }
 
+// PlayOrderRef is a completed Google Play order that may have been refunded
+// without a voided-purchase notice. PurchaseToken is a credential.
+type PlayOrderRef struct {
+	OrderID       string
+	PurchaseToken string
+}
+
 // StatusResponse is returned by GET /billing/status.
 // Payments is the account's recorded Bitcoin charges. Each item carries a
 // date, amount, plan, and confirmation status only — no invoice, address, or

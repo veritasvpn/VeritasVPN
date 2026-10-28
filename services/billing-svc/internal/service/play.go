@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/veritasvpn/lib/logging"
@@ -56,6 +57,9 @@ type PlayBilling struct {
 	push    provider.PushVerifier
 	now     func() time.Time
 	publish func(subject string, payload map[string]interface{})
+
+	voidedMu      sync.Mutex
+	voidedApplied map[string]struct{}
 }
 
 func NewPlayBilling(log *logging.Logger, store PlayStore, client provider.PlayClient, push provider.PushVerifier, publish func(string, map[string]interface{})) *PlayBilling {
@@ -115,43 +119,88 @@ func (p *PlayBilling) Verify(ctx context.Context, accountID, productID, purchase
 
 func (p *PlayBilling) ProcessNotification(ctx context.Context, body []byte, authorization string) error {
 	if err := p.push.Verify(ctx, authorization); err != nil {
+		p.logNotification("google play notification not applied", "unauthorized", developerNote{})
 		return fmt.Errorf("rtdn auth: %w", err)
 	}
 	note, err := decodeDeveloperNotification(body)
 	if err != nil {
+		p.logNotification("google play notification not applied", "undecodable", developerNote{})
 		return err
 	}
 	if note.PackageName != "" && note.PackageName != p.client.PackageName() {
+		p.logNotification("google play notification not applied", "package_mismatch", note)
 		return fmt.Errorf("google play package mismatch")
 	}
 	if note.Test {
 		p.log.Info("google play test notification")
 		return nil
 	}
+	if note.IgnoreReason != "" {
+		p.logNotification("google play notification ignored", note.IgnoreReason, note)
+		return nil
+	}
+	if note.RefundOrderID != "" && p.log != nil {
+		// Visible at INFO when a refund notice arrives. The purchase token is not logged.
+		p.log.Info("google play voided purchase notification", "order_id", note.RefundOrderID, "renewal_order", isPlayRenewalOrder(note.RefundOrderID), "product_type", note.ProductType, "refund_type", note.RefundType)
+	}
 	if note.PurchaseToken == "" {
+		p.logNotification("google play notification ignored", "missing_purchase_token", note)
 		return nil
 	}
 	purchase, err := p.lookup(ctx, note.PurchaseToken)
 	if err != nil {
+		p.logNotification("google play notification not applied", "subscription_lookup_failed", note)
 		return err
 	}
 	accountID, err := p.accountForPurchase(ctx, note.PurchaseToken, purchase.ObfuscatedAccountID)
 	if err != nil {
+		reason := "account_lookup_failed"
+		if errors.Is(err, ErrPlayAccountUnbound) {
+			reason = "account_unbound"
+		} else if errors.Is(err, ErrPlayAccountMismatch) {
+			reason = "account_mismatch"
+		}
+		p.logNotification("google play notification not applied", reason, note)
 		return err
 	}
 	if accountID == "" {
+		p.logNotification("google play notification not applied", "account_unbound", note)
 		return ErrPlayAccountUnbound
 	}
-	_, err = p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke, note.RefundOrderID)
+	result, err := p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke, note.RefundOrderID)
 	if repository.IsPlayPaymentUniqueConflict(err) {
 		// Only a duplicate provider_transaction_id is acknowledged. Any other
 		// unique violation stays retryable. The message has no token or order id.
-		if p.log != nil {
-			p.log.Warn("google play payment order id already stored; acknowledging notification")
-		}
+		p.logNotification("google play notification ignored", "duplicate_order", note)
 		return nil
 	}
-	return err
+	if err != nil {
+		p.logNotification("google play notification not applied", "not_applied", note)
+		return err
+	}
+	if note.RefundOrderID != "" {
+		p.logVoidApplied(result, note.RefundOrderID)
+	}
+	return nil
+}
+
+// logNotification records an RTDN branch that returned before the payment row
+// changed. order id and product type are safe. The purchase token is not logged.
+func (p *PlayBilling) logNotification(message, reason string, note developerNote) {
+	if p == nil || p.log == nil || reason == "" {
+		return
+	}
+	args := []interface{}{
+		"reason", reason,
+		"order_id", note.RefundOrderID,
+		"product_type", note.ProductType,
+		"notification_type", note.Type,
+	}
+	if message == "google play notification ignored" {
+		p.log.Info(message, args...)
+		return
+	}
+	p.log.Warn(message, args...)
 }
 
 func (p *PlayBilling) lookup(ctx context.Context, token string) (*provider.SubscriptionPurchase, error) {
@@ -657,9 +706,14 @@ type developerNote struct {
 	PurchaseToken string
 	ProductID     string
 	Type          int
+	ProductType   int
+	RefundType    int
 	Test          bool
 	ForceRevoke   bool
 	RefundOrderID string
+	// IgnoreReason is set when the notice is acknowledged and not applied.
+	// Empty means the purchase token should be handled.
+	IgnoreReason string
 }
 
 func decodeDeveloperNotification(body []byte) (developerNote, error) {
@@ -695,7 +749,14 @@ func decodeDeveloperNotification(body []byte) (developerNote, error) {
 			PurchaseToken string `json:"purchaseToken"`
 			OrderID       string `json:"orderId"`
 			ProductType   int    `json:"productType"`
+			RefundType    int    `json:"refundType"`
 		} `json:"voidedPurchaseNotification"`
+		OneTimeProductNotification *struct {
+			NotificationType int `json:"notificationType"`
+		} `json:"oneTimeProductNotification"`
+		PendingRefundReviewNotification *struct {
+			OrderID string `json:"orderId"`
+		} `json:"pendingRefundReviewNotification"`
 	}
 	if err := json.Unmarshal(raw, &note); err != nil {
 		return developerNote{}, fmt.Errorf("invalid developer notification")
@@ -706,23 +767,46 @@ func decodeDeveloperNotification(body []byte) (developerNote, error) {
 		return out, nil
 	}
 	if note.SubscriptionNotification != nil {
-		out.PurchaseToken = note.SubscriptionNotification.PurchaseToken
+		out.PurchaseToken = strings.TrimSpace(note.SubscriptionNotification.PurchaseToken)
 		out.ProductID = note.SubscriptionNotification.SubscriptionID
 		out.Type = note.SubscriptionNotification.NotificationType
 		out.ForceRevoke = out.Type == 12
+		if out.PurchaseToken == "" {
+			out.IgnoreReason = "missing_purchase_token"
+		}
 		return out, nil
 	}
 	if note.VoidedPurchaseNotification != nil {
-		if note.VoidedPurchaseNotification.ProductType != 0 && note.VoidedPurchaseNotification.ProductType != 1 {
+		out.ProductType = note.VoidedPurchaseNotification.ProductType
+		out.RefundType = note.VoidedPurchaseNotification.RefundType
+		out.RefundOrderID = strings.TrimSpace(note.VoidedPurchaseNotification.OrderID)
+		// productType 1 is a subscription. 2 is a one-time product. 0 means the
+		// field was absent; those notices are still applied. Anything else is
+		// acknowledged and logged so it is not a silent 200.
+		if out.ProductType != 0 && out.ProductType != 1 {
+			out.IgnoreReason = "unsupported_product_type"
 			return out, nil
 		}
-		out.PurchaseToken = note.VoidedPurchaseNotification.PurchaseToken
-		out.RefundOrderID = strings.TrimSpace(note.VoidedPurchaseNotification.OrderID)
+		out.PurchaseToken = strings.TrimSpace(note.VoidedPurchaseNotification.PurchaseToken)
 		// The fresh subscriptionsv2 lookup decides entitlement. Refunding an
 		// order, including the latest one, does not revoke a subscription
 		// Google still reports as entitled.
 		out.ForceRevoke = false
+		if out.PurchaseToken == "" {
+			out.IgnoreReason = "missing_purchase_token"
+		}
 		return out, nil
 	}
+	if note.OneTimeProductNotification != nil {
+		out.IgnoreReason = "one_time_product"
+		out.Type = note.OneTimeProductNotification.NotificationType
+		return out, nil
+	}
+	if note.PendingRefundReviewNotification != nil {
+		out.IgnoreReason = "pending_refund_review"
+		out.RefundOrderID = strings.TrimSpace(note.PendingRefundReviewNotification.OrderID)
+		return out, nil
+	}
+	out.IgnoreReason = "unrecognized_notification"
 	return out, nil
 }

@@ -135,7 +135,7 @@ The app acknowledges a purchase only after the server accepts it. Pending Play p
 
 ## Real-time Developer Notifications
 
-Renewals, cancellations, expirations, refunds, grace, and account hold are applied when Pub/Sub pushes a notification. The app also re-checks purchases on launch, which covers a missed push.
+Renewals, cancellations, expirations, grace, and account hold are applied when Pub/Sub pushes a subscription notification. The app also re-checks purchases on launch, which covers a missed subscription push. A refund is not visible on that lookup: `purchases.subscriptionsv2.get` does not say which past order was voided.
 
 1. In the same Google Cloud project, create a Pub/Sub topic, for example `play-rtdn`.
 2. Grant `google-play-developer-notifications@system.gserviceaccount.com` the **Pub/Sub Publisher** role on that topic.
@@ -144,7 +144,12 @@ Renewals, cancellations, expirations, refunds, grace, and account hold are appli
    - Enable authentication. Choose a push service account (it can be the same API service account or a dedicated one).
    - Audience: the same URL, `https://api.veritasvpn.cloud/api/v1/billing/webhook/google-play`
 4. Play Console → Monetize → Monetization setup → Real-time developer notifications. Set the topic name (`projects/PROJECT_ID/topics/play-rtdn`) and send a test notification. The server answers 200 for a test notification once RTDN auth is configured.
-5. The server checks the push bearer token against Google's OIDC certificates. `email` must match `GOOGLE_PLAY_RTDN_PUSH_SERVICE_ACCOUNT` when that variable is set, and `aud` must match `GOOGLE_PLAY_RTDN_AUDIENCE`.
+5. In that same Real-time developer notifications section, choose which notification types to receive and save. **Subscriptions and voided purchases only** (Play's label for "Get notifications for subscriptions and all voided purchases") includes voided purchases. The live topic is `projects/veritasvpn-play/topics/play-rtdn`. That choice does not by itself mean every refund sends `voidedPurchaseNotification`. Google documents that notice, together with `SUBSCRIPTION_REVOKED`, for a refund that also revokes access. The [Voided Purchases API](https://developers.google.com/android-publisher/voided-purchases) says a developer refund without the revoke option is not returned. A Play Console refund that leaves the subscription active is that case. License testers are not documented as exempt from voided notices. An unacknowledged license-tester purchase is auto-refunded after about 3 minutes; that is a different event from refunding an acknowledged order in Order management.
+6. The server checks the push bearer token against Google's OIDC certificates. `email` must match `GOOGLE_PLAY_RTDN_PUSH_SERVICE_ACCOUNT` when that variable is set, and `aud` must match `GOOGLE_PLAY_RTDN_AUDIENCE`.
+
+Every 10 minutes billing-svc does two Play reads with the same service account. `purchases.voidedpurchases.list` uses `type=1` so subscription voids are included; the API default (`type=0`) returns only one-time products. `orders.get` is called for recent completed `GPA.` order ids. An order whose state is `REFUNDED`, or whose `orderHistory.refundEvent` is set, is marked `refunded` even when Play did not publish a voided notice. The order id is stored as Play sends it, including a renewal suffix (`GPA.xxxx..2`). Premium still follows `purchases.subscriptionsv2.get`, so a refund that leaves the subscription entitled does not drop the account to free. A repeated poll updates the same row. Bitcoin rows are not changed. Both calls use the existing `androidpublisher.googleapis.com` egress. The service account still needs **View financial data, orders, and cancellation survey responses**; a 403 from either call means that permission is missing.
+
+An RTDN that is acknowledged without a payment change is logged at INFO as `google play notification ignored`, with a `reason` (`unsupported_product_type`, `missing_purchase_token`, `one_time_product`, `pending_refund_review`, `unrecognized_notification`, `duplicate_order`). A notice that is not acknowledged is logged at WARN as `google play notification not applied`. Neither line includes the purchase token.
 
 Notification handling, after `purchases.subscriptionsv2.get`:
 
