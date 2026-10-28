@@ -287,6 +287,65 @@ func TestListVoidedPurchasesIncludesSubscriptionOrders(t *testing.T) {
 	}
 }
 
+func TestParsePlayOrderStatusRefundWithoutRevoke(t *testing.T) {
+	refunded, err := parsePlayOrderStatus([]byte(`{
+	  "orderId":"GPA.3305-8757-7634-59491..2",
+	  "state":"REFUNDED",
+	  "purchaseToken":"secret-purchase-token",
+	  "orderHistory":{"refundEvent":{"eventTime":"2026-10-27T23:48:00Z","refundReason":"OTHER"}}
+	}`))
+	if err != nil || !refunded.Refunded || refunded.PurchaseToken != "secret-purchase-token" {
+		t.Fatalf("status = %+v err=%v", refunded, err)
+	}
+	open, err := parsePlayOrderStatus([]byte(`{"state":"PROCESSED","orderHistory":{"refundEvent":null}}`))
+	if err != nil || open.Refunded {
+		t.Fatalf("open order = %+v err=%v", open, err)
+	}
+	fromEvent, err := parsePlayOrderStatus([]byte(`{"state":"PROCESSED","orderHistory":{"refundEvent":{"refundReason":"CHARGEBACK"}}}`))
+	if err != nil || !fromEvent.Refunded {
+		t.Fatalf("chargeback = %+v err=%v", fromEvent, err)
+	}
+}
+
+func TestOrderRefundedOmitsTokenFromErrors(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
+	const orderID = "GPA.3305-8757-7634-59491..2"
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/androidpublisher/v3/applications/cloud.veritasvpn/orders/"+orderID {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		if strings.Contains(r.URL.Path, "secret-purchase-token") {
+			t.Errorf("path contained a purchase token")
+		}
+		http.Error(w, `{"purchaseToken":"secret-purchase-token","buyerAddress":{"buyerState":"x"}}`, http.StatusInternalServerError)
+	}))
+	defer apiSrv.Close()
+	pemKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	raw, err := json.Marshal(map[string]string{
+		"client_email": "play@example.iam.gserviceaccount.com",
+		"private_key":  string(pemKey),
+		"token_uri":    "https://oauth2.googleapis.com/token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := newGooglePlayClient("cloud.veritasvpn", raw, apiSrv.URL, "https://oauth2.googleapis.com/token", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.now = func() time.Time { return now }
+	client.token = "ya29.test"
+	client.tokenExp = now.Add(time.Hour)
+	_, err = client.OrderRefunded(context.Background(), orderID)
+	if err == nil || strings.Contains(err.Error(), "secret-purchase-token") || strings.Contains(err.Error(), "buyerAddress") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestPubSubPushAuthAcceptsGoogleShapedToken(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

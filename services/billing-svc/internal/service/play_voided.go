@@ -30,20 +30,46 @@ func (s *BillingService) SyncPlayVoidedPurchases(ctx context.Context) (int, erro
 	return s.play.SyncVoidedPurchases(ctx)
 }
 
-// SyncVoidedPurchases polls purchases.voidedpurchases.list and applies each
-// order through the same decision as a voidedPurchaseNotification.
+// playRefundedOrderLookback is how far back orders.get is asked about completed
+// Play charges. A refund that does not revoke access never appears in the
+// voided-purchases list.
+const playRefundedOrderLookback = 30 * 24 * time.Hour
+
+const playRefundedOrderBatch = 25
+
+type playOrderRefundChecker interface {
+	OrderRefunded(ctx context.Context, orderID string) (provider.PlayOrderStatus, error)
+}
+
+type completedPlayOrders interface {
+	ListCompletedPlayOrders(ctx context.Context, since time.Time, limit int) ([]model.PlayOrderRef, error)
+}
+
+// SyncVoidedPurchases polls purchases.voidedpurchases.list and orders.get.
+// Both paths use the same entitlement decision as a voidedPurchaseNotification.
 func (p *PlayBilling) SyncVoidedPurchases(ctx context.Context) (int, error) {
 	if p == nil || p.client == nil {
 		return 0, nil
 	}
+	applied, failed, listErr := p.syncVoidedList(ctx)
+	n, orderFailed, orderErr := p.syncRefundedOrders(ctx)
+	applied += n
+	failed += orderFailed
+	if listErr != nil || orderErr != nil || failed > 0 {
+		return applied, errors.New("google play voided purchase sync incomplete")
+	}
+	return applied, nil
+}
+
+func (p *PlayBilling) syncVoidedList(ctx context.Context) (int, int, error) {
 	lister, ok := p.client.(provider.VoidedPurchaseLister)
 	if !ok {
-		return 0, nil
+		return 0, 0, nil
 	}
 	start := p.now().UTC().Add(-provider.VoidedPurchaseLookback)
 	voids, err := lister.ListVoidedPurchases(ctx, start)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	var applied, failed int
 	for _, vp := range voids {
@@ -70,10 +96,67 @@ func (p *PlayBilling) SyncVoidedPurchases(ctx context.Context) (int, error) {
 			applied++
 		}
 	}
-	if failed > 0 {
-		return applied, errors.New("google play voided purchase sync incomplete")
+	return applied, failed, nil
+}
+
+func (p *PlayBilling) syncRefundedOrders(ctx context.Context) (int, int, error) {
+	checker, ok := p.client.(playOrderRefundChecker)
+	if !ok {
+		return 0, 0, nil
 	}
-	return applied, nil
+	lister, ok := p.store.(completedPlayOrders)
+	if !ok {
+		return 0, 0, nil
+	}
+	since := p.now().UTC().Add(-playRefundedOrderLookback)
+	orders, err := lister.ListCompletedPlayOrders(ctx, since, playRefundedOrderBatch)
+	if err != nil {
+		return 0, 0, err
+	}
+	var applied, failed int
+	for _, order := range orders {
+		orderID := strings.TrimSpace(order.OrderID)
+		if orderID == "" || p.voidedSeen(orderID) {
+			continue
+		}
+		status, err := checker.OrderRefunded(ctx, orderID)
+		if err != nil {
+			failed++
+			if p.log != nil {
+				p.log.Warn("google play order refund was not checked", "order_id", orderID)
+			}
+			continue
+		}
+		if !status.Refunded {
+			continue
+		}
+		token := strings.TrimSpace(order.PurchaseToken)
+		if token == "" {
+			token = strings.TrimSpace(status.PurchaseToken)
+		}
+		if token == "" {
+			failed++
+			if p.log != nil {
+				p.log.Warn("google play refunded order has no stored purchase", "order_id", orderID)
+			}
+			continue
+		}
+		recorded, done, err := p.recordVoidedOrder(ctx, token, orderID)
+		if err != nil {
+			failed++
+			if p.log != nil {
+				p.log.Warn("google play voided purchase was not applied", "order_id", orderID)
+			}
+			continue
+		}
+		if done {
+			p.rememberVoided(orderID)
+		}
+		if recorded {
+			applied++
+		}
+	}
+	return applied, failed, nil
 }
 
 // recordVoidedOrder returns recorded=true when a payment row was marked

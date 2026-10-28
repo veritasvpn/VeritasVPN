@@ -132,6 +132,31 @@ func (m *memPlayStore) paymentCount() int {
 	return len(m.pays)
 }
 
+func (m *memPlayStore) ListCompletedPlayOrders(ctx context.Context, since time.Time, limit int) ([]model.PlayOrderRef, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if limit <= 0 {
+		limit = 25
+	}
+	var out []model.PlayOrderRef
+	for _, payment := range m.pays {
+		if payment.Provider != "" && payment.Provider != model.PaymentGooglePlay {
+			continue
+		}
+		if payment.Status != model.PaymentCompleted || !strings.HasPrefix(payment.ProviderTransactionID, "GPA.") {
+			continue
+		}
+		if !since.IsZero() && !payment.CreatedAt.IsZero() && payment.CreatedAt.Before(since) {
+			continue
+		}
+		out = append(out, model.PlayOrderRef{OrderID: payment.ProviderTransactionID, PurchaseToken: payment.PurchaseToken})
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 type stubPlayClient struct {
 	pkg      string
 	purchase *provider.SubscriptionPurchase

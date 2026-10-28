@@ -322,6 +322,174 @@ type errString string
 
 func (e errString) Error() string { return string(e) }
 
+type orderRefundClient struct {
+	voidListClient
+	refunded map[string]bool
+	checked  []string
+}
+
+func (c *orderRefundClient) OrderRefunded(ctx context.Context, orderID string) (provider.PlayOrderStatus, error) {
+	c.checked = append(c.checked, orderID)
+	return provider.PlayOrderStatus{Refunded: c.refunded[orderID]}, nil
+}
+
+func TestDecodeVoidedNoticeDoesNotDropASubscriptionRefund(t *testing.T) {
+	body := pubSubBody(t, map[string]any{
+		"packageName": "cloud.veritasvpn",
+		"voidedPurchaseNotification": map[string]any{
+			"purchaseToken": "token-1",
+			"orderId":       voidRenewalOrder,
+			"productType":   1,
+			"refundType":    1,
+		},
+	})
+	note, err := decodeDeveloperNotification(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note.Test || note.IgnoreReason != "" || note.PurchaseToken != "token-1" || note.RefundOrderID != voidRenewalOrder || note.ProductType != 1 || note.RefundType != 1 {
+		t.Fatalf("note = %+v", note)
+	}
+	if note.ForceRevoke {
+		t.Fatal("a voided notice is not a revoke by itself")
+	}
+}
+
+func TestDecodeEarlyReturnsNameTheBranch(t *testing.T) {
+	cases := []struct {
+		name   string
+		note   map[string]any
+		reason string
+		order  string
+		ptype  int
+	}{
+		{
+			name: "one-time product type",
+			note: map[string]any{"voidedPurchaseNotification": map[string]any{
+				"purchaseToken": "token-1", "orderId": voidInitialOrder, "productType": 2, "refundType": 1,
+			}},
+			reason: "unsupported_product_type",
+			order:  voidInitialOrder,
+			ptype:  2,
+		},
+		{
+			name: "voided notice without a token",
+			note: map[string]any{"voidedPurchaseNotification": map[string]any{
+				"orderId": voidRenewalOrder, "productType": 1,
+			}},
+			reason: "missing_purchase_token",
+			order:  voidRenewalOrder,
+			ptype:  1,
+		},
+		{
+			name:   "one-time product notice",
+			note:   map[string]any{"oneTimeProductNotification": map[string]any{"notificationType": 2, "purchaseToken": "token-1"}},
+			reason: "one_time_product",
+		},
+		{
+			name:   "pending refund review",
+			note:   map[string]any{"pendingRefundReviewNotification": map[string]any{"orderId": voidRenewalOrder, "pendingRefundToken": "secret-token"}},
+			reason: "pending_refund_review",
+			order:  voidRenewalOrder,
+		},
+		{
+			name:   "empty developer notification",
+			note:   map[string]any{"packageName": "cloud.veritasvpn"},
+			reason: "unrecognized_notification",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := tc.note
+			raw["packageName"] = "cloud.veritasvpn"
+			note, err := decodeDeveloperNotification(pubSubBody(t, raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if note.Test || note.IgnoreReason != tc.reason || note.RefundOrderID != tc.order || note.ProductType != tc.ptype {
+				t.Fatalf("note = %+v", note)
+			}
+			if note.PurchaseToken != "" {
+				t.Fatal("ignored notice kept a purchase token")
+			}
+		})
+	}
+}
+
+func TestUnsupportedVoidedProductTypeDoesNotChangeThePayment(t *testing.T) {
+	now := time.Date(2026, 10, 27, 23, 48, 0, 0, time.UTC)
+	play, store, client := seedVoidedOrders(t, now, nil)
+	setVoidLookup(client, voidRenewalOrder, "SUBSCRIPTION_STATE_ACTIVE", now.Add(30*24*time.Hour))
+	before := client.calls
+	body := pubSubBody(t, map[string]any{
+		"packageName": "cloud.veritasvpn",
+		"voidedPurchaseNotification": map[string]any{
+			"purchaseToken": voidTestToken,
+			"orderId":       voidRenewalOrder,
+			"productType":   2,
+			"refundType":    1,
+		},
+	})
+	if err := play.ProcessNotification(context.Background(), body, "Bearer test"); err != nil {
+		t.Fatal(err)
+	}
+	if client.calls != before {
+		t.Fatal("unsupported product type still looked up the subscription")
+	}
+	if store.pays[voidRenewalOrder].Status != model.PaymentCompleted || store.pays[voidInitialOrder].Status != model.PaymentCompleted {
+		t.Fatalf("rows changed: initial %+v renewal %+v", store.pays[voidInitialOrder], store.pays[voidRenewalOrder])
+	}
+}
+
+func TestOrderRefundWithoutRevokeMarksOnlyThatRenewal(t *testing.T) {
+	now := time.Date(2026, 10, 27, 23, 48, 0, 0, time.UTC)
+	store := newMemPlayStore()
+	client := &orderRefundClient{voidListClient: voidListClient{stubPlayClient: stubPlayClient{pkg: "cloud.veritasvpn"}}}
+	var expired int
+	play := NewPlayBilling(testLog(t), store, client, allowPush{}, func(subject string, _ map[string]interface{}) {
+		if subject == "subscription.expired" {
+			expired++
+		}
+	})
+	play.now = func() time.Time { return now }
+	for _, order := range []string{voidInitialOrder, voidRenewalOrder} {
+		purchase := activePurchase("acc-1", "premium_monthly", now.Add(30*24*time.Hour), "SUBSCRIPTION_STATE_ACTIVE")
+		purchase.LatestOrderID = order
+		purchase.LineItems[0].LatestSuccessfulOrderID = order
+		purchase.LineItems[0].HasPrice = true
+		purchase.LineItems[0].PriceCents = 300
+		purchase.LineItems[0].Currency = "pyg"
+		client.purchase = purchase
+		if _, err := play.Verify(context.Background(), "acc-1", "premium_monthly", voidTestToken); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.pays["btcpay-invoice"] = &model.PaymentRecord{
+		ID: "pay-btc", AccountID: "acc-1", Provider: model.PaymentBTCPay,
+		ProviderTransactionID: "btcpay-invoice", Status: model.PaymentCompleted, Amount: 3000,
+	}
+	client.refunded = map[string]bool{voidRenewalOrder: true}
+	n, err := play.SyncVoidedPurchases(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v checked=%v", n, err, client.checked)
+	}
+	assertVoidedOrder(t, store, now, voidRenewalOrder, true, expired)
+	if store.pays["btcpay-invoice"].Status != model.PaymentCompleted {
+		t.Fatalf("bitcoin payment changed: %+v", store.pays["btcpay-invoice"])
+	}
+	checked := append([]string(nil), client.checked...)
+	n, err = play.SyncVoidedPurchases(context.Background())
+	if err != nil || n != 0 {
+		t.Fatalf("second n=%d err=%v", n, err)
+	}
+	for _, id := range client.checked[len(checked):] {
+		if id == voidRenewalOrder {
+			t.Fatal("refunded renewal was checked again")
+		}
+	}
+	assertVoidedOrder(t, store, now, voidRenewalOrder, true, expired)
+}
+
 func assertVoidedOrder(t *testing.T, store *memPlayStore, now time.Time, refundedOrder string, wantPremium bool, expired int) {
 	t.Helper()
 	sub := store.subs["acc-1"]
