@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/veritasvpn/lib/logging"
@@ -56,6 +57,9 @@ type PlayBilling struct {
 	push    provider.PushVerifier
 	now     func() time.Time
 	publish func(subject string, payload map[string]interface{})
+
+	voidedMu      sync.Mutex
+	voidedApplied map[string]struct{}
 }
 
 func NewPlayBilling(log *logging.Logger, store PlayStore, client provider.PlayClient, push provider.PushVerifier, publish func(string, map[string]interface{})) *PlayBilling {
@@ -128,6 +132,10 @@ func (p *PlayBilling) ProcessNotification(ctx context.Context, body []byte, auth
 		p.log.Info("google play test notification")
 		return nil
 	}
+	if note.RefundOrderID != "" && p.log != nil {
+		// Visible at INFO when a refund notice arrives. The purchase token is not logged.
+		p.log.Info("google play voided purchase notification", "order_id", note.RefundOrderID, "renewal_order", isPlayRenewalOrder(note.RefundOrderID))
+	}
 	if note.PurchaseToken == "" {
 		return nil
 	}
@@ -142,7 +150,7 @@ func (p *PlayBilling) ProcessNotification(ctx context.Context, body []byte, auth
 	if accountID == "" {
 		return ErrPlayAccountUnbound
 	}
-	_, err = p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke, note.RefundOrderID)
+	result, err := p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke, note.RefundOrderID)
 	if repository.IsPlayPaymentUniqueConflict(err) {
 		// Only a duplicate provider_transaction_id is acknowledged. Any other
 		// unique violation stays retryable. The message has no token or order id.
@@ -151,7 +159,13 @@ func (p *PlayBilling) ProcessNotification(ctx context.Context, body []byte, auth
 		}
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if note.RefundOrderID != "" {
+		p.logVoidApplied(result, note.RefundOrderID)
+	}
+	return nil
 }
 
 func (p *PlayBilling) lookup(ctx context.Context, token string) (*provider.SubscriptionPurchase, error) {

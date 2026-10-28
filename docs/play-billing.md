@@ -135,7 +135,7 @@ The app acknowledges a purchase only after the server accepts it. Pending Play p
 
 ## Real-time Developer Notifications
 
-Renewals, cancellations, expirations, refunds, grace, and account hold are applied when Pub/Sub pushes a notification. The app also re-checks purchases on launch, which covers a missed push.
+Renewals, cancellations, expirations, grace, and account hold are applied when Pub/Sub pushes a subscription notification. The app also re-checks purchases on launch, which covers a missed subscription push. A refund is not visible on that lookup: `purchases.subscriptionsv2.get` does not say which past order was voided.
 
 1. In the same Google Cloud project, create a Pub/Sub topic, for example `play-rtdn`.
 2. Grant `google-play-developer-notifications@system.gserviceaccount.com` the **Pub/Sub Publisher** role on that topic.
@@ -144,7 +144,10 @@ Renewals, cancellations, expirations, refunds, grace, and account hold are appli
    - Enable authentication. Choose a push service account (it can be the same API service account or a dedicated one).
    - Audience: the same URL, `https://api.veritasvpn.cloud/api/v1/billing/webhook/google-play`
 4. Play Console → Monetize → Monetization setup → Real-time developer notifications. Set the topic name (`projects/PROJECT_ID/topics/play-rtdn`) and send a test notification. The server answers 200 for a test notification once RTDN auth is configured.
-5. The server checks the push bearer token against Google's OIDC certificates. `email` must match `GOOGLE_PLAY_RTDN_PUSH_SERVICE_ACCOUNT` when that variable is set, and `aud` must match `GOOGLE_PLAY_RTDN_AUDIENCE`.
+5. In that same Real-time developer notifications section, choose which notification types to receive and save. **Get notifications for subscriptions and all voided purchases** is the right choice (Veritas does not sell one-time products). **Get all notifications for subscriptions and one-time products** also includes voided purchases. A topic that was saved with subscription notifications only keeps delivering cancels, renewals, and expirations, and does not publish `voidedPurchaseNotification`. Refunds stay `completed` until this choice is saved. Saving it does not backfill notices Play already skipped.
+6. The server checks the push bearer token against Google's OIDC certificates. `email` must match `GOOGLE_PLAY_RTDN_PUSH_SERVICE_ACCOUNT` when that variable is set, and `aud` must match `GOOGLE_PLAY_RTDN_AUDIENCE`.
+
+Refunds, voids, and chargebacks are also pulled from `purchases.voidedpurchases.list` every 10 minutes, using the same service account. The request sets `type=1` so subscription orders are included; the API default (`type=0`) returns only one-time products. The order id is stored as Play sends it, including a renewal suffix (`GPA.xxxx..2`). A repeated poll updates the same `payment_records` row. The list only goes back 30 days. A void whose purchase is not linked to an account yet is retried on a later poll. A token we never recorded is skipped. Bitcoin rows are not changed. The call uses the existing `androidpublisher.googleapis.com` egress. The service account still needs **View financial data, orders, and cancellation survey responses**; a 403 from this list means that permission is missing.
 
 Notification handling, after `purchases.subscriptionsv2.get`:
 
