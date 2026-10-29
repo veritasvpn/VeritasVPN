@@ -50,6 +50,32 @@ describe('errorMapper', () => {
       expect(toUserMessage(undefined)).toBe('Something went wrong. Please try again.');
     });
 
+    it('returns no internet for a blackhole connect error', () => {
+      const raw = 'tcp connect error: Invalid argument (os error 22)';
+      expect(toUserMessage(raw)).toBe('No internet connection. Check your network and try again.');
+      expect(toUserMessage(raw)).not.toContain('Invalid argument');
+    });
+
+    it('returns no internet for a DNS failure', () => {
+      const error = new Error('failed to lookup address information: Name or service not known');
+      expect(toUserMessage(error)).toBe('No internet connection. Check your network and try again.');
+      expect(toUserMessage(error)).not.toContain('Name or service not known');
+    });
+
+    it('keeps a server message that mentions a transport phrase', () => {
+      const error = new ApiError('The server hit os error 22 while saving.', 500);
+      expect(toUserMessage(error)).toBe('The server hit os error 22 while saving.');
+    });
+
+    it('does not treat a plain invalid-argument error as no internet', () => {
+      expect(toUserMessage(new Error('Invalid argument'))).toBe('Something went wrong. Please try again.');
+    });
+
+    it('keeps a server message that is not an offline failure', () => {
+      const error = new ApiError('Incorrect email or password.', 401);
+      expect(toUserMessage(error)).toBe('Incorrect email or password.');
+    });
+
     it('never returns raw error message for unknown errors', () => {
       const error = new Error('Raw error message that should not be shown');
       const message = toUserMessage(error);

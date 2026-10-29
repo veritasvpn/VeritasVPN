@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import veritasMark from "./assets/veritas-mark.png";
+import { connectControlDisconnects } from "./reconnectPolicy";
 
-export type HeroPhase = "ready" | "upsell" | "checking" | "connecting" | "protected";
+export type HeroPhase = "ready" | "upsell" | "checking" | "connecting" | "reconnecting" | "protected";
 
 type HeroConnectControlProps = {
   phase: HeroPhase;
@@ -56,7 +57,7 @@ export function pulseEnvelope(from: number, to: number, elapsedMs: number, durat
 function actionName(phase: HeroPhase): string | null {
   if (phase === "ready") return "Connect";
   if (phase === "upsell") return "Get Premium";
-  if (phase === "protected") return "Disconnect";
+  if (connectControlDisconnects(phase)) return "Disconnect";
   return null;
 }
 
@@ -121,7 +122,7 @@ export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) 
       if (circle) circle.style.transform = `scale(${scale})`;
       const mark = markRef.current;
       if (mark) {
-        const live = current === "checking" || current === "connecting";
+        const live = current === "checking" || current === "connecting" || current === "reconnecting";
         // Protected keeps liveStart so the brightness ramp does not jump.
         if (current !== "protected") {
           if (live) {
@@ -159,17 +160,36 @@ export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) 
 
   const showNotConnected = phase === "ready" || phase === "upsell" || phase === "checking";
   const caption =
-    phase === "checking" ? "Checking plan…" : phase === "connecting" ? "Connecting…" : phase === "protected" ? "Protected" : null;
+    phase === "checking"
+      ? "Checking plan…"
+      : phase === "connecting"
+        ? "Connecting…"
+        : phase === "reconnecting"
+          ? "Reconnecting…"
+          : phase === "protected"
+            ? "Protected"
+            : null;
   const name = actionName(phase);
   const edgeClass =
-    phase === "protected" ? "is-protected" : phase === "upsell" ? "is-upsell" : phase === "checking" || phase === "connecting" ? "is-connecting" : "is-idle";
+    phase === "protected"
+      ? "is-protected"
+      : phase === "upsell"
+        ? "is-upsell"
+        : phase === "checking" || phase === "connecting" || phase === "reconnecting"
+          ? "is-connecting"
+          : "is-idle";
 
   const setPressed = (pressed: boolean) => {
     const canPress = onClickRef.current != null && actionName(phaseRef.current) != null;
     pressRef.current = pressed && canPress ? 0.94 : 1;
   };
 
-  const idleLabel = phase === "checking" || phase === "connecting" ? "Connecting" : "Connection";
+  const idleLabel =
+    phase === "checking" || phase === "connecting"
+      ? "Connecting"
+      : phase === "reconnecting"
+        ? "Reconnecting"
+        : "Connection";
   const circle = (
     <img ref={markRef} className="hero-mark" src={veritasMark} alt="" />
   );
