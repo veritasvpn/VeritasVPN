@@ -17,8 +17,8 @@ images:
     digest: sha256:ffe74af6db018c37eb3038859b5a3763acd441ba876788064733a5e221e373bf
   - name: localhost:31500/billing-svc
     newName: localhost:31500/billing-svc
-    # Play order payments, pause and refund entitlement (393364d, PR #270).
-    digest: sha256:ad91942c7f997fe56e1686126d38cddcd78f316624b232f16d4d25eb65698844
+    # Play voided-purchase refund recording (0dee2fb, PR #273).
+    digest: sha256:486dadf2c08cde704e4d836e76256c3378723697b535805aa97986eb0747f0df
   - name: localhost:31500/veritas-agent
     newName: localhost:31500/veritas-agent
     # Shield malware feed with disk-backed per-feed cache under 512Mi (5486bb8).
