@@ -613,6 +613,10 @@ pub struct WgTransferStats {
     /// interface and gateway. Metric is not part of this.
     #[serde(default)]
     pub underlay_path_ok: bool,
+    /// True while received bytes are flat, sent bytes grow and the handshake is
+    /// stale. The UI shows Reconnecting. No error text is attached.
+    #[serde(default)]
+    pub stalled: bool,
 }
 
 #[tauri::command]
@@ -632,6 +636,7 @@ fn wireguard_stats() -> WgTransferStats {
             underlay_reconnecting: false,
             underlay_gave_up: false,
             underlay_path_ok: false,
+            stalled: false,
         }
     }
 }
@@ -700,6 +705,18 @@ pub(crate) fn published_handshake_fresh() -> bool {
     (0..180).contains(&age)
 }
 
+/// Seconds since the published handshake, or None when there is none.
+pub(crate) fn published_handshake_age_secs() -> Option<u64> {
+    let ts = read_published_handshake();
+    if ts <= 0 {
+        return None;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some((now.as_secs() as i64).saturating_sub(ts).max(0) as u64)
+}
+
 fn passwordless_sudoers_installed() -> bool {
     Path::new("/etc/sudoers.d/veritasvpn-soft").is_file()
 }
@@ -745,6 +762,7 @@ fn wireguard_stats_linux() -> WgTransferStats {
             underlay_reconnecting: network_switch::underlay_reconnecting(),
             underlay_gave_up: network_switch::underlay_gave_up(),
             underlay_path_ok: false,
+            stalled: false,
         };
     }
 
@@ -765,6 +783,7 @@ fn wireguard_stats_linux() -> WgTransferStats {
         underlay_reconnecting: network_switch::underlay_reconnecting(),
         underlay_gave_up: network_switch::underlay_gave_up(),
         underlay_path_ok: path_ok,
+        stalled: network_switch::tunnel_stalled_now(),
     }
 }
 

@@ -31,7 +31,7 @@ import {
   type PurchaseHistoryItem,
 } from "./billing";
 import { AUTH_API } from "./config";
-import { classifyPeerCheck, connectWatchdogAction, displayStatus, peerGoneAction, peerGoneLatchHeld, recoveryRetryAction, sessionLooksConnected, tunnelAddress, underlayNoticeKeepsSession } from "./reconnectPolicy";
+import { classifyPeerCheck, connectWatchdogAction, displayStatus, keepsReconnectingView, peerGoneAction, peerGoneLatchHeld, recoveryRetryAction, sessionLooksConnected, tunnelAddress, underlayNoticeKeepsSession } from "./reconnectPolicy";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
 import {
   advanceBlocked,
@@ -183,6 +183,7 @@ interface WgTransferStats {
   underlay_reconnecting?: boolean;
   underlay_gave_up?: boolean;
   underlay_path_ok?: boolean;
+  stalled?: boolean;
 }
 
 interface PeerInfo {
@@ -1976,8 +1977,14 @@ function App() {
           pathOk: stats.underlay_path_ok !== false,
         });
         const reconnectNotice = underlayNoticeKeepsSession(notice);
-        const keepSession = !healthy && (stats.underlay_reconnecting === true || reconnectNotice);
-        if (healthy && !gaveUp) {
+        const stalled = stats.stalled === true;
+        const keepSession = keepsReconnectingView({
+          healthy,
+          stalled,
+          underlayReconnecting: stats.underlay_reconnecting === true,
+          noticeKeepsSession: reconnectNotice,
+        });
+        if (healthy && !gaveUp && !stalled) {
           if (reconnectingRef.current) {
             reconnectingRef.current = false;
             setReconnecting(false);

@@ -275,6 +275,7 @@ fn clear_clocks(mem: &mut FollowMemory) {
     mem.release_cleared = true;
     mem.pending_key.clear();
     mem.pending_since = None;
+    stall_reset();
 }
 
 pub(crate) fn clear_underlay_watch() {
@@ -396,6 +397,76 @@ pub(crate) fn underlay_fingerprint_diverged(recorded: &str, detected: Option<&st
     }
 }
 
+/// Pending-key stand-in for "no usable underlay". Never a real `iface|gw`.
+const NO_PATH_KEY: &str = "<none>";
+
+/// Interface names come from root-written state. Keep them to the characters
+/// the kernel allows before they are put into a sysfs path.
+fn iface_name_ok(iface: &str) -> bool {
+    !iface.is_empty()
+        && iface.len() <= 15
+        && iface != "."
+        && iface != ".."
+        && iface
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':' | b'-'))
+}
+
+/// True when the interface is gone or has no carrier (cable out, radio off).
+pub(crate) fn iface_down_or_absent(iface: &str) -> bool {
+    if !iface_name_ok(iface) {
+        return false;
+    }
+    let base = format!("/sys/class/net/{iface}");
+    if !std::path::Path::new(&base).exists() {
+        return true;
+    }
+    match fs::read_to_string(format!("{base}/operstate")) {
+        Ok(state) => matches!(
+            state.trim().to_ascii_lowercase().as_str(),
+            "down" | "lowerlayerdown" | "notpresent"
+        ),
+        Err(_) => false,
+    }
+}
+
+/// The recorded underlay interface lost carrier or disappeared and nothing else
+/// carries the tunnel. This is not a metric flap, so it skips the debounce.
+pub(crate) fn carrier_lost(
+    tunnel_up: bool,
+    recorded: &str,
+    detected: Option<&str>,
+    recorded_iface_down: bool,
+) -> bool {
+    tunnel_up
+        && recorded_iface_down
+        && !underlay_path_key(recorded).is_empty()
+        && detected
+            .map(underlay_path_key)
+            .filter(|key| !key.is_empty())
+            .is_none()
+}
+
+/// An unconfirmed path keeps the recorded route for a moment. It must not
+/// apply when nothing was detected and the recorded interface is down, or the
+/// route would be reported ok for an underlay that no longer exists.
+pub(crate) fn unconfirmed_path(
+    tunnel_up: bool,
+    changed: bool,
+    recorded: &str,
+    detected: Option<&str>,
+    recorded_iface_down: bool,
+) -> bool {
+    if !tunnel_up || changed || !underlay_fingerprint_diverged(recorded, detected) {
+        return false;
+    }
+    let nothing_detected = detected
+        .map(underlay_path_key)
+        .filter(|key| !key.is_empty())
+        .is_none();
+    !(nothing_detected && recorded_iface_down)
+}
+
 /// `(present, changed)` after the new path has stayed put for `debounce`.
 /// The first sample of a different iface or gateway is not a change yet, so a
 /// one-tick metric reorder cannot run path-adapt or move the UI.
@@ -421,7 +492,12 @@ pub(crate) fn debounced_path_change(
             return (true, false);
         }
     }
-    let key = detected_key.clone().unwrap_or_default();
+    // "No path at all" is a sample like any other. An empty key equals the
+    // cleared pending_key, so without a sentinel the debounce clock would
+    // never start and a vanished underlay (cable pulled) looked unchanged.
+    let key = detected_key
+        .clone()
+        .unwrap_or_else(|| NO_PATH_KEY.to_string());
     if pending_key != &key {
         *pending_key = key;
         *pending_since = Some(now);
@@ -503,6 +579,143 @@ fn recorded_underlay_fingerprint() -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Stalled-tunnel fallback (mirrors Android TunnelStall)
+// ---------------------------------------------------------------------------
+
+/// Counters must stay flat this long before a stall can be called.
+pub(crate) const STALL_DETECT_WINDOW: Duration = Duration::from_secs(15);
+/// No handshake at all for this long (with nothing received) is a stall.
+pub(crate) const STALL_NO_HANDSHAKE_AFTER: Duration = Duration::from_secs(20);
+/// The client sets PersistentKeepalive = 25, so a healthy session rekeys at
+/// about 120 to 145 seconds. 135 would flap on an idle tunnel; keep 180.
+pub(crate) const STALL_HANDSHAKE_STALE_SECS: u64 = 180;
+pub(crate) const STALL_MIN_BACKOFF: Duration = Duration::from_secs(30);
+pub(crate) const STALL_MAX_BACKOFF: Duration = Duration::from_secs(120);
+
+/// Pure stall rule. `elapsed` is how long rx has been flat.
+pub(crate) fn tunnel_stalled(
+    elapsed: Duration,
+    rx_delta: u64,
+    tx_delta: u64,
+    handshake_age_secs: Option<u64>,
+) -> bool {
+    if elapsed < STALL_DETECT_WINDOW || rx_delta > 0 {
+        return false;
+    }
+    match handshake_age_secs {
+        None => elapsed >= STALL_NO_HANDSHAKE_AFTER,
+        Some(age) => tx_delta > 0 && age > STALL_HANDSHAKE_STALE_SECS,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StallVerdict {
+    /// The tunnel is stalled right now. The UI shows Reconnecting.
+    pub stalled: bool,
+    /// Start a recovery attempt now. Rate limited with doubling backoff.
+    pub trigger: bool,
+}
+
+pub(crate) struct StallTracker {
+    base: Option<(Instant, u64, u64)>,
+    backoff: Duration,
+    next_trigger: Option<Instant>,
+}
+
+impl StallTracker {
+    pub(crate) const fn new() -> Self {
+        Self {
+            base: None,
+            backoff: STALL_MIN_BACKOFF,
+            next_trigger: None,
+        }
+    }
+
+    pub(crate) fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    pub(crate) fn observe(
+        &mut self,
+        now: Instant,
+        rx: u64,
+        tx: u64,
+        handshake_age_secs: Option<u64>,
+    ) -> StallVerdict {
+        let quiet = StallVerdict {
+            stalled: false,
+            trigger: false,
+        };
+        let (base_at, base_rx, base_tx) = match self.base {
+            // Anything received (or a counter reset) restarts the window.
+            Some((at, brx, btx)) if rx == brx && tx >= btx => (at, brx, btx),
+            _ => {
+                self.base = Some((now, rx, tx));
+                self.backoff = STALL_MIN_BACKOFF;
+                self.next_trigger = None;
+                return quiet;
+            }
+        };
+        let elapsed = now.saturating_duration_since(base_at);
+        let stalled = tunnel_stalled(elapsed, rx - base_rx, tx - base_tx, handshake_age_secs);
+        if !stalled {
+            return quiet;
+        }
+        let due = self.next_trigger.map(|at| now >= at).unwrap_or(true);
+        if due {
+            self.next_trigger = Some(now + self.backoff);
+            self.backoff = (self.backoff * 2).min(STALL_MAX_BACKOFF);
+        }
+        StallVerdict {
+            stalled: true,
+            trigger: due,
+        }
+    }
+}
+
+static STALL: Mutex<StallTracker> = Mutex::new(StallTracker::new());
+static TUNNEL_STALLED: AtomicBool = AtomicBool::new(false);
+
+/// True while the watcher sees a stalled tunnel. Read by the UI poll.
+pub(crate) fn tunnel_stalled_now() -> bool {
+    TUNNEL_STALLED.load(Ordering::SeqCst)
+}
+
+fn stall_reset() {
+    STALL.lock().unwrap_or_else(|e| e.into_inner()).reset();
+    TUNNEL_STALLED.store(false, Ordering::SeqCst);
+}
+
+fn stall_forgive() {
+    stall_reset();
+}
+
+fn read_tunnel_counter(name: &str) -> u64 {
+    fs::read_to_string(format!("/sys/class/net/veritas0/statistics/{name}"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// One watcher tick. Returns true when a recovery attempt should start.
+/// Idle while the user disconnected, the iface is gone, or a connect is
+/// still bringing the tunnel up.
+fn observe_stall(tunnel_up: bool) -> bool {
+    if !tunnel_up || user_disconnected_now() || super::connect_holds_tunnel() {
+        stall_reset();
+        return false;
+    }
+    let verdict = STALL.lock().unwrap_or_else(|e| e.into_inner()).observe(
+        Instant::now(),
+        read_tunnel_counter("rx_bytes"),
+        read_tunnel_counter("tx_bytes"),
+        super::published_handshake_age_secs(),
+    );
+    TUNNEL_STALLED.store(verdict.stalled, Ordering::SeqCst);
+    verdict.trigger
+}
+
 fn noop(action: &str, message: &str) -> NetworkRecoverResult {
     NetworkRecoverResult {
         changed: false,
@@ -541,6 +754,7 @@ fn follow_snapshot(
     changed: bool,
     route_ok: bool,
     traffic_ok: bool,
+    stalled: bool,
 ) -> FollowInput {
     let mut mem = follow_lock();
     if !present {
@@ -553,7 +767,7 @@ fn follow_snapshot(
     // A matching fingerprint is not traffic. Keep the outage clock until the
     // endpoint route is on the underlay and egress works. Do not start it for
     // a stable tunnel that is only briefly unhealthy.
-    let network_outage = !present || changed || !route_ok;
+    let network_outage = !present || changed || !route_ok || stalled;
     if tunnel_up && traffic_ok && route_ok && present {
         mem.diverged_since = None;
         mem.released = false;
@@ -788,7 +1002,17 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
     } else {
         String::new()
     };
-    let (present, changed) = {
+    let recorded_iface_down = fingerprint_iface(&recorded)
+        .map(|iface| iface_down_or_absent(&iface))
+        .unwrap_or(false);
+    let lost_now = carrier_lost(tunnel_up, &recorded, detected.as_deref(), recorded_iface_down);
+    let (present, changed) = if lost_now {
+        // Carrier loss is reported at once: the next tick shows Reconnecting.
+        let mut mem = follow_lock();
+        mem.pending_key = NO_PATH_KEY.to_string();
+        mem.pending_since = Some(Instant::now());
+        (false, true)
+    } else {
         let mut mem = follow_lock();
         let now = Instant::now();
         let mut pending_key = std::mem::take(&mut mem.pending_key);
@@ -807,9 +1031,13 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
     };
     // Until a new iface|gateway has persisted, keep the recorded path. A
     // metric-only sample then cannot start path-adapt or the outage clock.
-    let unconfirmed = tunnel_up
-        && !changed
-        && underlay_fingerprint_diverged(&recorded, detected.as_deref());
+    let unconfirmed = unconfirmed_path(
+        tunnel_up,
+        changed,
+        &recorded,
+        detected.as_deref(),
+        recorded_iface_down,
+    );
     let underlay_if = if unconfirmed {
         fingerprint_iface(&recorded).unwrap_or_default()
     } else {
@@ -828,7 +1056,11 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
     // Probe egress only during an outage, and skip the probe when the host
     // route is already on the wrong interface so the next try stays fast.
     let outage_active = follow_lock().diverged_since.is_some();
-    let probing = tunnel_up && (changed || !present || !route_ok || outage_active);
+    // A stalled tunnel (rx flat, tx growing, handshake stale) starts an outage
+    // even though the underlay looks unchanged. The egress probe below decides
+    // whether it is real.
+    let stall_trigger = observe_stall(tunnel_up);
+    let probing = tunnel_up && (changed || !present || !route_ok || outage_active || stall_trigger);
     // A fresh handshake on the recorded iface|gateway is health. A failed
     // public-IP probe must not run path-adapt while that path is unchanged.
     let handshake_ok = super::published_handshake_fresh();
@@ -841,7 +1073,11 @@ fn recover_network_switch_linux() -> Result<NetworkRecoverResult, String> {
     } else {
         handshake_ok || tunnel_is_healthy().unwrap_or(false)
     };
-    let input = follow_snapshot(tunnel_up, present, changed, route_ok, traffic_ok);
+    if stall_trigger && traffic_ok {
+        // Egress works, so the quiet counters were not a fault.
+        stall_forgive();
+    }
+    let input = follow_snapshot(tunnel_up, present, changed, route_ok, traffic_ok, stall_trigger);
 
     match decide_underlay_follow(input) {
         UnderlayFollow::Idle => {
@@ -1078,7 +1314,9 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        debounced_path_change, decide_underlay_follow, default_route_key, path_key_from_route_get,
+        carrier_lost, debounced_path_change, decide_underlay_follow, default_route_key,
+        path_key_from_route_get, tunnel_stalled, unconfirmed_path, StallTracker,
+        STALL_DETECT_WINDOW, STALL_MAX_BACKOFF, STALL_MIN_BACKOFF, STALL_NO_HANDSHAKE_AFTER,
         reconnecting_after_rebind, recovery_lock_abandon, recovery_lock_acquire,
         recovery_lock_acquire_owned, recovery_lock_release, recovery_lock_release_owned,
         reconnect_backoff, route_dev_is, underlay_fingerprint_diverged, underlay_path_key,
@@ -1275,6 +1513,138 @@ mod tests {
             "wlx90de802153e1|192.0.2.1",
             Some("eno1|198.51.100.1")
         ));
+    }
+
+    #[test]
+    fn clean_state_loss_starts_the_debounce_clock() {
+        // Steady state: nothing pending. The cable is pulled, so no path is
+        // detected on every sample. This used to answer (true, false) forever.
+        let t0 = Instant::now();
+        let mut key = String::new();
+        let mut since = None;
+        let rec = "eno1|192.0.2.1";
+        let (present, changed) = debounced_path_change(
+            rec, None, &mut key, &mut since, t0, UNDERLAY_CHANGE_DEBOUNCE,
+        );
+        assert!(present && !changed, "first sample is not a change yet");
+        assert!(since.is_some(), "the clock must be armed");
+        let (present, changed) = debounced_path_change(
+            rec,
+            None,
+            &mut key,
+            &mut since,
+            t0 + UNDERLAY_CHANGE_DEBOUNCE,
+            UNDERLAY_CHANGE_DEBOUNCE,
+        );
+        assert!(!present && changed, "a loss that persists is a change");
+        // The path coming back clears the pending loss.
+        let (present, changed) = debounced_path_change(
+            rec,
+            Some(rec),
+            &mut key,
+            &mut since,
+            t0 + UNDERLAY_CHANGE_DEBOUNCE * 2,
+            UNDERLAY_CHANGE_DEBOUNCE,
+        );
+        assert!(present && !changed && key.is_empty() && since.is_none());
+    }
+
+    #[test]
+    fn carrier_loss_is_immediate_and_needs_a_down_iface() {
+        let rec = "eno1|192.0.2.1";
+        assert!(carrier_lost(true, rec, None, true));
+        assert!(!carrier_lost(true, rec, None, false), "iface up: debounce path");
+        assert!(!carrier_lost(true, rec, Some("wlp2|198.51.100.1"), true));
+        assert!(!carrier_lost(false, rec, None, true), "tunnel already down");
+        assert!(!carrier_lost(true, "", None, true), "nothing recorded");
+        assert!(carrier_lost(true, rec, Some("veritas0|"), true), "tunnel dev is not an underlay");
+    }
+
+    #[test]
+    fn unconfirmed_shortcut_does_not_hide_a_dead_iface() {
+        let rec = "eno1|192.0.2.1";
+        // Nothing detected and the recorded NIC is down: not unconfirmed.
+        assert!(!unconfirmed_path(true, false, rec, None, true));
+        // Nothing detected but the NIC is still up: keep the recorded path.
+        assert!(unconfirmed_path(true, false, rec, None, false));
+        // A different path that has not persisted yet stays unconfirmed.
+        assert!(unconfirmed_path(true, false, rec, Some("wlp2|198.51.100.1"), true));
+        // Same path, a confirmed change, or no tunnel: never unconfirmed.
+        assert!(!unconfirmed_path(true, false, rec, Some(rec), false));
+        assert!(!unconfirmed_path(true, true, rec, None, false));
+        assert!(!unconfirmed_path(false, false, rec, None, false));
+    }
+
+    #[test]
+    fn carrier_loss_reaches_reconnecting_then_release() {
+        // present=false, changed=true from carrier loss.
+        let wait = follow(|i| {
+            i.underlay_present = false;
+            i.underlay_changed = true;
+            i.traffic_ok = false;
+            i.outage_for = Duration::from_secs(1);
+        });
+        assert_eq!(wait, UnderlayFollow::Wait);
+        let release = follow(|i| {
+            i.underlay_present = false;
+            i.underlay_changed = true;
+            i.traffic_ok = false;
+            i.outage_for = UNDERLAY_RELEASE_AFTER;
+        });
+        assert_eq!(release, UnderlayFollow::ReleaseKeepIntent);
+    }
+
+    #[test]
+    fn stall_rule_cases() {
+        let w = STALL_DETECT_WINDOW;
+        // rx flat, tx growing, handshake stale for the window: stalled.
+        assert!(tunnel_stalled(w, 0, 10, Some(181)));
+        // Too early.
+        assert!(!tunnel_stalled(Duration::from_secs(14), 0, 10, Some(300)));
+        // Received something: healthy.
+        assert!(!tunnel_stalled(w, 1, 10, Some(300)));
+        // Fresh handshake: healthy even when rx is flat.
+        assert!(!tunnel_stalled(w, 0, 10, Some(120)));
+        assert!(!tunnel_stalled(w, 0, 10, Some(180)));
+        // Idle tunnel with nothing sent is not a stall on its own.
+        assert!(!tunnel_stalled(w, 0, 0, Some(300)));
+        // No handshake at all: stalled only after the longer window.
+        assert!(!tunnel_stalled(w, 0, 10, None));
+        assert!(tunnel_stalled(STALL_NO_HANDSHAKE_AFTER, 0, 0, None));
+        assert!(!tunnel_stalled(STALL_NO_HANDSHAKE_AFTER, 5, 0, None));
+    }
+
+    #[test]
+    fn stall_tracker_windows_and_backoff() {
+        let t0 = Instant::now();
+        let mut tracker = StallTracker::new();
+        let sec = Duration::from_secs;
+        assert!(!tracker.observe(t0, 100, 100, Some(200)).stalled, "baseline");
+        assert!(!tracker.observe(t0 + sec(10), 100, 200, Some(210)).stalled);
+        let v = tracker.observe(t0 + sec(16), 100, 300, Some(216));
+        assert!(v.stalled && v.trigger, "first trigger is immediate");
+        let v = tracker.observe(t0 + sec(20), 100, 400, Some(220));
+        assert!(v.stalled && !v.trigger, "backoff holds the next trigger");
+        let v = tracker.observe(t0 + sec(16) + STALL_MIN_BACKOFF, 100, 900, Some(250));
+        assert!(v.stalled && v.trigger, "retry after the minimum backoff");
+        let v = tracker.observe(t0 + sec(16) + STALL_MIN_BACKOFF + sec(40), 100, 950, Some(290));
+        assert!(!v.trigger, "backoff doubled to 60s");
+        let v = tracker.observe(t0 + sec(106), 100, 1000, Some(310));
+        assert!(v.trigger, "third trigger after the 60s backoff");
+        let v = tracker.observe(t0 + sec(225), 100, 1100, Some(430));
+        assert!(!v.trigger, "next backoff is 120s");
+        let v = tracker.observe(t0 + sec(226), 100, 1200, Some(431));
+        assert!(v.trigger, "fourth trigger after 120s");
+        let v = tracker.observe(t0 + sec(345), 100, 1300, Some(550));
+        assert!(!v.trigger, "backoff stays capped at 120s, not 240s");
+        let v = tracker.observe(t0 + sec(346), 100, 1400, Some(551));
+        assert!(v.trigger, "fifth trigger at the cap");
+        // Stay within the 200s mark used below by restarting the baseline.
+        // Data received again: window and backoff restart.
+        let v = tracker.observe(t0 + sec(200), 5000, 1000, Some(5));
+        assert!(!v.stalled && !v.trigger);
+        let v = tracker.observe(t0 + sec(230), 5000, 1100, Some(40));
+        assert!(!v.stalled, "fresh handshake keeps it healthy");
     }
 
     #[test]

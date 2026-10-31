@@ -4,6 +4,7 @@ import {
   connectWatchdogAction,
   displayStatus,
   connectControlDisconnects,
+  keepsReconnectingView,
   sessionLooksConnected,
   underlayNoticeKeepsSession,
   peerGoneAction,
@@ -145,6 +146,50 @@ describe("status text", () => {
       lastHandshakeSec: now - 5,
       nowSec: now,
       pathOk: true,
+    })).toBe(false);
+  });
+
+  it("shows Reconnecting for a stalled tunnel even without a helper flag", () => {
+    // rx flat, tx growing, handshake stale: stats.stalled from the backend.
+    expect(keepsReconnectingView({
+      healthy: false,
+      stalled: true,
+      underlayReconnecting: false,
+      noticeKeepsSession: false,
+    })).toBe(true);
+    // Stalled wins even if the handshake still looks recent.
+    expect(keepsReconnectingView({
+      healthy: true,
+      stalled: true,
+      underlayReconnecting: false,
+      noticeKeepsSession: false,
+    })).toBe(true);
+    // Healthy and not stalled: stays Protected.
+    expect(keepsReconnectingView({
+      healthy: true,
+      stalled: false,
+      underlayReconnecting: true,
+      noticeKeepsSession: true,
+    })).toBe(false);
+    // Existing behavior: unhealthy plus a helper flag or notice.
+    expect(keepsReconnectingView({
+      healthy: false,
+      stalled: false,
+      underlayReconnecting: true,
+      noticeKeepsSession: false,
+    })).toBe(true);
+    expect(keepsReconnectingView({
+      healthy: false,
+      stalled: false,
+      underlayReconnecting: false,
+      noticeKeepsSession: true,
+    })).toBe(true);
+    // Unhealthy with no signal at all does not invent a view.
+    expect(keepsReconnectingView({
+      healthy: false,
+      stalled: false,
+      underlayReconnecting: false,
+      noticeKeepsSession: false,
     })).toBe(false);
   });
 

@@ -41,6 +41,21 @@ export function sessionLooksConnected(input: {
 }
 
 /**
+ * Whether the session stays on Reconnecting. A stalled tunnel (nothing
+ * received, data still going out, handshake stale) always shows it, even when
+ * the helper has not raised its own flag. No raw error text is ever attached.
+ */
+export function keepsReconnectingView(input: {
+  healthy: boolean;
+  stalled: boolean;
+  underlayReconnecting: boolean;
+  noticeKeepsSession: boolean;
+}): boolean {
+  if (input.stalled) return true;
+  return !input.healthy && (input.underlayReconnecting || input.noticeKeepsSession);
+}
+
+/**
  * The connect watchdog must not turn a bring-up that is still inside pkexec,
  * or one that already succeeded, into Not connected.
  */
