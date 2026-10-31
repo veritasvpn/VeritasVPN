@@ -1260,13 +1260,19 @@ fn command_stdout(args: &[&str]) -> Option<String> {
 
 /// First usable default route, as `iface|gateway`. Metric is not read.
 fn default_route_key(text: &str) -> Option<String> {
+    default_route_key_with(text, iface_is_down)
+}
+
+/// `default_route_key` with the interface-down check injected, so unit tests do
+/// not depend on which NICs the build host happens to have.
+fn default_route_key_with(text: &str, is_down: impl Fn(&str) -> bool) -> Option<String> {
     for line in text.lines() {
         if line.contains("blackhole") || !line.contains(" via ") {
             continue;
         }
         let key = path_key_from_route_get(line)?;
         let iface = key.split('|').next().unwrap_or("");
-        if iface.is_empty() || iface_is_down(iface) {
+        if iface.is_empty() || is_down(iface) {
             continue;
         }
         return Some(key);
@@ -1314,7 +1320,7 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        carrier_lost, debounced_path_change, decide_underlay_follow, default_route_key,
+        carrier_lost, debounced_path_change, decide_underlay_follow, default_route_key_with,
         path_key_from_route_get, tunnel_stalled, unconfirmed_path, StallTracker,
         STALL_DETECT_WINDOW, STALL_MAX_BACKOFF, STALL_MIN_BACKOFF, STALL_NO_HANDSHAKE_AFTER,
         reconnecting_after_rebind, recovery_lock_abandon, recovery_lock_acquire,
@@ -1468,17 +1474,21 @@ mod tests {
         );
     }
 
+    fn up_route_key(text: &str) -> Option<String> {
+        default_route_key_with(text, |_| false)
+    }
+
     #[test]
     fn default_route_metric_is_not_a_new_underlay() {
         let low = "default via 192.0.2.1 dev wlx90de802153e1 proto dhcp src 192.0.2.50 metric 600\n";
         let high = "default via 192.0.2.1 dev wlx90de802153e1 proto dhcp src 192.0.2.50 metric 20600\n";
-        assert_eq!(default_route_key(low), default_route_key(high));
+        assert_eq!(up_route_key(low), up_route_key(high));
         assert_eq!(
-            default_route_key(low).as_deref(),
+            up_route_key(low).as_deref(),
             Some("wlx90de802153e1|192.0.2.1")
         );
         let with_blackhole = "blackhole default metric 1\ndefault via 192.0.2.1 dev wlx90de802153e1 metric 20600\n";
-        assert_eq!(default_route_key(with_blackhole), default_route_key(low));
+        assert_eq!(up_route_key(with_blackhole), up_route_key(low));
     }
 
     #[test]
