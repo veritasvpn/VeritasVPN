@@ -44,8 +44,22 @@ test("Android pin is 0.2.100 and Linux pin is 0.2.99", () => {
 
 test("canary names the business only and is not a signed blob", () => {
   const canary = read("website/canary.txt");
-  assert.match(canary, /Operator: VERITAS ARK \(RUC 5111281-7\), Asunción, Paraguay/);
-  assert.match(canary, /Next expected update: on or before 2026-11-07/);
+  assert.match(canary, /^Operator: VERITAS ARK, Asunción, Paraguay$/m);
+  assert.equal(canary.includes("RUC"), false);
+  assert.equal(canary.includes("5111281"), false);
+  const published = canary.match(/^Published: (\d{4}-\d{2}-\d{2})$/m);
+  const next = canary.match(/^Next expected update: on or before (\d{4}-\d{2}-\d{2})$/m);
+  assert.ok(published, "canary has a Published date");
+  assert.ok(next, "canary has a Next expected update date");
+  const publishedMs = Date.parse(`${published[1]}T00:00:00Z`);
+  const nextMs = Date.parse(`${next[1]}T00:00:00Z`);
+  assert.ok(Number.isFinite(publishedMs) && Number.isFinite(nextMs));
+  assert.ok(publishedMs <= nextMs, "published is not after next expected update");
+  assert.ok((nextMs - publishedMs) / 86400000 <= 40, "canary update window is at most 40 days");
+  assert.match(canary, /^Proof of freshness\n-+\n/m);
+  assert.match(canary, /^Bitcoin block \d+ at publication$/m);
+  assert.match(canary, /^Hash: [0-9a-f]{64}$/m);
+  assert.match(canary, /https:\/\/veritasvpn\.cloud\/transparency/);
   assert.equal(canary.includes("Juan"), false);
   assert.equal(canary.includes("García"), false);
   assert.equal(canary.includes("Vacchetta"), false);
