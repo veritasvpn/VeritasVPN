@@ -54,14 +54,20 @@ test("Play badge artwork is the unmodified official English asset", async () => 
   assert.equal(png.readUInt32BE(20), 250);
 });
 
-test("direct APK stays a secondary link on the Android install page only", async () => {
+test("direct APK is a second option, downloaded from the Android install page only", async () => {
   const pin = DOWNLOADS["veritasvpn-android.apk"];
   const version = pin.tag.replace(/^android-/, "").replace(/^v/, "");
   const html = await read("website/install/android.html");
   const apkHref = `/downloads/veritasvpn-android.apk?v=${version}`;
   assert.equal(html.split(apkHref).length - 1, 1);
   assert.ok(html.indexOf(PLAY) < html.indexOf(apkHref));
-  assert.match(html, /Can't use Google Play\? Download the APK directly/);
+  assert.match(html, /<h2>Download the \.apk<\/h2>/);
+  assert.match(html, />Download the \.apk<\/a>/);
+  assert.match(html, /de-Googled/);
+  assert.match(html, /Bitcoin through BTCPay/);
+  assert.match(html, /Signed by VeritasVPN/);
+  assert.match(html, /Google Play subscriptions/);
+  assert.doesNotMatch(html, /Stripe|credit card|card payment/i);
   assert.match(html, new RegExp(`Signed release v${version.replaceAll(".", "\\.")}`));
   assert.match(html, new RegExp(pin.sha256));
   assert.match(html, /automatic updates/);
@@ -77,6 +83,12 @@ test("direct APK stays a secondary link on the Android install page only", async
     const source = await read(path);
     assert.equal(source.includes("veritasvpn-android.apk"), false, path);
     assert.equal(source.includes("Download Android APK"), false, path);
+  }
+
+  for (const path of ["website/index.html", "website/downloads.html"]) {
+    const source = await read(path);
+    assert.match(source, /<a href="\/install\/android#apk">Download the \.apk<\/a>/, path);
+    assert.ok(source.indexOf(PLAY) < source.indexOf("/install/android#apk"), path);
   }
 });
 
