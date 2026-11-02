@@ -1687,6 +1687,13 @@ a.play-badge img{display:block;width:100%;height:auto;border:0;border-radius:0;f
 .downloads-hero p.apk-fallback a{color:var(--paper-muted);font-weight:600;text-decoration:underline;text-underline-offset:3px}
 .downloads-hero p.apk-fallback span{display:block;margin-top:6px}
 .downloads-hero p.apk-fallback code{overflow-wrap:anywhere}
+.apk-option{max-width:42rem;margin:30px auto 0;padding-top:26px;border-top:1px solid var(--line)}
+.apk-option h2{margin:0 0 10px;font-size:1.3rem}
+.apk-option>p{margin:0 auto 18px;color:var(--paper-dim);font-size:.95rem;line-height:1.6}
+.apk-option .installer-hero-action{margin-top:0}
+.apk-mini{display:block;margin-top:4px;padding-top:12px;border-top:1px solid var(--line);color:var(--paper-dim);font-size:var(--text-meta);line-height:1.5}
+.apk-mini a{color:var(--paper);font-weight:700;text-decoration:underline;text-underline-offset:3px}
+.apk-mini span{display:block;margin-top:4px}
 .downloads-hero p.play-trademark{margin:14px auto 0;color:var(--paper-dim);font-size:.75rem;letter-spacing:.01em}
 
 
