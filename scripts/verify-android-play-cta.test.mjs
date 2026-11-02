@@ -67,6 +67,7 @@ test("direct APK is a second option, downloaded from the Android install page on
   assert.match(html, /Bitcoin through BTCPay/);
   assert.match(html, /Signed by VeritasVPN/);
   assert.match(html, /Google Play subscriptions/);
+  assert.match(html, /Switching between the Google Play version and this APK requires uninstalling the other one first\./);
   assert.doesNotMatch(html, /Stripe|credit card|card payment/i);
   assert.match(html, new RegExp(`Signed release v${version.replaceAll(".", "\\.")}`));
   assert.match(html, new RegExp(pin.sha256));
