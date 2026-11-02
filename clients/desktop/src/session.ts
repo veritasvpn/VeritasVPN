@@ -4,7 +4,7 @@ import {
   SessionExpiredError,
   expireSession,
   getValidAccessToken,
-  refreshSession,
+  refreshSessionOutcome,
 } from "./auth";
 
 export { SESSION_EXPIRED_EVENT, SessionExpiredError };
@@ -24,7 +24,11 @@ export async function fetchWithAuth(url: string, init: RequestInit = {}): Promis
   if (response.status !== 401) return response;
 
   response.body?.cancel?.();
-  if (!(await refreshSession())) {
+  const outcome = await refreshSessionOutcome();
+  if (outcome === "offline") {
+    throw new TypeError("network is unreachable");
+  }
+  if (outcome !== "ok") {
     await expireSession();
     throw new SessionExpiredError();
   }
