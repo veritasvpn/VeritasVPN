@@ -69,6 +69,21 @@ class BillingStatusShrinkingParseTest {
     }
 
     @Test
+    fun shrinkingParseKeepsServerErrorFields() {
+        val status = parseAsRelease("""{"is_premium": false, "error": "Could not load your plan."}""")
+        assertEquals("Could not load your plan.", status.error)
+
+        val gson = GsonBuilder().setFieldNamingStrategy(releaseFieldRename()).create()
+        val checkout = gson.fromJson(
+            """{"error": "Could not cancel your subscription."}""",
+            CheckoutResponse::class.java,
+        )
+        assertEquals("Could not cancel your subscription.", checkout.error)
+        val peer = gson.fromJson("""{"error": "That device is not on this account."}""", PeerResponse::class.java)
+        assertEquals("That device is not on this account.", peer.error)
+    }
+
+    @Test
     fun shrinkingParseLeavesMissingPurchaseHistoryNull() {
         val status = parseAsRelease("""{"is_premium": true}""")
         assertNull(status.payments)

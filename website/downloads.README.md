@@ -7,7 +7,7 @@ Primary download offers:
 1. **Android** → `install/android.html`
 2. **Linux** → `install/linux.html`
 
-Windows, macOS, and iOS stay listed as coming soon. Do not add a Chrome extension card.
+Windows, macOS, iOS, and the Chrome extension stay listed as coming soon. Do not link a Chrome download until a Chrome Web Store listing exists.
 
 ## Useful information (AI)
 

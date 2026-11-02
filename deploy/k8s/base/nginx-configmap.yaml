@@ -107,6 +107,19 @@ data:
             return 204;
         }
 
+        # api.veritasvpn.cloud is the API. The marketing site is Cloudflare Pages.
+        # 418 is internal only: static locations below turn it into a JSON 404.
+        # /healthz, /readyz, and /api/ are not in those locations and stay as they are.
+        error_page 418 = @api_miss;
+
+        location @api_miss {
+            internal;
+            default_type application/json;
+            add_header Cache-Control "no-store" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            return 404 '{"error":"not_found"}\n';
+        }
+
         location = /healthz {
             access_log off;
             default_type text/plain;
@@ -141,6 +154,9 @@ data:
 
         # Binary downloads must never fall back to HTML pages.
         location /downloads/ {
+            if ($host = api.veritasvpn.cloud) {
+                return 418;
+            }
             try_files $uri =404;
             add_header Cache-Control "public, max-age=300";
             types {
@@ -153,22 +169,34 @@ data:
 
         # Short TTL so Cloudflare/browsers pick up CSS/JS deploys (also bust ?v=).
         location ~* \.(css|js)$ {
+            if ($host = api.veritasvpn.cloud) {
+                return 418;
+            }
             expires 5m;
             try_files $uri =404;
         }
 
         location ~* \.html$ {
+            if ($host = api.veritasvpn.cloud) {
+                return 418;
+            }
             expires -1;
             try_files $uri =404;
         }
 
         location = / {
+            if ($host = api.veritasvpn.cloud) {
+                return 418;
+            }
             expires -1;
             add_header Cache-Control "no-store, no-cache, must-revalidate" always;
             try_files /index.html =404;
         }
 
         location / {
+            if ($host = api.veritasvpn.cloud) {
+                return 418;
+            }
             try_files $uri $uri/ $uri.html =404;
         }
 
@@ -277,4 +305,15 @@ data:
         gzip on;
         gzip_types text/css application/javascript application/json image/svg+xml;
         gzip_min_length 256;
+    }
+
+    # www is normally served by Cloudflare Pages (functions/_middleware.js).
+    # If a www request still reaches this origin, send it to the apex.
+    server {
+        listen 8000;
+        listen 80;
+        server_name www.veritasvpn.cloud;
+        access_log off;
+        error_log /dev/null;
+        return 301 https://veritasvpn.cloud$request_uri;
     }

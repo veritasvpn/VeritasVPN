@@ -148,6 +148,7 @@ func main() {
 			}
 			svc.SetPlayBilling(service.NewPlayBilling(log, db, playClient, push, svc.PublishEvent))
 			log.Info("Google Play billing configured", zap.String("package", cfg.GooglePlayPackageName))
+			go syncPlayVoids(log, svc)
 		}
 	} else {
 		log.Info("Google Play billing is not configured")
@@ -211,6 +212,26 @@ func main() {
 		log.Fatal("server forced to shutdown", zap.Error(err))
 	}
 	log.Info("billing-svc stopped")
+}
+
+func syncPlayVoids(log *logging.Logger, svc *service.BillingService) {
+	log.Info("google play voided purchase sync enabled", "interval", service.PlayVoidedSyncInterval.String())
+	run := func() {
+		n, err := svc.SyncPlayVoidedPurchases(context.Background())
+		if err != nil {
+			log.Error("google play voided purchase sync failed", "error", err.Error(), "recorded", n)
+			return
+		}
+		if n > 0 {
+			log.Info("google play voided purchases recorded", "count", n)
+		}
+	}
+	run()
+	ticker := time.NewTicker(service.PlayVoidedSyncInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		run()
+	}
 }
 
 func connectDatabase(databaseURL string, log *logging.Logger) (*pgxpool.Pool, error) {

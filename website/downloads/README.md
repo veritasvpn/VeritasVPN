@@ -2,13 +2,13 @@
 
 ## Useful information (humans)
 
-**Production traffic** is served by Cloudflare Functions that stream from GitHub Releases only when the bytes match the SHA-256 pinned in `functions/_lib/releases.js`. Android is served from `android-v0.2.95` (app version 0.2.95). Linux is served from desktop `v0.2.90` (git tag `linux-v0.2.90`). The local fallback files in this directory are not deployed to Pages and retain their own checksum manifest until they are refreshed separately.
+**Production traffic** is served by Cloudflare Functions that stream from GitHub Releases only when the bytes match the SHA-256 pinned in `functions/_lib/releases.js`. Android is served from `android-v0.2.99` (app version 0.2.99). Linux is served from desktop `v0.2.90` (git tag `linux-v0.2.90`). The local fallback files in this directory are not deployed to Pages and retain their own checksum manifest until they are refreshed separately.
 
 The site’s primary Android button opens the Google Play listing (`https://play.google.com/store/apps/details?id=cloud.veritasvpn`). `/downloads/veritasvpn-android.apk` stays available as the sideload fallback linked from the Android install page.
 
 | File | Purpose |
 |------|---------|
-| `veritasvpn-android.apk` | Local signed-APK fallback — must match the local SHA-256 manifest; public downloads stream GitHub `android-v0.2.95` |
+| `veritasvpn-android.apk` | Local signed-APK fallback — must match the local SHA-256 manifest; public downloads stream GitHub `android-v0.2.99` |
 | `veritasvpn-linux.deb` | Local Linux .deb fallback — gitignored; public downloads stream GitHub `linux-v0.2.90` |
 | `veritasvpn-linux.AppImage` | Local Linux AppImage fallback — gitignored; public downloads stream GitHub `linux-v0.2.90` |
 | `veritasvpn-chrome.zip` | Sideload zip from `clients/browser-extension` (source `0.3.7`); public download remains paused |
@@ -21,7 +21,7 @@ Refresh from the published tags:
 
 ```bash
 cd website/downloads
-curl -fL -o veritasvpn-android.apk "https://github.com/veritasvpn/VeritasVPN/releases/download/android-v0.2.95/veritasvpn-android.apk"
+curl -fL -o veritasvpn-android.apk "https://github.com/veritasvpn/VeritasVPN/releases/download/android-v0.2.99/veritasvpn-android.apk"
 curl -fL -o veritasvpn-linux.deb "https://github.com/veritasvpn/VeritasVPN/releases/download/linux-v0.2.90/veritasvpn-linux.deb"
 curl -fL -o veritasvpn-linux.AppImage "https://github.com/veritasvpn/VeritasVPN/releases/download/linux-v0.2.90/veritasvpn-linux.AppImage"
 sha256sum -c SHA256SUMS --ignore-missing

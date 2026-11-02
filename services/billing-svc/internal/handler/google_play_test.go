@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,5 +50,16 @@ func TestUnboundPlayPurchaseIsNotAcknowledged(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "invalid") {
 		t.Fatalf("unbound purchase was classified as a client error: %s", rec.Body.String())
+	}
+}
+
+func TestRedactPlayNotificationErrorOmitsTokenAndAddress(t *testing.T) {
+	err := errors.New(`google play subscription lookup: Get "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/cloud.veritasvpn/purchases/subscriptionsv2/tokens/secret-purchase-token?page=1": dial tcp 142.250.1.1:443: connect [2607:f8b0:4004:800::200e]:443`)
+	got := redactPlayNotificationError(err)
+	if strings.Contains(got, "secret-purchase-token") || strings.Contains(got, "142.250.1.1") || strings.Contains(got, "2607:f8b0") {
+		t.Fatalf("log line leaked: %s", got)
+	}
+	if !strings.Contains(got, "/tokens/redacted") {
+		t.Fatalf("redacted = %s", got)
 	}
 }

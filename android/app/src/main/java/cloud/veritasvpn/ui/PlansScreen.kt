@@ -28,6 +28,9 @@ import androidx.compose.ui.unit.sp
 import cloud.veritasvpn.R
 import cloud.veritasvpn.api.BillingStatus
 import cloud.veritasvpn.billing.PlanEntitlement
+import cloud.veritasvpn.billing.PlayPlanPrice
+import cloud.veritasvpn.billing.planChoiceDetail
+import cloud.veritasvpn.billing.shownPlanPrice
 import cloud.veritasvpn.api.PurchaseHistoryItem
 import cloud.veritasvpn.ui.theme.*
 import java.time.LocalDate
@@ -51,6 +54,7 @@ fun AccountScreen(
     deletingAccount: Boolean = false,
     deleteError: String? = null,
     trialOffers: Map<String, cloud.veritasvpn.billing.TrialOffer> = emptyMap(),
+    planPrices: Map<String, PlayPlanPrice>? = null,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onPurchase: (String) -> Unit,
@@ -136,6 +140,15 @@ fun AccountScreen(
         Spacer(Modifier.height(18.dp))
 
         val premium = PlanEntitlement.grantsPremium(billingStatus)
+        val paused = playBilling && billingStatus?.accessState.equals("paused", ignoreCase = true)
+        val pricesLoaded = planPrices != null
+        val selectedShown = shownPlanPrice(
+        playBilling = playBilling,
+        pricesLoaded = pricesLoaded,
+        price = planPrices?.get(selectedPlan),
+        directPrice = if (selectedPlan == "premium_annual") "$30" else "$3",
+        directSuffix = if (selectedPlan == "premium_annual") "/year" else "/month",
+    )
         Row(
             Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(20.dp)).padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -145,6 +158,7 @@ fun AccountScreen(
                 Text(
                     when {
                         refreshing && billingStatus == null -> "Checking subscription…"
+                        paused -> "Paused"
                         premium -> "Premium"
                         paymentPending -> "Payment pending"
                         else -> "No active subscription"
@@ -153,7 +167,10 @@ fun AccountScreen(
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
-                if (premium && hasPeriodEnd) {
+                if (paused) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(pausedSubscriptionCopy(billingStatus?.resumesAt), color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
+                } else if (premium && hasPeriodEnd) {
                     Spacer(Modifier.height(4.dp))
                     Text("PREMIUM ACCESS EXPIRES", color = PaperDim, fontSize = 10.sp, letterSpacing = 1.1.sp)
                     Text("Expires on $periodEnd", color = PaperMuted, fontSize = 13.sp)
@@ -205,15 +222,18 @@ fun AccountScreen(
         Spacer(Modifier.height(18.dp))
 
         PlanCard(
-            name = "Premium", price = if (selectedPlan == "premium_annual") "$30" else "$3",
-            suffix = if (selectedPlan == "premium_annual") "/year" else "/month", current = premium,
+            name = "Premium",
+            price = selectedShown.price,
+            suffix = selectedShown.suffix,
+            priceLoading = selectedShown.loading,
+            current = premium,
             features = listOf("Paraguay WireGuard egress", "Up to 5 VPN devices", checkoutFeature, "Chrome, Android, and Linux access"),
             emphasized = true
         )
         
         // Show trial messaging if eligible (only for Play billing)
         val trialOffer = if (playBilling) trialOffers[selectedPlan] else null
-        if (!premium && !paymentPending && billingStatus?.trialEligible == true && trialOffer != null) {
+        if (!premium && !paused && !paymentPending && billingStatus?.trialEligible == true && trialOffer != null) {
             Spacer(Modifier.height(12.dp))
             Card(
                 Modifier.fillMaxWidth(),
@@ -239,15 +259,35 @@ fun AccountScreen(
             }
         }
         
-        if (!premium && !paymentPending) {
+        if (!premium && !paused && !paymentPending) {
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                PlanChoice("Monthly", "$3 / 30 days", selectedPlan == "premium_monthly", { selectedPlan = "premium_monthly" }, Modifier.weight(1f))
-                PlanChoice("Annual", "$30 / 365 days", selectedPlan == "premium_annual", { selectedPlan = "premium_annual" }, Modifier.weight(1f))
+                PlanChoice(
+                    "Monthly",
+                    planChoiceDetail(playBilling, pricesLoaded, planPrices?.get("premium_monthly"), "$3 / 30 days"),
+                    selectedPlan == "premium_monthly",
+                    { selectedPlan = "premium_monthly" },
+                    Modifier.weight(1f),
+                )
+                PlanChoice(
+                    "Annual",
+                    planChoiceDetail(playBilling, pricesLoaded, planPrices?.get("premium_annual"), "$30 / 365 days"),
+                    selectedPlan == "premium_annual",
+                    { selectedPlan = "premium_annual" },
+                    Modifier.weight(1f),
+                )
             }
         }
 
-        if (!premium && !paymentPending) {
+        if (paused) {
+            Spacer(Modifier.height(18.dp))
+            Button(
+                onClick = onManageSubscription,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Royal),
+            ) { Text("Manage subscription", color = Color.White, fontWeight = FontWeight.Bold) }
+        } else if (!premium && !paymentPending) {
             Spacer(Modifier.height(18.dp))
             Text(stringResource(R.string.pay_section_title), color = Paper, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             Text(stringResource(R.string.pay_section_body), color = PaperMuted, fontSize = 13.sp, lineHeight = 19.sp)
@@ -331,7 +371,7 @@ fun AccountScreen(
             fontSize = 13.sp,
             lineHeight = 19.sp
         )
-        val activePlaySubscription = PlanEntitlement.activeGooglePlaySubscription(playBilling, billingStatus)
+        val activePlaySubscription = PlanEntitlement.googlePlaySubscriptionToManage(playBilling, billingStatus)
         if (activePlaySubscription) {
             Spacer(Modifier.height(12.dp))
             PlaySubscriptionDeletionNotice(onManageSubscription)
@@ -566,9 +606,16 @@ private fun formatPurchaseAmount(cents: Long, currency: String?): String {
     }
 }
 
-private fun purchaseHistoryDetail(payment: PurchaseHistoryItem): String {
-    val base = "${purchasePlanLabel(payment.plan)} · ${formatPurchaseAmount(payment.amountCents, payment.currency)}"
+internal fun purchaseHistoryDetail(payment: PurchaseHistoryItem): String {
+    val amount = if (payment.isTrial) "Free trial" else formatPurchaseAmount(payment.amountCents, payment.currency)
+    val base = "${purchasePlanLabel(payment.plan)} · $amount"
     return if (payment.provider == "google_play") "$base · Google Play" else base
+}
+
+internal fun pausedSubscriptionCopy(resumesAt: String?): String {
+    val raw = resumesAt?.trim().orEmpty()
+    if (raw.isEmpty()) return "Paused. Resume it in Google Play."
+    return "Paused, resumes on ${formatBillingDate(raw)}."
 }
 
 private fun purchasePlanLabel(plan: String?): String = when (plan) {
@@ -577,7 +624,7 @@ private fun purchasePlanLabel(plan: String?): String = when (plan) {
     else -> "—"
 }
 
-private fun purchaseStatusLabel(status: String?): String = when (status) {
+internal fun purchaseStatusLabel(status: String?): String = when (status) {
     "completed" -> "Confirmed"
     "failed" -> "Failed"
     "refunded" -> "Refunded"
@@ -604,13 +651,21 @@ private fun PlanChoice(name: String, detail: String, selected: Boolean, onClick:
         shape = RoundedCornerShape(12.dp)) {
         Column(horizontalAlignment = Alignment.Start) {
             Text(name, color = Paper, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-            Text(detail, color = PaperDim, fontSize = 11.sp)
+            if (detail.isNotBlank()) Text(detail, color = PaperDim, fontSize = 11.sp)
         }
     }
 }
 
 @Composable
-private fun PlanCard(name: String, price: String, suffix: String, current: Boolean, features: List<String>, emphasized: Boolean = false) {
+private fun PlanCard(
+    name: String,
+    price: String?,
+    suffix: String,
+    current: Boolean,
+    features: List<String>,
+    emphasized: Boolean = false,
+    priceLoading: Boolean = false,
+) {
     Card(
         Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
@@ -626,9 +681,15 @@ private fun PlanCard(name: String, price: String, suffix: String, current: Boole
                 if (current) Text("CURRENT", color = SuccessGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.clip(CircleShape).background(SuccessGreen.copy(alpha = .12f)).padding(horizontal = 9.dp, vertical = 4.dp))
             }
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(price, color = if (emphasized) CyanHover else Paper, fontSize = 32.sp, fontWeight = FontWeight.Bold)
-                Text(suffix, color = PaperDim, fontSize = 13.sp, modifier = Modifier.padding(bottom = 6.dp, start = 4.dp))
+            if (priceLoading) {
+                Text("Loading price…", color = PaperMuted, fontSize = 16.sp)
+            } else if (!price.isNullOrBlank()) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(price, color = if (emphasized) CyanHover else Paper, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                    if (suffix.isNotBlank()) {
+                        Text(suffix, color = PaperDim, fontSize = 13.sp, modifier = Modifier.padding(bottom = 6.dp, start = 4.dp))
+                    }
+                }
             }
             Spacer(Modifier.height(12.dp))
             features.forEach { feature ->

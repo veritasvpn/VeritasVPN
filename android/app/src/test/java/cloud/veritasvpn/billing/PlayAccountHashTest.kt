@@ -66,8 +66,8 @@ class PlayAccountHashTest {
         assertTrue(direct.contains("/billing/app-return"))
         assertTrue(direct.contains("veritasvpn://") || direct.contains("android:scheme=\"veritasvpn\""))
         assertFalse(gradle.contains("logging-interceptor"))
-        assertTrue(gradle.contains("versionCode = 83"))
-        assertTrue(gradle.contains("versionName = \"0.2.99\""))
+        assertTrue(gradle.contains("versionCode = 84"))
+        assertTrue(gradle.contains("versionName = \"0.2.100\""))
     }
 
     private fun read(relative: String): String {

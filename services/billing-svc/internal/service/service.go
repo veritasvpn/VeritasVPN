@@ -201,6 +201,13 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 	// and have no payment history (or only failed payments)
 	trialEligible := isTrialEligible(recorded)
 
+	accessState := ""
+	var resumesAt *time.Time
+	if !isPremium && sub.PaymentMethod == model.PaymentGooglePlay && sub.AccessState == model.AccessPaused {
+		accessState = model.AccessPaused
+		resumesAt = sub.PauseResumesAt
+	}
+
 	return &model.StatusResponse{
 		AccountID:          sub.AccountID,
 		Tier:               sub.Tier,
@@ -219,6 +226,8 @@ func (s *BillingService) GetStatus(ctx context.Context, accountID string) (*mode
 		PollAfterSeconds:   paymentStatePollAfter(paymentState),
 		Payments:           model.PurchaseHistoryFrom(recorded),
 		TrialEligible:      trialEligible,
+		AccessState:        accessState,
+		ResumesAt:          resumesAt,
 	}, nil
 }
 

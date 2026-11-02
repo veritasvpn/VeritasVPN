@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/veritasvpn/lib/logging"
@@ -31,8 +32,11 @@ var (
 
 // PlayStore is the persistence Play Billing needs. *repository.Postgres implements it.
 type PlayStore interface {
-	PaymentAccount(ctx context.Context, providerTxnID string) (string, error)
-	UpdateGooglePlay(ctx context.Context, accountID, token string, apply func(sub *model.Subscription, existing *model.PaymentRecord) (*model.PaymentRecord, string, error)) (string, error)
+	PaymentAccount(ctx context.Context, purchaseToken string) (string, error)
+	// UpdateGooglePlay locks the subscription and every payment row for this
+	// purchase token. apply returns the one order row to insert or update.
+	// Other linked rows stay as they are.
+	UpdateGooglePlay(ctx context.Context, accountID, token string, apply func(sub *model.Subscription, linked []model.PaymentRecord) (*model.PaymentRecord, string, error)) (string, error)
 }
 
 // PlayVerifyResult tells the app whether Premium is active and whether the
@@ -53,6 +57,9 @@ type PlayBilling struct {
 	push    provider.PushVerifier
 	now     func() time.Time
 	publish func(subject string, payload map[string]interface{})
+
+	voidedMu      sync.Mutex
+	voidedApplied map[string]struct{}
 }
 
 func NewPlayBilling(log *logging.Logger, store PlayStore, client provider.PlayClient, push provider.PushVerifier, publish func(string, map[string]interface{})) *PlayBilling {
@@ -107,40 +114,93 @@ func (p *PlayBilling) Verify(ctx context.Context, accountID, productID, purchase
 	if !playAccountMatches(accountID, purchase.ObfuscatedAccountID) {
 		return nil, ErrPlayAccountMismatch
 	}
-	return p.apply(ctx, accountID, productID, purchaseToken, purchase, false)
+	return p.apply(ctx, accountID, productID, purchaseToken, purchase, false, "")
 }
 
 func (p *PlayBilling) ProcessNotification(ctx context.Context, body []byte, authorization string) error {
 	if err := p.push.Verify(ctx, authorization); err != nil {
+		p.logNotification("google play notification not applied", "unauthorized", developerNote{})
 		return fmt.Errorf("rtdn auth: %w", err)
 	}
 	note, err := decodeDeveloperNotification(body)
 	if err != nil {
+		p.logNotification("google play notification not applied", "undecodable", developerNote{})
 		return err
 	}
 	if note.PackageName != "" && note.PackageName != p.client.PackageName() {
+		p.logNotification("google play notification not applied", "package_mismatch", note)
 		return fmt.Errorf("google play package mismatch")
 	}
 	if note.Test {
 		p.log.Info("google play test notification")
 		return nil
 	}
+	if note.IgnoreReason != "" {
+		p.logNotification("google play notification ignored", note.IgnoreReason, note)
+		return nil
+	}
+	if note.RefundOrderID != "" && p.log != nil {
+		// Visible at INFO when a refund notice arrives. The purchase token is not logged.
+		p.log.Info("google play voided purchase notification", "order_id", note.RefundOrderID, "renewal_order", isPlayRenewalOrder(note.RefundOrderID), "product_type", note.ProductType, "refund_type", note.RefundType)
+	}
 	if note.PurchaseToken == "" {
+		p.logNotification("google play notification ignored", "missing_purchase_token", note)
 		return nil
 	}
 	purchase, err := p.lookup(ctx, note.PurchaseToken)
 	if err != nil {
+		p.logNotification("google play notification not applied", "subscription_lookup_failed", note)
 		return err
 	}
 	accountID, err := p.accountForPurchase(ctx, note.PurchaseToken, purchase.ObfuscatedAccountID)
 	if err != nil {
+		reason := "account_lookup_failed"
+		if errors.Is(err, ErrPlayAccountUnbound) {
+			reason = "account_unbound"
+		} else if errors.Is(err, ErrPlayAccountMismatch) {
+			reason = "account_mismatch"
+		}
+		p.logNotification("google play notification not applied", reason, note)
 		return err
 	}
 	if accountID == "" {
+		p.logNotification("google play notification not applied", "account_unbound", note)
 		return ErrPlayAccountUnbound
 	}
-	_, err = p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke)
-	return err
+	result, err := p.apply(ctx, accountID, note.ProductID, note.PurchaseToken, purchase, note.ForceRevoke, note.RefundOrderID)
+	if repository.IsPlayPaymentUniqueConflict(err) {
+		// Only a duplicate provider_transaction_id is acknowledged. Any other
+		// unique violation stays retryable. The message has no token or order id.
+		p.logNotification("google play notification ignored", "duplicate_order", note)
+		return nil
+	}
+	if err != nil {
+		p.logNotification("google play notification not applied", "not_applied", note)
+		return err
+	}
+	if note.RefundOrderID != "" {
+		p.logVoidApplied(result, note.RefundOrderID)
+	}
+	return nil
+}
+
+// logNotification records an RTDN branch that returned before the payment row
+// changed. order id and product type are safe. The purchase token is not logged.
+func (p *PlayBilling) logNotification(message, reason string, note developerNote) {
+	if p == nil || p.log == nil || reason == "" {
+		return
+	}
+	args := []interface{}{
+		"reason", reason,
+		"order_id", note.RefundOrderID,
+		"product_type", note.ProductType,
+		"notification_type", note.Type,
+	}
+	if message == "google play notification ignored" {
+		p.log.Info(message, args...)
+		return
+	}
+	p.log.Warn(message, args...)
 }
 
 func (p *PlayBilling) lookup(ctx context.Context, token string) (*provider.SubscriptionPurchase, error) {
@@ -157,15 +217,15 @@ func (p *PlayBilling) lookup(ctx context.Context, token string) (*provider.Subsc
 	return purchase, nil
 }
 
-func (p *PlayBilling) apply(ctx context.Context, accountID, requestedProduct, token string, purchase *provider.SubscriptionPurchase, forceRevoke bool) (*PlayVerifyResult, error) {
+func (p *PlayBilling) apply(ctx context.Context, accountID, requestedProduct, token string, purchase *provider.SubscriptionPurchase, forceRevoke bool, refundOrderID string) (*PlayVerifyResult, error) {
 	now := p.now().UTC()
 	var result PlayVerifyResult
 	var planID string
 	var periodDays int
 	var periodEnd time.Time
 	var isTrialStart, isConversion bool
-	event, err := p.store.UpdateGooglePlay(ctx, accountID, token, func(sub *model.Subscription, existing *model.PaymentRecord) (*model.PaymentRecord, string, error) {
-		payment, ev, trialStart, conversion, res, err := decidePlayEntitlement(now, accountID, requestedProduct, token, purchase, sub, existing, forceRevoke)
+	event, err := p.store.UpdateGooglePlay(ctx, accountID, token, func(sub *model.Subscription, linked []model.PaymentRecord) (*model.PaymentRecord, string, error) {
+		payment, ev, trialStart, conversion, res, err := decidePlayEntitlement(now, accountID, requestedProduct, token, purchase, sub, linked, forceRevoke, refundOrderID)
 		if err != nil {
 			return nil, "", err
 		}
@@ -236,7 +296,7 @@ func (p *PlayBilling) accountForPurchase(ctx context.Context, token, obfuscated 
 	return obfuscated, nil
 }
 
-func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token string, purchase *provider.SubscriptionPurchase, sub *model.Subscription, existing *model.PaymentRecord, forceRevoke bool) (*model.PaymentRecord, string, bool, bool, PlayVerifyResult, error) {
+func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token string, purchase *provider.SubscriptionPurchase, sub *model.Subscription, linked []model.PaymentRecord, forceRevoke bool, refundOrderID string) (*model.PaymentRecord, string, bool, bool, PlayVerifyResult, error) {
 	if purchase.ObfuscatedAccountID != "" && !playAccountMatches(accountID, purchase.ObfuscatedAccountID) {
 		return nil, "", false, false, PlayVerifyResult{}, ErrPlayAccountMismatch
 	}
@@ -258,32 +318,90 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 	before := snapPlay(sub)
 	state := purchase.State
 	pending := state == "SUBSCRIPTION_STATE_PENDING"
+	latestOrder := strings.TrimSpace(playChargeOrderID(purchase, line))
+	refundID := strings.TrimSpace(refundOrderID)
+	// A refund records that one order. Premium follows the fresh lookup:
+	// active, in grace, and canceled with time left stay entitled, including
+	// when the refunded order is the latest one. SUBSCRIPTION_REVOKED and a
+	// lookup that is no longer entitled still remove Premium.
 	entitled := !forceRevoke && !pending && playEntitled(state, line.Expiry, now)
 
+	orderKey := latestOrder
+	if refundID != "" {
+		orderKey = refundID
+	}
+	if orderKey == "" {
+		orderKey = token
+	}
+	renewalOrder := isPlayRenewalOrder(orderKey)
+	// A renewal order is a real charge. License-tester renewals happen in
+	// minutes, while the line item still carries the trial offer and
+	// PLAY_TRIAL_DAYS has not elapsed. The base order stays the trial.
+	isTrial := line.InTrial && !renewalOrder
 	amount := product.PriceCents
 	currency := "usd"
-	if line.HasPrice && line.PriceCents > 0 {
+	if line.HasPrice {
 		amount = line.PriceCents
 		if line.Currency != "" {
-			currency = line.Currency
+			currency = strings.ToLower(line.Currency)
 		}
 	}
-	// Trials are free: set amount to 0 and mark as trial
-	isTrial := line.InTrial
 	if isTrial {
 		amount = 0
 	}
+
+	// Older builds stored every renewal on the purchase-token row. Re-point
+	// that row when it already is this charge. A different charge, including
+	// a token-keyed trial next to a paid renewal, stays put.
+	allowLegacy := !renewalOrder || legacyTokenRowIsThisCharge(linked, token, sub, line.Expiry)
+	if refundID != "" && renewalOrder && latestOrder != "" && refundID != latestOrder {
+		allowLegacy = false
+	}
+	existing := matchPlayPayment(linked, token, orderKey, allowLegacy)
+	if existing != nil && existing.IsTrial && !renewalOrder && !forceRevoke && refundID == "" {
+		isTrial = true
+		amount = 0
+	}
+	status := playPaymentStatus(state, forceRevoke, entitled)
+	if state == "SUBSCRIPTION_STATE_EXPIRED" && orderKey != token && refundID == "" && !forceRevoke {
+		// The charge succeeded. Expiry only removes Premium.
+		status = model.PaymentCompleted
+	}
+	if existing != nil && existing.Status == model.PaymentCompleted && status == model.PaymentFailed && !forceRevoke && refundID == "" {
+		status = model.PaymentCompleted
+	}
+	if forceRevoke || refundID != "" {
+		status = model.PaymentRefunded
+		if existing != nil {
+			amount = existing.Amount
+			if existing.Currency != "" {
+				currency = existing.Currency
+			}
+			isTrial = existing.IsTrial
+		}
+	}
+	// A later verify or RTDN must not turn a refund back into a completed charge.
+	if existing != nil && existing.Status == model.PaymentRefunded && status != model.PaymentRefunded {
+		status = model.PaymentRefunded
+		amount = existing.Amount
+		if existing.Currency != "" {
+			currency = existing.Currency
+		}
+		isTrial = existing.IsTrial
+	}
+
 	payment := &model.PaymentRecord{
 		SubscriptionID:        sub.ID,
 		AccountID:             accountID,
 		Amount:                amount,
 		Currency:              currency,
-		ProviderTransactionID: token,
+		ProviderTransactionID: orderKey,
 		PlanID:                product.PlanID,
 		PeriodDays:            product.PeriodDays,
 		Provider:              model.PaymentGooglePlay,
-		Status:                playPaymentStatus(state, forceRevoke, entitled),
+		Status:                status,
 		IsTrial:               isTrial,
+		PurchaseToken:         token,
 	}
 	if existing != nil {
 		payment.ID = existing.ID
@@ -304,10 +422,10 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 			assignPlaySubscription(sub, product, token, line, newEnd, now, state)
 		}
 	} else if playOwnsEntitlement(sub, token) {
-		revokePlaySubscription(sub, now, state, forceRevoke)
+		revokePlaySubscription(sub, now, state, forceRevoke, purchase.PauseResumesAt)
 	}
 
-	event, isTrialStart, isConversion := playEvent(before, sub, payment.IsTrial, existing)
+	event, isTrialStart, isConversion := playEvent(before, sub, payment.IsTrial, conversionMarker(linked, existing, payment.IsTrial))
 	premium := sub.Tier == model.TierPremium && sub.Status == model.StatusActive && now.Before(sub.CurrentPeriodEnd)
 	result := PlayVerifyResult{
 		IsPremium:   premium,
@@ -316,6 +434,95 @@ func decidePlayEntitlement(now time.Time, accountID, requestedProduct, token str
 		Status:      sub.Status,
 	}
 	return payment, event, isTrialStart, isConversion, result, nil
+}
+
+// playChargeOrderID is the idempotency key for one successful charge.
+// Renewals use a new Google order id (GPA.xxxx..0) on the same purchase token.
+func playChargeOrderID(purchase *provider.SubscriptionPurchase, line provider.PlayLineItem) string {
+	if id := strings.TrimSpace(line.LatestSuccessfulOrderID); id != "" {
+		return id
+	}
+	if purchase != nil {
+		if id := strings.TrimSpace(purchase.LatestOrderID); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func isPlayRenewalOrder(orderID string) bool {
+	return strings.Contains(orderID, "..")
+}
+
+// matchPlayPayment finds the row for this order. allowLegacy also matches the
+// purchase-token row older builds used for every charge.
+func matchPlayPayment(linked []model.PaymentRecord, token, orderKey string, allowLegacy bool) *model.PaymentRecord {
+	for i := range linked {
+		if linked[i].ProviderTransactionID == orderKey {
+			cp := linked[i]
+			return &cp
+		}
+	}
+	if !allowLegacy || token == "" || token == orderKey {
+		return nil
+	}
+	for i := range linked {
+		if linked[i].ProviderTransactionID == token {
+			cp := linked[i]
+			return &cp
+		}
+	}
+	return nil
+}
+
+// legacyTokenRowIsThisCharge is true when the only pre-order-id row already
+// records this renewal. Old builds updated that token row and the period end
+// together, so a later unpaid renewal has a later expiry and must be a new row.
+func legacyTokenRowIsThisCharge(linked []model.PaymentRecord, token string, sub *model.Subscription, expiry time.Time) bool {
+	if token == "" || sub == nil || expiry.IsZero() || sub.CurrentPeriodEnd.IsZero() {
+		return false
+	}
+	var legacy *model.PaymentRecord
+	for i := range linked {
+		if linked[i].ProviderTransactionID != token {
+			continue
+		}
+		row := linked[i]
+		legacy = &row
+		break
+	}
+	if legacy == nil || legacy.IsTrial || legacy.Amount <= 0 || legacy.Status == model.PaymentRefunded {
+		return false
+	}
+	return !sub.CurrentPeriodEnd.UTC().Before(expiry.UTC())
+}
+
+// conversionMarker is non-nil only for the first paid order after a trial,
+// so a later renewal is not reported as a second conversion.
+func conversionMarker(linked []model.PaymentRecord, existing *model.PaymentRecord, isTrial bool) *model.PaymentRecord {
+	if isTrial {
+		return nil
+	}
+	if existing != nil && existing.IsTrial {
+		return existing
+	}
+	if existing != nil {
+		return nil
+	}
+	priorTrial := false
+	for _, row := range linked {
+		if row.IsTrial {
+			priorTrial = true
+			continue
+		}
+		if row.Amount > 0 && (row.Status == model.PaymentCompleted || row.Status == model.PaymentRefunded) {
+			return nil
+		}
+	}
+	if !priorTrial {
+		return nil
+	}
+	return &model.PaymentRecord{IsTrial: true}
 }
 
 func selectPlayLine(purchase *provider.SubscriptionPurchase, requestedProduct string) (provider.PlayLineItem, error) {
@@ -372,8 +579,6 @@ func playPaymentStatus(state string, forceRevoke, entitled bool) string {
 		return model.PaymentPending
 	case "SUBSCRIPTION_STATE_PENDING_PURCHASE_CANCELED":
 		return model.PaymentFailed
-	case "SUBSCRIPTION_STATE_EXPIRED":
-		return model.PaymentFailed
 	default:
 		if entitled {
 			return model.PaymentCompleted
@@ -408,14 +613,31 @@ func assignPlaySubscription(sub *model.Subscription, product model.PlayProduct, 
 	sub.CurrentPeriodEnd = newEnd
 	sub.ExternalRef = token
 	sub.CancelAtPeriodEnd = state == "SUBSCRIPTION_STATE_CANCELED" || !line.AutoRenewEnabled
+	sub.AccessState = ""
+	sub.PauseResumesAt = nil
 }
 
-func revokePlaySubscription(sub *model.Subscription, now time.Time, state string, forceRevoke bool) {
-	if !forceRevoke && (state == "SUBSCRIPTION_STATE_ON_HOLD" || state == "SUBSCRIPTION_STATE_PAUSED") {
+func revokePlaySubscription(sub *model.Subscription, now time.Time, state string, forceRevoke bool, pauseResumesAt *time.Time) {
+	if !forceRevoke && state == "SUBSCRIPTION_STATE_PAUSED" {
 		sub.Tier = model.TierPremium
 		sub.Status = model.StatusPastDue
 		sub.PaymentMethod = model.PaymentGooglePlay
 		sub.CancelAtPeriodEnd = false
+		sub.AccessState = model.AccessPaused
+		sub.PauseResumesAt = nil
+		if pauseResumesAt != nil {
+			utc := pauseResumesAt.UTC()
+			sub.PauseResumesAt = &utc
+		}
+		return
+	}
+	if !forceRevoke && state == "SUBSCRIPTION_STATE_ON_HOLD" {
+		sub.Tier = model.TierPremium
+		sub.Status = model.StatusPastDue
+		sub.PaymentMethod = model.PaymentGooglePlay
+		sub.CancelAtPeriodEnd = false
+		sub.AccessState = ""
+		sub.PauseResumesAt = nil
 		return
 	}
 	if !forceRevoke && state == "SUBSCRIPTION_STATE_PENDING" {
@@ -432,6 +654,8 @@ func revokePlaySubscription(sub *model.Subscription, now time.Time, state string
 	sub.CurrentPeriodEnd = now.Add(100 * 365 * 24 * time.Hour)
 	sub.CancelAtPeriodEnd = false
 	sub.ExternalRef = ""
+	sub.AccessState = ""
+	sub.PauseResumesAt = nil
 }
 
 type playSnap struct {
@@ -482,8 +706,14 @@ type developerNote struct {
 	PurchaseToken string
 	ProductID     string
 	Type          int
+	ProductType   int
+	RefundType    int
 	Test          bool
 	ForceRevoke   bool
+	RefundOrderID string
+	// IgnoreReason is set when the notice is acknowledged and not applied.
+	// Empty means the purchase token should be handled.
+	IgnoreReason string
 }
 
 func decodeDeveloperNotification(body []byte) (developerNote, error) {
@@ -517,8 +747,16 @@ func decodeDeveloperNotification(body []byte) (developerNote, error) {
 		} `json:"subscriptionNotification"`
 		VoidedPurchaseNotification *struct {
 			PurchaseToken string `json:"purchaseToken"`
+			OrderID       string `json:"orderId"`
 			ProductType   int    `json:"productType"`
+			RefundType    int    `json:"refundType"`
 		} `json:"voidedPurchaseNotification"`
+		OneTimeProductNotification *struct {
+			NotificationType int `json:"notificationType"`
+		} `json:"oneTimeProductNotification"`
+		PendingRefundReviewNotification *struct {
+			OrderID string `json:"orderId"`
+		} `json:"pendingRefundReviewNotification"`
 	}
 	if err := json.Unmarshal(raw, &note); err != nil {
 		return developerNote{}, fmt.Errorf("invalid developer notification")
@@ -529,20 +767,46 @@ func decodeDeveloperNotification(body []byte) (developerNote, error) {
 		return out, nil
 	}
 	if note.SubscriptionNotification != nil {
-		out.PurchaseToken = note.SubscriptionNotification.PurchaseToken
+		out.PurchaseToken = strings.TrimSpace(note.SubscriptionNotification.PurchaseToken)
 		out.ProductID = note.SubscriptionNotification.SubscriptionID
 		out.Type = note.SubscriptionNotification.NotificationType
 		out.ForceRevoke = out.Type == 12
+		if out.PurchaseToken == "" {
+			out.IgnoreReason = "missing_purchase_token"
+		}
 		return out, nil
 	}
 	if note.VoidedPurchaseNotification != nil {
-		if note.VoidedPurchaseNotification.ProductType != 0 && note.VoidedPurchaseNotification.ProductType != 1 {
+		out.ProductType = note.VoidedPurchaseNotification.ProductType
+		out.RefundType = note.VoidedPurchaseNotification.RefundType
+		out.RefundOrderID = strings.TrimSpace(note.VoidedPurchaseNotification.OrderID)
+		// productType 1 is a subscription. 2 is a one-time product. 0 means the
+		// field was absent; those notices are still applied. Anything else is
+		// acknowledged and logged so it is not a silent 200.
+		if out.ProductType != 0 && out.ProductType != 1 {
+			out.IgnoreReason = "unsupported_product_type"
 			return out, nil
 		}
-		out.PurchaseToken = note.VoidedPurchaseNotification.PurchaseToken
-		out.ForceRevoke = true
-		out.Type = 12
+		out.PurchaseToken = strings.TrimSpace(note.VoidedPurchaseNotification.PurchaseToken)
+		// The fresh subscriptionsv2 lookup decides entitlement. Refunding an
+		// order, including the latest one, does not revoke a subscription
+		// Google still reports as entitled.
+		out.ForceRevoke = false
+		if out.PurchaseToken == "" {
+			out.IgnoreReason = "missing_purchase_token"
+		}
 		return out, nil
 	}
+	if note.OneTimeProductNotification != nil {
+		out.IgnoreReason = "one_time_product"
+		out.Type = note.OneTimeProductNotification.NotificationType
+		return out, nil
+	}
+	if note.PendingRefundReviewNotification != nil {
+		out.IgnoreReason = "pending_refund_review"
+		out.RefundOrderID = strings.TrimSpace(note.PendingRefundReviewNotification.OrderID)
+		return out, nil
+	}
+	out.IgnoreReason = "unrecognized_notification"
 	return out, nil
 }

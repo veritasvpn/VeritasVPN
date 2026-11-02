@@ -22,6 +22,17 @@ object PlanEntitlement {
         return grantsPremium(status)
     }
 
+    /**
+     * A Play subscription the user can still manage, including one that is
+     * paused. Deleting the account does not cancel it.
+     */
+    fun googlePlaySubscriptionToManage(playBilling: Boolean, status: BillingStatus?): Boolean {
+        if (!playBilling || status == null) return false
+        if (!status.paymentMethod.equals("google_play", ignoreCase = true)) return false
+        if (status.accessState.equals("paused", ignoreCase = true)) return true
+        return grantsPremium(status)
+    }
+
     fun grantsPremium(status: BillingStatus?, nowMs: Long = System.currentTimeMillis()): Boolean {
         if (status == null) return false
         if (status.isPremium) return true

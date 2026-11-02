@@ -3,8 +3,7 @@ VeritasVPN Warrant Canary
 
 Published: 2026-10-07
 Next expected update: on or before 2026-11-07
-Operator: Juan Pablo Alan García Vacchetta, doing business as VERITAS ARK
-          (RUC 5111281-7), Asunción, Paraguay
+Operator: VERITAS ARK (RUC 5111281-7), Asunción, Paraguay
 Service: VeritasVPN (veritasvpn.cloud)
 Servers: Paraguay
 Public repository: https://github.com/veritasvpn/VeritasVPN

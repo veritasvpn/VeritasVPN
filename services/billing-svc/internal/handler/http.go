@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -298,7 +299,8 @@ func (h *BillingHandler) handleGooglePlayNotification(w http.ResponseWriter, r *
 		return
 	}
 	if err := h.service.ProcessGooglePlayNotification(r.Context(), payload, r.Header.Get("Authorization")); err != nil {
-		h.log.Warn("google play notification rejected", zap.Error(err))
+		// Lookup failures include the request URL, which contains the purchase token.
+		h.log.Warn("google play notification rejected", "error", redactPlayNotificationError(err))
 		h.writePlayError(w, err)
 		return
 	}
@@ -332,6 +334,39 @@ func (h *BillingHandler) writePlayError(w http.ResponseWriter, err error) {
 		}
 		writeError(w, http.StatusBadGateway, "Google Play could not be reached")
 	}
+}
+
+var (
+	playLogIPv4 = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	playLogIPv6 = regexp.MustCompile(`\[[0-9A-Fa-f:.]+\]`)
+)
+
+// redactPlayNotificationError strips purchase tokens and addresses from a
+// Play lookup failure before it is written to the log.
+func redactPlayNotificationError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	const marker = "/tokens/"
+	var b strings.Builder
+	for {
+		i := strings.Index(msg, marker)
+		if i < 0 {
+			b.WriteString(msg)
+			break
+		}
+		b.WriteString(msg[:i])
+		b.WriteString("/tokens/redacted")
+		msg = msg[i+len(marker):]
+		k := 0
+		for k < len(msg) && msg[k] != '"' && msg[k] != ' ' && msg[k] != '?' && msg[k] != '\\' {
+			k++
+		}
+		msg = msg[k:]
+	}
+	out := playLogIPv4.ReplaceAllString(b.String(), "redacted")
+	return playLogIPv6.ReplaceAllString(out, "redacted")
 }
 
 func (h *BillingHandler) handleMockCheckout(w http.ResponseWriter, r *http.Request) {
