@@ -1,12 +1,13 @@
 VeritasVPN Warrant Canary
 =========================
 
-Published: 2026-10-07
-Next expected update: on or before 2026-11-07
-Operator: VERITAS ARK (RUC 5111281-7), Asunción, Paraguay
+Published: 2026-11-02
+Next expected update: on or before 2026-12-07
+Operator: VERITAS ARK, Asunción, Paraguay
 Service: VeritasVPN (veritasvpn.cloud)
 Servers: Paraguay
 Public repository: https://github.com/veritasvpn/VeritasVPN
+Transparency page: https://veritasvpn.cloud/transparency
 
 This canary is a plain-text statement. Cryptographic signing of canary
 updates may be added later; until then, treat GitHub commit history and
@@ -62,5 +63,13 @@ the site for an explanation.
 
 This canary is about secret legal compulsion. It is not a claim that we
 store zero operational data. Read https://veritasvpn.cloud/privacy.html.
+
+Proof of freshness
+------------------
+Bitcoin block 974294 at publication
+Hash: 00000000000000000001d07837476b17894cb75da489aacb8189e2f7de26c5ce
+Checked on 2026-11-02 at 20:33 UTC against blockstream.info and mempool.space.
+This does not prove the statements above are true. It proves this file was
+written on or after that block was mined.
 
 Contact: contact@veritasvpn.cloud
