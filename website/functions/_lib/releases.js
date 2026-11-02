@@ -17,10 +17,10 @@ const MAX_ASSET_BYTES = 100 * 1024 * 1024;
 
 export const DOWNLOADS = {
   "veritasvpn-android.apk": {
-    // android-v0.2.99 is the signed website APK (versionName 0.2.99, versionCode 83).
+    // android-v0.2.100 is the signed website APK (versionName 0.2.100, versionCode 84).
     // Digest is the veritasvpn-android.apk line from that release's SHA256SUMS.
-    tag: "android-v0.2.99",
-    sha256: "82c2883dc33493028997e998f66630e13050e9195a15cbe2d661b44798b7c7cb",
+    tag: "android-v0.2.100",
+    sha256: "fa35911058e4db426fb58d587a9d4fc7194d326b194c0d3a3f88e87e18880599",
     contentType: "application/vnd.android.package-archive",
     unavailable: "Android APK is temporarily unavailable.",
   },

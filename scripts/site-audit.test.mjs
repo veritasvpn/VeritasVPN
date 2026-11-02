@@ -29,14 +29,14 @@ const SKIP = new Set([
 ]);
 
 const FOOTER_LINKS = ["/privacy", "/terms", "/transparency", "/cookies", "/contact"];
-const ANDROID_SHA = "82c2883dc33493028997e998f66630e13050e9195a15cbe2d661b44798b7c7cb";
+const ANDROID_SHA = "fa35911058e4db426fb58d587a9d4fc7194d326b194c0d3a3f88e87e18880599";
 
-test("Android and Linux pins are 0.2.99", () => {
+test("Android pin is 0.2.100 and Linux pin is 0.2.99", () => {
   const android = DOWNLOADS["veritasvpn-android.apk"];
-  assert.equal(android.tag, "android-v0.2.99");
+  assert.equal(android.tag, "android-v0.2.100");
   assert.equal(android.sha256, ANDROID_SHA);
-  assert.equal(android.sha256.startsWith("82c2883d"), true);
-  assert.equal(android.sha256.endsWith("7c7cb"), true);
+  assert.equal(android.sha256.startsWith("fa359110"), true);
+  assert.equal(android.sha256.endsWith("80599"), true);
   assert.equal(DOWNLOADS["veritasvpn-linux.deb"].tag, "linux-v0.2.99");
   assert.equal(DOWNLOADS["veritasvpn-linux.AppImage"].tag, "linux-v0.2.99");
   assert.equal(DOWNLOADS["veritasvpn-linux.deb"].sha256, "c253eb4fe8902c38b52f35c8e6bcea9b38d9599fb8fcec65a96633923169fe4e");
