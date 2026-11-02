@@ -25,15 +25,15 @@ export const DOWNLOADS = {
     unavailable: "Android APK is temporarily unavailable.",
   },
   "veritasvpn-linux.deb": {
-    // linux-v0.2.90: connect circle pulsing through Protected (#201).
-    tag: "linux-v0.2.90",
-    sha256: "60baddacc91482e259e71da212468544f81c1fbe94cb8a0166cf44cf4353013d",
+    // linux-v0.2.99: reconnect after network changes, long sessions, and Stealth roaming (#261).
+    tag: "linux-v0.2.99",
+    sha256: "c253eb4fe8902c38b52f35c8e6bcea9b38d9599fb8fcec65a96633923169fe4e",
     contentType: "application/vnd.debian.binary-package",
     unavailable: "Linux .deb is temporarily unavailable.",
   },
   "veritasvpn-linux.AppImage": {
-    tag: "linux-v0.2.90",
-    sha256: "eec7029323df556b0efbd783a2f149ecfe6c9777211114485fbe07fc7deee9eb",
+    tag: "linux-v0.2.99",
+    sha256: "2e09ab5213c35adb42676fd80f3b9b8455fe646053abafc8b5b48f0766a91b02",
     contentType: "application/octet-stream",
     unavailable: "Linux AppImage is temporarily unavailable.",
   },

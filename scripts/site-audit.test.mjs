@@ -31,15 +31,15 @@ const SKIP = new Set([
 const FOOTER_LINKS = ["/privacy", "/terms", "/transparency", "/cookies", "/contact"];
 const ANDROID_SHA = "82c2883dc33493028997e998f66630e13050e9195a15cbe2d661b44798b7c7cb";
 
-test("Android pin is 0.2.99 and Linux stays 0.2.90", () => {
+test("Android and Linux pins are 0.2.99", () => {
   const android = DOWNLOADS["veritasvpn-android.apk"];
   assert.equal(android.tag, "android-v0.2.99");
   assert.equal(android.sha256, ANDROID_SHA);
   assert.equal(android.sha256.startsWith("82c2883d"), true);
   assert.equal(android.sha256.endsWith("7c7cb"), true);
-  assert.equal(DOWNLOADS["veritasvpn-linux.deb"].tag, "linux-v0.2.90");
-  assert.equal(DOWNLOADS["veritasvpn-linux.AppImage"].tag, "linux-v0.2.90");
-  assert.equal(DOWNLOADS["veritasvpn-linux.deb"].sha256, "60baddacc91482e259e71da212468544f81c1fbe94cb8a0166cf44cf4353013d");
+  assert.equal(DOWNLOADS["veritasvpn-linux.deb"].tag, "linux-v0.2.99");
+  assert.equal(DOWNLOADS["veritasvpn-linux.AppImage"].tag, "linux-v0.2.99");
+  assert.equal(DOWNLOADS["veritasvpn-linux.deb"].sha256, "c253eb4fe8902c38b52f35c8e6bcea9b38d9599fb8fcec65a96633923169fe4e");
 });
 
 test("canary names the business only and is not a signed blob", () => {
