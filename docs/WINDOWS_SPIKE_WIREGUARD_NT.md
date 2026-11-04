@@ -31,17 +31,26 @@ The job log lines prefixed `SPIKE_` are the raw record. The table below is fille
 
 ## Results
 
-Filled after the first CI run on this branch. Until then the cells stay blank on purpose, rather than guessing a build number.
+Recorded from GitHub Actions run 41935115731 (4 Nov 2026). Both jobs printed `SPIKE_OK`.
 
-| Runner | Windows build | Driver version | Adapter created, up, and removed |
+| Runner | Windows | Driver | Adapter |
 | --- | --- | --- | --- |
-| windows-latest | | | |
-| windows-2022 | | | |
+| windows-latest | 10.0.26100.33674, build 26100, product type 3 (Server) | 65537 (`0x10001`, 1.1) | Created, state Up, then removed |
+| windows-2022 | 10.0.20348.5773, build 20348, product type 3 (Server) | 65537 (`0x10001`, 1.1) | Created, state Up, then removed |
+
+`Get-NetAdapter` showed `Name: VeritasVPN`, `Status: Up`, `InterfaceDescription: WireGuard Tunnel`. After `WireGuardCloseAdapter` the adapter was gone, and `WireGuardDeleteDriver` returned success. No reboot.
+
+The struct sizes that the driver accepted were interface 80, peer 136, allowed-IP 24, config blob 240.
+
+## What this does and does not prove
+
+The lowest build that actually ran is **20348** (Windows Server 2022). That is the Windows 10 generation, and it is newer than Windows 10 22H2 (build 19045). GitHub has no 22H2 client image, so 22H2 Home or Pro is still best-effort and untested. Both runners are Server SKUs, not Windows 11 Home or Pro. Build 26100 is the Windows 11 generation (Server 2025 on `windows-latest`).
+
+"Up" means the NDIS adapter exists and the driver accepted a config. No address and no route were added, and there was no handshake.
 
 ## Surprises
 
-Recorded with the results above. Known before the run:
-
-- Creating an adapter needs an elevated process. The GitHub runner account is an administrator, so the probe does not show what a standard user would see. The real app will not create adapters itself; the SYSTEM service will.
-- Struct layout is `repr(C, align(8))` matched to `wireguard.h`. `SPIKE_LAYOUT` prints the sizes. A wrong size fails `WireGuardSetConfiguration` or the one-peer read-back.
-- No IP address and no route are assigned. "Up" means the NDIS adapter exists and the driver accepted the config, not that a handshake completed.
+- Nothing failed. The first `WireGuardCreateAdapter` installed the driver and brought the adapter up in the same process, with no reboot.
+- The adapter **name** can be `VeritasVPN`. The tunnel **type** passed to the API was `WireGuard`, which is the name the signed driver registers. Windows then describes the interface as "WireGuard Tunnel". A different tunnel type was not tried.
+- The runner is already an administrator, so this does not show the consent prompt a normal user would see. The real app must not call this API itself. The SYSTEM service will.
+- The driver version DWORD is `0x00010001`, which matches package 1.1.
