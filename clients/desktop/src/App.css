@@ -1,7 +1,8 @@
 @import "./fonts.css";
 
-/* Android Color.kt tokens */
+/* Android Color.kt tokens. The block between the markers is generated. */
 :root {
+  /* BEGIN design-tokens generated from android Color.kt */
   --cyan: #09c7f5;
   --cyan-hover: #4ad9fa;
   --cyan-soft: rgba(9, 199, 245, 0.14);
@@ -18,9 +19,10 @@
   --paper-dim: #7189a5;
   --line: rgba(33, 103, 168, 0.2);
   --line-strong: rgba(64, 143, 212, 0.4);
-  --success: #09c7f5; /* Android SuccessGreen = Cyan */
+  --success: #09c7f5;
   --error: #ff6b7a;
   --warning: #ffb74d;
+  /* END design-tokens generated from android Color.kt */
   --font: "Inter", system-ui, sans-serif;
   --display: "Space Grotesk", "Inter", sans-serif;
 }

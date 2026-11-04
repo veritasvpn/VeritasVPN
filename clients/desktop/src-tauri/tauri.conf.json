@@ -51,6 +51,17 @@
       "minimumSystemVersion": "12.0",
       "signingIdentity": "-"
     },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": ["English"],
+        "displayLanguageSelector": false
+      }
+    },
     "linux": {
       "deb": {
         "desktopTemplate": "./linux/veritasvpn.desktop",

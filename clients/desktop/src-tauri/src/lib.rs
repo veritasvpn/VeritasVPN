@@ -1,9 +1,8 @@
+#[cfg(any(target_os = "macos", test))]
 use base64::{engine::general_purpose::STANDARD, Engine};
-use rand_core::OsRng;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::fs;
 use std::io::Write;
-use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{
@@ -13,11 +12,19 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
-use x25519_dalek::{PublicKey, StaticSecret};
+
+pub use veritas_core::{b64_key_to_hex, ensure_host_cidr, WgTunnelConfig};
 
 const KEYRING_SERVICE: &str = "cloud.veritasvpn.desktop";
 
+#[cfg(target_os = "linux")]
+#[path = "network_switch.rs"]
 mod network_switch;
+#[cfg(not(target_os = "linux"))]
+#[path = "network_switch_stub.rs"]
+mod network_switch;
+
+mod tunnel;
 
 fn keyring_entry(name: &str) -> Result<keyring::Entry, String> {
     if name != "access_token" && name != "refresh_token" {
@@ -52,157 +59,6 @@ fn secure_credential_delete(name: String) -> Result<(), String> {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(format!("delete secure credential: {e}")),
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WgTunnelConfig {
-    pub private_key: String,
-    pub address: String,
-    pub dns: String,
-    pub server_public_key: String,
-    pub endpoint: String,
-    pub allowed_ips: Vec<String>,
-    pub peer_id: String,
-    #[serde(default)]
-    pub preshared_key: String,
-    /// Remote TLS/WebSocket host:port for stealth mode (empty = direct UDP).
-    #[serde(default)]
-    pub stealth_endpoint: String,
-    #[serde(default)]
-    pub stealth_path_prefix: String,
-    /// Alternate LAN/WAN WireGuard endpoints so path-adapt can fail over.
-    #[serde(default)]
-    pub endpoint_lan: String,
-    #[serde(default)]
-    pub endpoint_wan: String,
-}
-
-impl WgTunnelConfig {
-    /// Treat every field received from the control plane as untrusted. These
-    /// values are consumed by privileged networking code, so validation must
-    /// happen before the config is persisted or privilege elevation begins.
-    fn validate(&self) -> Result<(), String> {
-        b64_key_to_hex(&self.private_key)?;
-        b64_key_to_hex(&self.server_public_key)?;
-        if !self.preshared_key.trim().is_empty() {
-            b64_key_to_hex(&self.preshared_key)?;
-        }
-        validate_cidr(&self.address, "address")?;
-        let dns = if self.dns.trim().is_empty() {
-            "1.1.1.1"
-        } else {
-            self.dns.trim()
-        };
-        dns.parse::<IpAddr>()
-            .map_err(|_| "invalid DNS address".to_string())?;
-        validate_endpoint(&self.endpoint, "endpoint", false)?;
-        validate_endpoint(&self.endpoint_lan, "LAN endpoint", true)?;
-        validate_endpoint(&self.endpoint_wan, "WAN endpoint", true)?;
-        validate_endpoint(&self.stealth_endpoint, "stealth endpoint", true)?;
-        if !self.stealth_endpoint.trim().is_empty() {
-            validate_path_prefix(&self.stealth_path_prefix)?;
-        }
-        if self.allowed_ips.len() > 64 {
-            return Err("too many allowed IP ranges".into());
-        }
-        for allowed in &self.allowed_ips {
-            validate_cidr(allowed, "allowed IP")?;
-        }
-        let peer_id = self.peer_id.trim();
-        if peer_id.is_empty()
-            || peer_id.len() > 128
-            || !peer_id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        {
-            return Err("invalid peer id".into());
-        }
-        Ok(())
-    }
-}
-
-/// A reused device peer is returned as a bare host. A fresh allocation already
-/// has the prefix. The tunnel address has to be CIDR either way.
-fn ensure_host_cidr(value: &str) -> String {
-    let value = value.trim();
-    if value.is_empty() || value.contains('/') {
-        return value.to_string();
-    }
-    if value.parse::<std::net::Ipv4Addr>().is_ok() {
-        return format!("{value}/32");
-    }
-    if value.parse::<std::net::Ipv6Addr>().is_ok() {
-        return format!("{value}/128");
-    }
-    value.to_string()
-}
-
-impl WgTunnelConfig {
-    fn normalize_addresses(&mut self) {
-        self.address = ensure_host_cidr(&self.address);
-    }
-}
-
-fn validate_cidr(value: &str, field: &str) -> Result<(), String> {
-    let value = value.trim();
-    let (ip, prefix) = value
-        .split_once('/')
-        .ok_or_else(|| format!("{field} must be CIDR notation"))?;
-    let ip: IpAddr = ip.parse().map_err(|_| format!("invalid {field}"))?;
-    let prefix: u8 = prefix
-        .parse()
-        .map_err(|_| format!("invalid {field} prefix"))?;
-    let max = if ip.is_ipv4() { 32 } else { 128 };
-    if prefix > max {
-        return Err(format!("invalid {field} prefix"));
-    }
-    Ok(())
-}
-
-fn validate_endpoint(value: &str, field: &str, allow_empty: bool) -> Result<(), String> {
-    let value = value.trim();
-    if value.is_empty() && allow_empty {
-        return Ok(());
-    }
-    if value.len() > 255 || value.chars().any(char::is_whitespace) {
-        return Err(format!("invalid {field}"));
-    }
-    if let Ok(socket) = value.parse::<SocketAddr>() {
-        return (socket.port() != 0)
-            .then_some(())
-            .ok_or_else(|| format!("invalid {field} port"));
-    }
-    let (host, port) = value
-        .rsplit_once(':')
-        .ok_or_else(|| format!("{field} must include a port"))?;
-    let port: u16 = port.parse().map_err(|_| format!("invalid {field} port"))?;
-    if port == 0
-        || host.is_empty()
-        || host.len() > 253
-        || !host
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
-        || host.starts_with(['.', '-'])
-        || host.ends_with(['.', '-'])
-    {
-        return Err(format!("invalid {field}"));
-    }
-    Ok(())
-}
-
-fn validate_path_prefix(value: &str) -> Result<(), String> {
-    let value = value.trim();
-    if value.is_empty()
-        || value.len() > 128
-        || !value.starts_with('/')
-        || value.split('/').any(|part| part == "..")
-        || !value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~'))
-    {
-        return Err("invalid stealth path prefix".into());
-    }
-    Ok(())
 }
 
 fn shell_quote(value: &str) -> String {
@@ -371,13 +227,7 @@ fn resolve_wstunnel(app: &AppHandle) -> Result<PathBuf, String> {
 
 #[tauri::command]
 fn wireguard_available(app: AppHandle) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = app;
-        return false;
-    }
-    #[cfg(not(target_os = "windows"))]
-    resolve_wireguard_go(&app).is_ok()
+    tunnel::backend().available(&app)
 }
 
 #[derive(Debug, Serialize)]
@@ -469,22 +319,11 @@ fn desktop_device_metadata() -> DesktopDeviceMetadata {
 
 #[tauri::command]
 fn generate_wg_keys() -> Result<KeyPair, String> {
-    let secret = StaticSecret::random_from_rng(OsRng);
-    let public = PublicKey::from(&secret);
+    let pair = veritas_core::generate_keypair();
     Ok(KeyPair {
-        private_key: STANDARD.encode(secret.to_bytes()),
-        public_key: STANDARD.encode(public.to_bytes()),
+        private_key: pair.private_key,
+        public_key: pair.public_key,
     })
-}
-
-fn b64_key_to_hex(b64: &str) -> Result<String, String> {
-    let bytes = STANDARD
-        .decode(b64.trim())
-        .map_err(|e| format!("invalid key: {e}"))?;
-    if bytes.len() != 32 {
-        return Err("WireGuard key must be 32 bytes".into());
-    }
-    Ok(hex::encode(bytes))
 }
 
 #[tauri::command]
@@ -527,10 +366,11 @@ async fn connect_wireguard(app: AppHandle, mut config: WgTunnelConfig) -> Connec
     // (avoids GTK "veritasvpn is not responding" during pkexec + handshake).
     let peer_id = config.peer_id.clone();
     let app_for_thread = app.clone();
-    let result =
-        tauri::async_runtime::spawn_blocking(move || bring_up_wireguard(&app_for_thread, &config))
-            .await
-            .unwrap_or_else(|e| Err(format!("connect task failed: {e}")));
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        tunnel::backend().bring_up(&app_for_thread, &config)
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("connect task failed: {e}")));
 
     let connect_result = match result {
         Ok(msg) => {
@@ -621,24 +461,7 @@ pub struct WgTransferStats {
 
 #[tauri::command]
 fn wireguard_stats() -> WgTransferStats {
-    #[cfg(target_os = "linux")]
-    {
-        return wireguard_stats_linux();
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        WgTransferStats {
-            rx_bytes: 0,
-            tx_bytes: 0,
-            last_handshake_sec: 0,
-            interface_up: false,
-            underlay_notice: String::new(),
-            underlay_reconnecting: false,
-            underlay_gave_up: false,
-            underlay_path_ok: false,
-            stalled: false,
-        }
-    }
+    tunnel::backend().stats()
 }
 
 #[cfg(target_os = "linux")]
@@ -693,6 +516,7 @@ fn read_published_handshake() -> i64 {
 
 /// A handshake newer than three minutes means the peer is answering.
 /// Unprivileged callers use the published integer, never `wg show dump`.
+#[cfg(target_os = "linux")]
 pub(crate) fn published_handshake_fresh() -> bool {
     let ts = read_published_handshake();
     if ts <= 0 {
@@ -706,6 +530,7 @@ pub(crate) fn published_handshake_fresh() -> bool {
 }
 
 /// Seconds since the published handshake, or None when there is none.
+#[cfg(target_os = "linux")]
 pub(crate) fn published_handshake_age_secs() -> Option<u64> {
     let ts = read_published_handshake();
     if ts <= 0 {
@@ -806,9 +631,9 @@ async fn disconnect_wireguard(app: AppHandle, soft: Option<bool>) -> ConnectResu
         close_recovery_exception_quiet();
         if soft {
             let _guard = SoftElevatedGuard::enter();
-            bring_down_wireguard(&app)
+            tunnel::backend().bring_down(&app)
         } else {
-            bring_down_wireguard(&app)
+            tunnel::backend().bring_down(&app)
         }
     })
     .await
@@ -1128,6 +953,7 @@ pub(crate) fn write_last_config_json(
 }
 
 /// True if the tunnel is healthy enough for soft recovery to skip.
+#[cfg(target_os = "linux")]
 pub(crate) fn tunnel_is_healthy() -> Result<bool, String> {
     // Do not go through wireguard_stats_linux: that consumes the reconnect notice.
     let (up, _, _) = linux_iface_sysfs_stats("veritas0");
@@ -1140,6 +966,7 @@ pub(crate) fn tunnel_is_healthy() -> Result<bool, String> {
     Ok(public_egress_ok())
 }
 
+#[cfg(target_os = "linux")]
 fn public_egress_ok() -> bool {
     // Best-effort: if curl fails for a short window, recovery is needed.
     // Timeout is short so soft recovery never hangs the UI.
@@ -1664,6 +1491,7 @@ pub(crate) fn cleanup_kill_switch_noninteractive() -> Result<bool, String> {
 
 /// Full rebuild from last-config.json when the tunnel was released and a
 /// default route is back. Passwordless only: the caller holds soft-elevated.
+#[cfg(target_os = "linux")]
 pub(crate) fn bring_up_from_saved_config_soft() -> Result<String, String> {
     let saved = network_switch::load_last_config().map_err(|e| e)?;
     let mut config = WgTunnelConfig {
@@ -1692,6 +1520,7 @@ pub(crate) fn bring_up_from_saved_config_soft() -> Result<String, String> {
 /// Soft reconnect that reuses the normal bringup path but never falls back
 /// to interactive pkexec. Soft reconnect is timed and non-blocking.
 /// Soft reconnect is best-effort and never freezes the UI.
+#[cfg(target_os = "linux")]
 fn soft_reconnect_via_existing_bringup(config: &WgTunnelConfig) -> Result<String, String> {
     let app = get_app_handle_for_recover()
         .ok_or_else(|| String::from("no AppHandle for soft reconnect"))?;
@@ -4070,40 +3899,6 @@ fn remove_proxy_macos() -> Result<String, String> {
     Ok(format!("SOCKS5 proxy disabled on {}", service))
 }
 
-#[cfg(target_os = "windows")]
-fn set_proxy_windows(host: &str, port: u16) -> Result<String, String> {
-    use winreg::enums::*;
-    use winreg::RegKey;
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let proxy_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
-    let settings = hkcu
-        .open_subkey_with_flags(proxy_path, KEY_SET_VALUE)
-        .map_err(|e| format!("Failed to open registry: {}", e))?;
-    let proxy_addr = format!("{}:{}", host, port);
-    settings
-        .set_value("ProxyServer", &proxy_addr)
-        .map_err(|e| format!("Failed to set ProxyServer: {}", e))?;
-    settings
-        .set_value("ProxyEnable", &1u32)
-        .map_err(|e| format!("Failed to enable proxy: {}", e))?;
-    Ok(format!("SOCKS5 proxy set -> {}:{}", host, port))
-}
-
-#[cfg(target_os = "windows")]
-fn remove_proxy_windows() -> Result<String, String> {
-    use winreg::enums::*;
-    use winreg::RegKey;
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let proxy_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
-    let settings = hkcu
-        .open_subkey_with_flags(proxy_path, KEY_SET_VALUE)
-        .map_err(|e| format!("Failed to open registry: {}", e))?;
-    settings
-        .set_value("ProxyEnable", &0u32)
-        .map_err(|e| format!("Failed to disable proxy: {}", e))?;
-    Ok("System proxy disabled".into())
-}
-
 #[cfg(target_os = "linux")]
 fn set_proxy_linux(host: &str, port: u16) -> Result<String, String> {
     let port_str = port.to_string();
@@ -4484,6 +4279,7 @@ mod security_tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn reconnect_policy_matches_android() {
         let output = std::process::Command::new("bash")
             .arg(concat!(
@@ -4520,7 +4316,14 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .setup(|_app| {
+        .setup(|app| {
+            // Native dark title bar on Windows only. Linux keeps its system frame.
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_theme(Some(tauri::Theme::Dark));
+            }
+            #[cfg(not(target_os = "windows"))]
+            let _ = app;
             tauri::async_runtime::spawn_blocking(close_recovery_exception_quiet);
             Ok(())
         })
