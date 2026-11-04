@@ -1,0 +1,10 @@
+[package]
+name = "wireguard-nt-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Throwaway Phase 0 probe: load official wireguard.dll and bring an adapter up. Not part of the desktop app."
+
+[[bin]]
+name = "wireguard-nt-spike"
+path = "src/main.rs"
