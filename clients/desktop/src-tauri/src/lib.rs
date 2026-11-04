@@ -4225,6 +4225,7 @@ mod security_tests {
         assert!(!nic_name_is_physical_candidate("lo"));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn packaged_killswitch_cleanup_stays_inside_veritas() {
         let script = include_str!("../linux/killswitch-cleanup.sh");
