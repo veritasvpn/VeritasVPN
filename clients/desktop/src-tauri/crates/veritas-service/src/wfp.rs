@@ -6,7 +6,8 @@ use std::ptr;
 
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterCreateEnumHandle0,
-    FwpmFilterDeleteByKey0, FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0, FwpmFreeMemory0,
+    FwpmFilterDeleteById0, FwpmFilterDeleteByKey0, FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0,
+    FwpmFreeMemory0,
     FwpmProviderAdd0, FwpmProviderDeleteByKey0, FwpmSubLayerAdd0, FwpmSubLayerDeleteByKey0,
     FwpmTransactionAbort0, FwpmTransactionBegin0, FwpmTransactionCommit0, FWPM_ACTION0,
     FWPM_DISPLAY_DATA0, FWPM_FILTER0, FWPM_FILTER_CONDITION0, FWPM_FILTER_ENUM_TEMPLATE0,
@@ -30,6 +31,8 @@ use crate::wfp_plan::{rules, Endpoint, LockPlan, Rule};
 const PROVIDER: GUID = GUID::from_u128(0x5b1d0c2a_7e44_4f1a_9c3d_2a6e8b0f11c4);
 const SUBLAYER: GUID = GUID::from_u128(0x6c2e1d3b_8f55_401b_ad4e_3b7f9c1022d5);
 const RPC_C_AUTHN_WINNT: u32 = 10;
+
+static FILTER_IDS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
 const FWP_E_ALREADY_EXISTS: u32 = 0x8032_0009;
 
 pub fn arm(plan: &LockPlan) -> Result<(), u32> {
@@ -342,7 +345,13 @@ fn add_simple(
         r#type: if permit { FWP_ACTION_PERMIT } else { FWP_ACTION_BLOCK },
         Anonymous: unsafe { std::mem::zeroed() },
     };
-    let err = unsafe { FwpmFilterAdd0(engine, &filter, ptr::null_mut(), ptr::null_mut()) };
+    let mut id = 0u64;
+    let err = unsafe { FwpmFilterAdd0(engine, &filter, ptr::null_mut(), &mut id) };
+    if err == 0 {
+        if let Ok(mut ids) = FILTER_IDS.lock() {
+            ids.push(id);
+        }
+    }
     let _ = held.luid;
     if err == 0 {
         Ok(())
@@ -538,6 +547,10 @@ fn value_v6(mask: &FWP_V6_ADDR_AND_MASK) -> ConditionValue {
 }
 
 fn delete_our_objects(engine: windows_sys::Win32::Foundation::HANDLE) -> Result<(), u32> {
+    let ids = FILTER_IDS.lock().map(|mut ids| std::mem::take(&mut *ids)).unwrap_or_default();
+    for id in ids {
+        let _ = unsafe { FwpmFilterDeleteById0(engine, id) };
+    }
     for _ in 0..8 {
         let keys = our_filter_keys(engine)?;
         if keys.is_empty() {
