@@ -333,6 +333,7 @@ fn leak_body(dll: String, service: PathBuf) {
         probe(open).is_ok(),
         "baseline connection to the physical address should work before the lock"
     );
+    let doc = outside_oracle();
 
     // No 0.0.0.0/0 route: that blackholed the runner. full_lock still blocks
     // the physical NIC. Management hosts captured before the lock stay permitted.
@@ -351,8 +352,6 @@ fn leak_body(dll: String, service: PathBuf) {
     // that connect staying open is not a physical leak.
     assert!(probe(open).is_ok(), "own address should stay reachable");
     eprintln!("PHYSICAL_SELF_STAYS_OPEN");
-    // 203.0.113.10 is not local, not the tunnel, and not TCP 80/443.
-    let doc = SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 9));
     assert_blocked(doc, "non-local ipv4 while connected");
     assert_blocked(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 53)), "dns port 53");
     assert_blocked(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 853)), "dns port 853");
@@ -435,6 +434,25 @@ fn bring_up_tunnel(dll: &str) -> TestPeer {
 
 fn probe(addr: SocketAddr) -> std::io::Result<()> {
     std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(800)).map(|_| ())
+}
+
+fn outside_oracle() -> SocketAddr {
+    let candidates = [
+        SocketAddr::from((Ipv4Addr::new(1, 1, 1, 1), 9)),
+        SocketAddr::from((Ipv4Addr::new(8, 8, 8, 8), 9)),
+        SocketAddr::from((Ipv4Addr::new(9, 9, 9, 9), 9)),
+        SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 9)),
+    ];
+    for addr in candidates {
+        match probe(addr) {
+            Err(err) if is_denied(&err) => continue,
+            other => {
+                eprintln!("BASELINE_ORACLE denied=false reachable={}", other.is_ok());
+                return addr;
+            }
+        }
+    }
+    panic!("every outside address was already denied before the lock");
 }
 
 fn is_denied(err: &std::io::Error) -> bool {
