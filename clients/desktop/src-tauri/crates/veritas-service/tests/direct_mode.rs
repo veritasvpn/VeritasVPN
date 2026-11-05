@@ -349,14 +349,17 @@ fn leak_body(dll: String, service: PathBuf) {
         }
     }
     eprintln!("BASELINE_PHYSICAL open={baseline_open}");
-    assert!(probe(loopback).is_ok(), "loopback baseline");
+    assert!(
+        probe_ok(loopback, "loopback baseline"),
+        "loopback baseline"
+    );
     let doc = outside_oracle();
 
     // No 0.0.0.0/0 route: that blackholed the runner. full_lock still blocks
     // the physical NIC. Management hosts captured before the lock stay permitted.
     let _peer = bring_up_tunnel(&dll);
     assert_tunnel_carries();
-    assert!(probe(loopback).is_ok(), "loopback must stay open");
+    assert!(probe_ok(loopback, "loopback locked"), "loopback must stay open");
     let v6_loop = std::net::TcpListener::bind("[::1]:0").ok();
     if let Some(v6_loop) = v6_loop {
         let addr = v6_loop.local_addr().unwrap();
@@ -388,7 +391,7 @@ fn leak_body(dll: String, service: PathBuf) {
     if let Ok(adapter) = veritas_service::AdapterHandle::open(api, "VeritasVPN") {
         let _ = adapter.set_down();
     }
-    assert!(probe(loopback).is_ok(), "loopback during reconnect");
+    assert!(probe_ok(loopback, "loopback reconnect"), "loopback during reconnect");
     assert_blocked(doc, "non-local ipv4 while reconnecting");
     eprintln!("LEAK_RECONNECTING");
 
@@ -400,7 +403,7 @@ fn leak_body(dll: String, service: PathBuf) {
     eprintln!("LEAK_AFTER_KILL");
 
     run(&service, ["repair"]);
-    assert!(probe(loopback).is_ok(), "repair must release the lock");
+    assert!(probe_ok(loopback, "loopback repair"), "repair must release the lock");
     if baseline_open {
         assert!(probe(open).is_ok(), "repair must release the lock on the physical address");
     }
@@ -476,6 +479,19 @@ fn bring_up_tunnel(dll: &str) -> TestPeer {
 
 fn probe(addr: SocketAddr) -> std::io::Result<()> {
     std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(800)).map(|_| ())
+}
+
+fn probe_ok(addr: SocketAddr, label: &str) -> bool {
+    for _ in 0..6 {
+        match probe(addr) {
+            Ok(()) => return true,
+            Err(err) => {
+                eprintln!("{label} kind={:?} raw={:?}", err.kind(), err.raw_os_error());
+                thread::sleep(Duration::from_millis(300));
+            }
+        }
+    }
+    false
 }
 
 fn outside_oracle() -> SocketAddr {
