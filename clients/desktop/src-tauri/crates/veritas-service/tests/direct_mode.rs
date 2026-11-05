@@ -320,6 +320,8 @@ fn leak_body(dll: String, service: PathBuf) {
     );
     run(&service, ["start"]);
     wait_until_hello();
+    // The previous test can leave persistent filters if its cleanup is cut short.
+    run(&service, ["repair"]);
 
     let listener = std::net::TcpListener::bind("0.0.0.0:0").expect("listener");
     let port = listener.local_addr().unwrap().port();
@@ -329,8 +331,16 @@ fn leak_body(dll: String, service: PathBuf) {
     let physical = primary_ipv4();
     let open = SocketAddr::from((physical, port));
     let loopback = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let mut baseline_open = false;
+    for _ in 0..6 {
+        if probe(open).is_ok() {
+            baseline_open = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
     assert!(
-        probe(open).is_ok(),
+        baseline_open,
         "baseline connection to the physical address should work before the lock"
     );
     let doc = outside_oracle();
