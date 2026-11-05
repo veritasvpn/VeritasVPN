@@ -33,6 +33,17 @@ html, body, #root {
   height: 100%;
 }
 
+html[data-parity="frozen"],
+html[data-parity="frozen"] * {
+  animation: none !important;
+  transition: none !important;
+  caret-color: transparent;
+}
+
+html[data-parity="frozen"] :focus {
+  outline: none;
+}
+
 body {
   font-family: var(--font);
   background: var(--ink);

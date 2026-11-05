@@ -24,7 +24,7 @@ test("transparency page is linked from the privacy policy and does not overclaim
   const flat = transparency.replace(/\s+/g, " ");
   assert.match(privacy, /href="\/transparency"/);
   assert.match(flat, /Veritas Ark/);
-  assert.match(flat, /Last updated: October 25, 2026/);
+  assert.match(flat, /Last updated: November 5, 2026/);
   assert.match(flat, /No independent audit/);
   assert.match(flat, /not a claim that we keep zero logs/i);
   assert.match(flat, /not a claim that the service is RAM-only/);
@@ -41,8 +41,8 @@ test("terms and privacy name the operator and are not drafts", () => {
     assert.match(page, /Veritas Ark/);
     assert.equal(/starting point|legal counsel|legal advice|open item|early.stage/i.test(page), false);
   }
-  assert.match(terms, /Last updated: October 24, 2026/);
-  assert.match(privacy, /Last updated: October 25, 2026/);
+  assert.match(terms, /Last updated: November 5, 2026/);
+  assert.match(privacy, /Last updated: November 5, 2026/);
   assert.match(terms, /Republic of Paraguay/);
   assert.match(terms, /courts of Asunción/);
   assert.match(terms, /Google Play/);

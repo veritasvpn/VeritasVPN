@@ -23,6 +23,9 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^4",
+    "pixelmatch": "^7.1.0",
+    "playwright": "^1.56.1",
+    "pngjs": "^7.0.0",
     "typescript": "^5.7",
     "vite": "^6.4",
     "vitest": "^5"

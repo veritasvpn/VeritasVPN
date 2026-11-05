@@ -4391,6 +4391,21 @@ mod security_tests {
 }
 
 #[cfg(target_os = "windows")]
+fn open_parity_screen(window: &tauri::WebviewWindow) {
+    let Ok(screen) = std::env::var("VERITAS_PARITY") else {
+        return;
+    };
+    if screen.len() > 32 || !screen.chars().all(|c| c.is_ascii_lowercase()) {
+        return;
+    }
+    let Ok(mut url) = window.url() else {
+        return;
+    };
+    url.set_query(Some(&format!("parity={screen}")));
+    let _ = window.navigate(url);
+}
+
+#[cfg(target_os = "windows")]
 pub fn pipe_check() -> i32 {
     win_pipe::write_hello_marker()
 }
@@ -4451,6 +4466,7 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_theme(Some(tauri::Theme::Dark));
                     windows_shell::watch_close(&window);
+                    open_parity_screen(&window);
                 }
                 windows_shell::install_tray(app.handle().clone());
             }
