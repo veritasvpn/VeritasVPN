@@ -4,7 +4,8 @@ on:
   push:
     branches: [master, main]
   pull_request:
-    branches: [master, main]
+    # The Phase 2 branch is the base of the kill-switch pull request.
+    branches: [master, main, cursor/windows-service-direct-b81d]
 
 # Start every job with the least privilege required. Jobs that publish releases
 # or images explicitly request their additional permission below.

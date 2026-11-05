@@ -76,6 +76,7 @@ pub fn install(client: &Path, dll: Option<&Path>) -> Result<(), i32> {
 }
 
 pub fn uninstall() -> Result<(), i32> {
+    let _ = crate::engine::release_lock();
     let _ = stop_service();
     unsafe {
         let scm = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_CONNECT);

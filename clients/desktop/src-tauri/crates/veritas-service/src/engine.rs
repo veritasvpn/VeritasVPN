@@ -1,5 +1,6 @@
-//! Direct-mode session. Stealth, kill switch, and soft reconnect are stored
-//! or refused, not implemented.
+//! Direct-mode session. The kill switch is armed after the tunnel is up and
+//! released only by Disconnect, uninstall, or Repair. Stealth and soft
+//! reconnect stay refused.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -23,6 +24,7 @@ static SESSION: Mutex<Session> = Mutex::new(Session {
     adapter: None,
     luid: 0,
     routes: Vec::new(),
+    endpoint_pin: None,
     local_network: false,
     stealth_requested: false,
 });
@@ -31,6 +33,7 @@ struct Session {
     adapter: Option<AdapterHandle>,
     luid: u64,
     routes: Vec<(Ipv4Addr, u8)>,
+    endpoint_pin: Option<net::PinnedEndpoint>,
     local_network: bool,
     stealth_requested: bool,
 }
@@ -45,10 +48,17 @@ pub fn handle(request: &Request, caller_ok: bool) -> Response {
         OP_STATUS | OP_STATS => status_response(request.id, &session),
         OP_CONNECT => connect(request, &mut session),
         OP_DISCONNECT => {
-            disconnect(&mut session);
-            Response::ok(request.id)
+            release_tunnel(&mut session);
+            match release_lock() {
+                Ok(()) => Response::ok(request.id),
+                Err(_) => Response::fail(request.id, CODE_TUNNEL_FAILED),
+            }
         }
-        OP_SOFT_RECONNECT | OP_CLEAR_LOCK => Response::fail(request.id, CODE_NOT_IN_THIS_BUILD),
+        OP_SOFT_RECONNECT => Response::fail(request.id, CODE_NOT_IN_THIS_BUILD),
+        OP_CLEAR_LOCK => match release_lock() {
+            Ok(()) => Response::ok(request.id),
+            Err(_) => Response::fail(request.id, CODE_TUNNEL_FAILED),
+        },
         OP_SET_OPTIONS => {
             if let Some(value) = request.local_network {
                 session.local_network = value;
@@ -64,7 +74,7 @@ pub fn handle(request: &Request, caller_ok: bool) -> Response {
             response.diagnostics = Some(Diagnostics {
                 service: true,
                 stealth: false,
-                kill_switch: false,
+                kill_switch: crate::wfp::is_armed(),
                 local_network: session.local_network,
             });
             response.status = Some(read_status(&session));
@@ -75,9 +85,21 @@ pub fn handle(request: &Request, caller_ok: bool) -> Response {
     }
 }
 
+/// Service stop or crash must leave the lock in place. Only Disconnect,
+/// uninstall, and Repair call [`release_lock`].
 pub fn shutdown_tunnel() {
     if let Ok(mut session) = SESSION.lock() {
-        disconnect(&mut session);
+        release_tunnel(&mut session);
+    }
+}
+
+pub fn release_lock() -> Result<(), u32> {
+    match crate::wfp::disarm() {
+        Ok(()) => Ok(()),
+        Err(code) => {
+            log_code("lock", code);
+            Err(code)
+        }
     }
 }
 
@@ -97,10 +119,33 @@ fn connect(request: &Request, session: &mut Session) -> Response {
         return Response::fail(request.id, CODE_NOT_IN_THIS_BUILD);
     }
     match bring_up(config) {
-        Ok((adapter, luid, routes)) => {
+        Ok((adapter, luid, routes, pin)) => {
+            let local_network = crate::wfp_plan::local_network_from_allowed(&config.allowed_ips);
+            let plan = crate::wfp_plan::LockPlan {
+                tunnel_luid: luid,
+                wireguard: crate::wfp::endpoints_from(config),
+                stealth: None,
+                local_network,
+            };
+            if let Err(code) = crate::wfp::arm(&plan) {
+                log_code("lock", code);
+                for (network, len) in &routes {
+                    net::delete_route(luid, *network, *len);
+                }
+                if let Some(pin) = pin.as_ref() {
+                    net::unpin_endpoint(pin);
+                }
+                let _ = adapter.set_down();
+                return Response::fail(request.id, veritas_ipc::CODE_LOCK_FAILED);
+            }
+            if let Ok(dns) = config.dns.trim().parse::<Ipv4Addr>() {
+                crate::wfp::nrpt_set(dns);
+            }
             session.adapter = Some(adapter);
             session.luid = luid;
             session.routes = routes;
+            session.endpoint_pin = pin;
+            session.local_network = local_network;
             log_line("connect", "ok");
             status_response(request.id, session)
         }
@@ -111,11 +156,13 @@ fn connect(request: &Request, session: &mut Session) -> Response {
     }
 }
 
-fn bring_up(config: &WgTunnelConfig) -> Result<(AdapterHandle, u64, Vec<(Ipv4Addr, u8)>), &'static str> {
+fn bring_up(
+    config: &WgTunnelConfig,
+) -> Result<(AdapterHandle, u64, Vec<(Ipv4Addr, u8)>, Option<net::PinnedEndpoint>), &'static str> {
     let api = load_api().map_err(|_| CODE_TUNNEL_FAILED)?;
     let private_key = decode_key(&config.private_key).map_err(|_| CODE_INVALID_CONFIG)?;
     let peer_key = decode_key(&config.server_public_key).map_err(|_| CODE_INVALID_CONFIG)?;
-    let endpoint = resolve_v4(&config.endpoint).map_err(|_| CODE_INVALID_CONFIG)?;
+    let endpoint = resolve_endpoint(&config.endpoint).map_err(|_| CODE_INVALID_CONFIG)?;
     let (address, prefix) = parse_cidr(&config.address).map_err(|_| CODE_INVALID_CONFIG)?;
     let dns = config
         .dns
@@ -157,20 +204,35 @@ fn bring_up(config: &WgTunnelConfig) -> Result<(AdapterHandle, u64, Vec<(Ipv4Add
         let _ = adapter.set_down();
         return Err(CODE_TUNNEL_FAILED);
     }
+    let endpoint_addr = endpoint.0;
+    let pin = match net::pin_endpoint(endpoint_addr, luid) {
+        Ok(pin) => pin,
+        Err(code) => {
+            log_line("endpoint_route", &format!("win32={code}"));
+            let _ = adapter.set_down();
+            return Err(CODE_TUNNEL_FAILED);
+        }
+    };
     for (network, len) in &allowed {
         if let Err(code) = net::add_route(luid, *network, *len) {
             log_line("route", &format!("win32={code}"));
             for (done_net, done_len) in &allowed {
                 net::delete_route(luid, *done_net, *done_len);
             }
+            if let Some(pin) = pin.as_ref() {
+                net::unpin_endpoint(pin);
+            }
             let _ = adapter.set_down();
             return Err(CODE_TUNNEL_FAILED);
         }
     }
-    Ok((adapter, luid, allowed))
+    Ok((adapter, luid, allowed, pin))
 }
 
-fn disconnect(session: &mut Session) {
+fn release_tunnel(session: &mut Session) {
+    if let Some(pin) = session.endpoint_pin.take() {
+        net::unpin_endpoint(&pin);
+    }
     if let Some(adapter) = session.adapter.take() {
         for (network, len) in session.routes.drain(..) {
             net::delete_route(session.luid, network, len);
@@ -249,7 +311,7 @@ fn decode_key(text: &str) -> Result<[u8; 32], ()> {
     bytes.try_into().map_err(|_| ())
 }
 
-fn resolve_v4(endpoint: &str) -> Result<(Ipv4Addr, u16), ()> {
+pub(crate) fn resolve_endpoint(endpoint: &str) -> Result<(Ipv4Addr, u16), ()> {
     let socket = endpoint
         .trim()
         .to_socket_addrs()
@@ -289,6 +351,10 @@ fn network_base(ip: Ipv4Addr, prefix: u8) -> Ipv4Addr {
     }
     let mask = u32::MAX.checked_shl(32 - prefix as u32).unwrap_or(0);
     Ipv4Addr::from(u32::from(ip) & mask)
+}
+
+pub(crate) fn log_code(op: &str, code: u32) {
+    log_line(op, &format!("win32={code}"));
 }
 
 fn log_line(op: &str, code: &str) {

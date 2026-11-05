@@ -26,6 +26,7 @@ pub const CODE_INVALID_CONFIG: &str = "invalid_config";
 pub const CODE_TUNNEL_FAILED: &str = "tunnel_failed";
 pub const CODE_DENIED: &str = "denied";
 pub const CODE_NOT_IN_THIS_BUILD: &str = "not_in_this_build";
+pub const CODE_LOCK_FAILED: &str = "lock_failed";
 pub const CODE_BUSY: &str = "busy";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +113,7 @@ pub fn user_message(code: &str) -> &'static str {
     match code {
         CODE_UNAVAILABLE => "The VeritasVPN background service is not running.",
         CODE_BUSY => "A connection is already in progress.",
+        CODE_LOCK_FAILED => "Kill switch could not be enabled. Connect was cancelled so traffic stays unprotected only while you fix it.",
         _ => "Couldn't start the tunnel. Try connecting again.",
     }
 }
@@ -165,6 +167,7 @@ mod tests {
             CODE_TUNNEL_FAILED,
             CODE_DENIED,
             CODE_NOT_IN_THIS_BUILD,
+            CODE_LOCK_FAILED,
             CODE_BUSY,
             "timeout",
             "os error 5",

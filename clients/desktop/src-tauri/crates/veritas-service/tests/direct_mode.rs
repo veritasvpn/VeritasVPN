@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
@@ -143,6 +143,7 @@ struct Cleanup {
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
+        let _ = Command::new(&self.service).arg("repair").status();
         let _ = Command::new(&self.service).arg("stop").status();
         let _ = Command::new(&self.service).arg("uninstall").status();
         let _ = Command::new("netsh").args([
@@ -280,6 +281,174 @@ fn run(bin: &std::path::Path, args: impl IntoIterator<Item = impl AsRef<std::ffi
         "service command failed {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn leak_harness_blocks_until_repair() {
+    let dll = std::env::var("VERITAS_WIREGUARD_DLL").expect("VERITAS_WIREGUARD_DLL");
+    let service = PathBuf::from(
+        option_env!("CARGO_BIN_EXE_veritas_service").unwrap_or("veritas-service.exe"),
+    );
+    let client = std::env::current_exe().expect("test exe");
+    let _guard = Cleanup {
+        service: service.clone(),
+    };
+    fs::copy(&dll, service.parent().unwrap().join("wireguard.dll")).expect("copy dll");
+    run(
+        &service,
+        ["install", "--client", &client.display().to_string(), "--dll", &dll],
+    );
+    run(&service, ["start"]);
+    wait_until_hello();
+
+    let listener = std::net::TcpListener::bind("0.0.0.0:0").expect("listener");
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for _ in listener.incoming() {}
+    });
+    let physical = primary_ipv4();
+    let open = SocketAddr::from((physical, port));
+    let loopback = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    assert!(
+        probe(open).is_ok(),
+        "baseline connection to the physical address should work before the lock"
+    );
+
+    let _peer = bring_up_tunnel(&dll);
+    // Drop the tunnel default route so the next connects try the physical NIC.
+    // The lock has to be what stops them. The /32 tunnel route stays.
+    drop_tunnel_default_route();
+    allow_icmp();
+    let ping = Command::new("ping")
+        .args(["-n", "2", "-w", "2000", "10.66.0.1"])
+        .output()
+        .expect("ping");
+    assert!(ping.status.success(), "tunnel traffic was not permitted");
+    assert!(probe(loopback).is_ok(), "loopback must stay open");
+    let v6_loop = std::net::TcpListener::bind("[::1]:0").ok();
+    if let Some(v6_loop) = v6_loop {
+        let addr = v6_loop.local_addr().unwrap();
+        thread::spawn(move || {
+            for _ in v6_loop.incoming() {}
+        });
+        assert!(probe(addr).is_ok(), "ipv6 loopback must stay open");
+    }
+    assert_blocked(open, "physical leak while connected");
+    assert_blocked(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 53)), "dns port 53");
+    assert_blocked(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 853)), "dns port 853");
+    let v6 = ipv6_listener();
+    if let Some(addr) = v6 {
+        assert_blocked(addr, "ipv6 leak while connected");
+        println!("IPV6_BLOCKED");
+    } else {
+        println!("IPV6_NO_LOCAL");
+    }
+    println!("LEAK_CONNECTED");
+
+    let api = ensure_api(std::path::Path::new(&dll)).expect("dll");
+    if let Ok(adapter) = veritas_service::AdapterHandle::open(api, "VeritasVPN") {
+        let _ = adapter.set_down();
+    }
+    assert!(probe(loopback).is_ok(), "loopback during reconnect");
+    assert_blocked(open, "physical leak while reconnecting");
+    println!("LEAK_RECONNECTING");
+
+    let _ = Command::new("taskkill")
+        .args(["/F", "/IM", "veritas-service.exe"])
+        .status();
+    thread::sleep(Duration::from_millis(400));
+    assert_blocked(open, "physical leak after the service was killed");
+    thread::sleep(Duration::from_millis(1500));
+    assert_blocked(open, "physical leak after service recovery");
+    println!("LEAK_AFTER_KILL");
+
+    run(&service, ["repair"]);
+    assert!(probe(open).is_ok(), "repair must release the lock");
+    println!("LEAK_REPAIRED");
+}
+
+fn bring_up_tunnel(dll: &str) -> TestPeer {
+    let server_keys = generate_keypair();
+    let client_keys = generate_keypair();
+    let api = ensure_api(std::path::Path::new(dll)).expect("load dll");
+    let peer = TestPeer::up(
+        api,
+        "VeritasTestSrv",
+        decode(&server_keys.private_key),
+        decode(&client_keys.public_key),
+        51830,
+        "10.66.0.1".parse().unwrap(),
+        24,
+        &[("10.66.0.2".parse().unwrap(), 32)],
+    )
+    .expect("server peer");
+    let host = primary_ipv4();
+    let config = WgTunnelConfig {
+        private_key: client_keys.private_key,
+        address: "10.66.0.2/32".into(),
+        dns: "10.66.0.1".into(),
+        server_public_key: server_keys.public_key,
+        endpoint: format!("{host}:51830"),
+        allowed_ips: vec!["0.0.0.0/0".into(), "::/0".into(), "10.66.0.1/32".into()],
+        peer_id: "peer-lock".into(),
+        preshared_key: String::new(),
+        stealth_endpoint: String::new(),
+        stealth_path_prefix: String::new(),
+        endpoint_lan: String::new(),
+        endpoint_wan: String::new(),
+    };
+    let mut request = Request::new(2, OP_CONNECT);
+    request.config = Some(config);
+    let connected = transact(&request, 20_000).expect("connect");
+    assert!(
+        connected.ok,
+        "connect code {} log {}",
+        connected.code,
+        fs::read_to_string(r"C:\ProgramData\VeritasVPN\service.log").unwrap_or_default()
+    );
+    peer
+}
+
+fn probe(addr: SocketAddr) -> std::io::Result<()> {
+    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(800)).map(|_| ())
+}
+
+fn assert_blocked(addr: SocketAddr, label: &str) {
+    match probe(addr) {
+        Ok(()) => panic!("{label}: connection was allowed"),
+        Err(err) => {
+            let raw = err.raw_os_error();
+            assert!(
+                err.kind() == std::io::ErrorKind::PermissionDenied || raw == Some(5) || raw == Some(10013),
+                "{label}: filter did not deny it (kind {:?} raw {raw:?})",
+                err.kind()
+            );
+        }
+    }
+}
+
+fn drop_tunnel_default_route() {
+    let _ = Command::new("powershell").args([
+        "-NoProfile",
+        "-Command",
+        "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -like '*Veritas*' -or $_.InterfaceAlias -like '*WireGuard*' } | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue",
+    ]).status();
+}
+
+fn ipv6_listener() -> Option<SocketAddr> {
+    let output = Command::new("powershell").args([
+        "-NoProfile",
+        "-Command",
+        "(Get-NetIPAddress -AddressFamily IPv6 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike 'fe80*' -and $_.IPAddress -ne '::1' } | Select-Object -First 1 -ExpandProperty IPAddress)",
+    ]).output().ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let addr: std::net::Ipv6Addr = text.trim().parse().ok()?;
+    let listener = std::net::TcpListener::bind((addr, 0)).ok()?;
+    let bound = listener.local_addr().ok()?;
+    thread::spawn(move || {
+        for _ in listener.incoming() {}
+    });
+    Some(bound)
 }
 
 fn wide(value: &str) -> Vec<u16> {

@@ -28,7 +28,7 @@ export function platformCapabilities(userAgent?: string): PlatformCapabilities {
     return { os, tunnel: true, stealth: true, killSwitch: true };
   }
   if (os === "windows") {
-    return { os, tunnel: true, stealth: false, killSwitch: false };
+    return { os, tunnel: true, stealth: false, killSwitch: true };
   }
   return { os, tunnel: false, stealth: false, killSwitch: false };
 }

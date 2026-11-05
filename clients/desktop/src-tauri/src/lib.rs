@@ -1452,6 +1452,31 @@ fn clear_stale_kill_switch_blocking() -> StaleKillSwitchStatus {
     }
 }
 
+/// User-facing Repair. Startup only looks; this is the button that releases the lock.
+#[tauri::command]
+async fn repair_kill_switch() -> StaleKillSwitchStatus {
+    #[cfg(target_os = "windows")]
+    {
+        return tauri::async_runtime::spawn_blocking(|| {
+            let status = crate::win_pipe::repair_lock();
+            StaleKillSwitchStatus {
+                blocked: status.blocked,
+                cleared: status.cleared,
+            }
+        })
+        .await
+        .unwrap_or(StaleKillSwitchStatus {
+            blocked: true,
+            cleared: false,
+        });
+    }
+    #[cfg(not(target_os = "windows"))]
+    StaleKillSwitchStatus {
+        blocked: false,
+        cleared: false,
+    }
+}
+
 #[tauri::command]
 async fn clear_stale_kill_switch() -> StaleKillSwitchStatus {
     #[cfg(target_os = "linux")]
@@ -1463,7 +1488,22 @@ async fn clear_stale_kill_switch() -> StaleKillSwitchStatus {
                 cleared: false,
             });
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        return tauri::async_runtime::spawn_blocking(|| {
+            let status = crate::win_pipe::lock_status();
+            StaleKillSwitchStatus {
+                blocked: status.blocked,
+                cleared: status.cleared,
+            }
+        })
+        .await
+        .unwrap_or(StaleKillSwitchStatus {
+            blocked: false,
+            cleared: false,
+        });
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     StaleKillSwitchStatus {
         blocked: false,
         cleared: false,
@@ -4345,7 +4385,8 @@ pub fn run() {
             recovery_open,
             recovery_close,
             recover_wireguard,
-            clear_stale_kill_switch
+            clear_stale_kill_switch,
+            repair_kill_switch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2,8 +2,8 @@
 //! Windows error text never leaves this module.
 
 use veritas_ipc::{
-    encode, user_message, Request, Response, TunnelStatus, CODE_UNAVAILABLE, OP_CONNECT,
-    OP_DISCONNECT, OP_HELLO, OP_STATS, PIPE_NAME,
+    encode, user_message, Request, Response, TunnelStatus, CODE_UNAVAILABLE, OP_CLEAR_LOCK,
+    OP_CONNECT, OP_DIAGNOSTICS, OP_DISCONNECT, OP_HELLO, OP_STATS, PIPE_NAME,
 };
 use windows_sys::Win32::Foundation::{GetLastError, ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY};
 use windows_sys::Win32::System::Pipes::CallNamedPipeW;
@@ -32,6 +32,42 @@ pub fn disconnect() -> Result<String, String> {
         Ok(response) if response.ok => Ok("Disconnected".into()),
         Ok(_) | Err(_) => Err("Couldn't finish disconnecting. Try again.".into()),
     }
+}
+
+/// Report a leftover lock. Does not release it. A dead service is not a leftover:
+/// recovery restarts it, and the filters stay until Disconnect, uninstall, or Repair.
+pub fn lock_status() -> StaleLock {
+    match call(&Request::new(5, OP_DIAGNOSTICS), 2_000) {
+        Ok(response) if response.ok => StaleLock {
+            blocked: response
+                .diagnostics
+                .as_ref()
+                .is_some_and(|item| item.kill_switch),
+            cleared: false,
+        },
+        _ => StaleLock {
+            blocked: false,
+            cleared: false,
+        },
+    }
+}
+
+pub fn repair_lock() -> StaleLock {
+    match call(&Request::new(6, OP_CLEAR_LOCK), 10_000) {
+        Ok(response) if response.ok => StaleLock {
+            blocked: false,
+            cleared: true,
+        },
+        _ => StaleLock {
+            blocked: true,
+            cleared: false,
+        },
+    }
+}
+
+pub struct StaleLock {
+    pub blocked: bool,
+    pub cleared: bool,
 }
 
 pub fn stats() -> WgTransferStats {
