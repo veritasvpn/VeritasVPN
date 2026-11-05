@@ -1263,9 +1263,6 @@ fn recover_wireguard_blocking(app: AppHandle, mut config: WgTunnelConfig, timeou
     #[cfg(target_os = "windows")]
     {
         let _ = (app, timeout_secs);
-        if !config.stealth_endpoint.trim().is_empty() {
-            return false;
-        }
         return crate::win_pipe::soft_reconnect(&config);
     }
     #[cfg(not(target_os = "windows"))]
