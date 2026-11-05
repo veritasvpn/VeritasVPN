@@ -118,14 +118,16 @@ pub fn local_network_from_allowed(allowed: &[String]) -> bool {
     !allowed.iter().any(|item| item.trim() == "0.0.0.0/0")
 }
 
-/// WFP IPv4 conditions are host byte order.
+/// Form WFP accepts for `FWP_V4_ADDR_AND_MASK`. The first octet is the high
+/// byte, and a prefix mask has its bits set from the top. The low-byte form
+/// is rejected as `FWP_E_INVALID_NET_MASK` (0x8032001F).
 pub fn host_ipv4(addr: Ipv4Addr) -> u32 {
-    u32::from_ne_bytes(addr.octets())
+    u32::from(addr)
 }
 
-/// `network_order_mask` has its prefix bits in the high end, matching `Ipv4Addr`.
-pub fn host_mask(network_order_mask: u32) -> u32 {
-    u32::from_ne_bytes(network_order_mask.to_be_bytes())
+/// `prefix_mask` already has its prefix bits in the high end.
+pub fn host_mask(prefix_mask: u32) -> u32 {
+    prefix_mask
 }
 
 #[cfg(test)]
@@ -197,10 +199,10 @@ mod tests {
     }
 
     #[test]
-    fn wfp_values_are_host_byte_order() {
-        assert_eq!(host_ipv4("10.1.2.3".parse().unwrap()), u32::from_ne_bytes([10, 1, 2, 3]));
+    fn wfp_values_keep_the_prefix_in_the_high_bits() {
+        assert_eq!(host_ipv4("10.1.2.3".parse().unwrap()), 0x0a01_0203);
         let slash8 = u32::MAX.checked_shl(24).unwrap();
-        assert_eq!(host_mask(slash8), u32::from_ne_bytes([255, 0, 0, 0]));
+        assert_eq!(host_mask(slash8), 0xff00_0000);
         assert_eq!(host_mask(u32::MAX), u32::MAX);
     }
 

@@ -327,7 +327,11 @@ fn leak_body(dll: String, service: PathBuf) {
     let _peer = bring_up_tunnel(&dll);
     allow_icmp();
     let ping = output_bounded("ping", &["-n", "2", "-w", "2000", "10.66.0.1"], Duration::from_secs(10));
-    assert!(ping.status.success(), "tunnel traffic was not permitted");
+    assert!(
+        ping.status.success(),
+        "tunnel traffic was not permitted: {}",
+        String::from_utf8_lossy(&ping.stdout)
+    );
     assert!(probe(loopback).is_ok(), "loopback must stay open");
     let v6_loop = std::net::TcpListener::bind("[::1]:0").ok();
     if let Some(v6_loop) = v6_loop {
