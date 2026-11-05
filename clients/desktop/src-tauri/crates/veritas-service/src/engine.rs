@@ -719,7 +719,8 @@ fn resume_saved() {
     request.management_v4 = saved.management_v4;
     request.management_v6 = saved.management_v6;
     let mut session = SESSION.lock().unwrap_or_else(|e| e.into_inner());
-    if session.adapter.is_some() {
+    // Disconnect deletes the blob while it holds this lock, then disarms.
+    if session.adapter.is_some() || !session_blob_exists() {
         return;
     }
     let _ = connect(&request, &mut session);

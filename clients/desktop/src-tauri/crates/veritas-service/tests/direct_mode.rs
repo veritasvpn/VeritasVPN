@@ -150,8 +150,8 @@ impl Drop for Cleanup {
     fn drop(&mut self) {
         // Bound every call. A Drop that waits on WFP or PowerShell is how the
         // job sat for an hour with the runner cut off.
-        quiet_bounded(&self.service, &["repair"], Duration::from_secs(15));
         quiet_bounded(&self.service, &["stop"], Duration::from_secs(15));
+        quiet_bounded(&self.service, &["repair"], Duration::from_secs(15));
         quiet_bounded(&self.service, &["uninstall"], Duration::from_secs(15));
         quiet_bounded(
             "netsh",
