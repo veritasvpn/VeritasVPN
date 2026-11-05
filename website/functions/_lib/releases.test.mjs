@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
-import { pinnedChecksumDocument, sha256Hex, verifiedReleaseBody, DOWNLOADS } from "./releases.js";
+import { pinnedChecksumDocument, sha256Hex, verifiedReleaseBody, DOWNLOADS, WINDOWS_INSTALLER, windowsPinReady, serveWindowsInstaller } from "./releases.js";
 
 test("published Android pin includes the lockdown security baseline", async () => {
   const version = DOWNLOADS['veritasvpn-android.apk'].tag.match(/^(?:android-)?v(\d+)\.(\d+)\.(\d+)$/);
@@ -28,6 +28,20 @@ test("verifiedReleaseBody accepts only the pinned digest", async () => {
   assert.equal(Buffer.from(ok).toString(), "veritas");
   const rejected = await verifiedReleaseBody(responseFrom(bytes), "ab".repeat(32));
   assert.equal(rejected, null);
+});
+
+test("the live Windows pin is off and is not in the public checksum file", async () => {
+  assert.equal(windowsPinReady(), false);
+  assert.equal(WINDOWS_INSTALLER.published, false);
+  assert.equal(WINDOWS_INSTALLER.tag, "");
+  assert.equal(WINDOWS_INSTALLER.sha256, "");
+  assert.equal(Object.hasOwn(DOWNLOADS, WINDOWS_INSTALLER.filename), false);
+  const doc = pinnedChecksumDocument();
+  assert.equal(doc.includes("windows"), false);
+  assert.equal(doc.includes(WINDOWS_INSTALLER.filename), false);
+  const response = await serveWindowsInstaller(new Request("https://veritasvpn.cloud/downloads/veritasvpn-windows-setup.exe"));
+  assert.equal(response.status, 404);
+  assert.match(await response.text(), /not published yet/);
 });
 
 test("pinned checksums list every download and no other digest", () => {

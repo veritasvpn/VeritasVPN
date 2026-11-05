@@ -39,6 +39,26 @@ export const DOWNLOADS = {
   },
 };
 
+/**
+ * Windows download slot. published stays false until a windows-v* release is
+ * approved and tag plus sha256 are filled in together. An empty pin is not a
+ * file the site will fetch or list in SHA256SUMS.
+ */
+export const WINDOWS_INSTALLER = {
+  filename: "veritasvpn-windows-setup.exe",
+  published: false,
+  tag: "",
+  sha256: "",
+  contentType: "application/vnd.microsoft.portable-executable",
+  unavailable: "The Windows installer is not published yet.",
+};
+
+export function windowsPinReady() {
+  return WINDOWS_INSTALLER.published === true
+    && /^windows-v\d+\.\d+\.\d+$/.test(WINDOWS_INSTALLER.tag)
+    && /^[0-9a-f]{64}$/.test(WINDOWS_INSTALLER.sha256);
+}
+
 export function releaseAssetURL(filename) {
   return `${RELEASE_BASE}/${DOWNLOADS[filename].tag}/${filename}`;
 }
@@ -88,11 +108,15 @@ export async function verifiedReleaseBody(upstream, expectedSha256) {
   return body;
 }
 
-/** Checksum file published by the site. Built only from the pins above. */
+/** Checksum file published by the site. Built only from live pins. */
 export function pinnedChecksumDocument() {
-  const lines = Object.keys(DOWNLOADS)
+  const pins = { ...DOWNLOADS };
+  if (windowsPinReady()) {
+    pins[WINDOWS_INSTALLER.filename] = WINDOWS_INSTALLER;
+  }
+  const lines = Object.keys(pins)
     .sort()
-    .map((name) => `${DOWNLOADS[name].sha256}  ${name}`);
+    .map((name) => `${pins[name].sha256}  ${name}`);
   return [
     "# VeritasVPN release checksums",
     "# Verify with: sha256sum --check --ignore-missing SHA256SUMS",
@@ -103,9 +127,9 @@ export function pinnedChecksumDocument() {
   ].join("\n");
 }
 
-function downloadHeaders(filename, upstream) {
+function downloadHeaders(filename, entry, upstream) {
   const headers = withSecurityHeaders({
-    "Content-Type": DOWNLOADS[filename].contentType,
+    "Content-Type": entry.contentType,
     "Content-Disposition": `attachment; filename="${filename}"`,
     "Cache-Control": "public, max-age=300",
   });
@@ -114,14 +138,33 @@ function downloadHeaders(filename, upstream) {
   return headers;
 }
 
-/** Streams a release asset from GitHub under our own origin. */
-export async function serveRelease(request, filename) {
+/** Windows route. Refuses to fetch GitHub until the pin is explicitly ready. */
+export async function serveWindowsInstaller(request) {
   const method = request.method;
   if (method !== "GET" && method !== "HEAD") {
     return textResponse("Method Not Allowed", 405, { Allow: "GET, HEAD" });
   }
+  if (!windowsPinReady()) {
+    return textResponse(WINDOWS_INSTALLER.unavailable, 404);
+  }
+  return servePinned(request, WINDOWS_INSTALLER.filename, WINDOWS_INSTALLER);
+}
 
-  const url = releaseAssetURL(filename);
+/** Streams a release asset from GitHub under our own origin. */
+export async function serveRelease(request, filename) {
+  return servePinned(request, filename, DOWNLOADS[filename]);
+}
+
+async function servePinned(request, filename, entry) {
+  const method = request.method;
+  if (method !== "GET" && method !== "HEAD") {
+    return textResponse("Method Not Allowed", 405, { Allow: "GET, HEAD" });
+  }
+  if (!entry || !entry.tag || !entry.sha256) {
+    return textResponse("Not found", 404);
+  }
+
+  const url = `${RELEASE_BASE}/${entry.tag}/${filename}`;
   const cf = { cacheEverything: true, cacheTtl: 300 };
 
   if (method === "HEAD") {
@@ -129,20 +172,20 @@ export async function serveRelease(request, filename) {
     // Pages Functions must explicitly follow it before judging availability.
     const upstream = await fetch(url, { method: "HEAD", redirect: "follow", cf });
     if (!upstream.ok) {
-      return textResponse(DOWNLOADS[filename].unavailable, 502);
+      return textResponse(entry.unavailable, 502);
     }
     return new Response(null, {
       status: 200,
-      headers: downloadHeaders(filename, upstream),
+      headers: downloadHeaders(filename, entry, upstream),
     });
   }
 
   const upstream = await fetch(url, { redirect: "follow", cf });
-  const body = await verifiedReleaseBody(upstream, DOWNLOADS[filename].sha256);
+  const body = await verifiedReleaseBody(upstream, entry.sha256);
   if (!body) {
-    return textResponse(DOWNLOADS[filename].unavailable, 502);
+    return textResponse(entry.unavailable, 502);
   }
-  const headers = downloadHeaders(filename, upstream);
+  const headers = downloadHeaders(filename, entry, upstream);
   headers["Content-Length"] = String(body.byteLength);
   return new Response(body, {
     status: 200,

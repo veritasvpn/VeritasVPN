@@ -2,7 +2,7 @@
 
 ## Useful information (humans)
 
-**Production traffic** is served by Cloudflare Functions that stream from GitHub Releases only when the bytes match the SHA-256 pinned in `functions/_lib/releases.js`. Android is served from `android-v0.2.100` (app version 0.2.100). Linux is served from desktop `v0.2.99` (git tag `linux-v0.2.99`). The local fallback files in this directory are not deployed to Pages and retain their own checksum manifest until they are refreshed separately.
+**Production traffic** is served by Cloudflare Functions that stream from GitHub Releases only when the bytes match the SHA-256 pinned in `functions/_lib/releases.js`. Android is served from `android-v0.2.100` (app version 0.2.100). Linux is served from desktop `v0.2.99` (git tag `linux-v0.2.99`). Windows has a download route and an empty pin (`published: false`); the site does not fetch or list a Windows installer until that pin is filled in. The local fallback files in this directory are not deployed to Pages and retain their own checksum manifest until they are refreshed separately.
 
 The site’s primary Android button opens the Google Play listing (`https://play.google.com/store/apps/details?id=cloud.veritasvpn`). `/downloads/veritasvpn-android.apk` is the second Android option, "Download the .apk", on the Android install page (`/install/android#apk`), for phones without Google Play or for paying with Bitcoin. The downloads page and homepage link to it.
 

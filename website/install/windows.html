@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="VeritasVPN for Windows is planned but not currently offered for download.">
+  <meta name="description" content="VeritasVPN for Windows is a per-machine installer. The download is not published yet.">
   <title>VeritasVPN for Windows</title>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="../css/style-typography1.css">
@@ -50,14 +50,17 @@
   </nav>
   <main class="downloads-page">
     <section class="downloads-hero"><div class="container">
-      <span class="download-featured-badge">Coming soon</span>
+      <span class="download-featured-badge">Not published</span>
       <h1>VeritasVPN for Windows</h1>
-      <p>A full-device Windows client is on the roadmap. Use Android or Linux today.</p>
+      <p>The desktop app is a per-machine setup file. The website does not offer it for download until a signed <code>windows-v</code> release is pinned.</p>
     </div></section>
     <section class="downloads"><div class="container">
-      <div class="download-featured-card download-card-wide" aria-disabled="true">
-        <h2>Windows desktop</h2>
-        <p>No Windows installer is published yet. We will not present an unfinished build as production-ready.</p>
+      <div class="download-featured-card download-card-wide">
+        <h2>What the installer does</h2>
+        <p>One administrator prompt installs the app and a background service that starts with Windows. You choose Direct or Stealth in the app. Closing the window while connected leaves the tunnel running.</p>
+        <p>Windows 11 is the target. Windows 10 version 22H2 is best effort. Windows on ARM is not supported by this installer.</p>
+        <p>The current build is unsigned. After a certificate exists, the same release lane signs the setup file. Until then, Windows may show a SmartScreen notice. Do not treat an unsigned file as the public download.</p>
+        <p>When a release is pinned, the file name is <code>veritasvpn-windows-setup.exe</code>. Check it against <a href="/downloads/SHA256SUMS">SHA256SUMS</a>. That checksum list does not include Windows while the pin is off.</p>
         <a class="btn btn-primary" href="/downloads">View available platforms</a>
       </div>
     </div></section>
