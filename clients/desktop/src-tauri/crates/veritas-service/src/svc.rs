@@ -336,10 +336,17 @@ fn delete_service() -> bool {
         if scm.is_null() {
             return false;
         }
-        let deleted = delete_open(scm);
+        let _ = delete_open(scm);
         CloseServiceHandle(scm);
-        deleted || !service_installed()
     }
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(8) {
+        if !service_installed() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    !service_installed()
 }
 
 fn remove_adapter() -> bool {

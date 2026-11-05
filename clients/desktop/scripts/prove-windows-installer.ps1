@@ -15,11 +15,25 @@ function Invoke-Bounded([string]$File, [string[]]$ArgumentList, [int]$Seconds) {
     return $proc.ExitCode
 }
 
-function Remove-Installed {
+function Invoke-Uninstall([int]$Seconds) {
     $un = Join-Path $installDir "uninstall.exe"
-    if (Test-Path $un) {
-        try { Invoke-Bounded $un @("/S") 90 | Out-Null } catch { }
+    if (-not (Test-Path $un)) { return 0 }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "cmd.exe"
+    # cmd strips one pair of quotes around a /c command. The inner quotes
+    # keep the exe path together. _?= is last and stays unquoted, spaces included.
+    $psi.Arguments = "/c `"`"$un`" /S _?=$installDir`""
+    $psi.UseShellExecute = $false
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    if (-not $proc.WaitForExit($Seconds * 1000)) {
+        taskkill /F /T /PID $proc.Id | Out-Null
+        throw "deadline waiting for uninstall"
     }
+    return $proc.ExitCode
+}
+
+function Remove-Installed {
+    try { Invoke-Uninstall 90 | Out-Null } catch { }
     foreach ($image in @("veritasvpn-desktop.exe", "wstunnel.exe")) {
         $kill = Start-Process -FilePath "taskkill" -ArgumentList @("/F", "/IM", $image) -WindowStyle Hidden -PassThru
         if (-not $kill.WaitForExit(8000)) { taskkill /F /PID $kill.Id | Out-Null }
@@ -63,9 +77,8 @@ try {
     if ($code -ne 0 -or $text -ne "PIPE_OK") { throw "pipe check failed" }
     Write-Host "PIPE_OK"
 
-    $un = Join-Path $installDir "uninstall.exe"
-    if (-not (Test-Path $un)) { throw "uninstaller is missing" }
-    $code = Invoke-Bounded $un @("/S") 120
+    if (-not (Test-Path (Join-Path $installDir "uninstall.exe"))) { throw "uninstaller is missing" }
+    $code = Invoke-Uninstall 120
     if ($code -ne 0) { throw "uninstaller exit $code" }
     Write-Host "UNINSTALL_SILENT"
 

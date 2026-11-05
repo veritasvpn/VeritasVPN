@@ -388,8 +388,13 @@ jobs:
         run: |
           $un = Join-Path $env:ProgramFiles "VeritasVPN\uninstall.exe"
           if (Test-Path $un) {
-            $p = Start-Process -FilePath $un -ArgumentList "/S" -WindowStyle Hidden -PassThru
-            if (-not $p.WaitForExit(60000)) { taskkill /F /PID $p.Id | Out-Null }
+            $dir = Split-Path $un
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = "cmd.exe"
+            $psi.Arguments = "/c `"`"$un`" /S _?=$dir`""
+            $psi.UseShellExecute = $false
+            $p = [System.Diagnostics.Process]::Start($psi)
+            if (-not $p.WaitForExit(60000)) { taskkill /F /T /PID $p.Id | Out-Null }
           }
           foreach ($image in @("veritasvpn-desktop.exe", "wstunnel.exe")) {
             $k = Start-Process -FilePath taskkill -ArgumentList @("/F", "/IM", $image) -WindowStyle Hidden -PassThru
