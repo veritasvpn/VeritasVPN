@@ -347,14 +347,20 @@ fn leak_body(dll: String, service: PathBuf) {
         });
         assert!(probe(addr).is_ok(), "ipv6 loopback must stay open");
     }
-    assert_blocked(open, "physical leak while connected");
+    // Windows delivers a connection to this machine's own IP as loopback, so
+    // that connect staying open is not a physical leak.
+    assert!(probe(open).is_ok(), "own address should stay reachable");
+    eprintln!("PHYSICAL_SELF_STAYS_OPEN");
+    // 203.0.113.10 is not local, not the tunnel, and not TCP 80/443.
+    let doc = SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 9));
+    assert_blocked(doc, "non-local ipv4 while connected");
     assert_blocked(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 53)), "dns port 53");
     assert_blocked(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 853)), "dns port 853");
-    if let Some(addr) = ipv6_listener() {
-        assert_blocked(addr, "ipv6 leak while connected");
-        eprintln!("IPV6_BLOCKED");
-    } else {
-        eprintln!("IPV6_NO_LOCAL");
+    let doc6: SocketAddr = "[2001:db8::1]:9".parse().unwrap();
+    match probe(doc6) {
+        Err(err) if is_denied(&err) => eprintln!("IPV6_BLOCKED"),
+        Err(_) => eprintln!("IPV6_NO_ROUTE"),
+        Ok(()) => panic!("non-local ipv6 while connected: connection was allowed"),
     }
     eprintln!("LEAK_CONNECTED");
 
@@ -363,18 +369,23 @@ fn leak_body(dll: String, service: PathBuf) {
         let _ = adapter.set_down();
     }
     assert!(probe(loopback).is_ok(), "loopback during reconnect");
-    assert_blocked(open, "physical leak while reconnecting");
+    assert_blocked(doc, "non-local ipv4 while reconnecting");
     eprintln!("LEAK_RECONNECTING");
 
     let _ = output_bounded("taskkill", &["/F", "/IM", "veritas-service.exe"], Duration::from_secs(10));
     thread::sleep(Duration::from_millis(400));
-    assert_blocked(open, "physical leak after the service was killed");
+    assert_blocked(doc, "non-local ipv4 after the service was killed");
     thread::sleep(Duration::from_millis(1500));
-    assert_blocked(open, "physical leak after service recovery");
+    assert_blocked(doc, "non-local ipv4 after service recovery");
     eprintln!("LEAK_AFTER_KILL");
 
     run(&service, ["repair"]);
     assert!(probe(open).is_ok(), "repair must release the lock");
+    let released = probe(doc);
+    assert!(
+        released.is_err() && released.as_ref().err().is_none_or(|err| !is_denied(err)),
+        "repair left the documentation address denied"
+    );
     eprintln!("LEAK_REPAIRED");
 }
 
@@ -426,28 +437,23 @@ fn probe(addr: SocketAddr) -> std::io::Result<()> {
     std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(800)).map(|_| ())
 }
 
+fn is_denied(err: &std::io::Error) -> bool {
+    let raw = err.raw_os_error();
+    err.kind() == std::io::ErrorKind::PermissionDenied || raw == Some(5) || raw == Some(10013)
+}
+
 fn assert_blocked(addr: SocketAddr, label: &str) {
     match probe(addr) {
         Ok(()) => panic!("{label}: connection was allowed"),
         Err(err) => {
             let raw = err.raw_os_error();
             assert!(
-                err.kind() == std::io::ErrorKind::PermissionDenied || raw == Some(5) || raw == Some(10013),
+                is_denied(&err),
                 "{label}: filter did not deny it (kind {:?} raw {raw:?})",
                 err.kind()
             );
         }
     }
-}
-
-fn ipv6_listener() -> Option<SocketAddr> {
-    let addr = management_snapshot().local_v6?;
-    let listener = std::net::TcpListener::bind((addr, 0)).ok()?;
-    let bound = listener.local_addr().ok()?;
-    thread::spawn(move || {
-        for _ in listener.incoming() {}
-    });
-    Some(bound)
 }
 
 fn attach_management(request: &mut Request) {
