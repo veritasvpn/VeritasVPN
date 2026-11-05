@@ -11,6 +11,8 @@ mod net;
 #[cfg(windows)]
 mod pipe;
 #[cfg(windows)]
+mod stealth;
+#[cfg(windows)]
 mod svc;
 #[cfg(windows)]
 mod wfp;

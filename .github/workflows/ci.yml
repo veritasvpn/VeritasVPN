@@ -5,7 +5,7 @@ on:
     branches: [master, main]
   pull_request:
     # The Phase 2 branch is the base of the kill-switch pull request.
-    branches: [master, main, cursor/windows-service-direct-b81d, cursor/windows-kill-switch-b81d]
+    branches: [master, main, cursor/windows-service-direct-b81d, cursor/windows-kill-switch-b81d, cursor/windows-reconnect-b81d]
 
 # Keyed by commit so a runner that has lost its network cannot pin the
 # next push behind a cancel it will never acknowledge.
@@ -300,7 +300,9 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/bundle-wireguard-nt.ps1 | Out-Null
+          ./scripts/bundle-wstunnel-windows.ps1 | Out-Null
           $env:VERITAS_WIREGUARD_DLL = (Get-Content -Raw .\src-tauri\target\wireguard-nt\dll.path).Trim()
+          $env:VERITAS_WSTUNNEL = (Get-Content -Raw .\src-tauri\target\wstunnel\wstunnel.path).Trim()
           $failed = $false
           try {
             $cargo = Start-Process -FilePath cargo -ArgumentList @(

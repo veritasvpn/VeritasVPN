@@ -35,9 +35,9 @@ const RPC_C_AUTHN_WINNT: u32 = 10;
 static FILTER_IDS: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
 const FWP_E_ALREADY_EXISTS: u32 = 0x8032_0009;
 
-pub fn arm(plan: &LockPlan) -> Result<(), u32> {
+pub fn arm(plan: &LockPlan, helper: Option<&std::path::Path>) -> Result<(), u32> {
     let engine = open()?;
-    let result = arm_in(engine, plan);
+    let result = arm_in(engine, plan, helper);
     unsafe { FwpmEngineClose0(engine) };
     result
 }
@@ -58,7 +58,11 @@ pub fn is_armed() -> bool {
     armed
 }
 
-fn arm_in(engine: windows_sys::Win32::Foundation::HANDLE, plan: &LockPlan) -> Result<(), u32> {
+fn arm_in(
+    engine: windows_sys::Win32::Foundation::HANDLE,
+    plan: &LockPlan,
+    helper: Option<&std::path::Path>,
+) -> Result<(), u32> {
     let err = unsafe { FwpmTransactionBegin0(engine, 0) };
     if err != 0 {
         return Err(err);
@@ -68,7 +72,7 @@ fn arm_in(engine: windows_sys::Win32::Foundation::HANDLE, plan: &LockPlan) -> Re
         add_provider(engine)?;
         add_sublayer(engine)?;
         for rule in rules(plan) {
-            add_rule(engine, plan.tunnel_luid, &rule, weight_of(&rule))?;
+            add_rule(engine, plan.tunnel_luid, &rule, weight_of(&rule), helper)?;
         }
         Ok(())
     })();
@@ -165,6 +169,7 @@ fn add_rule(
     luid: u64,
     rule: &Rule,
     weight: u8,
+    helper: Option<&std::path::Path>,
 ) -> Result<(), u32> {
     match rule {
         Rule::PermitLoopback => {
@@ -194,13 +199,7 @@ fn add_rule(
             )?;
         }
         Rule::PermitStealth { addr, port } => {
-            add_simple(
-                engine,
-                FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-                weight,
-                true,
-                &tcp_endpoint(*addr, *port),
-            )?;
+            add_stealth(engine, *addr, *port, helper, weight)?;
         }
         Rule::PermitDhcp => {
             for port in [67u16, 68] {
@@ -369,6 +368,7 @@ enum Cond {
     Network(Ipv4Addr, u32),
     NetworkV6(std::net::Ipv6Addr),
     Index(u32),
+    App(*mut windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_BYTE_BLOB),
 }
 
 fn loopback_condition() -> Vec<Cond> {
@@ -474,6 +474,11 @@ fn hold(conds: &[Cond]) -> Held {
                 value_u64(&held.luid),
             ),
             Cond::Index(index) => (FWPM_CONDITION_INTERFACE_INDEX, FWP_MATCH_EQUAL, value_u32(*index)),
+            Cond::App(blob) => (
+                windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_ALE_APP_ID,
+                FWP_MATCH_EQUAL,
+                value_blob(*blob),
+            ),
             Cond::Protocol(proto) => (FWPM_CONDITION_IP_PROTOCOL, FWP_MATCH_EQUAL, value_u8(*proto)),
             Cond::Port(port) => (FWPM_CONDITION_IP_REMOTE_PORT, FWP_MATCH_EQUAL, value_u16(*port)),
             Cond::Network(_, _) => {
@@ -537,6 +542,46 @@ fn value_mask(mask: &FWP_V4_ADDR_AND_MASK) -> ConditionValue {
     out.r#type = FWP_V4_ADDR_MASK;
     out.Anonymous.v4AddrMask = mask as *const FWP_V4_ADDR_AND_MASK as *mut _;
     out
+}
+
+fn value_blob(
+    blob: *mut windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_BYTE_BLOB,
+) -> ConditionValue {
+    let mut out = ConditionValue::default();
+    out.r#type = windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_BYTE_BLOB_TYPE;
+    out.Anonymous.byteBlob = blob;
+    out
+}
+
+fn add_stealth(
+    engine: windows_sys::Win32::Foundation::HANDLE,
+    addr: std::net::Ipv4Addr,
+    port: u16,
+    helper: Option<&std::path::Path>,
+    weight: u8,
+) -> Result<(), u32> {
+    let mut conds = tcp_endpoint(addr, port);
+    let mut app = ptr::null_mut();
+    if let Some(path) = helper {
+        let wide = wide(&path.display().to_string());
+        let err = unsafe {
+            windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmGetAppIdFromFileName0(
+                wide.as_ptr(),
+                &mut app,
+            )
+        };
+        if err != 0 || app.is_null() {
+            return Err(if err == 0 { 87 } else { err });
+        }
+        conds.push(Cond::App(app));
+    }
+    let result = add_simple(engine, FWPM_LAYER_ALE_AUTH_CONNECT_V4, weight, true, &conds);
+    if !app.is_null() {
+        unsafe {
+            FwpmFreeMemory0(&mut app as *mut _ as *mut *mut _);
+        }
+    }
+    result
 }
 
 fn value_v6(mask: &FWP_V6_ADDR_AND_MASK) -> ConditionValue {
