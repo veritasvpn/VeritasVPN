@@ -27,6 +27,19 @@ pub fn connect(config: &WgTunnelConfig) -> Result<String, String> {
     }
 }
 
+pub fn kick_reconnect() -> bool {
+    matches!(
+        call(&Request::new(7, veritas_ipc::OP_SOFT_RECONNECT), 20_000),
+        Ok(response) if response.ok
+    )
+}
+
+pub fn soft_reconnect(config: &crate::WgTunnelConfig) -> bool {
+    let mut request = Request::new(8, veritas_ipc::OP_SOFT_RECONNECT);
+    request.config = Some(config.clone());
+    matches!(call(&request, 20_000), Ok(response) if response.ok)
+}
+
 pub fn disconnect() -> Result<String, String> {
     match call(&Request::new(3, OP_DISCONNECT), 10_000) {
         Ok(response) if response.ok => Ok("Disconnected".into()),
@@ -86,11 +99,11 @@ fn from_status(status: Option<&TunnelStatus>) -> WgTransferStats {
         tx_bytes: status.tx,
         last_handshake_sec: status.handshake,
         interface_up: status.up,
-        underlay_notice: String::new(),
-        underlay_reconnecting: false,
+        underlay_notice: status.notice.clone(),
+        underlay_reconnecting: status.reconnecting,
         underlay_gave_up: false,
-        underlay_path_ok: status.up,
-        stalled: false,
+        underlay_path_ok: status.up || status.reconnecting,
+        stalled: status.stalled,
     }
 }
 

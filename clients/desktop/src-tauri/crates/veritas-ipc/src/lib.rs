@@ -79,6 +79,15 @@ pub struct TunnelStatus {
     pub tx: u64,
     /// Unix seconds. Zero when the peer has not answered.
     pub handshake: i64,
+    /// The UI shows Reconnecting while this is set. The lock stays up.
+    #[serde(default)]
+    pub reconnecting: bool,
+    /// Lost handshake. The UI shows Reconnecting for this too.
+    #[serde(default)]
+    pub stalled: bool,
+    /// Fixed sentence. Empty when there is nothing to say.
+    #[serde(default)]
+    pub notice: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

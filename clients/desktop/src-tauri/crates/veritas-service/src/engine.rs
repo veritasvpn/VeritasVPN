@@ -1,14 +1,18 @@
 //! Direct-mode session. The kill switch is armed after the tunnel is up and
-//! released only by Disconnect, uninstall, or Repair. Stealth and soft
-//! reconnect stay refused.
+//! released only by Disconnect, uninstall, or Repair. Soft reconnect keeps
+//! the lock and the adapter. Stealth stays refused.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
+use serde::{Deserialize, Serialize};
 use veritas_core::WgTunnelConfig;
 use veritas_ipc::{
     Diagnostics, Request, Response, TunnelStatus, CODE_BUSY, CODE_INVALID_CONFIG,
@@ -27,6 +31,7 @@ static SESSION: Mutex<Session> = Mutex::new(Session {
     endpoint_pin: None,
     local_network: false,
     stealth_requested: false,
+    saved: None,
 });
 
 struct Session {
@@ -36,6 +41,16 @@ struct Session {
     endpoint_pin: Option<net::PinnedEndpoint>,
     local_network: bool,
     stealth_requested: bool,
+    saved: Option<SavedConnect>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SavedConnect {
+    config: WgTunnelConfig,
+    full_lock: bool,
+    permit_web: bool,
+    management_v4: Vec<String>,
+    management_v6: Vec<String>,
 }
 
 pub fn handle(request: &Request, caller_ok: bool) -> Response {
@@ -48,13 +63,15 @@ pub fn handle(request: &Request, caller_ok: bool) -> Response {
         OP_STATUS | OP_STATS => status_response(request.id, &session),
         OP_CONNECT => connect(request, &mut session),
         OP_DISCONNECT => {
+            session.saved = None;
+            forget_session();
             release_tunnel(&mut session);
             match release_lock() {
                 Ok(()) => Response::ok(request.id),
                 Err(_) => Response::fail(request.id, CODE_TUNNEL_FAILED),
             }
         }
-        OP_SOFT_RECONNECT => Response::fail(request.id, CODE_NOT_IN_THIS_BUILD),
+        OP_SOFT_RECONNECT => soft_reconnect(&mut session, request.id, request.config.clone()),
         OP_CLEAR_LOCK => match release_lock() {
             Ok(()) => Response::ok(request.id),
             Err(_) => Response::fail(request.id, CODE_TUNNEL_FAILED),
@@ -88,6 +105,7 @@ pub fn handle(request: &Request, caller_ok: bool) -> Response {
 /// Service stop or crash must leave the lock in place. Only Disconnect,
 /// uninstall, and Repair call [`release_lock`].
 pub fn shutdown_tunnel() {
+    MONITOR_STOP.store(true, Ordering::SeqCst);
     if let Ok(mut session) = SESSION.lock() {
         release_tunnel(&mut session);
     }
@@ -152,6 +170,17 @@ fn connect(request: &Request, session: &mut Session) -> Response {
             session.routes = routes;
             session.endpoint_pin = pin;
             session.local_network = local_network;
+            session.saved = Some(SavedConnect {
+                config: config.clone(),
+                full_lock: request.full_lock == Some(true),
+                permit_web: request.permit_web == Some(true),
+                management_v4: request.management_v4.clone(),
+                management_v6: request.management_v6.clone(),
+            });
+            if let Some(saved) = session.saved.clone() {
+                persist_session(&saved);
+            }
+            note_connected();
             log_line("connect", "ok");
             status_response(request.id, session)
         }
@@ -255,12 +284,16 @@ fn status_response(id: u64, session: &Session) -> Response {
 }
 
 fn read_status(session: &Session) -> TunnelStatus {
+    let phase = phase_snapshot();
     let Some(adapter) = session.adapter.as_ref() else {
         return TunnelStatus {
             up: false,
             rx: 0,
             tx: 0,
             handshake: 0,
+            reconnecting: phase.reconnecting,
+            stalled: phase.stalled,
+            notice: phase.notice,
         };
     };
     let (rx, tx, handshake) = adapter.counters().unwrap_or((0, 0, 0));
@@ -269,6 +302,9 @@ fn read_status(session: &Session) -> TunnelStatus {
         rx,
         tx,
         handshake: wg::filetime_to_unix(handshake),
+        reconnecting: phase.reconnecting,
+        stalled: phase.stalled,
+        notice: phase.notice,
     }
 }
 
@@ -389,4 +425,461 @@ fn log_line(op: &str, code: &str) {
 
 pub fn program_data() -> Option<PathBuf> {
     Some(PathBuf::from(r"C:\ProgramData\VeritasVPN"))
+}
+
+const NOTICE: &str = "Reconnecting…";
+
+struct Phase {
+    reconnecting: bool,
+    stalled: bool,
+    notice: String,
+}
+
+struct MonitorState {
+    last_fp: String,
+    last_power: String,
+    backoff: crate::reconnect::Backoff,
+    next_kick: Option<Instant>,
+    reconnecting: bool,
+    stalled: bool,
+    rx: u64,
+    tx: u64,
+    flat_since: Option<Instant>,
+}
+
+static MONITOR: Mutex<MonitorState> = Mutex::new(MonitorState {
+    last_fp: String::new(),
+    last_power: String::new(),
+    backoff: crate::reconnect::Backoff::new(),
+    next_kick: None,
+    reconnecting: false,
+    stalled: false,
+    rx: 0,
+    tx: 0,
+    flat_since: None,
+});
+static MONITOR_STOP: AtomicBool = AtomicBool::new(false);
+static MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
+static POWER: Mutex<Option<&'static str>> = Mutex::new(None);
+
+pub fn start_monitor() {
+    if MONITOR_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    MONITOR_STOP.store(false, Ordering::SeqCst);
+    thread::spawn(|| {
+        while !MONITOR_STOP.load(Ordering::SeqCst) {
+            tick();
+            thread::sleep(Duration::from_secs(2));
+        }
+    });
+}
+
+pub fn note_power(kind: &'static str) {
+    if let Ok(mut slot) = POWER.lock() {
+        *slot = Some(kind);
+    }
+}
+
+fn note_connected() {
+    if let Ok(mut state) = MONITOR.lock() {
+        state.last_fp = current_fingerprint();
+        state.reconnecting = false;
+        state.stalled = false;
+        state.backoff.reset();
+        state.next_kick = None;
+        state.flat_since = None;
+    }
+}
+
+fn phase_snapshot() -> Phase {
+    let state = MONITOR.lock().unwrap_or_else(|e| e.into_inner());
+    Phase {
+        reconnecting: state.reconnecting,
+        stalled: state.stalled,
+        notice: if state.reconnecting || state.stalled {
+            NOTICE.to_string()
+        } else {
+            String::new()
+        },
+    }
+}
+
+fn show(action: crate::reconnect::Action, stalled: bool) {
+    let mut state = MONITOR.lock().unwrap_or_else(|e| e.into_inner());
+    state.reconnecting = action.notice == crate::reconnect::Notice::Reconnecting;
+    state.stalled = stalled || state.reconnecting && stalled;
+    if action.notice == crate::reconnect::Notice::Quiet {
+        state.stalled = false;
+        state.backoff.reset();
+        state.next_kick = None;
+    }
+}
+
+fn kick_due(state: &mut MonitorState) -> bool {
+    let now = Instant::now();
+    if state.next_kick.is_some_and(|at| now < at) {
+        return false;
+    }
+    let delay = state.backoff.next_delay();
+    state.next_kick = Some(now + delay);
+    true
+}
+
+fn tick() {
+    if MONITOR_STOP.load(Ordering::SeqCst) {
+        return;
+    }
+    let saved_on_disk = session_blob_exists();
+    let snapshot = tunnel_snapshot();
+    if snapshot.adapter.is_none() && saved_on_disk {
+        show(crate::reconnect::on_boot(true), false);
+        resume_saved();
+        return;
+    }
+    let Some(up) = snapshot.up else {
+        return;
+    };
+    let sim = read_sim();
+    let fp = current_fingerprint();
+    let mut state = MONITOR.lock().unwrap_or_else(|e| e.into_inner());
+    let first = state.last_fp.is_empty();
+    let changed = !first && state.last_fp != fp;
+    state.last_fp = fp;
+    let power = take_power(&sim, &mut state);
+    let force_stall = sim.stall;
+    if let Some("sleep") = power {
+        state.reconnecting = true;
+        drop(state);
+        show(crate::reconnect::on_sleep(), false);
+        return;
+    }
+    if let Some("resume") = power {
+        drop(state);
+        show(crate::reconnect::on_resume(), false);
+        kick(true);
+        return;
+    }
+    if !up {
+        state.reconnecting = true;
+        let due = kick_due(&mut state);
+        drop(state);
+        show(crate::reconnect::on_link_down(), false);
+        if due {
+            kick(false);
+        }
+        return;
+    }
+    if changed {
+        drop(state);
+        show(crate::reconnect::on_underlay_change(), false);
+        kick(true);
+        return;
+    }
+    let lost = force_stall || stall_now(&mut state, snapshot.rx, snapshot.tx, snapshot.handshake_age);
+    if lost {
+        let due = kick_due(&mut state);
+        state.reconnecting = true;
+        state.stalled = true;
+        drop(state);
+        show(crate::reconnect::on_stall(due), true);
+        if due {
+            kick(true);
+        }
+        return;
+    }
+    let fresh = snapshot.handshake_age.is_some_and(|age| age <= crate::reconnect::HANDSHAKE_STALE);
+    if fresh {
+        state.reconnecting = false;
+        state.stalled = false;
+        state.backoff.reset();
+        state.next_kick = None;
+    }
+}
+
+fn stall_now(state: &mut MonitorState, rx: u64, tx: u64, age: Option<Duration>) -> bool {
+    if state.rx != rx {
+        state.rx = rx;
+        state.tx = tx;
+        state.flat_since = Some(Instant::now());
+        return false;
+    }
+    let tx_delta = tx.saturating_sub(state.tx);
+    state.tx = tx;
+    let started = *state.flat_since.get_or_insert_with(Instant::now);
+    crate::reconnect::handshake_lost(started.elapsed(), 0, tx_delta, age)
+}
+
+struct Snap {
+    adapter: Option<bool>,
+    up: Option<bool>,
+    rx: u64,
+    tx: u64,
+    handshake_age: Option<Duration>,
+}
+
+fn tunnel_snapshot() -> Snap {
+    let session = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(adapter) = session.adapter.as_ref() else {
+        return Snap {
+            adapter: None,
+            up: None,
+            rx: 0,
+            tx: 0,
+            handshake_age: None,
+        };
+    };
+    let up = adapter.is_up();
+    let (rx, tx, handshake) = adapter.counters().unwrap_or((0, 0, 0));
+    let unix = wg::filetime_to_unix(handshake);
+    let age = if unix > 0 {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        Some(Duration::from_secs(now.saturating_sub(unix).max(0) as u64))
+    } else {
+        None
+    };
+    Snap {
+        adapter: Some(true),
+        up: Some(up),
+        rx,
+        tx,
+        handshake_age: age,
+    }
+}
+
+fn kick(refresh: bool) {
+    let mut session = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(saved) = session.saved.clone() else {
+        return;
+    };
+    if kick_locked(&mut session, &saved, refresh).is_err() {
+        log_line("reconnect", "kick_failed");
+    }
+}
+
+fn kick_locked(session: &mut Session, saved: &SavedConnect, refresh: bool) -> Result<(), &'static str> {
+    let Some(adapter) = session.adapter.as_ref() else {
+        return Err(CODE_TUNNEL_FAILED);
+    };
+    if !adapter.is_up() {
+        adapter.set_up().map_err(|_| CODE_TUNNEL_FAILED)?;
+    }
+    let endpoint = resolve_endpoint(&saved.config.endpoint).map_err(|_| CODE_TUNNEL_FAILED)?;
+    if refresh {
+        if let Some(pin) = session.endpoint_pin.take() {
+            net::unpin_endpoint(&pin);
+        }
+        match net::pin_endpoint(endpoint.0, session.luid) {
+            Ok(pin) => session.endpoint_pin = pin,
+            Err(code) => log_code("endpoint_route", code),
+        }
+    }
+    let private_key = decode_key(&saved.config.private_key).map_err(|_| CODE_INVALID_CONFIG)?;
+    let peer_key = decode_key(&saved.config.server_public_key).map_err(|_| CODE_INVALID_CONFIG)?;
+    let allowed = ipv4_routes(&saved.config.allowed_ips);
+    let blob = wg::direct_config(private_key, peer_key, Some(endpoint), 0, 25, &allowed);
+    adapter.set_config(&blob).map_err(|_| CODE_TUNNEL_FAILED)?;
+    log_line("reconnect", "kick");
+    Ok(())
+}
+
+fn soft_reconnect(session: &mut Session, id: u64, replacement: Option<WgTunnelConfig>) -> Response {
+    if let Some(config) = replacement {
+        if !config.stealth_endpoint.trim().is_empty() {
+            return Response::fail(id, CODE_NOT_IN_THIS_BUILD);
+        }
+        let Some(saved) = session.saved.as_mut() else {
+            return Response::fail(id, CODE_TUNNEL_FAILED);
+        };
+        saved.config = config;
+        let saved = saved.clone();
+        persist_session(&saved);
+    }
+    let Some(saved) = session.saved.clone() else {
+        return Response::fail(id, CODE_TUNNEL_FAILED);
+    };
+    show(crate::reconnect::on_link_up(), false);
+    match kick_locked(session, &saved, true) {
+        Ok(()) => status_response(id, session),
+        Err(code) => {
+            log_line("reconnect", code);
+            Response::fail(id, code)
+        }
+    }
+}
+
+fn resume_saved() {
+    let Some(saved) = load_session() else {
+        return;
+    };
+    let mut request = Request::new(0, veritas_ipc::OP_CONNECT);
+    request.config = Some(saved.config);
+    request.full_lock = Some(saved.full_lock);
+    request.permit_web = Some(saved.permit_web);
+    request.management_v4 = saved.management_v4;
+    request.management_v6 = saved.management_v6;
+    let mut session = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    if session.adapter.is_some() {
+        return;
+    }
+    let _ = connect(&request, &mut session);
+}
+
+struct Sim {
+    underlay: Option<String>,
+    power: Option<String>,
+    stall: bool,
+}
+
+fn read_sim() -> Sim {
+    let mut sim = Sim {
+        underlay: None,
+        power: None,
+        stall: false,
+    };
+    let Some(dir) = program_data() else {
+        return sim;
+    };
+    let Ok(text) = fs::read_to_string(dir.join("sim.txt")) else {
+        return sim;
+    };
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match key.trim() {
+            "underlay" => sim.underlay = Some(value.trim().to_string()),
+            "power" => sim.power = Some(value.trim().to_string()),
+            "stall" => sim.stall = value.trim() == "1",
+            _ => {}
+        }
+    }
+    sim
+}
+
+fn current_fingerprint() -> String {
+    let sim = read_sim();
+    if let Some(underlay) = sim.underlay {
+        if !underlay.is_empty() {
+            return format!("sim:{underlay}");
+        }
+    }
+    match net::default_gateway() {
+        Some(gateway) => format!("gw:{gateway}"),
+        None => "gw:".to_string(),
+    }
+}
+
+fn take_power(sim: &Sim, state: &mut MonitorState) -> Option<&'static str> {
+    let mut pending = POWER.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(kind) = pending.take() {
+        state.last_power = kind.to_string();
+        return Some(kind);
+    }
+    let Some(power) = sim.power.as_deref() else {
+        return None;
+    };
+    if power == state.last_power {
+        return None;
+    }
+    state.last_power = power.to_string();
+    match power {
+        "sleep" => Some("sleep"),
+        "resume" => Some("resume"),
+        _ => None,
+    }
+}
+
+fn persist_session(saved: &SavedConnect) {
+    let Ok(plain) = serde_json::to_vec(saved) else {
+        return;
+    };
+    let Ok(sealed) = protect(&plain) else {
+        log_line("session", "protect_failed");
+        return;
+    };
+    let Some(dir) = program_data() else {
+        return;
+    };
+    let _ = fs::create_dir_all(&dir);
+    if fs::write(dir.join("session.bin"), sealed).is_err() {
+        log_line("session", "write_failed");
+    }
+}
+
+fn load_session() -> Option<SavedConnect> {
+    let dir = program_data()?;
+    let sealed = fs::read(dir.join("session.bin")).ok()?;
+    let plain = unprotect(&sealed).ok()?;
+    serde_json::from_slice(&plain).ok()
+}
+
+fn session_blob_exists() -> bool {
+    program_data().is_some_and(|dir| dir.join("session.bin").is_file())
+}
+
+fn forget_session() {
+    if let Some(dir) = program_data() {
+        let _ = fs::remove_file(dir.join("session.bin"));
+    }
+}
+
+fn protect(plain: &[u8]) -> Result<Vec<u8>, u32> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPT_INTEGER_BLOB};
+    let mut input = CRYPT_INTEGER_BLOB {
+        cbData: plain.len() as u32,
+        pbData: plain.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+    let ok = unsafe {
+        CryptProtectData(
+            &mut input,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            CRYPTPROTECT_LOCAL_MACHINE,
+            &mut output,
+        )
+    };
+    if ok == 0 {
+        return Err(unsafe { windows_sys::Win32::Foundation::GetLastError() });
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
+    unsafe { LocalFree(output.pbData as _) };
+    Ok(bytes)
+}
+
+fn unprotect(sealed: &[u8]) -> Result<Vec<u8>, u32> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+    let mut input = CRYPT_INTEGER_BLOB {
+        cbData: sealed.len() as u32,
+        pbData: sealed.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+    let ok = unsafe {
+        CryptUnprotectData(
+            &mut input,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            &mut output,
+        )
+    };
+    if ok == 0 {
+        return Err(unsafe { windows_sys::Win32::Foundation::GetLastError() });
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
+    unsafe { LocalFree(output.pbData as _) };
+    Ok(bytes)
 }

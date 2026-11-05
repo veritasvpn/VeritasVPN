@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use veritas_core::{generate_keypair, WgTunnelConfig};
-use veritas_ipc::{Request, OP_CONNECT, OP_DISCONNECT, OP_HELLO, OP_STATS};
+use veritas_ipc::{Request, TunnelStatus, OP_CONNECT, OP_DISCONNECT, OP_HELLO, OP_SOFT_RECONNECT, OP_STATS};
 use veritas_service::{ensure_api, management_snapshot, transact, TestPeer};
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ACCESS_DENIED, GENERIC_READ, GENERIC_WRITE,
@@ -159,6 +159,8 @@ impl Drop for Cleanup {
             Duration::from_secs(10),
         );
         quiet_bounded("net", &["user", "veritas-other", "/delete"], Duration::from_secs(10));
+        let _ = fs::remove_file(r"C:\ProgramData\VeritasVPN\sim.txt");
+        let _ = fs::remove_file(r"C:\ProgramData\VeritasVPN\session.bin");
     }
 }
 
@@ -431,6 +433,109 @@ fn leak_body(dll: String, service: PathBuf) {
         );
     }
     eprintln!("LEAK_REPAIRED");
+}
+
+#[test]
+fn reconnect_harness_keeps_the_lock() {
+    let dll = std::env::var("VERITAS_WIREGUARD_DLL").expect("VERITAS_WIREGUARD_DLL");
+    let service = PathBuf::from(
+        option_env!("CARGO_BIN_EXE_veritas_service").unwrap_or("veritas-service.exe"),
+    );
+    let _guard = Cleanup {
+        service: service.clone(),
+    };
+    let service = service.clone();
+    finish_within(Duration::from_secs(150), move || reconnect_body(dll, service));
+}
+
+fn reconnect_body(dll: String, service: PathBuf) {
+    let client = std::env::current_exe().expect("test exe");
+    fs::copy(&dll, service.parent().unwrap().join("wireguard.dll")).expect("copy dll");
+    run(
+        &service,
+        ["install", "--client", &client.display().to_string(), "--dll", &dll],
+    );
+    run(&service, ["start"]);
+    wait_until_hello();
+    let doc = outside_oracle();
+    let _peer = bring_up_tunnel(&dll);
+    assert_tunnel_carries();
+    assert_blocked(doc, "lock before reconnect");
+
+    let api = ensure_api(std::path::Path::new(&dll)).expect("dll");
+    let adapter = veritas_service::AdapterHandle::open(api, "VeritasVPN").expect("adapter");
+    adapter.set_down().expect("adapter down");
+    wait_status("link down", |status| status.reconnecting);
+    assert_blocked(doc, "lock while the link is down");
+    eprintln!("RECONNECT_LINK_DOWN");
+    let kicked = transact(&Request::new(11, OP_SOFT_RECONNECT), 15_000).expect("soft");
+    assert!(kicked.ok, "soft code {}", kicked.code);
+    wait_status("link up", |status| status.up && !status.reconnecting);
+    assert_tunnel_carries();
+    assert_blocked(doc, "lock after the link returned");
+    eprintln!("RECONNECT_LINK_UP");
+
+    write_sim("underlay=198.51.100.8\n");
+    wait_status("network change", |status| status.reconnecting);
+    assert_blocked(doc, "lock during a network change");
+    eprintln!("RECONNECT_NETWORK");
+    let _ = fs::remove_file(r"C:\ProgramData\VeritasVPN\sim.txt");
+    wait_status("network settled", |status| status.up && !status.reconnecting);
+
+    write_sim("power=sleep\n");
+    wait_status("sleep", |status| status.reconnecting);
+    assert_blocked(doc, "lock during sleep");
+    eprintln!("RECONNECT_SLEEP");
+    write_sim("power=resume\n");
+    wait_status("resume", |status| status.up);
+    assert_tunnel_carries();
+    assert_blocked(doc, "lock after resume");
+    eprintln!("RECONNECT_RESUME");
+    wait_status("resume settled", |status| status.up && !status.reconnecting);
+
+    write_sim("stall=1\n");
+    wait_status("lost handshake", |status| status.stalled && status.reconnecting);
+    assert_blocked(doc, "lock during a lost handshake");
+    eprintln!("RECONNECT_STALL");
+    let _ = fs::remove_file(r"C:\ProgramData\VeritasVPN\sim.txt");
+
+    run(&service, ["stop"]);
+    assert_blocked(doc, "lock after the service stopped");
+    run(&service, ["start"]);
+    wait_until_hello();
+    wait_status("boot", |status| status.up);
+    assert_tunnel_carries();
+    assert_blocked(doc, "lock after boot resume");
+    eprintln!("RECONNECT_BOOT");
+
+    let down = transact(&Request::new(12, OP_DISCONNECT), 15_000).expect("disconnect");
+    assert!(down.ok, "disconnect code {}", down.code);
+    assert!(
+        probe(doc).as_ref().err().is_none_or(|err| !is_denied(err)),
+        "disconnect left the lock engaged"
+    );
+    eprintln!("RECONNECT_DISCONNECT");
+}
+
+fn write_sim(body: &str) {
+    fs::write(r"C:\ProgramData\VeritasVPN\sim.txt", body).expect("sim");
+}
+
+fn wait_status(label: &str, pred: impl Fn(&TunnelStatus) -> bool) {
+    let start = Instant::now();
+    loop {
+        if start.elapsed() > Duration::from_secs(12) {
+            panic!("{label} exceeded 12s");
+        }
+        if let Ok(response) = transact(&Request::new(9, OP_STATS), 2_000) {
+            if let Some(status) = response.status.as_ref() {
+                if pred(status) {
+                    return;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(400));
+    }
 }
 
 fn bring_up_tunnel(dll: &str) -> TestPeer {
