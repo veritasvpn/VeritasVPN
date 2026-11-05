@@ -161,6 +161,7 @@ impl Drop for Cleanup {
         quiet_bounded("net", &["user", "veritas-other", "/delete"], Duration::from_secs(10));
         let _ = fs::remove_file(r"C:\ProgramData\VeritasVPN\sim.txt");
         let _ = fs::remove_file(r"C:\ProgramData\VeritasVPN\session.bin");
+        quiet_bounded("taskkill", &["/F", "/IM", "wstunnel.exe"], Duration::from_secs(8));
     }
 }
 
@@ -233,6 +234,34 @@ fn assert_other_user_denied() {
         CloseHandle(token);
     }
     assert_eq!(err, ERROR_ACCESS_DENIED, "other user was not rejected ({err})");
+}
+
+fn wait_carry() {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(12) {
+        let before = transact(&Request::new(7, OP_STATS), 2_000)
+            .ok()
+            .and_then(|response| response.status)
+            .map(|status| status.tx)
+            .unwrap_or(0);
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").expect("udp");
+        socket.set_write_timeout(Some(Duration::from_secs(2))).ok();
+        let _ = socket.send_to(b"veritas", "10.66.0.50:9");
+        thread::sleep(Duration::from_millis(400));
+        let after = transact(&Request::new(8, OP_STATS), 2_000)
+            .ok()
+            .and_then(|response| response.status)
+            .map(|status| status.tx)
+            .unwrap_or(0);
+        if after > before {
+            eprintln!("TUNNEL_CARRY tx {before} -> {after}");
+            return;
+        }
+    }
+    panic!(
+        "tunnel did not carry a packet within 12s\n{}",
+        fs::read_to_string(r"C:\ProgramData\VeritasVPN\stealth.log").unwrap_or_default()
+    );
 }
 
 fn assert_tunnel_carries() {
@@ -536,6 +565,156 @@ fn wait_status(label: &str, pred: impl Fn(&TunnelStatus) -> bool) {
         }
         thread::sleep(Duration::from_millis(400));
     }
+}
+
+#[test]
+fn stealth_harness_survives_the_lock() {
+    let dll = std::env::var("VERITAS_WIREGUARD_DLL").expect("VERITAS_WIREGUARD_DLL");
+    let wstunnel = std::env::var("VERITAS_WSTUNNEL").expect("VERITAS_WSTUNNEL");
+    let service = PathBuf::from(
+        option_env!("CARGO_BIN_EXE_veritas_service").unwrap_or("veritas-service.exe"),
+    );
+    let _guard = Cleanup {
+        service: service.clone(),
+    };
+    let service = service.clone();
+    finish_within(Duration::from_secs(150), move || stealth_body(dll, wstunnel, service));
+}
+
+fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
+    let client = std::env::current_exe().expect("test exe");
+    fs::copy(&dll, service.parent().unwrap().join("wireguard.dll")).expect("copy dll");
+    fs::copy(&wstunnel, service.parent().unwrap().join("wstunnel.exe")).expect("copy helper");
+    run(
+        &service,
+        ["install", "--client", &client.display().to_string(), "--dll", &dll],
+    );
+    let helper_dir = PathBuf::from(r"C:\ProgramData\VeritasVPN");
+    let _ = fs::create_dir_all(&helper_dir);
+    let helper_copy = helper_dir.join("wstunnel.exe");
+    fs::copy(&wstunnel, &helper_copy).expect("copy helper into program data");
+    fs::write(helper_dir.join("wstunnel.path"), helper_copy.display().to_string()).expect("helper path");
+    run(&service, ["start"]);
+    wait_until_hello();
+    let port = free_tcp();
+    let server = Command::new(&wstunnel)
+        .args([
+            "server",
+            "--restrict-http-upgrade-path-prefix",
+            "/veritas",
+            &format!("ws://127.0.0.1:{port}"),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("stealth server");
+    let _server = ServerGuard(server);
+    wait_tcp(port);
+    let doc = outside_oracle();
+    let _peer = bring_up_stealth(&dll, &format!("127.0.0.1:{port}"));
+    wait_carry();
+    assert_blocked(doc, "stealth lock");
+    eprintln!("STEALTH_UP");
+    eprintln!("STEALTH_NO_LEAK");
+
+    write_sim("underlay=198.51.100.8\n");
+    wait_status("stealth network", |status| status.reconnecting);
+    assert_blocked(doc, "stealth lock during a network change");
+    wait_carry();
+    eprintln!("STEALTH_NETWORK");
+    let _ = fs::remove_file(r"C:\ProgramData\VeritasVPN\sim.txt");
+
+    let _ = output_bounded(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-Command",
+            "Get-CimInstance Win32_Process -Filter \"Name = 'wstunnel.exe'\" | Where-Object { $_.CommandLine -like '*41820*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }",
+        ],
+        Duration::from_secs(12),
+    );
+    wait_carry();
+    assert_blocked(doc, "stealth lock after the helper recovered");
+    eprintln!("STEALTH_RECOVER");
+
+    let down = transact(&Request::new(13, OP_DISCONNECT), 15_000).expect("disconnect");
+    assert!(down.ok, "disconnect code {}", down.code);
+    assert!(
+        probe(doc).as_ref().err().is_none_or(|err| !is_denied(err)),
+        "disconnect left the lock engaged"
+    );
+    eprintln!("STEALTH_DISCONNECT");
+}
+
+struct ServerGuard(std::process::Child);
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn free_tcp() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port");
+    listener.local_addr().expect("port").port()
+}
+
+fn wait_tcp(port: u16) {
+    let start = Instant::now();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    while start.elapsed() < Duration::from_secs(8) {
+        if probe(addr).is_ok() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    panic!("stealth server did not listen");
+}
+
+fn bring_up_stealth(dll: &str, remote: &str) -> TestPeer {
+    let server_keys = generate_keypair();
+    let client_keys = generate_keypair();
+    let api = ensure_api(std::path::Path::new(dll)).expect("load dll");
+    let peer = TestPeer::up(
+        api,
+        "VeritasTestSrv",
+        decode(&server_keys.private_key),
+        decode(&client_keys.public_key),
+        51820,
+        "10.66.0.1".parse().unwrap(),
+        24,
+        &[("10.66.0.2".parse().unwrap(), 32)],
+    )
+    .expect("server peer");
+    let host = primary_ipv4();
+    let config = WgTunnelConfig {
+        private_key: client_keys.private_key,
+        address: "10.66.0.2/32".into(),
+        dns: "10.66.0.1".into(),
+        server_public_key: server_keys.public_key,
+        endpoint: format!("{host}:51820"),
+        allowed_ips: vec!["10.66.0.1/32".into(), "10.66.0.50/32".into()],
+        peer_id: "peer-stealth".into(),
+        preshared_key: String::new(),
+        stealth_endpoint: remote.into(),
+        stealth_path_prefix: "/veritas".into(),
+        endpoint_lan: String::new(),
+        endpoint_wan: String::new(),
+    };
+    let mut request = Request::new(2, OP_CONNECT);
+    request.config = Some(config);
+    request.full_lock = Some(true);
+    attach_management(&mut request);
+    let connected = transact(&request, 20_000).expect("connect");
+    assert!(
+        connected.ok,
+        "connect code {} log {} helper {}",
+        connected.code,
+        fs::read_to_string(r"C:\ProgramData\VeritasVPN\service.log").unwrap_or_default(),
+        fs::read_to_string(r"C:\ProgramData\VeritasVPN\stealth.log").unwrap_or_default()
+    );
+    peer
 }
 
 fn bring_up_tunnel(dll: &str) -> TestPeer {

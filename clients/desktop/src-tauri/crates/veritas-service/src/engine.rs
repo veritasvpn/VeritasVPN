@@ -32,6 +32,7 @@ static SESSION: Mutex<Session> = Mutex::new(Session {
     local_network: false,
     stealth_requested: false,
     saved: None,
+    helper: None,
 });
 
 struct Session {
@@ -42,6 +43,7 @@ struct Session {
     local_network: bool,
     stealth_requested: bool,
     saved: Option<SavedConnect>,
+    helper: Option<crate::stealth::Helper>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -90,7 +92,10 @@ pub fn handle(request: &Request, caller_ok: bool) -> Response {
             let mut response = Response::ok(request.id);
             response.diagnostics = Some(Diagnostics {
                 service: true,
-                stealth: false,
+                stealth: session
+                    .saved
+                    .as_ref()
+                    .is_some_and(|saved| !saved.config.stealth_endpoint.trim().is_empty()),
                 kill_switch: crate::wfp::is_armed(),
                 local_network: session.local_network,
             });
@@ -132,10 +137,33 @@ fn connect(request: &Request, session: &mut Session) -> Response {
         log_line("connect", CODE_INVALID_CONFIG);
         return Response::fail(request.id, CODE_INVALID_CONFIG);
     }
-    if !config.stealth_endpoint.trim().is_empty() {
-        log_line("connect", CODE_NOT_IN_THIS_BUILD);
-        return Response::fail(request.id, CODE_NOT_IN_THIS_BUILD);
+    let using_stealth = !config.stealth_endpoint.trim().is_empty();
+    if using_stealth && !crate::stealth::prefix_ok(config.stealth_path_prefix.trim()) && !config.stealth_path_prefix.trim().is_empty() {
+        log_line("stealth", "prefix");
+        return Response::fail(request.id, CODE_INVALID_CONFIG);
     }
+    let helper_path = if using_stealth {
+        match crate::stealth::locate() {
+            Some(path) => Some(path),
+            None => {
+                log_line("stealth", "missing");
+                return Response::fail(request.id, CODE_TUNNEL_FAILED);
+            }
+        }
+    } else {
+        None
+    };
+    let mut helper = if let Some(path) = helper_path.as_ref() {
+        match crate::stealth::start(path, config.stealth_endpoint.trim(), config.stealth_path_prefix.trim()) {
+            Ok(helper) => Some(helper),
+            Err(code) => {
+                log_code("stealth", code);
+                return Response::fail(request.id, CODE_TUNNEL_FAILED);
+            }
+        }
+    } else {
+        None
+    };
     match bring_up(config) {
         Ok((adapter, luid, routes, pin)) => {
             let mut local_network = crate::wfp_plan::local_network_from_allowed(&config.allowed_ips);
@@ -144,14 +172,21 @@ fn connect(request: &Request, session: &mut Session) -> Response {
             }
             let plan = crate::wfp_plan::LockPlan {
                 tunnel_luid: luid,
-                wireguard: crate::wfp::endpoints_from(config),
-                stealth: None,
+                wireguard: if using_stealth {
+                    vec![crate::wfp_plan::Endpoint {
+                        addr: Ipv4Addr::LOCALHOST,
+                        port: 41820,
+                    }]
+                } else {
+                    crate::wfp::endpoints_from(config)
+                },
+                stealth: stealth_permit(config),
                 local_network,
                 management_v4: parse_v4_list(&request.management_v4),
                 management_v6: parse_v6_list(&request.management_v6),
                 permit_web: request.permit_web == Some(true),
             };
-            if let Err(code) = crate::wfp::arm(&plan) {
+            if let Err(code) = crate::wfp::arm(&plan, helper_path.as_deref()) {
                 log_code("lock", code);
                 for (network, len) in &routes {
                     net::delete_route(luid, *network, *len);
@@ -160,6 +195,7 @@ fn connect(request: &Request, session: &mut Session) -> Response {
                     net::unpin_endpoint(pin);
                 }
                 let _ = adapter.set_down();
+                helper.take();
                 return Response::fail(request.id, veritas_ipc::CODE_LOCK_FAILED);
             }
             if let Ok(dns) = config.dns.trim().parse::<Ipv4Addr>() {
@@ -170,6 +206,7 @@ fn connect(request: &Request, session: &mut Session) -> Response {
             session.routes = routes;
             session.endpoint_pin = pin;
             session.local_network = local_network;
+            session.helper = helper.take();
             session.saved = Some(SavedConnect {
                 config: config.clone(),
                 full_lock: request.full_lock == Some(true),
@@ -185,6 +222,7 @@ fn connect(request: &Request, session: &mut Session) -> Response {
             status_response(request.id, session)
         }
         Err(code) => {
+            helper.take();
             log_line("connect", code);
             Response::fail(request.id, code)
         }
@@ -197,7 +235,19 @@ fn bring_up(
     let api = load_api().map_err(|_| CODE_TUNNEL_FAILED)?;
     let private_key = decode_key(&config.private_key).map_err(|_| CODE_INVALID_CONFIG)?;
     let peer_key = decode_key(&config.server_public_key).map_err(|_| CODE_INVALID_CONFIG)?;
-    let endpoint = resolve_endpoint(&config.endpoint).map_err(|_| CODE_INVALID_CONFIG)?;
+    let using_stealth = !config.stealth_endpoint.trim().is_empty();
+    let endpoint = if using_stealth {
+        (Ipv4Addr::LOCALHOST, 41820)
+    } else {
+        resolve_endpoint(&config.endpoint).map_err(|_| CODE_INVALID_CONFIG)?
+    };
+    let pin_ip = if using_stealth {
+        resolve_endpoint(config.stealth_endpoint.trim())
+            .map(|(addr, _)| addr)
+            .map_err(|_| CODE_INVALID_CONFIG)?
+    } else {
+        endpoint.0
+    };
     let (address, prefix) = parse_cidr(&config.address).map_err(|_| CODE_INVALID_CONFIG)?;
     let dns = config
         .dns
@@ -239,8 +289,7 @@ fn bring_up(
         let _ = adapter.set_down();
         return Err(CODE_TUNNEL_FAILED);
     }
-    let endpoint_addr = endpoint.0;
-    let pin = match net::pin_endpoint(endpoint_addr, luid) {
+    let pin = match net::pin_endpoint(pin_ip, luid) {
         Ok(pin) => pin,
         Err(code) => {
             log_line("endpoint_route", &format!("win32={code}"));
@@ -265,6 +314,7 @@ fn bring_up(
 }
 
 fn release_tunnel(session: &mut Session) {
+    session.helper.take();
     if let Some(pin) = session.endpoint_pin.take() {
         net::unpin_endpoint(&pin);
     }
@@ -576,6 +626,16 @@ fn tick() {
         kick(true);
         return;
     }
+    if snapshot.helper_down {
+        state.reconnecting = true;
+        let due = kick_due(&mut state);
+        drop(state);
+        show(crate::reconnect::on_link_up(), false);
+        if due {
+            kick(true);
+        }
+        return;
+    }
     let lost = force_stall || stall_now(&mut state, snapshot.rx, snapshot.tx, snapshot.handshake_age);
     if lost {
         let due = kick_due(&mut state);
@@ -616,6 +676,7 @@ struct Snap {
     rx: u64,
     tx: u64,
     handshake_age: Option<Duration>,
+    helper_down: bool,
 }
 
 fn tunnel_snapshot() -> Snap {
@@ -627,6 +688,7 @@ fn tunnel_snapshot() -> Snap {
             rx: 0,
             tx: 0,
             handshake_age: None,
+            helper_down: false,
         };
     };
     let up = adapter.is_up();
@@ -638,13 +700,28 @@ fn tunnel_snapshot() -> Snap {
     } else {
         None
     };
+    let stealth = session
+        .saved
+        .as_ref()
+        .is_some_and(|saved| !saved.config.stealth_endpoint.trim().is_empty());
+    let helper_down = stealth && session.helper.as_ref().map(|helper| !helper.alive()).unwrap_or(true);
     Snap {
         adapter: Some(true),
         up: Some(up),
         rx,
         tx,
         handshake_age: age,
+        helper_down,
     }
+}
+
+fn stealth_permit(config: &WgTunnelConfig) -> Option<crate::wfp_plan::Endpoint> {
+    let remote = config.stealth_endpoint.trim();
+    if remote.is_empty() {
+        return None;
+    }
+    let (addr, port) = resolve_endpoint(remote).ok()?;
+    Some(crate::wfp_plan::Endpoint { addr, port })
 }
 
 fn kick(refresh: bool) {
@@ -664,12 +741,39 @@ fn kick_locked(session: &mut Session, saved: &SavedConnect, refresh: bool) -> Re
     if !adapter.is_up() {
         adapter.set_up().map_err(|_| CODE_TUNNEL_FAILED)?;
     }
-    let endpoint = resolve_endpoint(&saved.config.endpoint).map_err(|_| CODE_TUNNEL_FAILED)?;
+    let using_stealth = !saved.config.stealth_endpoint.trim().is_empty();
+    if using_stealth {
+        let dead = session.helper.as_ref().map(|helper| !helper.alive()).unwrap_or(true);
+        if dead {
+            if let Some(path) = crate::stealth::locate() {
+                match crate::stealth::start(
+                    &path,
+                    saved.config.stealth_endpoint.trim(),
+                    saved.config.stealth_path_prefix.trim(),
+                ) {
+                    Ok(helper) => session.helper = Some(helper),
+                    Err(code) => log_code("stealth", code),
+                }
+            }
+        }
+    }
+    let endpoint = if using_stealth {
+        (Ipv4Addr::LOCALHOST, 41820)
+    } else {
+        resolve_endpoint(&saved.config.endpoint).map_err(|_| CODE_TUNNEL_FAILED)?
+    };
+    let pin_ip = if using_stealth {
+        resolve_endpoint(saved.config.stealth_endpoint.trim())
+            .map(|(addr, _)| addr)
+            .unwrap_or(endpoint.0)
+    } else {
+        endpoint.0
+    };
     if refresh {
         if let Some(pin) = session.endpoint_pin.take() {
             net::unpin_endpoint(&pin);
         }
-        match net::pin_endpoint(endpoint.0, session.luid) {
+        match net::pin_endpoint(pin_ip, session.luid) {
             Ok(pin) => session.endpoint_pin = pin,
             Err(code) => log_code("endpoint_route", code),
         }
@@ -685,9 +789,6 @@ fn kick_locked(session: &mut Session, saved: &SavedConnect, refresh: bool) -> Re
 
 fn soft_reconnect(session: &mut Session, id: u64, replacement: Option<WgTunnelConfig>) -> Response {
     if let Some(config) = replacement {
-        if !config.stealth_endpoint.trim().is_empty() {
-            return Response::fail(id, CODE_NOT_IN_THIS_BUILD);
-        }
         let Some(saved) = session.saved.as_mut() else {
             return Response::fail(id, CODE_TUNNEL_FAILED);
         };
