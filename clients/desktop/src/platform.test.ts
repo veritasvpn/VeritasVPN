@@ -16,10 +16,10 @@ describe("platform capabilities", () => {
     });
   });
 
-  it("leaves the Windows shell without a tunnel until the service exists", () => {
+  it("enables Direct mode on Windows and leaves Stealth and the kill switch off", () => {
     expect(platformCapabilities(WINDOWS_UA)).toEqual({
       os: "windows",
-      tunnel: false,
+      tunnel: true,
       stealth: false,
       killSwitch: false,
     });

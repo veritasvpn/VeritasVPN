@@ -4,7 +4,7 @@ export type DesktopOs = "linux" | "windows" | "macos" | "other";
 
 export type PlatformCapabilities = {
   os: DesktopOs;
-  /** A real tunnel engine is wired up. Windows stays false until the service phase. */
+  /** Direct-mode tunnel. Stealth and the kill switch are separate. */
   tunnel: boolean;
   /** Stealth (wstunnel) can be chosen. */
   stealth: boolean;
@@ -26,6 +26,9 @@ export function platformCapabilities(userAgent?: string): PlatformCapabilities {
   const os = desktopOs(ua);
   if (os === "linux") {
     return { os, tunnel: true, stealth: true, killSwitch: true };
+  }
+  if (os === "windows") {
+    return { os, tunnel: true, stealth: false, killSwitch: false };
   }
   return { os, tunnel: false, stealth: false, killSwitch: false };
 }

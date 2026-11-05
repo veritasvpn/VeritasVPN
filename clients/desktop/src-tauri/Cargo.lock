@@ -4769,6 +4769,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "veritas-ipc"
+version = "0.2.99"
+dependencies = [
+ "serde",
+ "serde_json",
+ "veritas-core",
+]
+
+[[package]]
+name = "veritas-service"
+version = "0.2.99"
+dependencies = [
+ "base64 0.22.1",
+ "serde_json",
+ "veritas-core",
+ "veritas-ipc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "veritasvpn-desktop"
 version = "0.2.99"
 dependencies = [
@@ -4783,6 +4803,8 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "veritas-core",
+ "veritas-ipc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

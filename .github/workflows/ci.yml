@@ -288,6 +288,12 @@ jobs:
       - name: Test Rust (Windows compile of the shell)
         run: cargo test --locked --workspace --lib
         working-directory: clients/desktop/src-tauri
+      - name: Prove the Direct-mode service
+        shell: pwsh
+        run: |
+          ./scripts/bundle-wireguard-nt.ps1 | Out-Null
+          $env:VERITAS_WIREGUARD_DLL = (Get-Content -Raw .\src-tauri\target\wireguard-nt\dll.path).Trim()
+          cargo test --manifest-path src-tauri/Cargo.toml --locked -p veritas-service --test direct_mode -- --test-threads=1 --nocapture
       - name: Build unsigned NSIS installer
         run: npx tauri build --bundles nsis
       - name: Window opens on the real UI

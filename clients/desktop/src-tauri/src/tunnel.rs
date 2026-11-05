@@ -1,8 +1,8 @@
 //! Platform boundary for the tunnel engine.
 //!
 //! Linux and macOS call the existing bring-up functions unchanged. Windows
-//! returns the same "unavailable" result the UI already shows, until the
-//! service in a later phase owns the adapter.
+//! sends Direct-mode commands to the background service. Stealth and the
+//! kill switch stay off until those phases.
 
 use tauri::AppHandle;
 
@@ -58,19 +58,19 @@ struct WindowsTunnel;
 #[cfg(target_os = "windows")]
 impl TunnelBackend for WindowsTunnel {
     fn available(&self, _app: &AppHandle) -> bool {
-        false
+        crate::win_pipe::available()
     }
 
-    fn bring_up(&self, _app: &AppHandle, _config: &WgTunnelConfig) -> Result<String, String> {
-        Err("WireGuard is unavailable in this build.".into())
+    fn bring_up(&self, _app: &AppHandle, config: &WgTunnelConfig) -> Result<String, String> {
+        crate::win_pipe::connect(config)
     }
 
     fn bring_down(&self, _app: &AppHandle) -> Result<String, String> {
-        Ok("WireGuard is not running.".into())
+        crate::win_pipe::disconnect()
     }
 
     fn stats(&self) -> WgTransferStats {
-        empty_stats()
+        crate::win_pipe::stats()
     }
 }
 
