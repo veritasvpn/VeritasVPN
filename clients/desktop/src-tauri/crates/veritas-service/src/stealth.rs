@@ -91,6 +91,13 @@ pub fn start(exe: &Path, remote: &str, prefix: &str) -> Result<Helper, u32> {
     let wide = wide(&command);
     let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
     si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let log = helper_log();
+    if !log.is_null() {
+        si.dwFlags = 0x00000100;
+        si.hStdInput = log;
+        si.hStdOutput = log;
+        si.hStdError = log;
+    }
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
     let ok = unsafe {
         CreateProcessW(
@@ -98,7 +105,7 @@ pub fn start(exe: &Path, remote: &str, prefix: &str) -> Result<Helper, u32> {
             wide.as_ptr() as *mut _,
             ptr::null(),
             ptr::null(),
-            0,
+            if log.is_null() { 0 } else { 1 },
             CREATE_NO_WINDOW | CREATE_SUSPENDED,
             ptr::null(),
             ptr::null(),
@@ -106,6 +113,9 @@ pub fn start(exe: &Path, remote: &str, prefix: &str) -> Result<Helper, u32> {
             &mut pi,
         )
     };
+    if !log.is_null() {
+        unsafe { CloseHandle(log) };
+    }
     if ok == 0 {
         return Err(unsafe { GetLastError() });
     }
@@ -139,11 +149,60 @@ pub fn start(exe: &Path, remote: &str, prefix: &str) -> Result<Helper, u32> {
         return Err(err);
     }
     unsafe { ResumeThread(pi.hThread) };
-    Ok(Helper {
+    thread_sleep();
+    let helper = Helper {
         job,
         process: pi.hProcess,
         thread: pi.hThread,
-    })
+    };
+    if !helper.alive() {
+        return Err(helper_exit(&helper));
+    }
+    Ok(helper)
+}
+
+fn helper_exit(helper: &Helper) -> u32 {
+    let mut code = 1u32;
+    unsafe { windows_sys::Win32::System::Threading::GetExitCodeProcess(helper.process, &mut code) };
+    code
+}
+
+fn helper_log() -> windows_sys::Win32::Foundation::HANDLE {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
+    };
+    let Some(dir) = crate::engine::program_data() else {
+        return ptr::null_mut();
+    };
+    let _ = fs::create_dir_all(&dir);
+    let path = wide(&dir.join("stealth.log").display().to_string());
+    let mut security = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: ptr::null_mut(),
+        bInheritHandle: 1,
+    };
+    let handle = unsafe {
+        CreateFileW(
+            path.as_ptr(),
+            0x4000_0000,
+            FILE_SHARE_READ,
+            &mut security,
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        ptr::null_mut()
+    } else {
+        handle
+    }
+}
+
+fn thread_sleep() {
+    std::thread::sleep(std::time::Duration::from_millis(400));
 }
 
 pub fn prefix_ok(prefix: &str) -> bool {

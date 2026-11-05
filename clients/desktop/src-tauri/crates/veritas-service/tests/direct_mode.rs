@@ -258,7 +258,10 @@ fn wait_carry() {
             return;
         }
     }
-    panic!("tunnel did not carry a packet within 12s");
+    panic!(
+        "tunnel did not carry a packet within 12s\n{}",
+        fs::read_to_string(r"C:\ProgramData\VeritasVPN\stealth.log").unwrap_or_default()
+    );
 }
 
 fn assert_tunnel_carries() {
@@ -609,7 +612,7 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
     wait_tcp(port);
     let doc = outside_oracle();
     let _peer = bring_up_stealth(&dll, &format!("127.0.0.1:{port}"));
-    assert_tunnel_carries();
+    wait_carry();
     assert_blocked(doc, "stealth lock");
     eprintln!("STEALTH_UP");
     eprintln!("STEALTH_NO_LEAK");
@@ -706,9 +709,10 @@ fn bring_up_stealth(dll: &str, remote: &str) -> TestPeer {
     let connected = transact(&request, 20_000).expect("connect");
     assert!(
         connected.ok,
-        "connect code {} log {}",
+        "connect code {} log {} helper {}",
         connected.code,
-        fs::read_to_string(r"C:\ProgramData\VeritasVPN\service.log").unwrap_or_default()
+        fs::read_to_string(r"C:\ProgramData\VeritasVPN\service.log").unwrap_or_default(),
+        fs::read_to_string(r"C:\ProgramData\VeritasVPN\stealth.log").unwrap_or_default()
     );
     peer
 }
