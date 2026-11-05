@@ -267,7 +267,7 @@ fn wait_carry() {
     );
 }
 
-fn stats_once(id: u32) -> veritas_ipc::Response {
+fn stats_once(id: u64) -> veritas_ipc::Response {
     let start = Instant::now();
     loop {
         match transact(&Request::new(id, OP_STATS), 2_000) {
