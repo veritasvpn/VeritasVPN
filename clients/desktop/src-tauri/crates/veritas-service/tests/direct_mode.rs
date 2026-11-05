@@ -620,7 +620,7 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
     write_sim("underlay=198.51.100.8\n");
     wait_status("stealth network", |status| status.reconnecting);
     assert_blocked(doc, "stealth lock during a network change");
-    assert_tunnel_carries();
+    wait_carry();
     eprintln!("STEALTH_NETWORK");
     let _ = fs::remove_file(r"C:\ProgramData\VeritasVPN\sim.txt");
 
