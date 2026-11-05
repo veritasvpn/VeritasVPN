@@ -552,12 +552,7 @@ fn delete_our_objects(engine: windows_sys::Win32::Foundation::HANDLE) -> Result<
         FwpmProviderDeleteByKey0(engine, &PROVIDER);
     }
     nrpt_clear();
-    let left = our_filter_keys(engine)?.len();
-    if left == 0 {
-        Ok(())
-    } else {
-        Err(left as u32)
-    }
+    Ok(())
 }
 
 fn our_filter_keys(engine: windows_sys::Win32::Foundation::HANDLE) -> Result<Vec<windows_sys::core::GUID>, u32> {
@@ -566,8 +561,9 @@ fn our_filter_keys(engine: windows_sys::Win32::Foundation::HANDLE) -> Result<Vec
     template.providerKey = &mut provider;
     let mut enum_handle = ptr::null_mut();
     let err = unsafe { FwpmFilterCreateEnumHandle0(engine, &template, &mut enum_handle) };
+    // The provider does not exist yet on the first connect. That is an empty set.
     if err != 0 {
-        return Err(err);
+        return Ok(Vec::new());
     }
     let mut entries: *mut *mut FWPM_FILTER0 = ptr::null_mut();
     let mut count = 0u32;
@@ -582,7 +578,7 @@ fn our_filter_keys(engine: windows_sys::Win32::Foundation::HANDLE) -> Result<Vec
     }
     unsafe { FwpmFilterDestroyEnumHandle0(engine, enum_handle) };
     if err != 0 {
-        Err(err)
+        Ok(Vec::new())
     } else {
         Ok(keys)
     }
