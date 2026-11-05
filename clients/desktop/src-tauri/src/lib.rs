@@ -4398,11 +4398,16 @@ fn open_parity_screen(window: &tauri::WebviewWindow) {
     if screen.len() > 32 || !screen.chars().all(|c| c.is_ascii_lowercase()) {
         return;
     }
-    let Ok(mut url) = window.url() else {
-        return;
-    };
-    url.set_query(Some(&format!("parity={screen}")));
-    let _ = window.navigate(url);
+    let window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let js = format!(
+            "if (!location.search.includes('parity=')) location.replace(location.origin + location.pathname + '?parity={screen}');"
+        );
+        let _ = window.eval(js);
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        let _ = window.set_title(&format!("VeritasVPN parity {screen}"));
+    });
 }
 
 #[cfg(target_os = "windows")]

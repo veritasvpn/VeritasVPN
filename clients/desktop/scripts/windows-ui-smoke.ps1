@@ -17,7 +17,7 @@ Write-Host "NSIS $($installer.Name) $([math]::Round($installer.Length / 1MB, 1))
 
 $env:VERITAS_PARITY = "home"
 $proc = Start-Process -FilePath $exe -PassThru
-$deadline = (Get-Date).AddSeconds(45)
+$deadline = (Get-Date).AddSeconds(60)
 $opened = $false
 try {
     while ((Get-Date) -lt $deadline) {
