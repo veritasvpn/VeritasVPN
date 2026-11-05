@@ -7,10 +7,10 @@ on:
     # The Phase 2 branch is the base of the kill-switch pull request.
     branches: [master, main, cursor/windows-service-direct-b81d]
 
-# A new push replaces a run that is still going. The Windows service test
-# can otherwise hold a runner after a kill-switch hang.
+# Keyed by commit so a runner that has lost its network cannot pin the
+# next push behind a cancel it will never acknowledge.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
 # Start every job with the least privilege required. Jobs that publish releases
