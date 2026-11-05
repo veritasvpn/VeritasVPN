@@ -20,6 +20,8 @@ pub struct LockPlan {
     /// the lock does not cut the machine off from its agent, DNS, or gateway.
     pub management_v4: Vec<Ipv4Addr>,
     pub management_v6: Vec<Ipv6Addr>,
+    /// TCP 80 and 443 on every adapter except the blocks below. Harness only.
+    pub permit_web: bool,
 }
 
 /// Highest priority first. Later rules cannot override an earlier match
@@ -42,6 +44,8 @@ pub enum Rule {
     PermitManagement { addr: Ipv4Addr },
     /// One IPv6 host the machine must still be able to reach. Harness only.
     PermitManagementV6 { addr: Ipv6Addr },
+    /// TCP 80 and 443, so a CI runner can reach its agent. Harness only.
+    PermitWeb,
     /// TCP and UDP 53 and 853, except traffic already permitted on the tunnel.
     BlockDns,
     /// Everything else, IPv4 and IPv6, including new inbound on non-tunnel adapters.
@@ -93,6 +97,9 @@ pub fn rules(plan: &LockPlan) -> Vec<Rule> {
         }
         seen_v6.push(*addr);
         out.push(Rule::PermitManagementV6 { addr: *addr });
+    }
+    if plan.permit_web {
+        out.push(Rule::PermitWeb);
     }
     out.push(Rule::BlockDns);
     out.push(Rule::BlockOther);
@@ -149,6 +156,7 @@ mod tests {
             local_network: local,
             management_v4: Vec::new(),
             management_v6: Vec::new(),
+            permit_web: false,
         }
     }
 
@@ -210,8 +218,14 @@ mod tests {
         assert!(permit < dns);
         assert!(!super::rules(&plan(false, false)).iter().any(|rule| matches!(
             rule,
-            Rule::PermitManagement { .. } | Rule::PermitManagementV6 { .. }
+            Rule::PermitManagement { .. } | Rule::PermitManagementV6 { .. } | Rule::PermitWeb
         )));
+        let mut web = plan(false, false);
+        web.permit_web = true;
+        let web_rules = super::rules(&web);
+        let web_at = web_rules.iter().position(|rule| rule == &Rule::PermitWeb).unwrap();
+        let dns_at = web_rules.iter().position(|rule| rule == &Rule::BlockDns).unwrap();
+        assert!(web_at < dns_at);
     }
 
     #[test]

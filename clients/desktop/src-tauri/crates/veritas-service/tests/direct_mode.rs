@@ -444,6 +444,8 @@ fn attach_management(request: &mut Request) {
     let snap = management_snapshot();
     request.management_v4 = snap.v4.iter().map(|addr| addr.to_string()).collect();
     request.management_v6 = snap.v6.iter().map(|addr| addr.to_string()).collect();
+    // TCP 80/443 stays open for the runner. Leak probes use other ports.
+    request.permit_web = Some(true);
     eprintln!(
         "MANAGEMENT_PERMIT v4={} v6={}",
         request.management_v4.len(),

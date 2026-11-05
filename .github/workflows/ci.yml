@@ -317,8 +317,10 @@ jobs:
           } finally {
             $svc = ".\src-tauri\target\debug\veritas-service.exe"
             if (Test-Path $svc) {
-              & $svc repair
-              & $svc stop
+              foreach ($cmd in @("repair", "stop")) {
+                $p = Start-Process -FilePath $svc -ArgumentList $cmd -PassThru -WindowStyle Hidden
+                if (-not $p.WaitForExit(20000)) { taskkill /F /PID $p.Id | Out-Null }
+              }
             }
           }
           if ($failed) { exit 1 }
@@ -329,9 +331,10 @@ jobs:
         run: |
           $svc = ".\src-tauri\target\debug\veritas-service.exe"
           if (Test-Path $svc) {
-            & $svc repair
-            & $svc stop
-            & $svc uninstall
+            foreach ($cmd in @("repair", "stop", "uninstall")) {
+              $p = Start-Process -FilePath $svc -ArgumentList $cmd -PassThru -WindowStyle Hidden
+              if (-not $p.WaitForExit(20000)) { taskkill /F /PID $p.Id | Out-Null }
+            }
           }
       - name: Build unsigned NSIS installer
         run: npx tauri build --bundles nsis

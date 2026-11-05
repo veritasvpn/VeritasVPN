@@ -131,6 +131,7 @@ fn connect(request: &Request, session: &mut Session) -> Response {
                 local_network,
                 management_v4: parse_v4_list(&request.management_v4),
                 management_v6: parse_v6_list(&request.management_v6),
+                permit_web: request.permit_web == Some(true),
             };
             if let Err(code) = crate::wfp::arm(&plan) {
                 log_code("lock", code);

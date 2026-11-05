@@ -150,7 +150,7 @@ fn weight_of(rule: &Rule) -> u8 {
         Rule::PermitStealth { .. } => 12,
         Rule::PermitDhcp => 11,
         Rule::PermitLocalNetwork => 10,
-        Rule::PermitManagement { .. } | Rule::PermitManagementV6 { .. } => 9,
+        Rule::PermitManagement { .. } | Rule::PermitManagementV6 { .. } | Rule::PermitWeb => 9,
         Rule::BlockDns => 2,
         Rule::BlockOther => 1,
     }
@@ -237,6 +237,24 @@ fn add_rule(
                 true,
                 &management_v6(*addr, luid),
             )?;
+        }
+        Rule::PermitWeb => {
+            for port in [80u16, 443] {
+                add_simple(
+                    engine,
+                    FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+                    weight,
+                    true,
+                    &proto_port(6, port),
+                )?;
+                add_simple(
+                    engine,
+                    FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+                    weight,
+                    true,
+                    &proto_port(6, port),
+                )?;
+            }
         }
         Rule::BlockDns => {
             for port in [53u16, 853] {

@@ -43,6 +43,10 @@ pub struct Request {
     /// Test harness only. Forces the block-all plan without a LAN permit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_lock: Option<bool>,
+    /// Test harness only. Lets TCP 80 and 443 through so the CI runner can
+    /// keep talking to GitHub while every other port stays blocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permit_web: Option<bool>,
     /// Test harness only. IPv4 hosts the runner must still reach (agent, DNS, gateway).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub management_v4: Vec<String>,
@@ -61,6 +65,7 @@ impl Request {
             local_network: None,
             stealth: None,
             full_lock: None,
+            permit_web: None,
             management_v4: Vec::new(),
             management_v6: Vec::new(),
         }
