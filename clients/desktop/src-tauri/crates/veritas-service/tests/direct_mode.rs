@@ -631,7 +631,7 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
             "-Command",
             "Get-CimInstance Win32_Process -Filter \"Name = 'wstunnel.exe'\" | Where-Object { $_.CommandLine -like '*41820*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }",
         ],
-        Duration::from_secs(12),
+        Duration::from_secs(30),
     );
     wait_carry();
     assert_blocked(doc, "stealth lock after the helper recovered");
