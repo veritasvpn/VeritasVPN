@@ -16,8 +16,11 @@ function Invoke-Bounded([string]$File, [string[]]$ArgumentList, [int]$Seconds) {
     }
 }
 
-Invoke-Bounded "powershell" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "bundle-wireguard-nt.ps1")) 120
-Invoke-Bounded "powershell" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "bundle-wstunnel-windows.ps1")) 120
+# These already ran under pwsh in the compile step. Run them again in this
+# host so Get-FileHash stays available. Windows PowerShell launched from
+# Start-Process does not see that cmdlet on the runner.
+& (Join-Path $PSScriptRoot "bundle-wireguard-nt.ps1") | Out-Null
+& (Join-Path $PSScriptRoot "bundle-wstunnel-windows.ps1") | Out-Null
 Invoke-Bounded "cargo" @(
     "build", "--manifest-path", "src-tauri/Cargo.toml", "--locked",
     "-p", "veritas-service", "--release"
