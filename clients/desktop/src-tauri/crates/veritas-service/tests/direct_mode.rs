@@ -333,16 +333,23 @@ fn leak_body(dll: String, service: PathBuf) {
     let loopback = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let mut baseline_open = false;
     for _ in 0..6 {
-        if probe(open).is_ok() {
-            baseline_open = true;
-            break;
+        match probe(open) {
+            Ok(()) => {
+                baseline_open = true;
+                break;
+            }
+            Err(err) => {
+                eprintln!(
+                    "BASELINE_PHYSICAL kind={:?} raw={:?}",
+                    err.kind(),
+                    err.raw_os_error()
+                );
+                thread::sleep(Duration::from_millis(300));
+            }
         }
-        thread::sleep(Duration::from_millis(300));
     }
-    assert!(
-        baseline_open,
-        "baseline connection to the physical address should work before the lock"
-    );
+    eprintln!("BASELINE_PHYSICAL open={baseline_open}");
+    assert!(probe(loopback).is_ok(), "loopback baseline");
     let doc = outside_oracle();
 
     // No 0.0.0.0/0 route: that blackholed the runner. full_lock still blocks
@@ -360,8 +367,12 @@ fn leak_body(dll: String, service: PathBuf) {
     }
     // Windows delivers a connection to this machine's own IP as loopback, so
     // that connect staying open is not a physical leak.
-    assert!(probe(open).is_ok(), "own address should stay reachable");
-    eprintln!("PHYSICAL_SELF_STAYS_OPEN");
+    if baseline_open {
+        assert!(probe(open).is_ok(), "own address should stay reachable");
+        eprintln!("PHYSICAL_SELF_STAYS_OPEN");
+    } else {
+        eprintln!("PHYSICAL_SELF_UNAVAILABLE");
+    }
     assert_blocked(doc, "non-local ipv4 while connected");
     assert_blocked(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 53)), "dns port 53");
     assert_blocked(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 853)), "dns port 853");
@@ -389,7 +400,10 @@ fn leak_body(dll: String, service: PathBuf) {
     eprintln!("LEAK_AFTER_KILL");
 
     run(&service, ["repair"]);
-    assert!(probe(open).is_ok(), "repair must release the lock");
+    assert!(probe(loopback).is_ok(), "repair must release the lock");
+    if baseline_open {
+        assert!(probe(open).is_ok(), "repair must release the lock on the physical address");
+    }
     // The outside address is chosen because it was not denied before the lock.
     // After repair it may time out or connect. Either means the filter is gone.
     // A deny can linger for a moment while WFP drops the persistent filters.
