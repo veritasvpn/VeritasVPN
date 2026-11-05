@@ -25,6 +25,8 @@ pub use pipe::transact;
 #[cfg(windows)]
 pub use svc::{install, start, stop_service, uninstall};
 #[cfg(windows)]
+pub use net::{management_snapshot, ManagementSnapshot};
+#[cfg(windows)]
 pub use wg::{AdapterHandle, TestPeer};
 
 #[cfg(windows)]

@@ -1,7 +1,7 @@
 //! Kill-switch rule list. This module does not call Windows.
 //! The service installs the same list as persistent WFP filters.
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
@@ -16,6 +16,10 @@ pub struct LockPlan {
     /// Present only when Stealth is actually in use. Phase 3 does not turn Stealth on.
     pub stealth: Option<Endpoint>,
     pub local_network: bool,
+    /// Runner management hosts. Empty in production. The harness fills these so
+    /// the lock does not cut the machine off from its agent, DNS, or gateway.
+    pub management_v4: Vec<Ipv4Addr>,
+    pub management_v6: Vec<Ipv6Addr>,
 }
 
 /// Highest priority first. Later rules cannot override an earlier match
@@ -34,6 +38,10 @@ pub enum Rule {
     PermitDhcp,
     /// Private ranges and multicast. Only when local network access is on.
     PermitLocalNetwork,
+    /// One IPv4 host the machine must still be able to reach. Harness only.
+    PermitManagement { addr: Ipv4Addr },
+    /// One IPv6 host the machine must still be able to reach. Harness only.
+    PermitManagementV6 { addr: Ipv6Addr },
     /// TCP and UDP 53 and 853, except traffic already permitted on the tunnel.
     BlockDns,
     /// Everything else, IPv4 and IPv6, including new inbound on non-tunnel adapters.
@@ -70,9 +78,33 @@ pub fn rules(plan: &LockPlan) -> Vec<Rule> {
     if plan.local_network {
         out.push(Rule::PermitLocalNetwork);
     }
+    let mut seen_v4 = Vec::new();
+    for addr in &plan.management_v4 {
+        if !usable_v4(*addr) || seen_v4.contains(addr) {
+            continue;
+        }
+        seen_v4.push(*addr);
+        out.push(Rule::PermitManagement { addr: *addr });
+    }
+    let mut seen_v6 = Vec::new();
+    for addr in &plan.management_v6 {
+        if !usable_v6(*addr) || seen_v6.contains(addr) {
+            continue;
+        }
+        seen_v6.push(*addr);
+        out.push(Rule::PermitManagementV6 { addr: *addr });
+    }
     out.push(Rule::BlockDns);
     out.push(Rule::BlockOther);
     out
+}
+
+fn usable_v4(addr: Ipv4Addr) -> bool {
+    !addr.is_unspecified() && !addr.is_loopback() && !addr.is_multicast() && !addr.is_broadcast()
+}
+
+fn usable_v6(addr: Ipv6Addr) -> bool {
+    !addr.is_unspecified() && !addr.is_loopback() && !addr.is_multicast()
 }
 
 pub fn local_network_from_allowed(allowed: &[String]) -> bool {
@@ -115,6 +147,8 @@ mod tests {
                 port: 443,
             }),
             local_network: local,
+            management_v4: Vec::new(),
+            management_v6: Vec::new(),
         }
     }
 
@@ -160,6 +194,24 @@ mod tests {
         let slash8 = u32::MAX.checked_shl(24).unwrap();
         assert_eq!(host_mask(slash8), u32::from_ne_bytes([255, 0, 0, 0]));
         assert_eq!(host_mask(u32::MAX), u32::MAX);
+    }
+
+    #[test]
+    fn management_permits_are_above_the_blocks_and_optional() {
+        let mut locked = plan(false, false);
+        locked.management_v4 = vec!["127.0.0.1".parse().unwrap(), "140.82.112.4".parse().unwrap()];
+        locked.management_v6 = vec!["::1".parse().unwrap(), "2001:db8::8".parse().unwrap()];
+        let rules = rules(&locked);
+        assert!(!rules.iter().any(|rule| matches!(rule, Rule::PermitManagement { addr } if addr.is_loopback())));
+        assert!(rules.iter().any(|rule| matches!(rule, Rule::PermitManagement { addr } if !addr.is_loopback())));
+        assert!(rules.iter().any(|rule| matches!(rule, Rule::PermitManagementV6 { .. })));
+        let permit = rules.iter().position(|rule| matches!(rule, Rule::PermitManagement { .. })).unwrap();
+        let dns = rules.iter().position(|rule| rule == &Rule::BlockDns).unwrap();
+        assert!(permit < dns);
+        assert!(!super::rules(&plan(false, false)).iter().any(|rule| matches!(
+            rule,
+            Rule::PermitManagement { .. } | Rule::PermitManagementV6 { .. }
+        )));
     }
 
     #[test]

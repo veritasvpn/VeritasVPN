@@ -120,12 +120,17 @@ fn connect(request: &Request, session: &mut Session) -> Response {
     }
     match bring_up(config) {
         Ok((adapter, luid, routes, pin)) => {
-            let local_network = crate::wfp_plan::local_network_from_allowed(&config.allowed_ips);
+            let mut local_network = crate::wfp_plan::local_network_from_allowed(&config.allowed_ips);
+            if request.full_lock == Some(true) {
+                local_network = false;
+            }
             let plan = crate::wfp_plan::LockPlan {
                 tunnel_luid: luid,
                 wireguard: crate::wfp::endpoints_from(config),
                 stealth: None,
                 local_network,
+                management_v4: parse_v4_list(&request.management_v4),
+                management_v6: parse_v6_list(&request.management_v6),
             };
             if let Err(code) = crate::wfp::arm(&plan) {
                 log_code("lock", code);
@@ -325,6 +330,14 @@ pub(crate) fn resolve_endpoint(endpoint: &str) -> Result<(Ipv4Addr, u16), ()> {
         return Err(());
     }
     Ok((*socket.ip(), socket.port()))
+}
+
+fn parse_v4_list(values: &[String]) -> Vec<Ipv4Addr> {
+    values.iter().filter_map(|value| value.trim().parse().ok()).take(32).collect()
+}
+
+fn parse_v6_list(values: &[String]) -> Vec<std::net::Ipv6Addr> {
+    values.iter().filter_map(|value| value.trim().parse().ok()).take(16).collect()
 }
 
 fn parse_cidr(value: &str) -> Result<(Ipv4Addr, u8), ()> {

@@ -40,6 +40,15 @@ pub struct Request {
     pub local_network: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stealth: Option<bool>,
+    /// Test harness only. Forces the block-all plan without a LAN permit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_lock: Option<bool>,
+    /// Test harness only. IPv4 hosts the runner must still reach (agent, DNS, gateway).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub management_v4: Vec<String>,
+    /// Test harness only. IPv6 hosts the runner must still reach.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub management_v6: Vec<String>,
 }
 
 impl Request {
@@ -51,6 +60,9 @@ impl Request {
             config: None,
             local_network: None,
             stealth: None,
+            full_lock: None,
+            management_v4: Vec::new(),
+            management_v6: Vec::new(),
         }
     }
 }

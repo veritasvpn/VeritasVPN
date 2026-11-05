@@ -4,17 +4,17 @@
 #![cfg(windows)]
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use veritas_core::{generate_keypair, WgTunnelConfig};
 use veritas_ipc::{Request, OP_CONNECT, OP_DISCONNECT, OP_HELLO, OP_STATS};
-use veritas_service::{ensure_api, transact, TestPeer};
+use veritas_service::{ensure_api, management_snapshot, transact, TestPeer};
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ACCESS_DENIED, GENERIC_READ, GENERIC_WRITE,
     INVALID_HANDLE_VALUE,
@@ -33,10 +33,15 @@ fn direct_mode_on_the_runner() {
     let service = PathBuf::from(
         option_env!("CARGO_BIN_EXE_veritas_service").unwrap_or("veritas-service.exe"),
     );
-    let client = std::env::current_exe().expect("test exe");
     let _guard = Cleanup {
         service: service.clone(),
     };
+    let service = service.clone();
+    finish_within(Duration::from_secs(150), move || direct_mode_body(dll, service));
+}
+
+fn direct_mode_body(dll: String, service: PathBuf) {
+    let client = std::env::current_exe().expect("test exe");
     fs::copy(&dll, service.parent().unwrap().join("wireguard.dll")).expect("copy dll");
 
     run(
@@ -48,7 +53,11 @@ fn direct_mode_on_the_runner() {
     wait_until_hello();
     println!("PIPE_HELLO_OK");
 
-    let path_denied = Command::new(&service).args(["call", "hello"]).output().unwrap();
+    let path_denied = output_bounded_os(
+        &service,
+        &["call".into(), "hello".into()],
+        Duration::from_secs(15),
+    );
     let path_text = String::from_utf8_lossy(&path_denied.stdout);
     assert!(
         path_text.contains("CALL_CODE denied"),
@@ -91,6 +100,7 @@ fn direct_mode_on_the_runner() {
     };
     let mut request = Request::new(2, OP_CONNECT);
     request.config = Some(config);
+    attach_management(&mut request);
     let connected = transact(&request, 20_000).expect("connect pipe");
     assert!(
         connected.ok,
@@ -115,10 +125,7 @@ fn direct_mode_on_the_runner() {
     }
     assert!(handshake > 0, "handshake did not complete");
     allow_icmp();
-    let ping = Command::new("ping")
-        .args(["-n", "3", "-w", "2000", "10.66.0.1"])
-        .output()
-        .expect("ping");
+    let ping = output_bounded("ping", &["-n", "3", "-w", "2000", "10.66.0.1"], Duration::from_secs(12));
     assert!(ping.status.success(), "ping failed: {}", String::from_utf8_lossy(&ping.stdout));
     let stats = transact(&Request::new(4, OP_STATS), 2_000).expect("stats after ping");
     let status = stats.status.unwrap();
@@ -143,13 +150,17 @@ struct Cleanup {
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
-        let _ = Command::new(&self.service).arg("repair").status();
-        let _ = Command::new(&self.service).arg("stop").status();
-        let _ = Command::new(&self.service).arg("uninstall").status();
-        let _ = Command::new("netsh").args([
-            "advfirewall", "firewall", "delete", "rule", "name=VeritasPhase2Icmp",
-        ]).status();
-        let _ = Command::new("net").args(["user", "veritas-other", "/delete"]).status();
+        // Bound every call. A Drop that waits on WFP or PowerShell is how the
+        // job sat for an hour with the runner cut off.
+        quiet_bounded(&self.service, &["repair"], Duration::from_secs(15));
+        quiet_bounded(&self.service, &["stop"], Duration::from_secs(15));
+        quiet_bounded(&self.service, &["uninstall"], Duration::from_secs(15));
+        quiet_bounded(
+            "netsh",
+            &["advfirewall", "firewall", "delete", "rule", "name=VeritasPhase2Icmp"],
+            Duration::from_secs(10),
+        );
+        quiet_bounded("net", &["user", "veritas-other", "/delete"], Duration::from_secs(10));
     }
 }
 
@@ -174,13 +185,13 @@ fn assert_other_user_denied() {
     let password = format!("Aa1!{ticks:09x}");
     let mut child = Command::new("net")
         .args(["user", "veritas-other", password.as_str(), "/add"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("net user");
     child.stdin.as_mut().unwrap().write_all(b"Y\r\n").ok();
-    let created = child.wait_with_output().expect("net user");
+    let created = wait_output(child, Duration::from_secs(15), "net user");
     assert!(
         created.status.success(),
         "could not create the other user: {}",
@@ -225,20 +236,21 @@ fn assert_other_user_denied() {
 }
 
 fn allow_icmp() {
-    let _ = Command::new("netsh").args([
-        "advfirewall", "firewall", "add", "rule", "name=VeritasPhase2Icmp", "dir=in",
-        "action=allow", "protocol=icmpv4",
-    ]).status();
+    let _ = output_bounded(
+        "netsh",
+        &[
+            "advfirewall", "firewall", "add", "rule", "name=VeritasPhase2Icmp", "dir=in",
+            "action=allow", "protocol=icmpv4",
+        ],
+        Duration::from_secs(10),
+    );
 }
 
 fn mtu_of(name: &str) -> u32 {
     let script = format!(
         "(Get-NetIPInterface -InterfaceAlias '{name}' -AddressFamily IPv4).NlMtu"
     );
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &script])
-        .output()
-        .unwrap();
+    let output = output_bounded("powershell", &["-NoProfile", "-Command", &script], Duration::from_secs(15));
     String::from_utf8_lossy(&output.stdout).trim().parse().unwrap_or(0)
 }
 
@@ -246,28 +258,18 @@ fn dns_is(name: &str, expect: &str) -> bool {
     let script = format!(
         "(Get-DnsClientServerAddress -InterfaceAlias '{name}' -AddressFamily IPv4).ServerAddresses -join ','"
     );
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &script])
-        .output()
-        .unwrap();
+    let output = output_bounded("powershell", &["-NoProfile", "-Command", &script], Duration::from_secs(15));
     String::from_utf8_lossy(&output.stdout).contains(expect)
 }
 
 fn adapter_gone(name: &str) -> bool {
     let script = format!("Get-NetAdapter -Name '{name}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name");
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &script])
-        .output()
-        .unwrap();
+    let output = output_bounded("powershell", &["-NoProfile", "-Command", &script], Duration::from_secs(15));
     !String::from_utf8_lossy(&output.stdout).to_ascii_lowercase().contains(&name.to_ascii_lowercase())
 }
 
 fn primary_ipv4() -> Ipv4Addr {
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-Command", "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.PrefixOrigin -ne 'WellKnown' } | Select-Object -First 1 -ExpandProperty IPAddress)"])
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&output.stdout).trim().parse().expect("host ipv4")
+    management_snapshot().local_v4.expect("host ipv4")
 }
 
 fn decode(text: &str) -> [u8; 32] {
@@ -275,7 +277,8 @@ fn decode(text: &str) -> [u8; 32] {
 }
 
 fn run(bin: &std::path::Path, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) {
-    let output = Command::new(bin).args(args).output().expect("spawn service");
+    let args: Vec<std::ffi::OsString> = args.into_iter().map(|a| a.as_ref().to_os_string()).collect();
+    let output = output_bounded_os(bin, &args, Duration::from_secs(20));
     assert!(
         output.status.success(),
         "service command failed {}",
@@ -289,10 +292,15 @@ fn leak_harness_blocks_until_repair() {
     let service = PathBuf::from(
         option_env!("CARGO_BIN_EXE_veritas_service").unwrap_or("veritas-service.exe"),
     );
-    let client = std::env::current_exe().expect("test exe");
     let _guard = Cleanup {
         service: service.clone(),
     };
+    let service = service.clone();
+    finish_within(Duration::from_secs(120), move || leak_body(dll, service));
+}
+
+fn leak_body(dll: String, service: PathBuf) {
+    let client = std::env::current_exe().expect("test exe");
     fs::copy(&dll, service.parent().unwrap().join("wireguard.dll")).expect("copy dll");
     run(
         &service,
@@ -314,15 +322,11 @@ fn leak_harness_blocks_until_repair() {
         "baseline connection to the physical address should work before the lock"
     );
 
+    // No 0.0.0.0/0 route: that blackholed the runner. full_lock still blocks
+    // the physical NIC. Management hosts captured before the lock stay permitted.
     let _peer = bring_up_tunnel(&dll);
-    // Drop the tunnel default route so the next connects try the physical NIC.
-    // The lock has to be what stops them. The /32 tunnel route stays.
-    drop_tunnel_default_route();
     allow_icmp();
-    let ping = Command::new("ping")
-        .args(["-n", "2", "-w", "2000", "10.66.0.1"])
-        .output()
-        .expect("ping");
+    let ping = output_bounded("ping", &["-n", "2", "-w", "2000", "10.66.0.1"], Duration::from_secs(10));
     assert!(ping.status.success(), "tunnel traffic was not permitted");
     assert!(probe(loopback).is_ok(), "loopback must stay open");
     let v6_loop = std::net::TcpListener::bind("[::1]:0").ok();
@@ -336,14 +340,13 @@ fn leak_harness_blocks_until_repair() {
     assert_blocked(open, "physical leak while connected");
     assert_blocked(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 53)), "dns port 53");
     assert_blocked(SocketAddr::from((Ipv4Addr::new(203, 0, 113, 10), 853)), "dns port 853");
-    let v6 = ipv6_listener();
-    if let Some(addr) = v6 {
+    if let Some(addr) = ipv6_listener() {
         assert_blocked(addr, "ipv6 leak while connected");
-        println!("IPV6_BLOCKED");
+        eprintln!("IPV6_BLOCKED");
     } else {
-        println!("IPV6_NO_LOCAL");
+        eprintln!("IPV6_NO_LOCAL");
     }
-    println!("LEAK_CONNECTED");
+    eprintln!("LEAK_CONNECTED");
 
     let api = ensure_api(std::path::Path::new(&dll)).expect("dll");
     if let Ok(adapter) = veritas_service::AdapterHandle::open(api, "VeritasVPN") {
@@ -351,20 +354,18 @@ fn leak_harness_blocks_until_repair() {
     }
     assert!(probe(loopback).is_ok(), "loopback during reconnect");
     assert_blocked(open, "physical leak while reconnecting");
-    println!("LEAK_RECONNECTING");
+    eprintln!("LEAK_RECONNECTING");
 
-    let _ = Command::new("taskkill")
-        .args(["/F", "/IM", "veritas-service.exe"])
-        .status();
+    let _ = output_bounded("taskkill", &["/F", "/IM", "veritas-service.exe"], Duration::from_secs(10));
     thread::sleep(Duration::from_millis(400));
     assert_blocked(open, "physical leak after the service was killed");
     thread::sleep(Duration::from_millis(1500));
     assert_blocked(open, "physical leak after service recovery");
-    println!("LEAK_AFTER_KILL");
+    eprintln!("LEAK_AFTER_KILL");
 
     run(&service, ["repair"]);
     assert!(probe(open).is_ok(), "repair must release the lock");
-    println!("LEAK_REPAIRED");
+    eprintln!("LEAK_REPAIRED");
 }
 
 fn bring_up_tunnel(dll: &str) -> TestPeer {
@@ -389,7 +390,7 @@ fn bring_up_tunnel(dll: &str) -> TestPeer {
         dns: "10.66.0.1".into(),
         server_public_key: server_keys.public_key,
         endpoint: format!("{host}:51830"),
-        allowed_ips: vec!["0.0.0.0/0".into(), "::/0".into(), "10.66.0.1/32".into()],
+        allowed_ips: vec!["10.66.0.1/32".into()],
         peer_id: "peer-lock".into(),
         preshared_key: String::new(),
         stealth_endpoint: String::new(),
@@ -399,6 +400,8 @@ fn bring_up_tunnel(dll: &str) -> TestPeer {
     };
     let mut request = Request::new(2, OP_CONNECT);
     request.config = Some(config);
+    request.full_lock = Some(true);
+    attach_management(&mut request);
     let connected = transact(&request, 20_000).expect("connect");
     assert!(
         connected.ok,
@@ -427,28 +430,101 @@ fn assert_blocked(addr: SocketAddr, label: &str) {
     }
 }
 
-fn drop_tunnel_default_route() {
-    let _ = Command::new("powershell").args([
-        "-NoProfile",
-        "-Command",
-        "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -like '*Veritas*' -or $_.InterfaceAlias -like '*WireGuard*' } | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue",
-    ]).status();
-}
-
 fn ipv6_listener() -> Option<SocketAddr> {
-    let output = Command::new("powershell").args([
-        "-NoProfile",
-        "-Command",
-        "(Get-NetIPAddress -AddressFamily IPv6 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike 'fe80*' -and $_.IPAddress -ne '::1' } | Select-Object -First 1 -ExpandProperty IPAddress)",
-    ]).output().ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let addr: std::net::Ipv6Addr = text.trim().parse().ok()?;
+    let addr = management_snapshot().local_v6?;
     let listener = std::net::TcpListener::bind((addr, 0)).ok()?;
     let bound = listener.local_addr().ok()?;
     thread::spawn(move || {
         for _ in listener.incoming() {}
     });
     Some(bound)
+}
+
+fn attach_management(request: &mut Request) {
+    let snap = management_snapshot();
+    request.management_v4 = snap.v4.iter().map(|addr| addr.to_string()).collect();
+    request.management_v6 = snap.v6.iter().map(|addr| addr.to_string()).collect();
+    eprintln!(
+        "MANAGEMENT_PERMIT v4={} v6={}",
+        request.management_v4.len(),
+        request.management_v6.len()
+    );
+    assert!(
+        !request.management_v4.is_empty(),
+        "no management hosts; refusing to arm a lock that would cut off the runner"
+    );
+}
+
+fn finish_within(limit: Duration, body: impl FnOnce() + Send + 'static) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)));
+    });
+    match rx.recv_timeout(limit) {
+        Ok(Ok(())) => {}
+        Ok(Err(payload)) => std::panic::resume_unwind(payload),
+        Err(_) => panic!("test exceeded {}s", limit.as_secs()),
+    }
+}
+
+fn output_bounded(cmd: &str, args: &[&str], limit: Duration) -> std::process::Output {
+    let os: Vec<std::ffi::OsString> = args.iter().map(|arg| (*arg).into()).collect();
+    output_bounded_os(std::path::Path::new(cmd), &os, limit)
+}
+
+fn output_bounded_os(cmd: &std::path::Path, args: &[std::ffi::OsString], limit: Duration) -> std::process::Output {
+    let child = Command::new(cmd)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|_| panic!("spawn {}", cmd.display()));
+    wait_output(child, limit, "command")
+}
+
+fn wait_output(mut child: std::process::Child, limit: Duration, label: &str) -> std::process::Output {
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                if let Some(mut out) = child.stdout.take() {
+                    let _ = out.read_to_end(&mut stdout);
+                }
+                if let Some(mut err) = child.stderr.take() {
+                    let _ = err.read_to_end(&mut stderr);
+                }
+                return std::process::Output { status, stdout, stderr };
+            }
+            Ok(None) if start.elapsed() > limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{label} exceeded {}s", limit.as_secs());
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(_) => panic!("{label} disappeared"),
+        }
+    }
+}
+
+fn quiet_bounded(cmd: impl AsRef<std::ffi::OsStr>, args: &[&str], limit: Duration) {
+    let Ok(mut child) = Command::new(cmd).args(args).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else {
+        return;
+    };
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if start.elapsed() > limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(_) => return,
+        }
+    }
 }
 
 fn wide(value: &str) -> Vec<u16> {

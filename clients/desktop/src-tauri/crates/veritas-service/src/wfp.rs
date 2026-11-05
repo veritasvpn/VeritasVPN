@@ -13,7 +13,8 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT, FWPM_FILTER_FLAG_PERSISTENT, FWPM_PROVIDER0,
     FWPM_PROVIDER_FLAG_PERSISTENT, FWPM_SESSION0, FWPM_SUBLAYER0, FWPM_SUBLAYER_FLAG_PERSISTENT,
     FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_CONDITION_FLAG_IS_LOOPBACK, FWP_MATCH_EQUAL,
-    FWP_UINT16, FWP_UINT64, FWP_UINT8, FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWPM_CONDITION_FLAGS,
+    FWP_UINT16, FWP_UINT64, FWP_UINT8, FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_V6_ADDR_AND_MASK,
+    FWP_V6_ADDR_MASK, FWPM_CONDITION_FLAGS,
     FWPM_CONDITION_IP_LOCAL_INTERFACE, FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_ADDRESS,
     FWPM_CONDITION_IP_REMOTE_PORT, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
@@ -149,6 +150,7 @@ fn weight_of(rule: &Rule) -> u8 {
         Rule::PermitStealth { .. } => 12,
         Rule::PermitDhcp => 11,
         Rule::PermitLocalNetwork => 10,
+        Rule::PermitManagement { .. } | Rule::PermitManagementV6 { .. } => 9,
         Rule::BlockDns => 2,
         Rule::BlockOther => 1,
     }
@@ -218,6 +220,24 @@ fn add_rule(
                 )?;
             }
         }
+        Rule::PermitManagement { addr } => {
+            add_simple(
+                engine,
+                FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+                weight,
+                true,
+                &management_v4(*addr, luid),
+            )?;
+        }
+        Rule::PermitManagementV6 { addr } => {
+            add_simple(
+                engine,
+                FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+                weight,
+                true,
+                &management_v6(*addr, luid),
+            )?;
+        }
         Rule::BlockDns => {
             for port in [53u16, 853] {
                 for proto in [17u8, 6] {
@@ -259,6 +279,7 @@ fn connect_and_recv() -> [GUID; 4] {
 struct Held {
     conditions: Vec<FWPM_FILTER_CONDITION0>,
     masks: Vec<FWP_V4_ADDR_AND_MASK>,
+    v6masks: Vec<FWP_V6_ADDR_AND_MASK>,
     luid: u64,
 }
 
@@ -311,6 +332,7 @@ enum Cond {
     Protocol(u8),
     Port(u16),
     Network(Ipv4Addr, u32),
+    NetworkV6(std::net::Ipv6Addr),
 }
 
 fn loopback_condition() -> Vec<Cond> {
@@ -345,6 +367,14 @@ fn network(addr: Ipv4Addr, mask: u32) -> Vec<Cond> {
     vec![Cond::Network(addr, mask)]
 }
 
+fn management_v4(addr: Ipv4Addr, luid: u64) -> Vec<Cond> {
+    vec![Cond::Network(addr, u32::MAX), Cond::NotInterface(luid)]
+}
+
+fn management_v6(addr: std::net::Ipv6Addr, luid: u64) -> Vec<Cond> {
+    vec![Cond::NetworkV6(addr), Cond::NotInterface(luid)]
+}
+
 fn private_ranges() -> [(Ipv4Addr, u32); 5] {
     [
         ("10.0.0.0".parse().unwrap(), prefix_mask(8)),
@@ -367,6 +397,7 @@ fn hold(conds: &[Cond]) -> Held {
     let mut held = Held {
         conditions: Vec::new(),
         masks: Vec::new(),
+        v6masks: Vec::new(),
         luid: 0,
     };
     for cond in conds {
@@ -376,10 +407,15 @@ fn hold(conds: &[Cond]) -> Held {
                 addr: crate::wfp_plan::host_ipv4(*addr),
                 mask: crate::wfp_plan::host_mask(*mask),
             }),
+            Cond::NetworkV6(addr) => held.v6masks.push(FWP_V6_ADDR_AND_MASK {
+                addr: addr.octets(),
+                prefixLength: 128,
+            }),
             _ => {}
         }
     }
     let mut mask_index = 0;
+    let mut v6_index = 0;
     for cond in conds {
         let (field, match_type, value) = match cond {
             Cond::Loopback => (
@@ -406,6 +442,15 @@ fn hold(conds: &[Cond]) -> Held {
                     FWPM_CONDITION_IP_REMOTE_ADDRESS,
                     FWP_MATCH_EQUAL,
                     value_mask(mask),
+                )
+            }
+            Cond::NetworkV6(_) => {
+                let mask = &held.v6masks[v6_index];
+                v6_index += 1;
+                (
+                    FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                    FWP_MATCH_EQUAL,
+                    value_v6(mask),
                 )
             }
         };
@@ -450,6 +495,13 @@ fn value_mask(mask: &FWP_V4_ADDR_AND_MASK) -> ConditionValue {
     let mut out = ConditionValue::default();
     out.r#type = FWP_V4_ADDR_MASK;
     out.Anonymous.v4AddrMask = mask as *const FWP_V4_ADDR_AND_MASK as *mut _;
+    out
+}
+
+fn value_v6(mask: &FWP_V6_ADDR_AND_MASK) -> ConditionValue {
+    let mut out = ConditionValue::default();
+    out.r#type = FWP_V6_ADDR_MASK;
+    out.Anonymous.v6AddrMask = mask as *const FWP_V6_ADDR_AND_MASK as *mut _;
     out
 }
 

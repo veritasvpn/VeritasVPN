@@ -7,6 +7,12 @@ on:
     # The Phase 2 branch is the base of the kill-switch pull request.
     branches: [master, main, cursor/windows-service-direct-b81d]
 
+# A new push replaces a run that is still going. The Windows service test
+# can otherwise hold a runner after a kill-switch hang.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # Start every job with the least privilege required. Jobs that publish releases
 # or images explicitly request their additional permission below.
 permissions:
@@ -290,11 +296,43 @@ jobs:
         run: cargo test --locked --workspace --lib
         working-directory: clients/desktop/src-tauri
       - name: Prove the Direct-mode service
+        timeout-minutes: 20
         shell: pwsh
         run: |
           ./scripts/bundle-wireguard-nt.ps1 | Out-Null
           $env:VERITAS_WIREGUARD_DLL = (Get-Content -Raw .\src-tauri\target\wireguard-nt\dll.path).Trim()
-          cargo test --manifest-path src-tauri/Cargo.toml --locked -p veritas-service --test direct_mode -- --test-threads=1 --nocapture
+          $failed = $false
+          try {
+            $cargo = Start-Process -FilePath cargo -ArgumentList @(
+              "test","--manifest-path","src-tauri/Cargo.toml","--locked",
+              "-p","veritas-service","--test","direct_mode","--",
+              "--test-threads=1","--nocapture"
+            ) -NoNewWindow -PassThru
+            if (-not $cargo.WaitForExit(900000)) {
+              taskkill /F /T /PID $cargo.Id | Out-Null
+              $failed = $true
+            } elseif ($cargo.ExitCode -ne 0) {
+              $failed = $true
+            }
+          } finally {
+            $svc = ".\src-tauri\target\debug\veritas-service.exe"
+            if (Test-Path $svc) {
+              & $svc repair
+              & $svc stop
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Release a leftover kill switch
+        if: always()
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $svc = ".\src-tauri\target\debug\veritas-service.exe"
+          if (Test-Path $svc) {
+            & $svc repair
+            & $svc stop
+            & $svc uninstall
+          }
       - name: Build unsigned NSIS installer
         run: npx tauri build --bundles nsis
       - name: Window opens on the real UI
