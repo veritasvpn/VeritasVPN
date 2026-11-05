@@ -15,36 +15,6 @@ if (-not $installer) {
 }
 Write-Host "NSIS $($installer.Name) $([math]::Round($installer.Length / 1MB, 1)) MiB"
 
-$env:VERITAS_PARITY = "home"
-$proc = Start-Process -FilePath $exe -PassThru
-$deadline = (Get-Date).AddSeconds(60)
-$opened = $false
-try {
-    while ((Get-Date) -lt $deadline) {
-        if ($proc.HasExited) {
-            throw "VeritasVPN exited before showing a window (code $($proc.ExitCode))"
-        }
-        $proc.Refresh()
-        $title = $proc.MainWindowTitle
-        if ($title -eq "VeritasVPN" -and -not $opened) {
-            Write-Host "WINDOW_OPEN title=$title pid=$($proc.Id)"
-            $opened = $true
-        }
-        if ($title -eq "VeritasVPN parity home") {
-            Write-Host "PARITY_HOME title=$title"
-            Assert-ParityWindow $proc
-            exit 0
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    $proc.Refresh()
-    throw "VeritasVPN parity home did not appear. MainWindowTitle='$($proc.MainWindowTitle)'"
-} finally {
-    if (-not $proc.HasExited) {
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    }
-}
-
 function Assert-ParityWindow($proc) {
     Add-Type @"
 using System;
@@ -86,5 +56,35 @@ public static class VeritasWindow {
     Write-Host "PARITY_CYAN samples=$cyan"
     if ($cyan -lt 8) {
         throw "the home screen did not paint the Android cyan token"
+    }
+}
+
+$env:VERITAS_PARITY = "home"
+$proc = Start-Process -FilePath $exe -PassThru
+$deadline = (Get-Date).AddSeconds(60)
+$opened = $false
+try {
+    while ((Get-Date) -lt $deadline) {
+        if ($proc.HasExited) {
+            throw "VeritasVPN exited before showing a window (code $($proc.ExitCode))"
+        }
+        $proc.Refresh()
+        $title = $proc.MainWindowTitle
+        if ($title -eq "VeritasVPN" -and -not $opened) {
+            Write-Host "WINDOW_OPEN title=$title pid=$($proc.Id)"
+            $opened = $true
+        }
+        if ($title -eq "VeritasVPN parity home") {
+            Write-Host "PARITY_HOME title=$title"
+            Assert-ParityWindow $proc
+            exit 0
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    $proc.Refresh()
+    throw "VeritasVPN parity home did not appear. MainWindowTitle='$($proc.MainWindowTitle)'"
+} finally {
+    if (-not $proc.HasExited) {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     }
 }
