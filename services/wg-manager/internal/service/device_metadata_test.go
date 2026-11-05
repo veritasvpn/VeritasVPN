@@ -57,6 +57,15 @@ func TestMergeStoredDeviceMetadataUsesIncomingWhenPresent(t *testing.T) {
 	}
 }
 
+func TestMergeStoredDeviceMetadataAcceptsWindows(t *testing.T) {
+	_, platform, _, _, _ := mergeStoredDeviceMetadata(
+		"", "Windows", "VeritasVPN", "Windows 11", "0.2.99", nil,
+	)
+	if platform != "Windows" {
+		t.Fatalf("platform = %q, want Windows", platform)
+	}
+}
+
 func TestMergeStoredDeviceMetadataWithoutHistory(t *testing.T) {
 	name, platform, deviceModel, osVersion, clientVersion := mergeStoredDeviceMetadata(
 		"", "Linux", "framework", "Ubuntu 24.04", "0.2.82", nil,
