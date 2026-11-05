@@ -15,7 +15,8 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
     FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_CONDITION_FLAG_IS_LOOPBACK, FWP_MATCH_EQUAL,
     FWP_UINT16, FWP_UINT64, FWP_UINT8, FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_V6_ADDR_AND_MASK,
     FWP_V6_ADDR_MASK, FWPM_CONDITION_FLAGS,
-    FWPM_CONDITION_IP_LOCAL_INTERFACE, FWPM_CONDITION_IP_PROTOCOL, FWPM_CONDITION_IP_REMOTE_ADDRESS,
+    FWPM_CONDITION_INTERFACE_INDEX, FWPM_CONDITION_IP_LOCAL_INTERFACE, FWPM_CONDITION_IP_PROTOCOL,
+    FWPM_CONDITION_IP_REMOTE_ADDRESS,
     FWPM_CONDITION_IP_REMOTE_PORT, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
     FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
 };
@@ -171,6 +172,13 @@ fn add_rule(
         Rule::PermitTunnel { .. } => {
             for layer in connect_and_recv() {
                 add_simple(engine, layer, weight, true, &interface_condition(luid))?;
+            }
+            // Same adapter, named by index as well as LUID. ALE has matched
+            // the index when the LUID condition did not.
+            if let Some(index) = crate::net::interface_index(luid) {
+                for layer in connect_and_recv() {
+                    add_simple(engine, layer, weight, true, &index_condition(index))?;
+                }
             }
         }
         Rule::PermitWireGuard { addr, port } => {
@@ -351,6 +359,7 @@ enum Cond {
     Port(u16),
     Network(Ipv4Addr, u32),
     NetworkV6(std::net::Ipv6Addr),
+    Index(u32),
 }
 
 fn loopback_condition() -> Vec<Cond> {
@@ -359,6 +368,10 @@ fn loopback_condition() -> Vec<Cond> {
 
 fn interface_condition(luid: u64) -> Vec<Cond> {
     vec![Cond::Interface(luid)]
+}
+
+fn index_condition(index: u32) -> Vec<Cond> {
+    vec![Cond::Index(index)]
 }
 
 fn udp_endpoint(addr: Ipv4Addr, port: u16, not_luid: Option<u64>) -> Vec<Cond> {
@@ -451,6 +464,7 @@ fn hold(conds: &[Cond]) -> Held {
                 windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_MATCH_NOT_EQUAL,
                 value_u64(&held.luid),
             ),
+            Cond::Index(index) => (FWPM_CONDITION_INTERFACE_INDEX, FWP_MATCH_EQUAL, value_u32(*index)),
             Cond::Protocol(proto) => (FWPM_CONDITION_IP_PROTOCOL, FWP_MATCH_EQUAL, value_u8(*proto)),
             Cond::Port(port) => (FWPM_CONDITION_IP_REMOTE_PORT, FWP_MATCH_EQUAL, value_u16(*port)),
             Cond::Network(_, _) => {

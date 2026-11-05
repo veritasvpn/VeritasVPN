@@ -5,7 +5,8 @@
 use std::net::Ipv4Addr;
 
 use windows_sys::Win32::NetworkManagement::IpHelper::{
-    ConvertInterfaceLuidToGuid, CreateIpForwardEntry2, CreateUnicastIpAddressEntry,
+    ConvertInterfaceLuidToGuid, ConvertInterfaceLuidToIndex, CreateIpForwardEntry2,
+    CreateUnicastIpAddressEntry,
     DeleteIpForwardEntry2, FreeMibTable, GetIpForwardTable2, GetIpInterfaceEntry,
     GetUnicastIpAddressTable, InitializeIpForwardEntry, InitializeIpInterfaceEntry,
     InitializeUnicastIpAddressEntry, SetInterfaceDnsSettings, SetIpInterfaceEntry,
@@ -91,6 +92,16 @@ pub fn add_route(luid: u64, network: Ipv4Addr, prefix: u8) -> Result<(), u32> {
         Ok(())
     } else {
         Err(err)
+    }
+}
+
+pub fn interface_index(luid: u64) -> Option<u32> {
+    let mut index = 0u32;
+    let err = unsafe { ConvertInterfaceLuidToIndex(&luid_of(luid), &mut index) };
+    if err == 0 && index != 0 {
+        Some(index)
+    } else {
+        None
     }
 }
 

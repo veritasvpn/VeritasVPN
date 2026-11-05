@@ -90,7 +90,7 @@ fn direct_mode_body(dll: String, service: PathBuf) {
         dns: "10.66.0.1".into(),
         server_public_key: server_keys.public_key,
         endpoint: format!("{host}:51830"),
-        allowed_ips: vec!["10.66.0.1/32".into()],
+        allowed_ips: vec!["10.66.0.1/32".into(), "10.66.0.50/32".into()],
         peer_id: "peer-test".into(),
         preshared_key: String::new(),
         stealth_endpoint: String::new(),
@@ -124,10 +124,8 @@ fn direct_mode_body(dll: String, service: PathBuf) {
         thread::sleep(Duration::from_millis(500));
     }
     assert!(handshake > 0, "handshake did not complete");
-    allow_icmp();
-    let ping = output_bounded("ping", &["-n", "3", "-w", "2000", "10.66.0.1"], Duration::from_secs(12));
-    assert!(ping.status.success(), "ping failed: {}", String::from_utf8_lossy(&ping.stdout));
-    let stats = transact(&Request::new(4, OP_STATS), 2_000).expect("stats after ping");
+    assert_tunnel_carries();
+    let stats = transact(&Request::new(4, OP_STATS), 2_000).expect("stats after traffic");
     let status = stats.status.unwrap();
     assert!(status.rx > 0 && status.tx > 0, "no tunnel traffic");
     assert_eq!(mtu_of("VeritasVPN"), 1280);
@@ -235,6 +233,20 @@ fn assert_other_user_denied() {
     assert_eq!(err, ERROR_ACCESS_DENIED, "other user was not rejected ({err})");
 }
 
+fn assert_tunnel_carries() {
+    // 10.66.0.1 is also a local address on the test peer, so a ping can be
+    // answered without entering the tunnel and the lock correctly drops that.
+    // 10.66.0.50 is only routed at the tunnel.
+    let before = transact(&Request::new(7, OP_STATS), 2_000).expect("stats").status.expect("status").tx;
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").expect("udp");
+    socket.set_write_timeout(Some(Duration::from_secs(2))).ok();
+    let sent = socket.send_to(b"veritas", "10.66.0.50:9");
+    thread::sleep(Duration::from_millis(500));
+    let after = transact(&Request::new(8, OP_STATS), 2_000).expect("stats").status.expect("status").tx;
+    assert!(after > before, "tunnel did not carry the packet (send {sent:?} tx {before} -> {after})");
+    eprintln!("TUNNEL_CARRY tx {before} -> {after}");
+}
+
 fn allow_icmp() {
     let _ = output_bounded(
         "netsh",
@@ -325,13 +337,7 @@ fn leak_body(dll: String, service: PathBuf) {
     // No 0.0.0.0/0 route: that blackholed the runner. full_lock still blocks
     // the physical NIC. Management hosts captured before the lock stay permitted.
     let _peer = bring_up_tunnel(&dll);
-    allow_icmp();
-    let ping = output_bounded("ping", &["-n", "2", "-w", "2000", "10.66.0.1"], Duration::from_secs(10));
-    assert!(
-        ping.status.success(),
-        "tunnel traffic was not permitted: {}",
-        String::from_utf8_lossy(&ping.stdout)
-    );
+    assert_tunnel_carries();
     assert!(probe(loopback).is_ok(), "loopback must stay open");
     let v6_loop = std::net::TcpListener::bind("[::1]:0").ok();
     if let Some(v6_loop) = v6_loop {
@@ -394,7 +400,7 @@ fn bring_up_tunnel(dll: &str) -> TestPeer {
         dns: "10.66.0.1".into(),
         server_public_key: server_keys.public_key,
         endpoint: format!("{host}:51830"),
-        allowed_ips: vec!["10.66.0.1/32".into()],
+        allowed_ips: vec!["10.66.0.1/32".into(), "10.66.0.50/32".into()],
         peer_id: "peer-lock".into(),
         preshared_key: String::new(),
         stealth_endpoint: String::new(),
