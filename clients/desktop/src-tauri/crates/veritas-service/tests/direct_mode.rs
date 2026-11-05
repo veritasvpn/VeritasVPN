@@ -586,6 +586,11 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
         &service,
         ["install", "--client", &client.display().to_string(), "--dll", &dll],
     );
+    let helper_dir = PathBuf::from(r"C:\ProgramData\VeritasVPN");
+    let _ = fs::create_dir_all(&helper_dir);
+    let helper_copy = helper_dir.join("wstunnel.exe");
+    fs::copy(&wstunnel, &helper_copy).expect("copy helper into program data");
+    fs::write(helper_dir.join("wstunnel.path"), helper_copy.display().to_string()).expect("helper path");
     run(&service, ["start"]);
     wait_until_hello();
     let port = free_tcp();

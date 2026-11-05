@@ -62,6 +62,12 @@ pub fn locate() -> Option<PathBuf> {
         }
     }
     if let Some(dir) = crate::engine::program_data() {
+        if let Ok(text) = fs::read_to_string(dir.join("wstunnel.path")) {
+            let pointed = PathBuf::from(text.trim());
+            if hashed(&pointed) {
+                return Some(pointed);
+            }
+        }
         let stored = dir.join("wstunnel.exe");
         if hashed(&stored) {
             return Some(stored);
