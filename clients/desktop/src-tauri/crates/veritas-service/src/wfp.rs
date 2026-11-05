@@ -569,32 +569,37 @@ fn delete_our_objects(engine: windows_sys::Win32::Foundation::HANDLE) -> Result<
 }
 
 fn our_filter_keys(engine: windows_sys::Win32::Foundation::HANDLE) -> Result<Vec<windows_sys::core::GUID>, u32> {
-    let mut provider = PROVIDER;
-    let mut template = FWPM_FILTER_ENUM_TEMPLATE0::default();
-    template.providerKey = &mut provider;
+    // A provider template can come back as "will never match" even after the
+    // filters exist. Walk the engine's filters and keep ours by provider key.
     let mut enum_handle = ptr::null_mut();
-    let err = unsafe { FwpmFilterCreateEnumHandle0(engine, &template, &mut enum_handle) };
-    // The provider does not exist yet on the first connect. That is an empty set.
+    let err = unsafe { FwpmFilterCreateEnumHandle0(engine, ptr::null(), &mut enum_handle) };
     if err != 0 {
         return Ok(Vec::new());
     }
     let mut entries: *mut *mut FWPM_FILTER0 = ptr::null_mut();
     let mut count = 0u32;
-    let err = unsafe { FwpmFilterEnum0(engine, enum_handle, 256, &mut entries, &mut count) };
+    let err = unsafe { FwpmFilterEnum0(engine, enum_handle, 4096, &mut entries, &mut count) };
     let mut keys = Vec::new();
     if err == 0 && !entries.is_null() {
         for index in 0..count {
             let filter = unsafe { &**entries.add(index as usize) };
-            keys.push(filter.filterKey);
+            if filter.providerKey.is_null() {
+                continue;
+            }
+            let provider = unsafe { &*filter.providerKey };
+            if provider.data1 == PROVIDER.data1
+                && provider.data2 == PROVIDER.data2
+                && provider.data3 == PROVIDER.data3
+                && provider.data4 == PROVIDER.data4
+            {
+                keys.push(filter.filterKey);
+            }
         }
         unsafe { FwpmFreeMemory0(&mut entries as *mut _ as *mut *mut _) };
     }
     unsafe { FwpmFilterDestroyEnumHandle0(engine, enum_handle) };
-    if err != 0 {
-        Ok(Vec::new())
-    } else {
-        Ok(keys)
-    }
+    let _ = err;
+    Ok(keys)
 }
 
 fn filter_count(engine: windows_sys::Win32::Foundation::HANDLE) -> u32 {
