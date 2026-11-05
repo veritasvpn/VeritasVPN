@@ -380,11 +380,29 @@ fn leak_body(dll: String, service: PathBuf) {
 
     run(&service, ["repair"]);
     assert!(probe(open).is_ok(), "repair must release the lock");
-    let released = probe(doc);
-    assert!(
-        released.is_err() && released.as_ref().err().is_none_or(|err| !is_denied(err)),
-        "repair left the documentation address denied"
-    );
+    // The outside address is chosen because it was not denied before the lock.
+    // After repair it may time out or connect. Either means the filter is gone.
+    // A deny can linger for a moment while WFP drops the persistent filters.
+    let mut released = probe(doc);
+    for _ in 0..8 {
+        let cleared = match &released {
+            Ok(()) => true,
+            Err(err) => !is_denied(err),
+        };
+        if cleared {
+            break;
+        }
+        thread::sleep(Duration::from_millis(400));
+        released = probe(doc);
+    }
+    if let Err(err) = &released {
+        assert!(
+            !is_denied(err),
+            "repair left the documentation address denied (kind {:?} raw {:?})",
+            err.kind(),
+            err.raw_os_error()
+        );
+    }
     eprintln!("LEAK_REPAIRED");
 }
 
