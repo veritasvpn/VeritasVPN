@@ -373,7 +373,15 @@ jobs:
         run: ./scripts/stage-windows-bundle.ps1
       - name: Build unsigned NSIS installer
         timeout-minutes: 40
-        run: npx tauri build --bundles nsis
+        shell: pwsh
+        run: |
+          $ok = $false
+          foreach ($try in 1..3) {
+            npx tauri build --bundles nsis
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            if ($try -lt 3) { Start-Sleep -Seconds 20 }
+          }
+          if (-not $ok) { exit 1 }
       - name: Signing hook
         timeout-minutes: 2
         shell: pwsh
