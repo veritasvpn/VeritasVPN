@@ -18,18 +18,23 @@ function Invoke-Bounded([string]$File, [string[]]$ArgumentList, [int]$Seconds) {
 function Invoke-Uninstall([int]$Seconds) {
     $un = Join-Path $installDir "uninstall.exe"
     if (-not (Test-Path $un)) { return 0 }
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "cmd.exe"
-    # cmd strips one pair of quotes around a /c command. The inner quotes
-    # keep the exe path together. _?= is last and stays unquoted, spaces included.
-    $psi.Arguments = "/c `"`"$un`" /S _?=$installDir`""
-    $psi.UseShellExecute = $false
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    if (-not $proc.WaitForExit($Seconds * 1000)) {
+    # The starter copies itself to Temp and returns. The copy does the removal,
+    # including this directory, so do not pass _?=.
+    $proc = Start-Process -FilePath $un -ArgumentList "/S" -WindowStyle Hidden -PassThru
+    if (-not $proc.WaitForExit(20000)) {
         taskkill /F /T /PID $proc.Id | Out-Null
         throw "deadline waiting for uninstall"
     }
-    return $proc.ExitCode
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        $svc = Get-Service -Name VeritasVPN -ErrorAction SilentlyContinue
+        if (-not $svc -and -not (Test-Path $installDir)) { return 0 }
+        Start-Sleep -Milliseconds 500
+    }
+    if ((Get-Service -Name VeritasVPN -ErrorAction SilentlyContinue) -or (Test-Path $installDir)) {
+        throw "uninstall left the app behind"
+    }
+    return 0
 }
 
 function Remove-Installed {
