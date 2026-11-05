@@ -687,11 +687,23 @@ input::placeholder { color: var(--paper-dim); }
   line-height: 1.35;
 }
 
-.settings-switch {
+.settings-drawer button.settings-switch {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--paper);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-drawer button.settings-switch:hover {
+  background: rgba(9, 199, 245, 0.08);
 }
 
 .settings-switch-copy {
@@ -700,6 +712,20 @@ input::placeholder { color: var(--paper-dim); }
   align-items: flex-start;
   gap: 3px;
   min-width: 0;
+}
+
+.settings-switch-copy strong {
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.settings-switch-copy span {
+  color: var(--paper-dim);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
 .settings-switch-track {

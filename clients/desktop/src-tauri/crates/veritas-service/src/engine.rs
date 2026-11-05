@@ -457,7 +457,7 @@ pub(crate) fn log_code(op: &str, code: u32) {
     log_line(op, &format!("win32={code}"));
 }
 
-fn log_line(op: &str, code: &str) {
+pub(crate) fn log_line(op: &str, code: &str) {
     let Some(dir) = program_data() else {
         return;
     };

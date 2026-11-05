@@ -5,7 +5,7 @@ on:
     branches: [master, main]
   pull_request:
     # The Phase 2 branch is the base of the kill-switch pull request.
-    branches: [master, main, cursor/windows-service-direct-b81d, cursor/windows-kill-switch-b81d, cursor/windows-reconnect-b81d]
+    branches: [master, main, cursor/windows-service-direct-b81d, cursor/windows-kill-switch-b81d, cursor/windows-reconnect-b81d, cursor/windows-stealth-b81d]
 
 # Keyed by commit so a runner that has lost its network cannot pin the
 # next push behind a cancel it will never acknowledge.
@@ -338,11 +338,39 @@ jobs:
               if (-not $p.WaitForExit(20000)) { taskkill /F /PID $p.Id | Out-Null }
             }
           }
+      - name: Stage the service and pinned helpers
+        timeout-minutes: 20
+        shell: pwsh
+        run: ./scripts/stage-windows-bundle.ps1
       - name: Build unsigned NSIS installer
+        timeout-minutes: 40
         run: npx tauri build --bundles nsis
+      - name: Signing hook
+        timeout-minutes: 2
+        shell: pwsh
+        run: ./scripts/sign-windows.ps1
       - name: Window opens on the real UI
+        timeout-minutes: 5
         shell: pwsh
         run: ./scripts/windows-ui-smoke.ps1
+      - name: Prove silent install and uninstall
+        timeout-minutes: 15
+        shell: pwsh
+        run: ./scripts/prove-windows-installer.ps1
+      - name: Remove a leftover install
+        if: always()
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $un = Join-Path $env:ProgramFiles "VeritasVPN\uninstall.exe"
+          if (Test-Path $un) {
+            $p = Start-Process -FilePath $un -ArgumentList "/S" -WindowStyle Hidden -PassThru
+            if (-not $p.WaitForExit(60000)) { taskkill /F /PID $p.Id | Out-Null }
+          }
+          foreach ($image in @("veritasvpn-desktop.exe", "wstunnel.exe")) {
+            $k = Start-Process -FilePath taskkill -ArgumentList @("/F", "/IM", $image) -WindowStyle Hidden -PassThru
+            if (-not $k.WaitForExit(8000)) { taskkill /F /PID $k.Id | Out-Null }
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: veritasvpn-windows-nsis

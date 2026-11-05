@@ -1002,6 +1002,7 @@ function App() {
   });
   const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
   const [capabilities] = useState<PlatformCapabilities>(() => platformCapabilities());
+  const [startWithWindows, setStartWithWindows] = useState(false);
   const [stealthMode, setStealthMode] = useState<StealthChoice>(() => (capabilities.stealth ? readStealthChoice() : "udp"));
   const [blockedDismissed, setBlockedDismissed] = useState(false);
   const [blockedStep, setBlockedStep] = useState({ visible: false, offerStealth: false, suggestOtherNetwork: false });
@@ -1025,6 +1026,7 @@ function App() {
   const authBootstrapGenerationRef = useRef(0);
   const userDisconnectedRef = useRef(false);
   const handleDisconnectRef = useRef<() => Promise<void>>(async () => {});
+  const handleConnectRef = useRef<() => Promise<void>>(async () => {});
   const clearReconnectTimerRef = useRef<() => void>(() => {});
   const hadGoodHandshakeRef = useRef(false);
   const hadInterfaceUpRef = useRef(false);
@@ -1769,6 +1771,7 @@ function App() {
       connectInFlightRef.current = false;
     }
   }, [clearReconnectTimer, connectVpn, capabilities.killSwitch]);
+  handleConnectRef.current = handleConnect;
 
   const disconnectInFlightRef = useRef(false);
   const handleDisconnect = useCallback(async () => {
@@ -1827,6 +1830,41 @@ function App() {
     }
   }, [tunnelMode, peerId, clearReconnectTimer, deletePeer, capabilities.killSwitch]);
   handleDisconnectRef.current = handleDisconnect;
+
+  useEffect(() => {
+    if (capabilities.os !== "windows") return;
+    void invoke<boolean>("autostart_enabled").then(setStartWithWindows).catch(() => setStartWithWindows(false));
+  }, [capabilities.os]);
+
+  useEffect(() => {
+    if (capabilities.os !== "windows") return;
+    void invoke("set_session_resident", { connected }).catch(() => undefined);
+  }, [capabilities.os, connected]);
+
+  useEffect(() => {
+    if (capabilities.os !== "windows") return;
+    let unlisten: (() => void) | undefined;
+    let cancel = false;
+    void import("@tauri-apps/api/event").then(async ({ listen }) => {
+      const stop = await listen("tray-toggle", () => {
+        if (connectedRef.current) void handleDisconnectRef.current();
+        else void handleConnectRef.current();
+      });
+      if (cancel) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      cancel = true;
+      unlisten?.();
+    };
+  }, [capabilities.os]);
+
+  const toggleAutostart = useCallback(async () => {
+    const next = !startWithWindows;
+    const ok = await invoke<boolean>("set_autostart", { enabled: next }).catch(() => false);
+    if (ok) setStartWithWindows(next);
+    else setStatusMsg("Couldn't change start-up. Try again.");
+  }, [startWithWindows]);
 
   const attemptReconnect = useCallback(async (opts?: { once?: boolean }) => {
     if (reconnectingRef.current) return;
@@ -2691,6 +2729,9 @@ function App() {
         onClose={closeSettings}
         returnFocusRef={settingsCogRef}
         showStealth={capabilities.stealth}
+        showAutostart={capabilities.os === "windows"}
+        autostart={startWithWindows}
+        onToggleAutostart={() => void toggleAutostart()}
         onOpenAccount={openAccount}
         onOpenNetworkMap={openNetworkMap}
         onOpenStealthSettings={openStealthSettings}

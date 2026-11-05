@@ -27,6 +27,8 @@ mod network_switch;
 mod tunnel;
 #[cfg(target_os = "windows")]
 mod win_pipe;
+#[cfg(target_os = "windows")]
+mod windows_shell;
 
 fn keyring_entry(name: &str) -> Result<keyring::Entry, String> {
     if name != "access_token" && name != "refresh_token" {
@@ -4388,8 +4390,56 @@ mod security_tests {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn pipe_check() -> i32 {
+    win_pipe::write_hello_marker()
+}
+
+#[tauri::command]
+fn autostart_enabled() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows_shell::autostart_enabled()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows_shell::set_autostart(enabled)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = enabled;
+        false
+    }
+}
+
+#[tauri::command]
+fn set_session_resident(connected: bool) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows_shell::set_resident(connected);
+        true
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = connected;
+        false
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    if !windows_shell::acquire_instance() {
+        return;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
@@ -4397,8 +4447,12 @@ pub fn run() {
         .setup(|app| {
             // Native dark title bar on Windows only. Linux keeps its system frame.
             #[cfg(target_os = "windows")]
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_theme(Some(tauri::Theme::Dark));
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_theme(Some(tauri::Theme::Dark));
+                    windows_shell::watch_close(&window);
+                }
+                windows_shell::install_tray(app.handle().clone());
             }
             #[cfg(not(target_os = "windows"))]
             let _ = app;
@@ -4421,7 +4475,10 @@ pub fn run() {
             recovery_close,
             recover_wireguard,
             clear_stale_kill_switch,
-            repair_kill_switch
+            repair_kill_switch,
+            autostart_enabled,
+            set_autostart,
+            set_session_resident
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

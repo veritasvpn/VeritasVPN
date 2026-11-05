@@ -46,6 +46,10 @@ impl Helper {
     }
 }
 
+pub fn helper_is_pinned(path: &Path) -> bool {
+    hashed(path)
+}
+
 pub fn locate() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("VERITAS_WSTUNNEL") {
         let path = PathBuf::from(path);

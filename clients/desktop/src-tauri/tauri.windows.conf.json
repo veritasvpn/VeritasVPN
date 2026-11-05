@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "resources": {
+      "resources/bin/": "resources/bin/",
+      "target/windows-bundle/veritas-service.exe": "service/veritas-service.exe",
+      "target/windows-bundle/wireguard.dll": "service/wireguard.dll",
+      "target/windows-bundle/wstunnel.exe": "service/wstunnel.exe"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    }
+  }
+}

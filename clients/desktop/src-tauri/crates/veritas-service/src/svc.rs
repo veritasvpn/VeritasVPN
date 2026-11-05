@@ -3,21 +3,22 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::System::Services::{
     ChangeServiceConfig2W, CloseServiceHandle, ControlService, CreateServiceW, DeleteService,
-    OpenSCManagerW, OpenServiceW, RegisterServiceCtrlHandlerExW, SetServiceStatus, StartServiceW,
-    StartServiceCtrlDispatcherW, SC_ACTION, SC_ACTION_RESTART, SC_HANDLE, SC_MANAGER_CONNECT,
-    SC_MANAGER_CREATE_SERVICE, SERVICE_ACCEPT_POWEREVENT, SERVICE_ACCEPT_SHUTDOWN,
-    SERVICE_ACCEPT_STOP,
-    SERVICE_AUTO_START, SERVICE_CONFIG_DESCRIPTION, SERVICE_CONFIG_FAILURE_ACTIONS,
-    SERVICE_CONTROL_POWEREVENT, SERVICE_CONTROL_SHUTDOWN, SERVICE_CONTROL_STOP, SERVICE_DESCRIPTIONW,
-    SERVICE_ERROR_NORMAL,
-    SERVICE_FAILURE_ACTIONSW, SERVICE_RUNNING, SERVICE_START_PENDING, SERVICE_STATUS,
-    SERVICE_STOPPED, SERVICE_STOP_PENDING, SERVICE_TABLE_ENTRYW, SERVICE_WIN32_OWN_PROCESS,
+    OpenSCManagerW, OpenServiceW, QueryServiceStatus, RegisterServiceCtrlHandlerExW,
+    SetServiceStatus, StartServiceW, StartServiceCtrlDispatcherW, SC_ACTION, SC_ACTION_RESTART,
+    SC_HANDLE, SC_MANAGER_CONNECT, SC_MANAGER_CREATE_SERVICE, SERVICE_ACCEPT_POWEREVENT,
+    SERVICE_ACCEPT_SHUTDOWN, SERVICE_ACCEPT_STOP, SERVICE_AUTO_START, SERVICE_CONFIG_DESCRIPTION,
+    SERVICE_CONFIG_FAILURE_ACTIONS, SERVICE_CONTROL_POWEREVENT, SERVICE_CONTROL_SHUTDOWN,
+    SERVICE_CONTROL_STOP, SERVICE_DESCRIPTIONW, SERVICE_ERROR_NORMAL, SERVICE_FAILURE_ACTIONSW,
+    SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START_PENDING, SERVICE_STATUS, SERVICE_STOPPED,
+    SERVICE_STOP_PENDING, SERVICE_TABLE_ENTRYW, SERVICE_WIN32_OWN_PROCESS,
 };
 
 use crate::engine;
@@ -29,14 +30,23 @@ static STOP: AtomicBool = AtomicBool::new(false);
 static STATUS_HANDLE: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
     std::sync::atomic::AtomicPtr::new(ptr::null_mut());
 
-pub fn install(client: &Path, dll: Option<&Path>) -> Result<(), i32> {
+pub fn install(client: &Path, dll: Option<&Path>, helper: Option<&Path>) -> Result<(), i32> {
     let client = std::fs::canonicalize(client).map_err(|_| 3)?;
+    if let Some(helper) = helper {
+        if !crate::stealth::helper_is_pinned(helper) {
+            engine::log_line("install", "helper");
+            return Err(3);
+        }
+    }
     let sid = pipe::current_user_sid().ok_or(3)?;
     pipe::write_state(&client, &sid).map_err(|_| 3)?;
-    if let Some(dll) = dll {
-        if let Some(dir) = engine::program_data() {
-            let _ = std::fs::create_dir_all(&dir);
+    if let Some(dir) = engine::program_data() {
+        let _ = std::fs::create_dir_all(&dir);
+        if let Some(dll) = dll {
             let _ = std::fs::copy(dll, dir.join("wireguard.dll"));
+        }
+        if let Some(helper) = helper {
+            std::fs::copy(helper, dir.join("wstunnel.exe")).map_err(|_| 3)?;
         }
     }
     unsafe {
@@ -78,23 +88,40 @@ pub fn install(client: &Path, dll: Option<&Path>) -> Result<(), i32> {
 }
 
 pub fn uninstall() -> Result<(), i32> {
-    let _ = crate::engine::release_lock();
+    // Stop first. The monitor re-arms the lock if it is still running.
     let _ = stop_service();
+    wait_until_stopped();
+    let lock_ok = crate::engine::release_lock().is_ok();
+    let _ = remove_adapter();
+    kill_helper();
+    let deleted = delete_service();
+    let _ = remove_autostart();
+    let files_ok = remove_program_data();
+    println!("UNINSTALL_LOCK {}", u8::from(lock_ok));
+    println!("UNINSTALL_SERVICE {}", u8::from(deleted));
+    println!("UNINSTALL_FILES {}", u8::from(files_ok));
+    if deleted && files_ok {
+        Ok(())
+    } else {
+        Err(3)
+    }
+}
+
+pub fn service_installed() -> bool {
     unsafe {
         let scm = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_CONNECT);
         if scm.is_null() {
-            return Err(3);
+            return false;
         }
-        let deleted = delete_open(scm);
+        let name = wide(NAME);
+        let service = OpenServiceW(scm, name.as_ptr(), SERVICE_QUERY_STATUS);
+        let present = !service.is_null();
+        if !service.is_null() {
+            CloseServiceHandle(service);
+        }
         CloseServiceHandle(scm);
-        if !deleted {
-            return Err(3);
-        }
+        present
     }
-    if let Some(dir) = engine::program_data() {
-        let _ = std::fs::remove_file(dir.join("client.txt"));
-    }
-    Ok(())
 }
 
 pub fn start() -> Result<(), i32> {
@@ -112,7 +139,7 @@ pub fn start() -> Result<(), i32> {
         let ok = StartServiceW(service, 0, ptr::null());
         CloseServiceHandle(service);
         CloseServiceHandle(scm);
-        if ok == 0 {
+        if ok == 0 && GetLastError() != 1056 {
             return Err(3);
         }
     }
@@ -135,11 +162,12 @@ pub fn stop_service() -> Result<(), i32> {
         let ok = ControlService(service, SERVICE_CONTROL_STOP, &mut status);
         CloseServiceHandle(service);
         CloseServiceHandle(scm);
-        if ok == 0 {
+        // 1062: the service is already stopped.
+        if ok == 0 && GetLastError() != 1062 {
             return Err(3);
         }
     }
-    std::thread::sleep(Duration::from_millis(500));
+    wait_until_stopped();
     Ok(())
 }
 
@@ -270,6 +298,121 @@ unsafe fn delete_open(scm: SC_HANDLE) -> bool {
     let ok = DeleteService(service);
     CloseServiceHandle(service);
     ok != 0
+}
+
+fn wait_until_stopped() {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(8) {
+        if !service_running() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn service_running() -> bool {
+    unsafe {
+        let scm = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_CONNECT);
+        if scm.is_null() {
+            return false;
+        }
+        let name = wide(NAME);
+        let service = OpenServiceW(scm, name.as_ptr(), SERVICE_QUERY_STATUS);
+        if service.is_null() {
+            CloseServiceHandle(scm);
+            return false;
+        }
+        let mut status = std::mem::zeroed::<SERVICE_STATUS>();
+        let ok = QueryServiceStatus(service, &mut status);
+        CloseServiceHandle(service);
+        CloseServiceHandle(scm);
+        ok != 0 && status.dwCurrentState != SERVICE_STOPPED
+    }
+}
+
+fn delete_service() -> bool {
+    unsafe {
+        let scm = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_CONNECT);
+        if scm.is_null() {
+            return false;
+        }
+        let deleted = delete_open(scm);
+        CloseServiceHandle(scm);
+        deleted || !service_installed()
+    }
+}
+
+fn remove_adapter() -> bool {
+    let Ok(path) = engine::dll_path() else {
+        return true;
+    };
+    match crate::wg::adapter_present(&path) {
+        Ok(true) => {
+            // Opening the adapter is enough for WireGuardNT to drop it when
+            // this process closes the handle. A second look must miss it.
+            crate::wg::adapter_present(&path).ok() != Some(true)
+        }
+        Ok(false) => true,
+        Err(()) => false,
+    }
+}
+
+fn kill_helper() {
+    let Ok(mut child) = Command::new("taskkill")
+        .args(["/F", "/IM", "wstunnel.exe"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let start = Instant::now();
+    loop {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        if start.elapsed() > Duration::from_secs(8) {
+            let _ = child.kill();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn remove_program_data() -> bool {
+    let Some(dir) = engine::program_data() else {
+        return true;
+    };
+    if !dir.exists() {
+        return true;
+    }
+    std::fs::remove_dir_all(&dir).is_ok() || !dir.exists()
+}
+
+fn remove_autostart() -> bool {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegDeleteValueW, RegOpenKeyExW, HKEY_CURRENT_USER, KEY_SET_VALUE,
+    };
+    let key_name = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    let mut key = ptr::null_mut();
+    let err = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            key_name.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &mut key,
+        )
+    };
+    if err != 0 {
+        return true;
+    }
+    let value = wide(NAME);
+    unsafe {
+        RegDeleteValueW(key, value.as_ptr());
+        RegCloseKey(key);
+    }
+    true
 }
 
 fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
