@@ -1,0 +1,11 @@
+[package]
+name = "veritas-ipc"
+version = "0.2.99"
+edition = "2021"
+publish = false
+description = "Versioned messages between the VeritasVPN window and the Windows service"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+veritas-core = { path = "../veritas-core" }

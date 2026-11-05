@@ -25,6 +25,8 @@ mod network_switch;
 mod network_switch;
 
 mod tunnel;
+#[cfg(target_os = "windows")]
+mod win_pipe;
 
 fn keyring_entry(name: &str) -> Result<keyring::Entry, String> {
     if name != "access_token" && name != "refresh_token" {

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/veritas-core"]
+members = [".", "crates/veritas-core", "crates/veritas-ipc", "crates/veritas-service"]
 resolver = "2"
 
 [package]
@@ -27,6 +27,13 @@ dirs-next = "2.0.0"
 base64 = "0.22.1"
 keyring = "4.1.6"
 veritas-core = { path = "crates/veritas-core" }
+veritas-ipc = { path = "crates/veritas-ipc" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Pipes",
+] }
 
 [features]
 default = ["custom-protocol"]
