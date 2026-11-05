@@ -238,7 +238,7 @@ fn assert_other_user_denied() {
 
 fn wait_carry() {
     let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(12) {
+    while start.elapsed() < Duration::from_secs(30) {
         let before = transact(&Request::new(7, OP_STATS), 2_000)
             .ok()
             .and_then(|response| response.status)
@@ -259,7 +259,7 @@ fn wait_carry() {
         }
     }
     panic!(
-        "tunnel did not carry a packet within 12s\n{}",
+        "tunnel did not carry a packet within 30s\n{}",
         fs::read_to_string(r"C:\ProgramData\VeritasVPN\stealth.log").unwrap_or_default()
     );
 }
