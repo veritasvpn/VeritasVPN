@@ -593,7 +593,7 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
         .args([
             "server",
             "--restrict-http-upgrade-path-prefix",
-            "veritas",
+            "/veritas",
             &format!("ws://127.0.0.1:{port}"),
         ])
         .stdout(Stdio::null())
@@ -690,7 +690,7 @@ fn bring_up_stealth(dll: &str, remote: &str) -> TestPeer {
         peer_id: "peer-stealth".into(),
         preshared_key: String::new(),
         stealth_endpoint: remote.into(),
-        stealth_path_prefix: "veritas".into(),
+        stealth_path_prefix: "/veritas".into(),
         endpoint_lan: String::new(),
         endpoint_wan: String::new(),
     };
