@@ -4,6 +4,7 @@
 #![cfg(windows)]
 
 use std::fs;
+use std::io::Write;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::process::Command;
@@ -166,14 +167,24 @@ fn wait_until_hello() {
 fn assert_other_user_denied() {
     let ticks = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
+        .map(|d| d.subsec_nanos())
         .unwrap_or(1);
-    let password = format!("Aa1!Vx{ticks:x}");
-    let created = Command::new("net")
+    // 14 characters or fewer, or `net user` asks a question this runner cannot answer.
+    let password = format!("Aa1!{ticks:09x}");
+    let mut child = Command::new("net")
         .args(["user", "veritas-other", password.as_str(), "/add"])
-        .status()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .expect("net user");
-    assert!(created.success(), "could not create the other user");
+    child.stdin.as_mut().unwrap().write_all(b"Y\r\n").ok();
+    let created = child.wait_with_output().expect("net user");
+    assert!(
+        created.status.success(),
+        "could not create the other user: {}",
+        String::from_utf8_lossy(&created.stdout)
+    );
     let user = wide("veritas-other");
     let pass = wide(&password);
     let mut token = std::ptr::null_mut();
