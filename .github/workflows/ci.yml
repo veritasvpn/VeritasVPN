@@ -296,7 +296,7 @@ jobs:
         run: cargo test --locked --workspace --lib
         working-directory: clients/desktop/src-tauri
       - name: Prove the Direct-mode service
-        timeout-minutes: 20
+        timeout-minutes: 12
         shell: pwsh
         run: |
           ./scripts/bundle-wireguard-nt.ps1 | Out-Null
@@ -308,7 +308,7 @@ jobs:
               "-p","veritas-service","--test","direct_mode","--",
               "--test-threads=1","--nocapture"
             ) -NoNewWindow -PassThru
-            if (-not $cargo.WaitForExit(900000)) {
+            if (-not $cargo.WaitForExit(480000)) {
               taskkill /F /T /PID $cargo.Id | Out-Null
               $failed = $true
             } elseif ($cargo.ExitCode -ne 0) {
