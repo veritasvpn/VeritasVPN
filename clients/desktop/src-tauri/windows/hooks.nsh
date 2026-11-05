@@ -3,20 +3,25 @@
 ; once a real certificate exists. Do not point that at a stand-in.
 
 !macro NSIS_HOOK_PREINSTALL
+  FileOpen $9 "$TEMP\veritas-install-hook.txt" w
+  FileWrite $9 "preinstall$\n"
   ${If} ${IsNativeARM64}
+    FileWrite $9 "arm$\n"
+    FileClose $9
     ${IfNot} ${Silent}
       MessageBox MB_ICONSTOP "VeritasVPN for Windows on ARM is not available yet."
     ${EndIf}
     Abort
   ${EndIf}
   ReadRegStr $0 HKLM "SOFTWARE\Microsoft\Windows NT\CurrentVersion" "CurrentBuildNumber"
-  IntCmp $0 19045 veritas_build_ok veritas_build_ok veritas_build_old
-  veritas_build_old:
+  FileWrite $9 "build=$0$\n"
+  FileClose $9
+  ${If} $0 < 19045
     ${IfNot} ${Silent}
       MessageBox MB_ICONSTOP "VeritasVPN needs Windows 10 version 22H2 or Windows 11."
     ${EndIf}
     Abort
-  veritas_build_ok:
+  ${EndIf}
   ExecWait 'taskkill /F /IM veritasvpn-desktop.exe' $0
   ExecWait 'taskkill /F /IM wstunnel.exe' $0
   IfFileExists "$INSTDIR\service\veritas-service.exe" 0 veritas_pre_done

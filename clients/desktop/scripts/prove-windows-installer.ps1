@@ -38,6 +38,8 @@ try {
     $installer = Get-ChildItem -Path $installerDir -Filter "*.exe" | Select-Object -First 1
     if (-not $installer) { throw "NSIS installer was not produced" }
     $code = Invoke-Bounded $installer.FullName @("/S") 180
+    $hook = Join-Path $env:TEMP "veritas-install-hook.txt"
+    if (Test-Path $hook) { Get-Content $hook | ForEach-Object { Write-Host "INSTALL_HOOK $_" } }
     if ($code -ne 0) { throw "installer exit $code" }
     Write-Host "INSTALL_SILENT"
 
