@@ -32,6 +32,7 @@ import {
 } from "./billing";
 import { AUTH_API } from "./config";
 import { classifyPeerCheck, connectWatchdogAction, displayStatus, keepsReconnectingView, peerGoneAction, peerGoneLatchHeld, recoveryRetryAction, sessionLooksConnected, tunnelAddress, underlayNoticeKeepsSession } from "./reconnectPolicy";
+import { platformCapabilities, type PlatformCapabilities } from "./platform";
 import { obtainTurnstileToken, prewarmTurnstile } from "./turnstile";
 import {
   advanceBlocked,
@@ -237,13 +238,6 @@ async function fetchRecovery(url: string, init: RequestInit = {}, budgetMs = REC
   } finally {
     window.clearTimeout(timer);
   }
-}
-
-/** Stealth (wstunnel) is Linux-desktop only in this build. */
-function isLinuxDesktop(): boolean {
-  if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent.toLowerCase();
-  return ua.includes("linux") && !ua.includes("android");
 }
 
 interface DesktopDeviceMetadata {
@@ -1007,7 +1001,8 @@ function App() {
     return stored === "none" ? "" : stored;
   });
   const [excludeLan, setExcludeLan] = useState(() => readLocalFlag(LS_EXCLUDE_LAN, "0"));
-  const [stealthMode, setStealthMode] = useState<StealthChoice>(() => (isLinuxDesktop() ? readStealthChoice() : "udp"));
+  const [capabilities] = useState<PlatformCapabilities>(() => platformCapabilities());
+  const [stealthMode, setStealthMode] = useState<StealthChoice>(() => (capabilities.stealth ? readStealthChoice() : "udp"));
   const [blockedDismissed, setBlockedDismissed] = useState(false);
   const [blockedStep, setBlockedStep] = useState({ visible: false, offerStealth: false, suggestOtherNetwork: false });
   const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
@@ -1015,7 +1010,6 @@ function App() {
   const blockedClockRef = useRef<BlockedClock>(initialBlockedClock());
   const blockedDismissedRef = useRef(false);
   const [transport, setTransport] = useState<"" | "udp" | "stealth" | "switching">("");
-  const [linuxDesktop] = useState(() => isLinuxDesktop());
   const [killSwitchLeftover, setKillSwitchLeftover] = useState(false);
   const [killSwitchBusy, setKillSwitchBusy] = useState(false);
   const [reconnectToApply, setReconnectToApply] = useState(false);
@@ -1078,7 +1072,7 @@ function App() {
   useEffect(() => { shieldFlagsRef.current = shieldFlags; }, [shieldFlags]);
 
   const restoreLeftoverKillSwitch = useCallback(async () => {
-    if (!linuxDesktop || connectedRef.current || connectingRef.current) return;
+    if (!capabilities.killSwitch || connectedRef.current || connectingRef.current) return;
     setKillSwitchBusy(true);
     try {
       const status = await invoke<StaleKillSwitchStatus>("clear_stale_kill_switch");
@@ -1090,13 +1084,13 @@ function App() {
     } finally {
       setKillSwitchBusy(false);
     }
-  }, [linuxDesktop]);
+  }, [capabilities.killSwitch]);
 
   useEffect(() => {
-    if (!linuxDesktop) return;
+    if (!capabilities.killSwitch) return;
     void invoke<ConnectResult>("recovery_close", { releaseLock: false }).catch(() => undefined);
     void restoreLeftoverKillSwitch();
-  }, [linuxDesktop, restoreLeftoverKillSwitch]);
+  }, [capabilities.killSwitch, restoreLeftoverKillSwitch]);
 
   useEffect(() => {
     if (connected) setKillSwitchLeftover(false);
@@ -1196,11 +1190,11 @@ function App() {
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!linuxDesktop && stealthMode !== "udp") {
+    if (!capabilities.stealth && stealthMode !== "udp") {
       setStealthMode("udp");
       writeStealthChoice("udp");
     }
-  }, [linuxDesktop, stealthMode]);
+  }, [capabilities.stealth, stealthMode]);
 
   useEffect(() => {
     if (!isRecordableError(statusMsg)) return;
@@ -1274,9 +1268,9 @@ function App() {
       setPeerId("");
       setStatusSticky(true);
       setStatusMsg("Connection timed out. Check your network and try again.");
-    }, linuxDesktop ? CONNECT_WATCHDOG_MS : CONNECT_TIMEOUT_MS);
+    }, capabilities.killSwitch ? CONNECT_WATCHDOG_MS : CONNECT_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
-  }, [connecting, transport, linuxDesktop]);
+  }, [connecting, transport, capabilities.killSwitch]);
 
   useEffect(() => {
     if ((!checkoutUrl && !checkoutSettlementPending) || !user) return;
@@ -1551,7 +1545,7 @@ function App() {
     if (connectedRef.current && !opts?.isReconnect) return false;
 
     const recover = opts?.recover === true;
-    const choice: StealthChoice = linuxDesktop ? stealthModeRef.current : "udp";
+    const choice: StealthChoice = capabilities.stealth ? stealthModeRef.current : "udp";
     const wantedStealth = choice === "stealth";
     if (!recover) showStatus("", false);
     const generation = recover ? recoveryGenerationRef.current + 1 : recoveryGenerationRef.current;
@@ -1594,7 +1588,7 @@ function App() {
         }
       }
 
-      if (choice === "stealth" && !linuxDesktop) {
+      if (choice === "stealth" && !capabilities.stealth) {
         throw new Error("Stealth mode is Linux-only in this build. Choose UDP only to connect with Direct UDP.");
       }
 
@@ -1645,7 +1639,7 @@ function App() {
 
       const allowedRaw = peer.client_allowed_ips || peer.allowed_ips || ["0.0.0.0/0", "::/0"];
       const allowed = applyExcludeLan(allowedRaw, excludeLanRef.current);
-      const stealthUsable = linuxDesktop && !!peer.stealth_available && !!peer.stealth_endpoint && !!peer.stealth_path_prefix;
+      const stealthUsable = capabilities.stealth && !!peer.stealth_available && !!peer.stealth_endpoint && !!peer.stealth_path_prefix;
       if (choice === "stealth" && !stealthUsable) {
         throw new Error("Stealth is not available on the VPN node yet. Choose UDP only or try again later.");
       }
@@ -1736,11 +1730,11 @@ function App() {
       setConnecting(false);
       if (applyStealth && stealthModeRef.current === "stealth" && !usedStealth && !userDisconnectedRef.current) {
         window.setTimeout(() => {
-          void connectVpn({ isReconnect: true, recover: recover || (linuxDesktop && connectedRef.current) });
+          void connectVpn({ isReconnect: true, recover: recover || (capabilities.killSwitch && connectedRef.current) });
         }, 0);
       }
     }
-  }, [user, deletePeer, linuxDesktop, showStatus, expireAndReturnToSignIn]);
+  }, [user, deletePeer, capabilities.stealth, capabilities.killSwitch, showStatus, expireAndReturnToSignIn]);
 
   const connectInFlightRef = useRef(false);
   const connectEpochRef = useRef(0);
@@ -1754,7 +1748,7 @@ function App() {
     setStatusSticky(false);
     recoveryGaveUpRef.current = false;
     peerGoneLatchedRef.current = peerGoneLatchHeld(peerGoneLatchedRef.current, false, true);
-    if (linuxDesktop) {
+    if (capabilities.killSwitch) {
       await invoke<ConnectResult>("recovery_close", { releaseLock: false }).catch(() => undefined);
     }
     try {
@@ -1762,7 +1756,7 @@ function App() {
     } finally {
       connectInFlightRef.current = false;
     }
-  }, [clearReconnectTimer, connectVpn, linuxDesktop]);
+  }, [clearReconnectTimer, connectVpn, capabilities.killSwitch]);
 
   const disconnectInFlightRef = useRef(false);
   const handleDisconnect = useCallback(async () => {
@@ -1791,7 +1785,7 @@ function App() {
     };
     const oldPeer = peerId;
     let teardownFailedMsg = "";
-    if (linuxDesktop) {
+    if (capabilities.killSwitch) {
       await invoke<ConnectResult>("recovery_close", { releaseLock: false }).catch(() => undefined);
     }
     try {
@@ -1819,7 +1813,7 @@ function App() {
     } finally {
       disconnectInFlightRef.current = false;
     }
-  }, [tunnelMode, peerId, clearReconnectTimer, deletePeer, linuxDesktop]);
+  }, [tunnelMode, peerId, clearReconnectTimer, deletePeer, capabilities.killSwitch]);
   handleDisconnectRef.current = handleDisconnect;
 
   const attemptReconnect = useCallback(async (opts?: { once?: boolean }) => {
@@ -1845,7 +1839,7 @@ function App() {
       }
 
       let ok = false;
-      if (linuxDesktop) {
+      if (capabilities.killSwitch) {
         ok = await connectVpn({ isReconnect: true, recover: true });
       } else {
         const oldPeer = peerIdRef.current;
@@ -1866,7 +1860,7 @@ function App() {
         setReconnecting(false);
         setStatusSticky(false);
         setStatusMsg("");
-      } else if (once || recoveryGaveUpRef.current || (linuxDesktop && recoveryRetryAction(attempt) === "stop")) {
+      } else if (once || recoveryGaveUpRef.current || (capabilities.killSwitch && recoveryRetryAction(attempt) === "stop")) {
         reconnectingRef.current = false;
         setReconnecting(false);
         setStatusSticky(true);
@@ -1882,7 +1876,7 @@ function App() {
         }
       }
     }, delay);
-  }, [clearReconnectTimer, connectVpn, deletePeer, linuxDesktop]);
+  }, [clearReconnectTimer, connectVpn, deletePeer, capabilities.killSwitch]);
   attemptReconnectRef.current = attemptReconnect;
 
   useEffect(() => {
@@ -2260,11 +2254,11 @@ function App() {
   }, [excludeLan]);
 
   const setStealthChoice = useCallback((next: StealthChoice) => {
-    if (!linuxDesktop || stealthMode === next) return;
+    if (!capabilities.stealth || stealthMode === next) return;
     writeStealthChoice(next);
     setStealthMode(next);
     setReconnectToApply(true);
-  }, [linuxDesktop, stealthMode]);
+  }, [capabilities.stealth, stealthMode]);
 
   const applyStealthNow = useCallback(() => {
     const next = modeAfterStealthTap(stealthModeRef.current, true);
@@ -2282,7 +2276,7 @@ function App() {
     clearReconnectTimer();
     reconnectingRef.current = false;
     setReconnecting(true);
-    void connectVpn({ isReconnect: true, recover: linuxDesktop }).then((ok) => {
+    void connectVpn({ isReconnect: true, recover: capabilities.killSwitch }).then((ok) => {
       if (ok) {
         reconnectAttemptRef.current = 0;
         reconnectingRef.current = false;
@@ -2297,7 +2291,7 @@ function App() {
         setReconnecting(false);
       }
     });
-  }, [clearReconnectTimer, connectVpn, attemptReconnect, linuxDesktop]);
+  }, [clearReconnectTimer, connectVpn, attemptReconnect, capabilities.killSwitch]);
 
   const handleSignOut = useCallback(() => {
     // Make the app unauthenticated first. Disconnecting the tunnel and deleting
@@ -2684,7 +2678,7 @@ function App() {
         open={showSettings}
         onClose={closeSettings}
         returnFocusRef={settingsCogRef}
-        linuxDesktop={linuxDesktop}
+        showStealth={capabilities.stealth}
         onOpenAccount={openAccount}
         onOpenNetworkMap={openNetworkMap}
         onOpenStealthSettings={openStealthSettings}

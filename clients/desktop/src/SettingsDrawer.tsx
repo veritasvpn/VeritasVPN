@@ -8,7 +8,7 @@ export type SettingsDrawerProps = {
   open: boolean;
   onClose: () => void;
   returnFocusRef: RefObject<HTMLButtonElement | null>;
-  linuxDesktop: boolean;
+  showStealth: boolean;
   onOpenAccount: () => void;
   onOpenNetworkMap: () => void;
   onOpenStealthSettings: () => void;
@@ -133,7 +133,7 @@ export function SettingsDrawer({
   open,
   onClose,
   returnFocusRef,
-  linuxDesktop,
+  showStealth,
   onOpenAccount,
   onOpenNetworkMap,
   onOpenStealthSettings,
@@ -250,7 +250,7 @@ export function SettingsDrawer({
           <section className="settings-drawer-section" aria-label="Connection">
             <p className="settings-drawer-label">Connection</p>
             <div className="settings-group">
-              {linuxDesktop && (
+              {showStealth && (
                 <NavItem
                   label="Stealth"
                   note="Auto · UDP only · Stealth always"
