@@ -4391,6 +4391,26 @@ mod security_tests {
 }
 
 #[cfg(target_os = "windows")]
+fn open_parity_screen(window: &tauri::WebviewWindow) {
+    let Ok(screen) = std::env::var("VERITAS_PARITY") else {
+        return;
+    };
+    if screen.len() > 32 || !screen.chars().all(|c| c.is_ascii_lowercase()) {
+        return;
+    }
+    let window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let js = format!(
+            "if (!location.search.includes('parity=')) location.replace(location.origin + location.pathname + '?parity={screen}');"
+        );
+        let _ = window.eval(js);
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        let _ = window.set_title(&format!("VeritasVPN parity {screen}"));
+    });
+}
+
+#[cfg(target_os = "windows")]
 pub fn pipe_check() -> i32 {
     win_pipe::write_hello_marker()
 }
@@ -4451,6 +4471,7 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_theme(Some(tauri::Theme::Dark));
                     windows_shell::watch_close(&window);
+                    open_parity_screen(&window);
                 }
                 windows_shell::install_tray(app.handle().clone());
             }

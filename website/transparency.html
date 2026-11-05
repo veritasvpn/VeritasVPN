@@ -51,7 +51,7 @@
   <main class="legal-page">
     <div class="container">
       <h1>Transparency</h1>
-      <p class="legal-meta">Last updated: October 25, 2026. Veritas Ark, Asunción, Paraguay. <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a>. This page explains the controls behind the <a href="/privacy">Privacy Policy</a>. It is not a substitute for that policy, and it is not an audit.</p>
+      <p class="legal-meta">Last updated: November 5, 2026. Veritas Ark, Asunción, Paraguay. <a href="mailto:contact@veritasvpn.cloud">contact@veritasvpn.cloud</a>. This page explains the controls behind the <a href="/privacy">Privacy Policy</a>. It is not a substitute for that policy, and it is not an audit.</p>
 
       <h2 id="what-this-is">What this page is</h2>
       <p>
@@ -91,7 +91,7 @@
         <li>The assigned tunnel IP, the server, the status, and the create time.</li>
         <li>The last handshake time. That is a timestamp, not an address.</li>
         <li>A random per-install device ID. The app creates it on the device so one account can have one peer per install, up to the plan's device limit. It is not an IMEI, Android ID, advertising ID, or MAC address. The peer-created log stores a short hash of it, not the raw value.</li>
-        <li>Device name, platform, model, OS version, and client version. Android sends the manufacturer and model. The Linux app may send the computer hostname as the device model. These are display data for the account, and the device ID is also how the device limit is enforced.</li>
+        <li>Device name, platform, model, OS version, and client version. Android sends the manufacturer and model. The Linux app and the Windows app may send the computer name as the device model. The Windows app labels the platform Windows. These are display data for the account, and the device ID is also how the device limit is enforced. The Windows service log stays on that PC, holds operation names and numeric codes, does not include addresses, and is not uploaded.</li>
         <li>The Veritas Shield toggles for that peer.</li>
       </ul>
       <p>A free account cannot create a tunnel, so Shield does not filter a free account.</p>
@@ -292,7 +292,8 @@
       <p>
         The Android app does not request a location permission. The connection map
         draws a fixed point for the server in Paraguay. It does not read the
-        device location. The Linux app map is the server location as well.
+        device location. The Linux app map and the Windows app map are the server
+        location as well. The Windows app does not ask for location access.
       </p>
       <p>
         After the Android app connects, it asks api.ipify.org, ifconfig.me, and
@@ -300,6 +301,7 @@
         are bound to the VPN network, including in Stealth mode. We do not store
         the address they return. The Linux app asks api.ipify.org for the same
         kind of egress check. It does not contact ifconfig.me or icanhazip.com.
+        The Windows app does not contact those hosts.
         The Chrome extension is not yet available (coming soon). It can ask ipwho.is for an approximate location so its
         map can draw a pin, and it can contact api.ipify.org. The result stays in
         the extension. The extension does not log destination sites on our servers.

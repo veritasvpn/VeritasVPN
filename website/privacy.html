@@ -51,7 +51,7 @@
   <main class="legal-page">
     <div class="container">
       <h1>Privacy Policy</h1>
-      <p class="legal-meta">Effective date: October 21, 2026. Last updated: October 25, 2026. Published at https://veritasvpn.cloud/privacy. <a href="#no-logs">No-logs policy</a>. <a href="/transparency">Transparency</a>.</p>
+      <p class="legal-meta">Effective date: October 21, 2026. Last updated: November 5, 2026. Published at https://veritasvpn.cloud/privacy. <a href="#no-logs">No-logs policy</a>. <a href="/transparency">Transparency</a>.</p>
 
       <h2 id="no-logs">No-logs policy</h2>
       <ul>
@@ -70,9 +70,11 @@
         the controller of the personal data described in this policy.
       </p>
       <p>
-        This policy covers the website, the Android app, the Linux app, the Chrome
-        extension (not yet available), and the VPN service at veritasvpn.cloud. VPN servers are in
-        Paraguay. Windows and macOS apps are not offered.
+        This policy covers the website, the Android app, the Linux app, the Windows
+        app, the Chrome extension (not yet available), and the VPN service at
+        veritasvpn.cloud. VPN servers are in Paraguay. The Windows app is not
+        offered for download until a signed release is pinned on this website.
+        macOS is not offered.
       </p>
       <p>
         Privacy requests go to
@@ -88,8 +90,9 @@
         <li>Your real connection IP, including in backups</li>
       </ul>
       <p>
-        The connection map in the Android and Linux apps shows only the server location
-        in Paraguay. It does not use your device location.
+        The connection map in the Android, Linux, and Windows apps shows only the
+        server location in Paraguay. It does not use your device location. The
+        Windows app does not ask for location access.
       </p>
       <p>
         Veritas Shield is a best-effort DNS filter for WireGuard clients that use the
@@ -145,10 +148,14 @@
       </ul>
       <p>
         Android sends the manufacturer and model as the device model. The Linux app
-        may send the computer hostname as the device model. The name, model, and OS
-        version are display data for your account. The per-install device ID is also
-        how the service enforces the device limit. None of these is a hardware
-        identifier such as an IMEI, Android ID, or MAC address.
+        and the Windows app may send the computer name as the device model. The
+        Windows app labels the platform Windows. The name, model, and OS version
+        are display data for your account. The per-install device ID is also how
+        the service enforces the device limit. None of these is a hardware
+        identifier such as an IMEI, Android ID, or MAC address. The Windows
+        service keeps a small log on that PC. The log has operation names and
+        numeric codes. It does not include addresses, and it is not sent to us.
+        There is no telemetry.
       </p>
       <p>
         Your real public IP may be read in memory to choose a LAN or WAN endpoint for
@@ -224,6 +231,7 @@
         <li>The breach check sends the email you type to our edge function and then to XposedOrNot. We do not store that email.</li>
         <li>After the Android app connects, it asks api.ipify.org, ifconfig.me, and icanhazip.com for the public address seen through the VPN. Those requests are bound to the VPN network. They are not sent on the network outside the tunnel, including in Stealth mode. We do not store the address they return. The app can show it as the VPN address.</li>
         <li>The Linux app contacts api.ipify.org to test whether the tunnel has working public egress. It does not contact ifconfig.me or icanhazip.com. We do not store the address ipify returns.</li>
+        <li>The Windows app does not contact api.ipify.org, ifconfig.me, or icanhazip.com.</li>
         <li>The Chrome extension (not yet available) asks ipwho.is for an approximate location so its network map can draw a pin, and it can contact api.ipify.org. The result stays in the extension on your device. The extension proxies browser traffic; it does not log destination sites on our servers.</li>
       </ul>
 
@@ -250,7 +258,7 @@
         <li><strong>Resend</strong> — verification and password-reset email</li>
         <li><strong>The mailbox provider for contact@veritasvpn.cloud</strong> — messages you send us</li>
         <li><strong>BTCPay</strong> — self-hosted by us, for Bitcoin invoices on the website and Linux app</li>
-        <li><strong>api.ipify.org</strong> — egress check from the Android app and the Linux app, and optionally the extension</li>
+        <li><strong>api.ipify.org</strong> — egress check from the Android app and the Linux app, and optionally the extension. The Windows app does not use it</li>
         <li><strong>api64.ipify.org</strong> — IPv6 check in the browser on this website</li>
         <li><strong>ifconfig.me</strong> — egress check from the Android app</li>
         <li><strong>icanhazip.com</strong> — egress check from the Android app</li>

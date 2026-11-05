@@ -13,7 +13,10 @@ use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use veritas_core::{generate_keypair, WgTunnelConfig};
-use veritas_ipc::{Request, TunnelStatus, OP_CONNECT, OP_DISCONNECT, OP_HELLO, OP_SOFT_RECONNECT, OP_STATS};
+use veritas_ipc::{
+    Request, TunnelStatus, CODE_BUSY, CODE_UNAVAILABLE, OP_CONNECT, OP_DISCONNECT, OP_HELLO,
+    OP_SOFT_RECONNECT, OP_STATS,
+};
 use veritas_service::{ensure_api, management_snapshot, transact, TestPeer};
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ACCESS_DENIED, GENERIC_READ, GENERIC_WRITE,
@@ -113,7 +116,7 @@ fn direct_mode_body(dll: String, service: PathBuf) {
     let mut handshake = 0i64;
     let mut rx = 0u64;
     for _ in 0..30 {
-        let stats = transact(&Request::new(3, OP_STATS), 2_000).expect("stats");
+        let stats = stats_once(3);
         let status = stats.status.expect("status");
         assert!(status.up);
         handshake = status.handshake;
@@ -125,7 +128,7 @@ fn direct_mode_body(dll: String, service: PathBuf) {
     }
     assert!(handshake > 0, "handshake did not complete");
     assert_tunnel_carries();
-    let stats = transact(&Request::new(4, OP_STATS), 2_000).expect("stats after traffic");
+    let stats = stats_once(4);
     let status = stats.status.unwrap();
     assert!(status.rx > 0 && status.tx > 0, "no tunnel traffic");
     assert_eq!(mtu_of("VeritasVPN"), 1280);
@@ -264,16 +267,32 @@ fn wait_carry() {
     );
 }
 
+fn stats_once(id: u64) -> veritas_ipc::Response {
+    let start = Instant::now();
+    loop {
+        match transact(&Request::new(id, OP_STATS), 2_000) {
+            Ok(response) => return response,
+            Err(code)
+                if (code == CODE_UNAVAILABLE || code == CODE_BUSY)
+                    && start.elapsed() < Duration::from_secs(8) =>
+            {
+                thread::sleep(Duration::from_millis(300));
+            }
+            Err(code) => panic!("stats: {code}"),
+        }
+    }
+}
+
 fn assert_tunnel_carries() {
     // 10.66.0.1 is also a local address on the test peer, so a ping can be
     // answered without entering the tunnel and the lock correctly drops that.
     // 10.66.0.50 is only routed at the tunnel.
-    let before = transact(&Request::new(7, OP_STATS), 2_000).expect("stats").status.expect("status").tx;
+    let before = stats_once(7).status.expect("status").tx;
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").expect("udp");
     socket.set_write_timeout(Some(Duration::from_secs(2))).ok();
     let sent = socket.send_to(b"veritas", "10.66.0.50:9");
     thread::sleep(Duration::from_millis(500));
-    let after = transact(&Request::new(8, OP_STATS), 2_000).expect("stats").status.expect("status").tx;
+    let after = stats_once(8).status.expect("status").tx;
     assert!(after > before, "tunnel did not carry the packet (send {sent:?} tx {before} -> {after})");
     eprintln!("TUNNEL_CARRY tx {before} -> {after}");
 }

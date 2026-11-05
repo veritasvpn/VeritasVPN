@@ -103,7 +103,8 @@ export function HeroConnectControl({ phase, onClick }: HeroConnectControlProps) 
     let envReady = false;
 
     const tick = (now: number) => {
-      const motion = !media.matches;
+      const frozen = document.documentElement.dataset.parity === "frozen";
+      const motion = !media.matches && !frozen;
       const current = phaseRef.current;
       const target = heroPulseAmplitude(current, motion);
       if (!envReady || !motion) {
