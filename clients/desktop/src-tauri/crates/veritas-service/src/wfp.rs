@@ -538,37 +538,13 @@ fn value_v6(mask: &FWP_V6_ADDR_AND_MASK) -> ConditionValue {
 }
 
 fn delete_our_objects(engine: windows_sys::Win32::Foundation::HANDLE) -> Result<(), u32> {
-    // Enumerate every filter. A provider template has missed persistent
-    // filters, and those keep blocking after repair says it succeeded.
     for _ in 0..8 {
-        let mut enum_handle = ptr::null_mut();
-        let err = unsafe { FwpmFilterCreateEnumHandle0(engine, ptr::null(), &mut enum_handle) };
-        if err != 0 {
-            return Err(err);
-        }
-        let mut entries = ptr::null_mut();
-        let mut count = 0u32;
-        let err = unsafe { FwpmFilterEnum0(engine, enum_handle, 256, &mut entries, &mut count) };
-        let mut deleted = 0u32;
-        if err == 0 && !entries.is_null() {
-            for index in 0..count {
-                let filter = unsafe { &**entries.add(index as usize) };
-                if !same_guid(&filter.subLayerKey, &SUBLAYER) {
-                    continue;
-                }
-                let del = unsafe { FwpmFilterDeleteByKey0(engine, &filter.filterKey) };
-                if del == 0 {
-                    deleted += 1;
-                }
-            }
-            unsafe { FwpmFreeMemory0(&mut entries as *mut _ as *mut *mut _) };
-        }
-        unsafe { FwpmFilterDestroyEnumHandle0(engine, enum_handle) };
-        if err != 0 {
-            return Err(err);
-        }
-        if deleted == 0 {
+        let keys = our_filter_keys(engine)?;
+        if keys.is_empty() {
             break;
+        }
+        for key in keys {
+            let _ = unsafe { FwpmFilterDeleteByKey0(engine, &key) };
         }
     }
     unsafe {
@@ -576,43 +552,44 @@ fn delete_our_objects(engine: windows_sys::Win32::Foundation::HANDLE) -> Result<
         FwpmProviderDeleteByKey0(engine, &PROVIDER);
     }
     nrpt_clear();
-    let left = filter_count(engine);
+    let left = our_filter_keys(engine)?.len();
     if left == 0 {
         Ok(())
     } else {
-        Err(left)
+        Err(left as u32)
     }
 }
 
-fn same_guid(left: &windows_sys::core::GUID, right: &windows_sys::core::GUID) -> bool {
-    left.data1 == right.data1
-        && left.data2 == right.data2
-        && left.data3 == right.data3
-        && left.data4 == right.data4
+fn our_filter_keys(engine: windows_sys::Win32::Foundation::HANDLE) -> Result<Vec<windows_sys::core::GUID>, u32> {
+    let mut provider = PROVIDER;
+    let mut template = FWPM_FILTER_ENUM_TEMPLATE0::default();
+    template.providerKey = &mut provider;
+    let mut enum_handle = ptr::null_mut();
+    let err = unsafe { FwpmFilterCreateEnumHandle0(engine, &template, &mut enum_handle) };
+    if err != 0 {
+        return Err(err);
+    }
+    let mut entries: *mut *mut FWPM_FILTER0 = ptr::null_mut();
+    let mut count = 0u32;
+    let err = unsafe { FwpmFilterEnum0(engine, enum_handle, 256, &mut entries, &mut count) };
+    let mut keys = Vec::new();
+    if err == 0 && !entries.is_null() {
+        for index in 0..count {
+            let filter = unsafe { &**entries.add(index as usize) };
+            keys.push(filter.filterKey);
+        }
+        unsafe { FwpmFreeMemory0(&mut entries as *mut _ as *mut *mut _) };
+    }
+    unsafe { FwpmFilterDestroyEnumHandle0(engine, enum_handle) };
+    if err != 0 {
+        Err(err)
+    } else {
+        Ok(keys)
+    }
 }
 
 fn filter_count(engine: windows_sys::Win32::Foundation::HANDLE) -> u32 {
-    let mut enum_handle = ptr::null_mut();
-    let err = unsafe { FwpmFilterCreateEnumHandle0(engine, ptr::null(), &mut enum_handle) };
-    if err != 0 {
-        return 0;
-    }
-    let mut entries = ptr::null_mut();
-    let mut count = 0u32;
-    let mut ours = 0u32;
-    unsafe {
-        if FwpmFilterEnum0(engine, enum_handle, 256, &mut entries, &mut count) == 0 && !entries.is_null() {
-            for index in 0..count {
-                let filter = &**entries.add(index as usize);
-                if same_guid(&filter.subLayerKey, &SUBLAYER) {
-                    ours += 1;
-                }
-            }
-            FwpmFreeMemory0(&mut entries as *mut _ as *mut *mut _);
-        }
-        FwpmFilterDestroyEnumHandle0(engine, enum_handle);
-    }
-    ours
+    our_filter_keys(engine).map(|keys| keys.len() as u32).unwrap_or(0)
 }
 
 const NRPT_KEY: &str = "SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient\\DnsPolicyConfig\\{8f3c2a10-6b4e-4c1a-9d2e-1a0b7c6d5e4f}";
