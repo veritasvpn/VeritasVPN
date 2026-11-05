@@ -9,6 +9,9 @@ export type SettingsDrawerProps = {
   onClose: () => void;
   returnFocusRef: RefObject<HTMLButtonElement | null>;
   showStealth: boolean;
+  showAutostart: boolean;
+  autostart: boolean;
+  onToggleAutostart: () => void;
   onOpenAccount: () => void;
   onOpenNetworkMap: () => void;
   onOpenStealthSettings: () => void;
@@ -134,6 +137,9 @@ export function SettingsDrawer({
   onClose,
   returnFocusRef,
   showStealth,
+  showAutostart,
+  autostart,
+  onToggleAutostart,
   onOpenAccount,
   onOpenNetworkMap,
   onOpenStealthSettings,
@@ -270,6 +276,22 @@ export function SettingsDrawer({
                 icon={<IconSplit />}
                 onClick={onOpenTunnelSettings}
               />
+              {showAutostart && (
+                <button
+                  type="button"
+                  className="settings-switch"
+                  aria-pressed={autostart}
+                  onClick={onToggleAutostart}
+                >
+                  <span className="settings-switch-copy">
+                    <strong>Start when I sign in</strong>
+                    <span>Off until you turn it on. The tunnel service still starts with Windows.</span>
+                  </span>
+                  <span className={`settings-switch-track${autostart ? " is-on" : ""}`} aria-hidden="true">
+                    <span className="settings-switch-thumb" />
+                  </span>
+                </button>
+              )}
             </div>
           </section>
 

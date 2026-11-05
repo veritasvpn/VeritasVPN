@@ -2,7 +2,7 @@
 //!
 //! The window never touches the adapter. It sends versioned messages on the
 //! named pipe. The kill switch is a persistent WFP lock. Reconnect keeps that
-//! lock and never changes Direct or Stealth. Stealth itself is still refused.
+//! lock and never changes Direct or Stealth.
 
 #[cfg(windows)]
 mod engine;
@@ -44,6 +44,7 @@ pub fn console_main() -> i32 {
         "repair" => repair(),
         "run" => svc::run_service(),
         "call" => call_from_args(args.collect()),
+        "leftover" => leftover(),
         _ => {
             eprintln!("usage: veritas-service install|uninstall|start|stop|repair|run|call");
             Err(2)
@@ -59,16 +60,44 @@ pub fn console_main() -> i32 {
 fn install_from_args(args: Vec<String>) -> Result<(), i32> {
     let mut client = None;
     let mut dll = None;
+    let mut helper = None;
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
         match flag.as_str() {
             "--client" => client = iter.next(),
             "--dll" => dll = iter.next(),
+            "--helper" => helper = iter.next(),
             _ => return Err(2),
         }
     }
     let client = client.ok_or(2)?;
-    install(std::path::Path::new(&client), dll.as_deref().map(std::path::Path::new))
+    install(
+        std::path::Path::new(&client),
+        dll.as_deref().map(std::path::Path::new),
+        helper.as_deref().map(std::path::Path::new),
+    )
+}
+
+#[cfg(windows)]
+fn leftover() -> Result<(), i32> {
+    let service = u8::from(svc::service_installed());
+    let filters = u8::from(wfp::is_armed());
+    println!("LEFTOVER_SERVICE {service}");
+    println!("LEFTOVER_FILTERS {filters}");
+    match engine::dll_path().and_then(|path| wg::adapter_present(&path).map_err(|_| ())) {
+        Ok(present) => {
+            println!("LEFTOVER_ADAPTER {}", u8::from(present));
+            if service == 0 && filters == 0 && !present {
+                Ok(())
+            } else {
+                Err(4)
+            }
+        }
+        Err(()) => {
+            println!("LEFTOVER_ADAPTER unchecked");
+            Err(3)
+        }
+    }
 }
 
 #[cfg(windows)]

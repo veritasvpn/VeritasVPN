@@ -10,6 +10,21 @@ use windows_sys::Win32::System::Pipes::CallNamedPipeW;
 
 use crate::{WgTransferStats, WgTunnelConfig};
 
+pub fn write_hello_marker() -> i32 {
+    let mut ok = false;
+    for _ in 0..24 {
+        if matches!(call(&Request::new(1, OP_HELLO), 800), Ok(response) if response.ok) {
+            ok = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    let text = if ok { "PIPE_OK" } else { "PIPE_FAIL" };
+    let _ = std::fs::write(std::env::temp_dir().join("veritasvpn-pipe-check.txt"), text);
+    println!("{text}");
+    if ok { 0 } else { 1 }
+}
+
 pub fn available() -> bool {
     match call(&Request::new(1, OP_HELLO), 800) {
         Ok(response) => response.ok,

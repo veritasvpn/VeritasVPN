@@ -227,6 +227,15 @@ impl Drop for AdapterHandle {
     }
 }
 
+pub fn adapter_present(dll: &Path) -> Result<bool, ()> {
+    let api = Api::load(dll)?;
+    let api: &'static Api = Box::leak(Box::new(api));
+    let opened = AdapterHandle::open(api, ADAPTER_NAME);
+    let present = opened.is_ok();
+    drop(opened);
+    Ok(present)
+}
+
 pub fn last_error() -> u32 {
     unsafe { GetLastError() }
 }
