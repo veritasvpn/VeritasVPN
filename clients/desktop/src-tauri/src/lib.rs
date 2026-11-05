@@ -667,7 +667,16 @@ fn network_switch_recover() -> serde_json::Value {
             serde_json::json!({"changed": false, "message": "recover failed", "action": "error"})
         });
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        let kicked = crate::win_pipe::kick_reconnect();
+        return serde_json::json!({
+            "changed": kicked,
+            "message": if kicked { "Reconnecting." } else { "Couldn't refresh the route. Try again." },
+            "action": "soft"
+        });
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         serde_json::json!({
             "changed": false,
@@ -693,13 +702,31 @@ fn refresh_endpoint_route() -> RouteRefreshResult {
     {
         return refresh_endpoint_route_linux();
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        return refresh_endpoint_route_windows();
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         RouteRefreshResult {
             refreshed: false,
             gateway: String::new(),
             message: "endpoint route refresh is Linux-only in this build".into(),
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn refresh_endpoint_route_windows() -> RouteRefreshResult {
+    let kicked = crate::win_pipe::kick_reconnect();
+    RouteRefreshResult {
+        refreshed: kicked,
+        gateway: String::new(),
+        message: if kicked {
+            "Route refreshed.".into()
+        } else {
+            "Couldn't refresh the route. Try again.".into()
+        },
     }
 }
 
@@ -1233,6 +1260,16 @@ fn write_recover_request(config: &WgTunnelConfig) -> Result<(), String> {
 }
 
 fn recover_wireguard_blocking(app: AppHandle, mut config: WgTunnelConfig, timeout_secs: u64) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (app, timeout_secs);
+        if !config.stealth_endpoint.trim().is_empty() {
+            return false;
+        }
+        return crate::win_pipe::soft_reconnect(&config);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
     config.normalize_addresses();
     if write_recover_request(&config).is_err() {
         return false;
@@ -1244,6 +1281,7 @@ fn recover_wireguard_blocking(app: AppHandle, mut config: WgTunnelConfig, timeou
     network_switch::mark_reconnect_wanted();
     start_network_switch_watcher_if_needed();
     true
+    }
 }
 
 /// Replace the WireGuard peer while the kill switch, sudoers, and helpers stay.

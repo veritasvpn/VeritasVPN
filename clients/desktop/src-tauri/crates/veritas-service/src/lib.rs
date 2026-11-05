@@ -1,8 +1,8 @@
 //! Windows service that owns the WireGuardNT adapter.
 //!
 //! The window never touches the adapter. It sends versioned messages on the
-//! named pipe. The kill switch is a persistent WFP lock. Automatic reconnect
-//! and Stealth are still answered with `not_in_this_build`.
+//! named pipe. The kill switch is a persistent WFP lock. Reconnect keeps that
+//! lock and never changes Direct or Stealth. Stealth itself is still refused.
 
 #[cfg(windows)]
 mod engine;
@@ -14,6 +14,7 @@ mod pipe;
 mod svc;
 #[cfg(windows)]
 mod wfp;
+mod reconnect;
 mod wfp_plan;
 #[cfg(windows)]
 mod wg;

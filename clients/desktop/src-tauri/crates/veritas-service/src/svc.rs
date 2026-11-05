@@ -11,9 +11,11 @@ use windows_sys::Win32::System::Services::{
     ChangeServiceConfig2W, CloseServiceHandle, ControlService, CreateServiceW, DeleteService,
     OpenSCManagerW, OpenServiceW, RegisterServiceCtrlHandlerExW, SetServiceStatus, StartServiceW,
     StartServiceCtrlDispatcherW, SC_ACTION, SC_ACTION_RESTART, SC_HANDLE, SC_MANAGER_CONNECT,
-    SC_MANAGER_CREATE_SERVICE, SERVICE_ACCEPT_SHUTDOWN, SERVICE_ACCEPT_STOP,
+    SC_MANAGER_CREATE_SERVICE, SERVICE_ACCEPT_POWEREVENT, SERVICE_ACCEPT_SHUTDOWN,
+    SERVICE_ACCEPT_STOP,
     SERVICE_AUTO_START, SERVICE_CONFIG_DESCRIPTION, SERVICE_CONFIG_FAILURE_ACTIONS,
-    SERVICE_CONTROL_SHUTDOWN, SERVICE_CONTROL_STOP, SERVICE_DESCRIPTIONW, SERVICE_ERROR_NORMAL,
+    SERVICE_CONTROL_POWEREVENT, SERVICE_CONTROL_SHUTDOWN, SERVICE_CONTROL_STOP, SERVICE_DESCRIPTIONW,
+    SERVICE_ERROR_NORMAL,
     SERVICE_FAILURE_ACTIONSW, SERVICE_RUNNING, SERVICE_START_PENDING, SERVICE_STATUS,
     SERVICE_STOPPED, SERVICE_STOP_PENDING, SERVICE_TABLE_ENTRYW, SERVICE_WIN32_OWN_PROCESS,
 };
@@ -170,7 +172,12 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
     STATUS_HANDLE.store(handle as *mut _, Ordering::SeqCst);
     set_state(SERVICE_START_PENDING, 0, 3000);
     STOP.store(false, Ordering::SeqCst);
-    set_state(SERVICE_RUNNING, SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN, 0);
+    set_state(
+        SERVICE_RUNNING,
+        SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN | SERVICE_ACCEPT_POWEREVENT,
+        0,
+    );
+    engine::start_monitor();
     pipe::serve_until(&STOP);
     engine::shutdown_tunnel();
     set_state(SERVICE_STOPPED, 0, 0);
@@ -178,7 +185,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
 
 unsafe extern "system" fn control_handler(
     control: u32,
-    _event: u32,
+    event: u32,
     _data: *mut core::ffi::c_void,
     _context: *mut core::ffi::c_void,
 ) -> u32 {
@@ -186,6 +193,13 @@ unsafe extern "system" fn control_handler(
         set_state(SERVICE_STOP_PENDING, 0, 5000);
         STOP.store(true, Ordering::SeqCst);
         pipe::poke();
+    } else if control == SERVICE_CONTROL_POWEREVENT {
+        // PBT_APMSUSPEND, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND.
+        if event == 4 {
+            engine::note_power("sleep");
+        } else if event == 7 || event == 18 {
+            engine::note_power("resume");
+        }
     }
     0
 }

@@ -4782,6 +4782,7 @@ name = "veritas-service"
 version = "0.2.99"
 dependencies = [
  "base64 0.22.1",
+ "serde",
  "serde_json",
  "veritas-core",
  "veritas-ipc",

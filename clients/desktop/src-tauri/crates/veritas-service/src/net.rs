@@ -153,6 +153,10 @@ pub struct PinnedEndpoint {
     pub gateway: Ipv4Addr,
 }
 
+pub fn default_gateway() -> Option<Ipv4Addr> {
+    underlay_default(0).map(|(_, gateway)| gateway)
+}
+
 pub fn pin_endpoint(endpoint: Ipv4Addr, tunnel_luid: u64) -> Result<Option<PinnedEndpoint>, u32> {
     if endpoint.is_unspecified() || owns_address(endpoint) {
         return Ok(None);
