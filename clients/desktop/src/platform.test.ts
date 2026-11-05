@@ -16,12 +16,12 @@ describe("platform capabilities", () => {
     });
   });
 
-  it("enables Direct mode on Windows and leaves Stealth and the kill switch off", () => {
+  it("enables Direct mode and the kill switch on Windows, and leaves Stealth off", () => {
     expect(platformCapabilities(WINDOWS_UA)).toEqual({
       os: "windows",
       tunnel: true,
       stealth: false,
-      killSwitch: false,
+      killSwitch: true,
     });
   });
 

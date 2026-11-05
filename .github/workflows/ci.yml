@@ -4,7 +4,14 @@ on:
   push:
     branches: [master, main]
   pull_request:
-    branches: [master, main]
+    # The Phase 2 branch is the base of the kill-switch pull request.
+    branches: [master, main, cursor/windows-service-direct-b81d]
+
+# Keyed by commit so a runner that has lost its network cannot pin the
+# next push behind a cancel it will never acknowledge.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: true
 
 # Start every job with the least privilege required. Jobs that publish releases
 # or images explicitly request their additional permission below.
@@ -289,11 +296,46 @@ jobs:
         run: cargo test --locked --workspace --lib
         working-directory: clients/desktop/src-tauri
       - name: Prove the Direct-mode service
+        timeout-minutes: 12
         shell: pwsh
         run: |
           ./scripts/bundle-wireguard-nt.ps1 | Out-Null
           $env:VERITAS_WIREGUARD_DLL = (Get-Content -Raw .\src-tauri\target\wireguard-nt\dll.path).Trim()
-          cargo test --manifest-path src-tauri/Cargo.toml --locked -p veritas-service --test direct_mode -- --test-threads=1 --nocapture
+          $failed = $false
+          try {
+            $cargo = Start-Process -FilePath cargo -ArgumentList @(
+              "test","--manifest-path","src-tauri/Cargo.toml","--locked",
+              "-p","veritas-service","--test","direct_mode","--",
+              "--test-threads=1","--nocapture"
+            ) -NoNewWindow -PassThru
+            if (-not $cargo.WaitForExit(480000)) {
+              taskkill /F /T /PID $cargo.Id | Out-Null
+              $failed = $true
+            } elseif ($cargo.ExitCode -ne 0) {
+              $failed = $true
+            }
+          } finally {
+            $svc = ".\src-tauri\target\debug\veritas-service.exe"
+            if (Test-Path $svc) {
+              foreach ($cmd in @("repair", "stop")) {
+                $p = Start-Process -FilePath $svc -ArgumentList $cmd -PassThru -WindowStyle Hidden
+                if (-not $p.WaitForExit(20000)) { taskkill /F /PID $p.Id | Out-Null }
+              }
+            }
+          }
+          if ($failed) { exit 1 }
+      - name: Release a leftover kill switch
+        if: always()
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $svc = ".\src-tauri\target\debug\veritas-service.exe"
+          if (Test-Path $svc) {
+            foreach ($cmd in @("repair", "stop", "uninstall")) {
+              $p = Start-Process -FilePath $svc -ArgumentList $cmd -PassThru -WindowStyle Hidden
+              if (-not $p.WaitForExit(20000)) { taskkill /F /PID $p.Id | Out-Null }
+            }
+          }
       - name: Build unsigned NSIS installer
         run: npx tauri build --bundles nsis
       - name: Window opens on the real UI

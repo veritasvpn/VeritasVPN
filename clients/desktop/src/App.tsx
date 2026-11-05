@@ -1075,7 +1075,10 @@ function App() {
     if (!capabilities.killSwitch || connectedRef.current || connectingRef.current) return;
     setKillSwitchBusy(true);
     try {
-      const status = await invoke<StaleKillSwitchStatus>("clear_stale_kill_switch");
+      // Windows keeps the lock across a crash. Opening the app must not drop it.
+      // The button is the Repair action. Linux still clears a leftover in place.
+      const command = capabilities.os === "windows" ? "repair_kill_switch" : "clear_stale_kill_switch";
+      const status = await invoke<StaleKillSwitchStatus>(command);
       if (connectedRef.current || connectingRef.current) return;
       setKillSwitchLeftover(status.blocked && !status.cleared);
     } catch {
@@ -1084,13 +1087,22 @@ function App() {
     } finally {
       setKillSwitchBusy(false);
     }
-  }, [capabilities.killSwitch]);
+  }, [capabilities.killSwitch, capabilities.os]);
 
   useEffect(() => {
     if (!capabilities.killSwitch) return;
     void invoke<ConnectResult>("recovery_close", { releaseLock: false }).catch(() => undefined);
+    if (capabilities.os === "windows") {
+      void invoke<StaleKillSwitchStatus>("clear_stale_kill_switch")
+        .then((status) => {
+          if (connectedRef.current || connectingRef.current) return;
+          setKillSwitchLeftover(status.blocked && !status.cleared);
+        })
+        .catch(() => undefined);
+      return;
+    }
     void restoreLeftoverKillSwitch();
-  }, [capabilities.killSwitch, restoreLeftoverKillSwitch]);
+  }, [capabilities.killSwitch, capabilities.os, restoreLeftoverKillSwitch]);
 
   useEffect(() => {
     if (connected) setKillSwitchLeftover(false);

@@ -1,8 +1,8 @@
 //! Platform boundary for the tunnel engine.
 //!
 //! Linux and macOS call the existing bring-up functions unchanged. Windows
-//! sends Direct-mode commands to the background service. Stealth and the
-//! kill switch stay off until those phases.
+//! sends Direct-mode commands to the background service. Stealth stays off.
+//! The kill switch is enforced by the service, not by this process.
 
 use tauri::AppHandle;
 

@@ -26,6 +26,7 @@ pub const CODE_INVALID_CONFIG: &str = "invalid_config";
 pub const CODE_TUNNEL_FAILED: &str = "tunnel_failed";
 pub const CODE_DENIED: &str = "denied";
 pub const CODE_NOT_IN_THIS_BUILD: &str = "not_in_this_build";
+pub const CODE_LOCK_FAILED: &str = "lock_failed";
 pub const CODE_BUSY: &str = "busy";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +40,19 @@ pub struct Request {
     pub local_network: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stealth: Option<bool>,
+    /// Test harness only. Forces the block-all plan without a LAN permit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_lock: Option<bool>,
+    /// Test harness only. Lets TCP 80 and 443 through so the CI runner can
+    /// keep talking to GitHub while every other port stays blocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permit_web: Option<bool>,
+    /// Test harness only. IPv4 hosts the runner must still reach (agent, DNS, gateway).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub management_v4: Vec<String>,
+    /// Test harness only. IPv6 hosts the runner must still reach.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub management_v6: Vec<String>,
 }
 
 impl Request {
@@ -50,6 +64,10 @@ impl Request {
             config: None,
             local_network: None,
             stealth: None,
+            full_lock: None,
+            permit_web: None,
+            management_v4: Vec::new(),
+            management_v6: Vec::new(),
         }
     }
 }
@@ -112,6 +130,7 @@ pub fn user_message(code: &str) -> &'static str {
     match code {
         CODE_UNAVAILABLE => "The VeritasVPN background service is not running.",
         CODE_BUSY => "A connection is already in progress.",
+        CODE_LOCK_FAILED => "Kill switch could not be enabled. Connect was cancelled so traffic stays unprotected only while you fix it.",
         _ => "Couldn't start the tunnel. Try connecting again.",
     }
 }
@@ -165,6 +184,7 @@ mod tests {
             CODE_TUNNEL_FAILED,
             CODE_DENIED,
             CODE_NOT_IN_THIS_BUILD,
+            CODE_LOCK_FAILED,
             CODE_BUSY,
             "timeout",
             "os error 5",

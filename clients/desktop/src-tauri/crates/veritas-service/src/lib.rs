@@ -1,8 +1,8 @@
 //! Windows service that owns the WireGuardNT adapter.
 //!
 //! The window never touches the adapter. It sends versioned messages on the
-//! named pipe. Kill switch, automatic reconnect, and Stealth are accepted as
-//! messages and answered with `not_in_this_build` until those phases land.
+//! named pipe. The kill switch is a persistent WFP lock. Automatic reconnect
+//! and Stealth are still answered with `not_in_this_build`.
 
 #[cfg(windows)]
 mod engine;
@@ -13,6 +13,9 @@ mod pipe;
 #[cfg(windows)]
 mod svc;
 #[cfg(windows)]
+mod wfp;
+mod wfp_plan;
+#[cfg(windows)]
 mod wg;
 
 #[cfg(windows)]
@@ -22,7 +25,9 @@ pub use pipe::transact;
 #[cfg(windows)]
 pub use svc::{install, start, stop_service, uninstall};
 #[cfg(windows)]
-pub use wg::TestPeer;
+pub use net::{management_snapshot, ManagementSnapshot};
+#[cfg(windows)]
+pub use wg::{AdapterHandle, TestPeer};
 
 #[cfg(windows)]
 pub fn console_main() -> i32 {
@@ -33,10 +38,11 @@ pub fn console_main() -> i32 {
         "uninstall" => uninstall(),
         "start" => start(),
         "stop" => stop_service(),
+        "repair" => repair(),
         "run" => svc::run_service(),
         "call" => call_from_args(args.collect()),
         _ => {
-            eprintln!("usage: veritas-service install|uninstall|start|stop|run|call");
+            eprintln!("usage: veritas-service install|uninstall|start|stop|repair|run|call");
             Err(2)
         }
     };
@@ -60,6 +66,14 @@ fn install_from_args(args: Vec<String>) -> Result<(), i32> {
     }
     let client = client.ok_or(2)?;
     install(std::path::Path::new(&client), dll.as_deref().map(std::path::Path::new))
+}
+
+#[cfg(windows)]
+fn repair() -> Result<(), i32> {
+    engine::release_lock().map_err(|code| {
+        engine::log_code("repair", code);
+        3
+    })
 }
 
 #[cfg(windows)]
