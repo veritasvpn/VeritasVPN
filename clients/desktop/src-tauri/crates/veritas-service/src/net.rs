@@ -146,7 +146,8 @@ pub fn set_dns(luid: u64, dns: Ipv4Addr) -> Result<(), u32> {
 }
 
 /// Host route that keeps the WireGuard server on the physical NIC after the
-/// tunnel installs 0.0.0.0/0. `None` when the server is already on-link.
+/// tunnel installs 0.0.0.0/0. `None` when the server is this PC itself.
+/// `gateway` is 0.0.0.0 when the server shares the physical LAN (on-link).
 pub struct PinnedEndpoint {
     pub endpoint: Ipv4Addr,
     pub luid: u64,
@@ -161,8 +162,16 @@ pub fn pin_endpoint(endpoint: Ipv4Addr, tunnel_luid: u64) -> Result<Option<Pinne
     if endpoint.is_unspecified() || owns_address(endpoint) {
         return Ok(None);
     }
-    let Some((luid, gateway)) = underlay_default(tunnel_luid) else {
+    let Some((luid, default_gateway)) = underlay_default(tunnel_luid) else {
         return Err(1168);
+    };
+    // A server on the same LAN as this PC (a home server) is reached
+    // directly. Sending its /32 via the router breaks the handshake on some
+    // networks, so pin it on-link with no next hop instead.
+    let gateway = if crate::wg_blob::endpoint_on_link(endpoint, &interface_prefixes(luid)) {
+        Ipv4Addr::UNSPECIFIED
+    } else {
+        default_gateway
     };
     add_route_via(luid, endpoint, 32, gateway)?;
     Ok(Some(PinnedEndpoint {
@@ -225,6 +234,30 @@ fn owns_address(endpoint: Ipv4Addr) -> bool {
     }
     unsafe { FreeMibTable(table as *const _) };
     found
+}
+
+/// IPv4 addresses and on-link prefix lengths assigned to one interface.
+fn interface_prefixes(luid: u64) -> Vec<(Ipv4Addr, u8)> {
+    let mut table = std::ptr::null_mut();
+    let err = unsafe { GetUnicastIpAddressTable(AF_INET, &mut table) };
+    if err != 0 || table.is_null() {
+        return Vec::new();
+    }
+    let count = unsafe { (*table).NumEntries };
+    let rows = unsafe { (*table).Table.as_ptr() };
+    let mut out = Vec::new();
+    for index in 0..count {
+        let row = unsafe { &*rows.add(index as usize) };
+        if unsafe { row.InterfaceLuid.Value } != luid {
+            continue;
+        }
+        out.push((
+            ipv4_of(unsafe { row.Address.Ipv4.sin_addr }),
+            row.OnLinkPrefixLength,
+        ));
+    }
+    unsafe { FreeMibTable(table as *const _) };
+    out
 }
 
 fn underlay_default(tunnel_luid: u64) -> Option<(u64, Ipv4Addr)> {

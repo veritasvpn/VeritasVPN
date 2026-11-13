@@ -84,9 +84,11 @@ pub fn start(exe: &Path, remote: &str, prefix: &str) -> Result<Helper, u32> {
     let url = tunnel_url(remote);
     let listen = format!("udp://{LOCAL_WG}:127.0.0.1:51820?timeout_sec=0");
     let mut command = format!("\"{}\" client", exe.display());
-    if !prefix.is_empty() {
+    // wstunnel builds `/<prefix>/events` itself and the server secret has no
+    // leading slash, so always hand it the bare segment.
+    if let Some(prefix) = veritas_core::normalize_path_prefix(prefix) {
         command.push_str(" --http-upgrade-path-prefix ");
-        command.push_str(prefix);
+        command.push_str(&prefix);
     }
     command.push_str(" -L \"");
     command.push_str(&listen);
@@ -210,11 +212,7 @@ fn thread_sleep() {
 }
 
 pub fn prefix_ok(prefix: &str) -> bool {
-    !prefix.is_empty()
-        && !prefix.contains("..")
-        && prefix
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'~' | b'-'))
+    veritas_core::normalize_path_prefix(prefix).is_some()
 }
 
 pub fn tunnel_url(endpoint: &str) -> String {

@@ -21,7 +21,7 @@ import {
   User,
   validateSessionOnResume,
 } from "./auth";
-import { fetchWithAuth, SessionExpiredError, SESSION_EXPIRED_EVENT } from "./session";
+import { fetchWithAuth, SessionExpiredError, SESSION_EXPIRED_EVENT, type AuthFetchOptions } from "./session";
 import {
   readCachedBillingStatus,
   writeCachedBillingStatus,
@@ -58,6 +58,7 @@ import {
 } from "./connectionMap";
 import { statusAfterDisconnectFailure } from "./disconnectStatus";
 import { toUserMessage } from "./errorMapper";
+import { formatConnectError } from "./connectError";
 import veritasMark from "./assets/veritas-mark.png";
 import veritasLogo from "./assets/veritas-logo.png";
 import "./App.css";
@@ -216,11 +217,16 @@ function writeLocalFlag(key: string, enabled: boolean) {
 }
 
 /** Billing, peer create, and peer delete during a kill-switch recovery. */
-async function fetchRecovery(url: string, init: RequestInit = {}, budgetMs = RECOVERY_REQUEST_MS): Promise<Response> {
+async function fetchRecovery(
+  url: string,
+  init: RequestInit = {},
+  budgetMs = RECOVERY_REQUEST_MS,
+  authOptions: AuthFetchOptions = {},
+): Promise<Response> {
   const limit = Math.max(1, Math.min(RECOVERY_REQUEST_MS, budgetMs));
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), limit);
-  const pending = fetchWithAuth(url, { ...init, signal: controller.signal });
+  const pending = fetchWithAuth(url, { ...init, signal: controller.signal }, authOptions);
   try {
     return await Promise.race([
       pending,
@@ -295,46 +301,6 @@ function writeStealthChoice(choice: StealthChoice) {
   } catch {
     // ignore quota / private mode
   }
-}
-
-function formatConnectError(err: unknown, wantedStealth: boolean): string {
-  let raw = "Connection failed";
-  if (err instanceof Error) raw = err.message;
-  else if (typeof err === "string") raw = err;
-  else if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
-    raw = (err as { message: string }).message;
-  }
-  const lower = raw.toLowerCase();
-  if (
-    wantedStealth ||
-    /stealth|wstunnel/.test(lower)
-  ) {
-    if (/wstunnel|stealth engine/.test(lower) && /missing|not found|not bundled/.test(lower)) {
-      return "Stealth failed: wstunnel is not bundled in this build. Rebuild with the Linux stealth binary, or choose UDP only.";
-    }
-    if (/stealth engine missing/.test(lower)) {
-      return "Stealth failed: wstunnel binary missing. Bundle it for Linux or choose UDP only.";
-    }
-    if (/linux desktop|linux only|available on linux/.test(lower)) {
-      return "Stealth mode is Linux-only in this build. Choose UDP only to connect with Direct UDP.";
-    }
-    if (/failed to start stealth|stealth transport/.test(lower)) {
-      return "Stealth transport failed to start. Check TLS endpoint reachability, or choose UDP only.";
-    }
-    if (/path prefix/.test(lower)) {
-      return "Stealth failed: server path prefix missing. Try again later or choose UDP only.";
-    }
-    if (/not available on the (server|vpn node)/.test(lower)) {
-      return "Stealth is not available on the VPN node yet. Choose UDP only or try again later.";
-    }
-  }
-  if (/firewall kill switch|kill switch/.test(lower)) {
-    if (/nftables|iptables/.test(lower)) {
-      return "Kill switch required: install nftables or iptables, then connect again. There is no off option.";
-    }
-    return "Kill switch could not be enabled. Connect was cancelled so traffic stays unprotected only while you fix it.";
-  }
-  return displayStatus(raw) || "Connection failed";
 }
 
 function isStickyStatusMessage(msg: string): boolean {
@@ -1273,7 +1239,7 @@ function App() {
       if (timedOutPeer) {
         await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${timedOutPeer}`, {
           method: "DELETE",
-        }).catch(() => undefined);
+        }, { background: true }).catch(() => undefined);
       }
       setConnecting(false);
       setConnected(false);
@@ -1534,7 +1500,8 @@ function App() {
     if (!id) return;
     if (recovery) {
       try {
-        await fetchRecovery(`${AUTH_API}/api/v1/wg/peers/${id}`, { method: "DELETE" }, budgetMs);
+        // Cleanup never signs the user out.
+        await fetchRecovery(`${AUTH_API}/api/v1/wg/peers/${id}`, { method: "DELETE" }, budgetMs, { background: true });
       } catch {
         // best effort cleanup
       }
@@ -1543,10 +1510,11 @@ function App() {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 5000);
     try {
+      // Disconnect cleanup is best effort and must never sign the user out.
       await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${id}`, {
         method: "DELETE",
         signal: controller.signal,
-      });
+      }, { background: true });
     } catch {
       // best effort cleanup
     } finally {
@@ -2118,7 +2086,8 @@ function App() {
     let peerCheckInFlight = false;
     const pollPeers = async () => {
       try {
-        const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`);
+        // Background poll: an auth hiccup here never signs the user out.
+        const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`, {}, { background: true });
         if (response.ok && !cancelled) {
           const data = (await response.json()) as { peers?: PeerInfo[] };
           if (!cancelled && Array.isArray(data.peers)) {
@@ -2165,7 +2134,7 @@ function App() {
         const timer = window.setTimeout(() => controller.abort(), 4000);
         const pending = fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${peerIdRef.current}`, {
           signal: controller.signal,
-        });
+        }, { background: true });
         try {
           const res = await Promise.race([
             pending,

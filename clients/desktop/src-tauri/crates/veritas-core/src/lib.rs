@@ -6,7 +6,7 @@ mod config;
 mod keys;
 mod reconnect;
 
-pub use config::{ensure_host_cidr, WgTunnelConfig};
+pub use config::{ensure_host_cidr, normalize_path_prefix, WgTunnelConfig};
 pub use keys::{b64_key_to_hex, generate_keypair, KeyPair};
 pub use reconnect::{
     classify_peer_check, connect_control_disconnects, connect_watchdog_action, display_status,
