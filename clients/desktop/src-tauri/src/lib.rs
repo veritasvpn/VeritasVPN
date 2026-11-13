@@ -13,9 +13,25 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
-pub use veritas_core::{b64_key_to_hex, ensure_host_cidr, WgTunnelConfig};
+pub use veritas_core::{b64_key_to_hex, ensure_host_cidr, normalize_path_prefix, WgTunnelConfig};
 
 const KEYRING_SERVICE: &str = "cloud.veritasvpn.desktop";
+
+/// Fixed connect failure codes. The UI maps them to friendly text, so raw
+/// validation strings never reach the screen.
+pub(crate) const CONNECT_STEALTH_UNAVAILABLE: &str = "connect.stealth_unavailable";
+pub(crate) const CONNECT_INVALID_CONFIG: &str = "connect.invalid_config";
+
+/// Turn a rejected tunnel config into a fixed code without exposing why.
+fn connect_config_error_code(config: &WgTunnelConfig) -> &'static str {
+    if !config.stealth_endpoint.trim().is_empty()
+        && normalize_path_prefix(&config.stealth_path_prefix).is_none()
+    {
+        CONNECT_STEALTH_UNAVAILABLE
+    } else {
+        CONNECT_INVALID_CONFIG
+    }
+}
 
 #[cfg(target_os = "linux")]
 #[path = "network_switch.rs"]
@@ -342,10 +358,10 @@ async fn connect_wireguard(app: AppHandle, mut config: WgTunnelConfig) -> Connec
     let _flight = ConnectFlight;
     let _ = tauri::async_runtime::spawn_blocking(close_recovery_exception_quiet).await;
     config.normalize_addresses();
-    if let Err(message) = config.validate() {
+    if config.validate().is_err() {
         return ConnectResult {
             success: false,
-            message,
+            message: connect_config_error_code(&config).into(),
             mode: "wireguard".into(),
             peer_id: config.peer_id,
         };
@@ -1226,6 +1242,12 @@ fn write_recover_request(config: &WgTunnelConfig) -> Result<(), String> {
     } else {
         config.dns.trim()
     };
+    // wstunnel wants the bare server segment; see `normalize_path_prefix`.
+    let stealth_prefix = if config.stealth_endpoint.trim().is_empty() {
+        String::new()
+    } else {
+        normalize_path_prefix(&config.stealth_path_prefix).unwrap_or_default()
+    };
     let request = format!(
         "address={}\nendpoint={}\nendpoint_wan={}\nendpoint_lan={}\nstealth_remote={}\nstealth_prefix={}\ndns={}\nfresh_ep={}\nfresh_stealth={}\nallowed={allowed_field}\n",
         config.address.trim(),
@@ -1233,7 +1255,7 @@ fn write_recover_request(config: &WgTunnelConfig) -> Result<(), String> {
         config.endpoint_wan.trim(),
         config.endpoint_lan.trim(),
         config.stealth_endpoint.trim(),
-        config.stealth_path_prefix.trim(),
+        stealth_prefix,
         dns,
         config.endpoint.trim(),
         config.stealth_endpoint.trim(),
@@ -2145,12 +2167,16 @@ fn bring_up_wireguard_linux_full(
 ) -> Result<String, String> {
     let wg_go = resolve_wireguard_go(app)?;
     let stealth_remote = config.stealth_endpoint.trim().to_string();
-    let stealth_prefix = config.stealth_path_prefix.trim().to_string();
+    let stealth_prefix = if stealth_remote.is_empty() {
+        String::new()
+    } else {
+        normalize_path_prefix(&config.stealth_path_prefix).unwrap_or_default()
+    };
     let wstunnel = if stealth_remote.is_empty() {
         PathBuf::new()
     } else {
         if stealth_prefix.is_empty() {
-            return Err("Stealth mode enabled but server did not provide a path prefix".into());
+            return Err(CONNECT_STEALTH_UNAVAILABLE.into());
         }
         resolve_wstunnel(app)?
     };
@@ -3071,15 +3097,12 @@ case "$STEALTH_REMOTE" in
   "") ;;
   *[!A-Za-z0-9.:-]*) exit 0 ;;
 esac
-case "$STEALTH_PREFIX" in
-  "") ;;
-  /*) ;;
-  *) STEALTH_PREFIX="" ;;
-esac
+# wstunnel builds /<prefix>/events itself: keep one bare segment.
+STEALTH_PREFIX="${{STEALTH_PREFIX#/}}"
 case "$STEALTH_PREFIX" in
   *..*) STEALTH_PREFIX="" ;;
 esac
-if [[ -n "$STEALTH_PREFIX" && ! "$STEALTH_PREFIX" =~ ^[A-Za-z0-9/._~-]+$ ]]; then
+if [[ -n "$STEALTH_PREFIX" && ! "$STEALTH_PREFIX" =~ ^[A-Za-z0-9._~-]{{1,128}}$ ]]; then
   STEALTH_PREFIX=""
 fi
 case "$WSTUNNEL_BIN" in
@@ -4388,6 +4411,26 @@ mod security_tests {
             "reconnect payload must not send device_name, got {encoded}"
         );
     }
+    #[test]
+    fn connect_config_errors_are_fixed_codes() {
+        let hex = "0123456789abcdef0123456789abcdef";
+        let mut config = valid_config();
+        config.stealth_endpoint = "vpn.example.com:443".into();
+        config.stealth_path_prefix = hex.into();
+        assert!(config.validate().is_ok(), "server hex prefix must validate");
+        config.stealth_path_prefix = String::new();
+        assert_eq!(connect_config_error_code(&config), CONNECT_STEALTH_UNAVAILABLE);
+        config.stealth_path_prefix = "/a/../b".into();
+        assert_eq!(connect_config_error_code(&config), CONNECT_STEALTH_UNAVAILABLE);
+        let mut config = valid_config();
+        config.dns = "not-an-ip".into();
+        assert!(config.validate().is_err());
+        assert_eq!(connect_config_error_code(&config), CONNECT_INVALID_CONFIG);
+        for code in [CONNECT_STEALTH_UNAVAILABLE, CONNECT_INVALID_CONFIG] {
+            assert!(code.starts_with("connect.") && !code.contains(' '));
+        }
+    }
+
 }
 
 #[cfg(target_os = "windows")]

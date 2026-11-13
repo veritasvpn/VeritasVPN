@@ -8,9 +8,9 @@ stealth_paths_ok() {
   [[ "$bin" == /* ]] || return 1
   [[ "$bin" != *..* ]] || return 1
   [[ "$bin" =~ ^/[A-Za-z0-9._~+/-]+$ ]] || return 1
-  [[ "$prefix" == /* ]] || return 1
+  # One bare segment: wstunnel builds /<prefix>/events itself.
   [[ "$prefix" != *..* ]] || return 1
-  [[ "$prefix" =~ ^[A-Za-z0-9/._~-]+$ ]] || return 1
+  [[ "$prefix" =~ ^[A-Za-z0-9._~-]{1,128}$ ]] || return 1
   return 0
 }
 

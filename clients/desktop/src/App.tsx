@@ -58,6 +58,7 @@ import {
 } from "./connectionMap";
 import { statusAfterDisconnectFailure } from "./disconnectStatus";
 import { toUserMessage } from "./errorMapper";
+import { formatConnectError } from "./connectError";
 import veritasMark from "./assets/veritas-mark.png";
 import veritasLogo from "./assets/veritas-logo.png";
 import "./App.css";
@@ -300,46 +301,6 @@ function writeStealthChoice(choice: StealthChoice) {
   } catch {
     // ignore quota / private mode
   }
-}
-
-function formatConnectError(err: unknown, wantedStealth: boolean): string {
-  let raw = "Connection failed";
-  if (err instanceof Error) raw = err.message;
-  else if (typeof err === "string") raw = err;
-  else if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
-    raw = (err as { message: string }).message;
-  }
-  const lower = raw.toLowerCase();
-  if (
-    wantedStealth ||
-    /stealth|wstunnel/.test(lower)
-  ) {
-    if (/wstunnel|stealth engine/.test(lower) && /missing|not found|not bundled/.test(lower)) {
-      return "Stealth failed: wstunnel is not bundled in this build. Rebuild with the Linux stealth binary, or choose UDP only.";
-    }
-    if (/stealth engine missing/.test(lower)) {
-      return "Stealth failed: wstunnel binary missing. Bundle it for Linux or choose UDP only.";
-    }
-    if (/linux desktop|linux only|available on linux/.test(lower)) {
-      return "Stealth mode is Linux-only in this build. Choose UDP only to connect with Direct UDP.";
-    }
-    if (/failed to start stealth|stealth transport/.test(lower)) {
-      return "Stealth transport failed to start. Check TLS endpoint reachability, or choose UDP only.";
-    }
-    if (/path prefix/.test(lower)) {
-      return "Stealth failed: server path prefix missing. Try again later or choose UDP only.";
-    }
-    if (/not available on the (server|vpn node)/.test(lower)) {
-      return "Stealth is not available on the VPN node yet. Choose UDP only or try again later.";
-    }
-  }
-  if (/firewall kill switch|kill switch/.test(lower)) {
-    if (/nftables|iptables/.test(lower)) {
-      return "Kill switch required: install nftables or iptables, then connect again. There is no off option.";
-    }
-    return "Kill switch could not be enabled. Connect was cancelled so traffic stays unprotected only while you fix it.";
-  }
-  return displayStatus(raw) || "Connection failed";
 }
 
 function isStickyStatusMessage(msg: string): boolean {

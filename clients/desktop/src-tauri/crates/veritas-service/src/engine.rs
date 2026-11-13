@@ -138,7 +138,7 @@ fn connect(request: &Request, session: &mut Session) -> Response {
         return Response::fail(request.id, CODE_INVALID_CONFIG);
     }
     let using_stealth = !config.stealth_endpoint.trim().is_empty();
-    if using_stealth && !crate::stealth::prefix_ok(config.stealth_path_prefix.trim()) && !config.stealth_path_prefix.trim().is_empty() {
+    if using_stealth && !crate::stealth::prefix_ok(&config.stealth_path_prefix) {
         log_line("stealth", "prefix");
         return Response::fail(request.id, CODE_INVALID_CONFIG);
     }

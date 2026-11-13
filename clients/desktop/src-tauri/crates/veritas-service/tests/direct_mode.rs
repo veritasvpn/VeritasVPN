@@ -573,6 +573,32 @@ fn write_sim(body: &str) {
     fs::write(r"C:\ProgramData\VeritasVPN\sim.txt", body).expect("sim");
 }
 
+/// Same shape as the production secret (`openssl rand -hex 16`): a bare
+/// segment with no leading slash. wstunnel only accepts the upgrade when the
+/// client sends exactly this segment, so a handshake proves the prefix matched.
+const STEALTH_SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+fn wait_stealth_handshake() {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(30) {
+        let _ = std::net::UdpSocket::bind("0.0.0.0:0")
+            .and_then(|socket| socket.send_to(b"veritas", "10.66.0.50:9"));
+        if let Ok(response) = transact(&Request::new(10, OP_STATS), 2_000) {
+            if let Some(status) = response.status.as_ref() {
+                if status.handshake > 0 && status.rx > 0 {
+                    eprintln!("STEALTH_HANDSHAKE rx {}", status.rx);
+                    return;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    panic!(
+        "stealth handshake did not complete within 30s\n{}",
+        fs::read_to_string(r"C:\ProgramData\VeritasVPN\stealth.log").unwrap_or_default()
+    );
+}
+
 fn wait_status(label: &str, pred: impl Fn(&TunnelStatus) -> bool) {
     let start = Instant::now();
     loop {
@@ -624,7 +650,7 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
         .args([
             "server",
             "--restrict-http-upgrade-path-prefix",
-            "/veritas",
+            STEALTH_SECRET,
             &format!("ws://127.0.0.1:{port}"),
         ])
         .stdout(Stdio::null())
@@ -636,6 +662,7 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
     let doc = outside_oracle();
     let _peer = bring_up_stealth(&dll, &format!("127.0.0.1:{port}"));
     wait_carry();
+    wait_stealth_handshake();
     assert_blocked(doc, "stealth lock");
     eprintln!("STEALTH_UP");
     eprintln!("STEALTH_NO_LEAK");
@@ -725,7 +752,7 @@ fn bring_up_stealth(dll: &str, remote: &str) -> TestPeer {
         peer_id: "peer-stealth".into(),
         preshared_key: psk,
         stealth_endpoint: remote.into(),
-        stealth_path_prefix: "/veritas".into(),
+        stealth_path_prefix: STEALTH_SECRET.into(),
         endpoint_lan: String::new(),
         endpoint_wan: String::new(),
     };

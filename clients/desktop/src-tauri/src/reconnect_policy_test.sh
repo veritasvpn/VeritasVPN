@@ -115,11 +115,14 @@ fi
 
 # shellcheck disable=SC1091
 source "$ROOT/stealth_apply.sh"
-stealth_paths_ok /usr/lib/veritasvpn/wstunnel /vpn && true || fail "bundled wstunnel path rejected"
-stealth_paths_ok "wstunnel" /vpn && fail "relative wstunnel path accepted"
-stealth_paths_ok '/tmp/wstunnel;id' /vpn && fail "shell metacharacter in binary accepted"
-stealth_paths_ok /tmp/../wstunnel /vpn && fail "binary traversal accepted"
-stealth_paths_ok /usr/bin/wstunnel /../tmp && fail "prefix traversal accepted"
+stealth_paths_ok /usr/lib/veritasvpn/wstunnel 0123456789abcdef0123456789abcdef && true || fail "server hex prefix rejected"
+stealth_paths_ok "wstunnel" vpn && fail "relative wstunnel path accepted"
+stealth_paths_ok '/tmp/wstunnel;id' vpn && fail "shell metacharacter in binary accepted"
+stealth_paths_ok /tmp/../wstunnel vpn && fail "binary traversal accepted"
+stealth_paths_ok /usr/bin/wstunnel ../tmp && fail "prefix traversal accepted"
+stealth_paths_ok /usr/bin/wstunnel /vpn && fail "slashed prefix reached wstunnel (never matches the server)"
+stealth_paths_ok /usr/bin/wstunnel vpn/x && fail "multi-segment prefix accepted"
+stealth_paths_ok /usr/bin/wstunnel '' && fail "empty prefix accepted"
 
 # A failed fresh read never installs a stored private address.
 STEALTH_REMOTE=""
