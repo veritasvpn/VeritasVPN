@@ -169,6 +169,7 @@ async function persistSession(user: User, data: AuthResponse): Promise<User> {
   ]);
   accessTokenCache = data.access_token;
   refreshTokenCache = data.refresh_token;
+  learnClockOffset(data.access_token);
   return user;
 }
 
@@ -195,29 +196,69 @@ export class SessionExpiredError extends Error {
   }
 }
 
-function parseJwtPayload(token: string): { exp?: number } | null {
+function parseJwtPayload(token: string): { exp?: number; iat?: number } | null {
   try {
     const part = token.split(".")[1];
     if (!part) return null;
     const base64 = part.replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(atob(base64)) as { exp?: number };
+    return JSON.parse(atob(base64)) as { exp?: number; iat?: number };
   } catch {
     return null;
   }
+}
+
+/** Server time minus this computer's clock, in seconds. Learned from the
+ * `iat` of each freshly issued access token, so a PC whose clock is hours
+ * fast or slow still judges token expiry by the server's clock. Without it a
+ * fast clock made every new token look expired and refreshed in a loop. */
+let clockOffsetSeconds = 0;
+
+function localNowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+/** Current time on the server's clock, as best this client knows it. */
+export function serverNowSeconds(): number {
+  return localNowSeconds() + clockOffsetSeconds;
+}
+
+export function getClockOffsetSeconds(): number {
+  return clockOffsetSeconds;
+}
+
+function learnClockOffset(token: string): void {
+  const iat = parseJwtPayload(token)?.iat;
+  if (typeof iat !== "number" || !Number.isFinite(iat) || iat <= 0) return;
+  clockOffsetSeconds = Math.round(iat) - localNowSeconds();
 }
 
 export function isAccessTokenExpired(token: string, skewSeconds = 30): boolean {
   const payload = parseJwtPayload(token);
   const exp = payload?.exp;
   if (!exp) return true;
-  return exp <= Math.floor(Date.now() / 1000) + skewSeconds;
+  return exp <= serverNowSeconds() + skewSeconds;
 }
 
 export type RefreshOutcome = "ok" | "rejected" | "offline";
 
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
+
 /** A network failure is not a rejected session. Signing out here used to tear
- * the tunnel down with --purge while the kill switch was still up. */
-export async function refreshSessionOutcome(): Promise<RefreshOutcome> {
+ * the tunnel down with --purge while the kill switch was still up.
+ *
+ * Single-flight: concurrent callers share one refresh. The server rotates the
+ * refresh token on every use, so two parallel refreshes with the same token
+ * used to make the second one fail with 401 and sign the user out. */
+export function refreshSessionOutcome(): Promise<RefreshOutcome> {
+  if (!refreshInFlight) {
+    refreshInFlight = runRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function runRefresh(): Promise<RefreshOutcome> {
   const rt = refreshTokenCache;
   if (!rt) return "rejected";
   try {
@@ -230,10 +271,31 @@ export async function refreshSessionOutcome(): Promise<RefreshOutcome> {
     return "ok";
   } catch (err) {
     if (err instanceof ApiError && (err.httpCode === 401 || err.httpCode === 403)) {
+      // Another refresh (another window, or an older in-flight call) already
+      // rotated this token. The session is fine; use the newer tokens.
+      if (await refreshTokenRotatedSince(rt)) return "ok";
       return "rejected";
     }
     return "offline";
   }
+}
+
+async function refreshTokenRotatedSince(used: string): Promise<boolean> {
+  if (refreshTokenCache && refreshTokenCache !== used) return true;
+  try {
+    const [stored, storedAccess] = await Promise.all([
+      getSecureCredential("refresh_token"),
+      getSecureCredential("access_token"),
+    ]);
+    if (stored && stored !== used && storedAccess) {
+      refreshTokenCache = stored;
+      accessTokenCache = storedAccess;
+      return true;
+    }
+  } catch {
+    // Credential store unavailable: fall through to a real rejection.
+  }
+  return false;
 }
 
 /** Returns a fresh access token, refreshing when expired. */
@@ -465,6 +527,14 @@ export async function deleteAccount(options: { password?: string; turnstileToken
     throw new ApiError(message, res.status);
   }
   await signOut();
+}
+
+/** Test-only: reset in-memory auth state between unit tests. */
+export function resetAuthStateForTests(): void {
+  accessTokenCache = null;
+  refreshTokenCache = null;
+  clockOffsetSeconds = 0;
+  refreshInFlight = null;
 }
 
 export async function signOut(): Promise<void> {

@@ -235,6 +235,10 @@ fn bring_up(
     let api = load_api().map_err(|_| CODE_TUNNEL_FAILED)?;
     let private_key = decode_key(&config.private_key).map_err(|_| CODE_INVALID_CONFIG)?;
     let peer_key = decode_key(&config.server_public_key).map_err(|_| CODE_INVALID_CONFIG)?;
+    // The control plane issues a per-device preshared key. Without it the
+    // server never answers the handshake, so a bad one fails the connect.
+    let preshared_key =
+        wg::decode_preshared_key(&config.preshared_key).map_err(|_| CODE_INVALID_CONFIG)?;
     let using_stealth = !config.stealth_endpoint.trim().is_empty();
     let endpoint = if using_stealth {
         (Ipv4Addr::LOCALHOST, 41820)
@@ -271,6 +275,7 @@ fn bring_up(
     let blob = wg::direct_config(
         private_key,
         peer_key,
+        preshared_key,
         Some(endpoint),
         0,
         25,
@@ -780,8 +785,18 @@ fn kick_locked(session: &mut Session, saved: &SavedConnect, refresh: bool) -> Re
     }
     let private_key = decode_key(&saved.config.private_key).map_err(|_| CODE_INVALID_CONFIG)?;
     let peer_key = decode_key(&saved.config.server_public_key).map_err(|_| CODE_INVALID_CONFIG)?;
+    let preshared_key =
+        wg::decode_preshared_key(&saved.config.preshared_key).map_err(|_| CODE_INVALID_CONFIG)?;
     let allowed = ipv4_routes(&saved.config.allowed_ips);
-    let blob = wg::direct_config(private_key, peer_key, Some(endpoint), 0, 25, &allowed);
+    let blob = wg::direct_config(
+        private_key,
+        peer_key,
+        preshared_key,
+        Some(endpoint),
+        0,
+        25,
+        &allowed,
+    );
     adapter.set_config(&blob).map_err(|_| CODE_TUNNEL_FAILED)?;
     log_line("reconnect", "kick");
     Ok(())

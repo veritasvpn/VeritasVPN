@@ -73,12 +73,16 @@ fn direct_mode_body(dll: String, service: PathBuf) {
 
     let server_keys = generate_keypair();
     let client_keys = generate_keypair();
+    // Production peers always carry a per-device preshared key. Prove the
+    // service hands it to WireGuardNT: without it no handshake completes.
+    let psk = generate_keypair().private_key;
     let api = ensure_api(std::path::Path::new(&dll)).expect("load dll");
     let _peer = TestPeer::up(
         api,
         "VeritasTestSrv",
         decode(&server_keys.private_key),
         decode(&client_keys.public_key),
+        Some(decode(&psk)),
         51830,
         "10.66.0.1".parse().unwrap(),
         24,
@@ -95,7 +99,7 @@ fn direct_mode_body(dll: String, service: PathBuf) {
         endpoint: format!("{host}:51830"),
         allowed_ips: vec!["10.66.0.1/32".into(), "10.66.0.50/32".into()],
         peer_id: "peer-test".into(),
-        preshared_key: String::new(),
+        preshared_key: psk,
         stealth_endpoint: String::new(),
         stealth_path_prefix: String::new(),
         endpoint_lan: String::new(),
@@ -694,12 +698,16 @@ fn wait_tcp(port: u16) {
 fn bring_up_stealth(dll: &str, remote: &str) -> TestPeer {
     let server_keys = generate_keypair();
     let client_keys = generate_keypair();
+    // Production peers always carry a per-device preshared key. Prove the
+    // service hands it to WireGuardNT: without it no handshake completes.
+    let psk = generate_keypair().private_key;
     let api = ensure_api(std::path::Path::new(dll)).expect("load dll");
     let peer = TestPeer::up(
         api,
         "VeritasTestSrv",
         decode(&server_keys.private_key),
         decode(&client_keys.public_key),
+        Some(decode(&psk)),
         51820,
         "10.66.0.1".parse().unwrap(),
         24,
@@ -715,7 +723,7 @@ fn bring_up_stealth(dll: &str, remote: &str) -> TestPeer {
         endpoint: format!("{host}:51820"),
         allowed_ips: vec!["10.66.0.1/32".into(), "10.66.0.50/32".into()],
         peer_id: "peer-stealth".into(),
-        preshared_key: String::new(),
+        preshared_key: psk,
         stealth_endpoint: remote.into(),
         stealth_path_prefix: "/veritas".into(),
         endpoint_lan: String::new(),
@@ -739,12 +747,16 @@ fn bring_up_stealth(dll: &str, remote: &str) -> TestPeer {
 fn bring_up_tunnel(dll: &str) -> TestPeer {
     let server_keys = generate_keypair();
     let client_keys = generate_keypair();
+    // Production peers always carry a per-device preshared key. Prove the
+    // service hands it to WireGuardNT: without it no handshake completes.
+    let psk = generate_keypair().private_key;
     let api = ensure_api(std::path::Path::new(dll)).expect("load dll");
     let peer = TestPeer::up(
         api,
         "VeritasTestSrv",
         decode(&server_keys.private_key),
         decode(&client_keys.public_key),
+        Some(decode(&psk)),
         51830,
         "10.66.0.1".parse().unwrap(),
         24,
@@ -760,7 +772,7 @@ fn bring_up_tunnel(dll: &str) -> TestPeer {
         endpoint: format!("{host}:51830"),
         allowed_ips: vec!["10.66.0.1/32".into(), "10.66.0.50/32".into()],
         peer_id: "peer-lock".into(),
-        preshared_key: String::new(),
+        preshared_key: psk,
         stealth_endpoint: String::new(),
         stealth_path_prefix: String::new(),
         endpoint_lan: String::new(),
