@@ -57,7 +57,7 @@ import {
   WORLD_MAP_WIDTH,
 } from "./connectionMap";
 import { statusAfterDisconnectFailure } from "./disconnectStatus";
-import { toUserMessage } from "./errorMapper";
+import { readApiJson, safeErrorText, toUserMessage } from "./errorMapper";
 import { formatConnectError } from "./connectError";
 import veritasMark from "./assets/veritas-mark.png";
 import veritasLogo from "./assets/veritas-logo.png";
@@ -1125,7 +1125,7 @@ function App() {
     setBillingLoading(true);
     try {
       const response = await fetchWithAuth(`${AUTH_API}/api/v1/billing/status`);
-      const status = (await response.json()) as BillingStatus;
+      const status = await readApiJson<BillingStatus>(response);
       if (!response.ok) throw new Error(status.error || "Could not load your subscription.");
       setBillingStatus(status);
       setSubscriptionActive(status.is_premium === true);
@@ -1446,7 +1446,7 @@ function App() {
           return_target: "desktop",
         }),
       });
-      const data = await response.json() as { checkout_url?: string; error?: string };
+      const data = await readApiJson<{ checkout_url?: string; error?: string }>(response);
       if (!response.ok || !isAllowedBtcpayCheckoutUrl(data.checkout_url)) {
         throw new Error(data.error || "The billing server returned an invalid checkout.");
       }
@@ -1473,7 +1473,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: "{}",
       });
-      const data = await response.json() as { error?: string };
+      const data = await readApiJson<{ error?: string }>(response);
       if (!response.ok) throw new Error(data.error || "Could not cancel your subscription.");
       await refreshBillingStatus();
       setShowCancelConfirmation(false);
@@ -1576,7 +1576,7 @@ function App() {
 
       if (recover && (!recoveryOwned() || budgetLeft() < 1000)) return false;
       const billingResponse = await (recover ? fetchRecovery(`${AUTH_API}/api/v1/billing/status`, {}, budgetLeft()) : fetchWithAuth(`${AUTH_API}/api/v1/billing/status`));
-      const billing = (await billingResponse.json()) as BillingStatus;
+      const billing = await readApiJson<BillingStatus>(billingResponse);
       if (!billingResponse.ok || !billing.is_premium) {
         setSubscriptionActive(false);
         setSubscriptionChecked(true);
@@ -1609,12 +1609,12 @@ function App() {
       const res = recover
         ? await fetchRecovery(`${AUTH_API}/api/v1/wg/peers`, peerInit, budgetLeft())
         : await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`, peerInit);
-      const peer = (await res.json()) as PeerResponse & { code?: string };
+      const peer = await readApiJson<PeerResponse & { code?: string }>(res);
       if (!res.ok) {
         if (peer.code?.startsWith("plan_device_limit")) {
-          throw new Error(peer.error || "Device limit reached. Disconnect another device or upgrade your plan.");
+          throw new Error(safeErrorText(peer.error, "Device limit reached. Disconnect another device or upgrade your plan."));
         }
-        throw new Error(peer.error || "Failed to create WireGuard peer");
+        throw new Error(safeErrorText(peer.error, "Couldn't set up a VPN connection on the server. Please try again."));
       }
       createdPeerId = peer.peer_id;
       connectPeerRef.current = peer.peer_id;
@@ -2089,7 +2089,7 @@ function App() {
         // Background poll: an auth hiccup here never signs the user out.
         const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`, {}, { background: true });
         if (response.ok && !cancelled) {
-          const data = (await response.json()) as { peers?: PeerInfo[] };
+          const data = await readApiJson<{ peers?: PeerInfo[] }>(response).catch(() => ({} as { peers?: PeerInfo[] }));
           if (!cancelled && Array.isArray(data.peers)) {
             const match = data.peers.find((p) => p.id === peerIdRef.current);
             if (match && typeof match.dns_blocked_count === "number") {
@@ -2254,7 +2254,7 @@ function App() {
         body: JSON.stringify(shieldRequest(next)),
       });
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        const body = await readApiJson<{ error?: string }>(res);
         throw new Error(body.error || "Could not update Veritas Shield. Try again.");
       }
     } catch (err) {
