@@ -651,7 +651,10 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
             "server",
             "--restrict-http-upgrade-path-prefix",
             STEALTH_SECRET,
-            &format!("ws://127.0.0.1:{port}"),
+            // Production runs `wss://0.0.0.0:443` with wstunnel's built-in
+            // certificate. A plain ws:// client against this port fails
+            // every upgrade, which is the bug this test guards.
+            &format!("wss://127.0.0.1:{port}"),
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -659,8 +662,13 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
         .expect("stealth server");
     let _server = ServerGuard(server);
     wait_tcp(port);
+    assert_plain_ws_is_refused(&wstunnel, port);
     let doc = outside_oracle();
     let _peer = bring_up_stealth(&dll, &format!("127.0.0.1:{port}"));
+    let log = fs::read_to_string(r"C:\ProgramData\VeritasVPN\stealth.log").unwrap_or_default();
+    assert!(!log.contains("invalid HTTP version"), "helper spoke plain ws to TLS\n{log}");
+    assert!(!log.contains(STEALTH_SECRET), "stealth.log leaked the path secret");
+    eprintln!("STEALTH_TLS");
     wait_carry();
     wait_stealth_handshake();
     assert_blocked(doc, "stealth lock");
@@ -694,6 +702,50 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
         "disconnect left the lock engaged"
     );
     eprintln!("STEALTH_DISCONNECT");
+}
+
+/// Same server, plain ws:// client: the upgrade must fail with wstunnel's
+/// TLS mismatch error. If this ever passes, the server is not TLS and the
+/// test would no longer catch a ws:// regression in the service.
+fn assert_plain_ws_is_refused(wstunnel: &str, port: u16) {
+    let probe_port = free_udp();
+    let mut client = Command::new(wstunnel)
+        .args([
+            "client",
+            "--http-upgrade-path-prefix",
+            STEALTH_SECRET,
+            "-L",
+            &format!("udp://127.0.0.1:{probe_port}:127.0.0.1:9?timeout_sec=0"),
+            &format!("ws://127.0.0.1:{port}"),
+        ])
+        .env("NO_COLOR", "true")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("plain ws client");
+    thread::sleep(Duration::from_millis(600));
+    if let Ok(socket) = std::net::UdpSocket::bind("127.0.0.1:0") {
+        let _ = socket.send_to(b"veritas", ("127.0.0.1", probe_port));
+    }
+    thread::sleep(Duration::from_millis(800));
+    let _ = client.kill();
+    let out = wait_output(client, Duration::from_secs(10), "plain ws client");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("failed to do websocket handshake"),
+        "plain ws:// to the TLS stealth port did not fail\n{}",
+        text.chars().take(2000).collect::<String>()
+    );
+    eprintln!("STEALTH_PLAIN_WS_REFUSED");
+}
+
+fn free_udp() -> u16 {
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("udp port");
+    socket.local_addr().expect("udp port").port()
 }
 
 struct ServerGuard(std::process::Child);

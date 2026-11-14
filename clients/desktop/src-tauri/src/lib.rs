@@ -2642,13 +2642,13 @@ if [[ -n "$STEALTH_REMOTE" ]]; then
       --http-upgrade-path-prefix "$STEALTH_PREFIX" \
       -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
       "$WST_URL" \
-      >"$RUNTIME_DIR/wstunnel.log" 2>&1 &
+      > >(capped_log_sink "$RUNTIME_DIR/wstunnel.log") 2>&1 &
   else
     "$WSTUNNEL" client \
       --http-upgrade-path-prefix "$STEALTH_PREFIX" \
       -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
       "$WST_URL" \
-      >"$RUNTIME_DIR/wstunnel.log" 2>&1 &
+      > >(capped_log_sink "$RUNTIME_DIR/wstunnel.log") 2>&1 &
   fi
   echo $! > "$STEALTH_PID_FILE"
   sleep 0.4

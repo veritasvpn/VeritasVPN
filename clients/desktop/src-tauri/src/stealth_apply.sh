@@ -147,12 +147,12 @@ start_wstunnel_pinned() {
       --tls-sni-override "$sni" \
       --http-upgrade-path-prefix "$STEALTH_PREFIX" \
       -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
-      "$url" >"$wst_log" 2>&1 &
+      "$url" > >(capped_log_sink "$wst_log") 2>&1 &
   else
     "$WSTUNNEL_BIN" client \
       --http-upgrade-path-prefix "$STEALTH_PREFIX" \
       -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
-      "$url" >"$wst_log" 2>&1 &
+      "$url" > >(capped_log_sink "$wst_log") 2>&1 &
   fi
   pid=$!
   echo "$pid" > "$STATE_DIR/wstunnel.pid"

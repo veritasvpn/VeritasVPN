@@ -7,6 +7,9 @@ export const CONNECT_INVALID_CONFIG = "connect.invalid_config";
 
 export const STEALTH_UNAVAILABLE_MESSAGE =
   "Stealth isn't available on this server right now. Try again later or choose UDP only.";
+/** Same sentence as `STEALTH_UNREACHABLE_MESSAGE` in veritas-ipc (Windows service). */
+export const STEALTH_UNREACHABLE_MESSAGE =
+  "Stealth couldn't reach the VeritasVPN server. Check your internet connection and try again, or choose UDP only.";
 export const CONNECT_FAILED_MESSAGE = "Couldn't connect. Please try again.";
 export const INVALID_CONFIG_MESSAGE =
   "We couldn't set up the VPN with this server's settings. Try again in a moment.";
@@ -44,6 +47,7 @@ export function formatConnectError(err: unknown, wantedStealth: boolean): string
     return SERVER_UNREACHABLE_MESSAGE;
   }
   if (trimmed === CONNECT_STEALTH_UNAVAILABLE) return STEALTH_UNAVAILABLE_MESSAGE;
+  if (trimmed === STEALTH_UNREACHABLE_MESSAGE || trimmed === "stealth_unreachable") return STEALTH_UNREACHABLE_MESSAGE;
   if (trimmed === CONNECT_INVALID_CONFIG) {
     return wantedStealth ? STEALTH_UNAVAILABLE_MESSAGE : INVALID_CONFIG_MESSAGE;
   }

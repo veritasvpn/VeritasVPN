@@ -63,7 +63,7 @@ pub fn handle(request: &Request, caller_ok: bool) -> Response {
     match request.op.as_str() {
         OP_HELLO => Response::ok(request.id),
         OP_STATUS | OP_STATS => status_response(request.id, &session),
-        OP_CONNECT => connect(request, &mut session),
+        OP_CONNECT => connect(request, &mut session, true),
         OP_DISCONNECT => {
             session.saved = None;
             forget_session();
@@ -126,7 +126,7 @@ pub fn release_lock() -> Result<(), u32> {
     }
 }
 
-fn connect(request: &Request, session: &mut Session) -> Response {
+fn connect(request: &Request, session: &mut Session, confirm_stealth: bool) -> Response {
     if session.adapter.is_some() {
         return Response::fail(request.id, CODE_BUSY);
     }
@@ -207,6 +207,22 @@ fn connect(request: &Request, session: &mut Session) -> Response {
             session.endpoint_pin = pin;
             session.local_network = local_network;
             session.helper = helper.take();
+            if using_stealth {
+                restart_gate(|gate| gate.reset());
+            }
+            if using_stealth && confirm_stealth {
+                // Connected means the TLS websocket upgrade and the WireGuard
+                // handshake through it both completed. Otherwise undo
+                // everything; the window shows a fixed sentence and never
+                // switches to Direct.
+                if let Err(reason) = wait_stealth_handshake(session, config) {
+                    log_line("stealth", reason);
+                    release_tunnel(session);
+                    let _ = release_lock();
+                    return Response::fail(request.id, veritas_ipc::CODE_STEALTH_UNREACHABLE);
+                }
+                log_line("stealth", "handshake");
+            }
             session.saved = Some(SavedConnect {
                 config: config.clone(),
                 full_lock: request.full_lock == Some(true),
@@ -227,6 +243,68 @@ fn connect(request: &Request, session: &mut Session) -> Response {
             Response::fail(request.id, code)
         }
     }
+}
+
+/// How long Connect waits for the first handshake through Stealth. The
+/// window's pipe call allows 20s for the whole connect.
+const STEALTH_CONFIRM: Duration = Duration::from_secs(13);
+
+fn wait_stealth_handshake(session: &Session, config: &WgTunnelConfig) -> Result<(), &'static str> {
+    let started = Instant::now();
+    let nudge = nudge_target(config);
+    let mut last_nudge: Option<Instant> = None;
+    while started.elapsed() < STEALTH_CONFIRM {
+        let Some(adapter) = session.adapter.as_ref() else {
+            return Err("no_adapter");
+        };
+        if let Some((_, _, handshake)) = adapter.counters() {
+            if wg::filetime_to_unix(handshake) > 0 {
+                return Ok(());
+            }
+        }
+        match session.helper.as_ref() {
+            Some(helper) if helper.flooded() => return Err("upgrade_refused"),
+            Some(helper) if !helper.alive() => return Err("helper_exited"),
+            None => return Err("helper_missing"),
+            _ => {}
+        }
+        // WireGuard only starts a handshake when it has something to send.
+        if let Some(target) = nudge {
+            if last_nudge.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
+                last_nudge = Some(Instant::now());
+                let _ = std::net::UdpSocket::bind("0.0.0.0:0").and_then(|socket| socket.send_to(&[0u8], target));
+            }
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    if session.helper.as_ref().is_some_and(|helper| helper.upgrade_failures() > 0) {
+        return Err("upgrade_failed");
+    }
+    Err("no_handshake")
+}
+
+/// Discard port on the tunnel DNS address, only when that address is routed
+/// into the tunnel. Nothing is ever sent outside it.
+fn nudge_target(config: &WgTunnelConfig) -> Option<SocketAddr> {
+    let dns: Ipv4Addr = config.dns.trim().parse().ok()?;
+    let inside = ipv4_routes(&config.allowed_ips)
+        .iter()
+        .any(|(network, len)| network_base(dns, *len) == *network);
+    inside.then(|| SocketAddr::from((dns, 9)))
+}
+
+static RESTART: Mutex<crate::stealth_watch::RestartGate> = Mutex::new(crate::stealth_watch::RestartGate::new());
+
+fn restart_gate<T>(f: impl FnOnce(&mut crate::stealth_watch::RestartGate) -> T) -> T {
+    let mut gate = RESTART.lock().unwrap_or_else(|e| e.into_inner());
+    f(&mut gate)
+}
+
+fn jitter_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_nanos()) / 1_000)
+        .unwrap_or(0)
 }
 
 fn bring_up(
@@ -659,6 +737,8 @@ fn tick() {
         state.stalled = false;
         state.backoff.reset();
         state.next_kick = None;
+        drop(state);
+        restart_gate(|gate| gate.reset());
     }
 }
 
@@ -749,7 +829,16 @@ fn kick_locked(session: &mut Session, saved: &SavedConnect, refresh: bool) -> Re
     let using_stealth = !saved.config.stealth_endpoint.trim().is_empty();
     if using_stealth {
         let dead = session.helper.as_ref().map(|helper| !helper.alive()).unwrap_or(true);
-        if dead {
+        let flooded = session.helper.as_ref().is_some_and(|helper| helper.flooded());
+        if flooded {
+            // The reader already stopped it. Drop it once and count the cut
+            // as an attempt so the next start waits for the backoff.
+            session.helper = None;
+            restart_gate(|gate| gate.note_failure(Instant::now(), jitter_ms()));
+            log_line("stealth", "upgrade_loop_stopped");
+        }
+        if dead && restart_gate(|gate| gate.try_restart(Instant::now(), jitter_ms())) {
+            log_line("stealth", "restart");
             if let Some(path) = crate::stealth::locate() {
                 match crate::stealth::start(
                     &path,
@@ -839,7 +928,9 @@ fn resume_saved() {
     if session.adapter.is_some() || !session_blob_exists() {
         return;
     }
-    let _ = connect(&request, &mut session);
+    // Boot resume keeps the old rule: the lock stays armed and the monitor
+    // keeps retrying, so it does not wait for the first handshake here.
+    let _ = connect(&request, &mut session, false);
 }
 
 struct Sim {

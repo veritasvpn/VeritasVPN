@@ -28,6 +28,13 @@ pub const CODE_DENIED: &str = "denied";
 pub const CODE_NOT_IN_THIS_BUILD: &str = "not_in_this_build";
 pub const CODE_LOCK_FAILED: &str = "lock_failed";
 pub const CODE_BUSY: &str = "busy";
+/// Stealth started but no WireGuard handshake came back through it.
+pub const CODE_STEALTH_UNREACHABLE: &str = "stealth_unreachable";
+
+/// Shown when Stealth could not complete its handshake. It suggests UDP only
+/// as the user's choice; the app never switches modes by itself.
+pub const STEALTH_UNREACHABLE_MESSAGE: &str =
+    "Stealth couldn't reach the VeritasVPN server. Check your internet connection and try again, or choose UDP only.";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
@@ -139,6 +146,7 @@ pub fn user_message(code: &str) -> &'static str {
     match code {
         CODE_UNAVAILABLE => "The VeritasVPN background service is not running.",
         CODE_BUSY => "A connection is already in progress.",
+        CODE_STEALTH_UNREACHABLE => STEALTH_UNREACHABLE_MESSAGE,
         CODE_LOCK_FAILED => "Kill switch could not be enabled. Connect was cancelled so traffic stays unprotected only while you fix it.",
         _ => "Couldn't start the tunnel. Try connecting again.",
     }
@@ -195,6 +203,7 @@ mod tests {
             CODE_NOT_IN_THIS_BUILD,
             CODE_LOCK_FAILED,
             CODE_BUSY,
+            CODE_STEALTH_UNREACHABLE,
             "timeout",
             "os error 5",
         ] {
@@ -205,5 +214,7 @@ mod tests {
             assert!(!lower.contains("timed out"), "{text}");
             assert_ne!(lower, "timeout");
         }
+        assert_eq!(user_message(CODE_STEALTH_UNREACHABLE), STEALTH_UNREACHABLE_MESSAGE);
+        assert!(!STEALTH_UNREACHABLE_MESSAGE.chars().any(|c| c.is_ascii_digit()));
     }
 }

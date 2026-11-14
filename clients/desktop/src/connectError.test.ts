@@ -4,9 +4,12 @@ import {
   CONNECT_STEALTH_UNAVAILABLE,
   INVALID_CONFIG_MESSAGE,
   STEALTH_UNAVAILABLE_MESSAGE,
+  STEALTH_UNREACHABLE_MESSAGE,
   formatConnectError,
 } from "./connectError";
+import { isDisplaySafeMessage } from "./errorMapper";
 import app from "./App.tsx?raw";
+import ipc from "../src-tauri/crates/veritas-ipc/src/lib.rs?raw";
 
 // Every message `WgTunnelConfig::validate` and key decoding can produce.
 const RAW_VALIDATION = [
@@ -62,6 +65,18 @@ describe("formatConnectError", () => {
   it("suggests UDP but never says it switched", () => {
     expect(STEALTH_UNAVAILABLE_MESSAGE).toMatch(/choose UDP only/);
     expect(STEALTH_UNAVAILABLE_MESSAGE).not.toMatch(/switched|falling back|using udp/i);
+  });
+
+  it("shows the Windows Stealth handshake failure as a friendly sentence", () => {
+    expect(ipc).toContain(JSON.stringify(STEALTH_UNREACHABLE_MESSAGE));
+    for (const raw of [STEALTH_UNREACHABLE_MESSAGE, "stealth_unreachable"]) {
+      for (const wantedStealth of [true, false]) {
+        expect(formatConnectError(new Error(raw), wantedStealth)).toBe(STEALTH_UNREACHABLE_MESSAGE);
+      }
+    }
+    expect(isDisplaySafeMessage(STEALTH_UNREACHABLE_MESSAGE)).toBe(true);
+    expect(STEALTH_UNREACHABLE_MESSAGE).toMatch(/choose UDP only/);
+    expect(STEALTH_UNREACHABLE_MESSAGE).not.toMatch(/\d|switched|falling back|using udp|ws:|wss:|http/i);
   });
 
   it("the connect screen shows only formatConnectError output", () => {

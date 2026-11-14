@@ -17,6 +17,8 @@ mod svc;
 #[cfg(windows)]
 mod wfp;
 mod reconnect;
+#[cfg_attr(any(not(windows), not(test)), allow(dead_code))]
+mod stealth_watch;
 mod wfp_plan;
 #[cfg(windows)]
 mod wg;
