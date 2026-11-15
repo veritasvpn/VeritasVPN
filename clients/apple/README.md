@@ -14,7 +14,7 @@ python3 Scripts/l10n.py          # regenerate
 python3 Scripts/l10n.py --check  # CI check
 
 # Xcode project
-brew install xcodegen go@1.22
+brew install xcodegen go   # Go 1.26+
 xcodegen generate && open VeritasVPN.xcodeproj
 ```
 

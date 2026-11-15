@@ -20,9 +20,8 @@ settings:
 
 packages:
   WireGuardKit:
-    url: https://git.zx2c4.com/wireguard-apple
-    # Tag 1.0.16-27 (pinned by commit; the tag is not SemVer).
-    revision: 2fec12a6e1f6e3460b6ee483aa00ad29cddadab1
+    # Vendored wireguard-apple 1.0.16-27 (see Packages/WireGuardKit/README.md).
+    path: Packages/WireGuardKit
   VeritasCore:
     path: Packages/VeritasCore
 

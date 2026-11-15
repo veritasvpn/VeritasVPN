@@ -13,16 +13,11 @@ fi
 PATH="${PATH}:/usr/local/go/bin:/opt/homebrew/bin:/usr/local/bin"
 export PATH
 
-# SPM checkout location. CI can pass -clonedSourcePackagesDirPath and set
-# VERITAS_SPM_CHECKOUTS to the same directory + /checkouts.
-if [ -n "${VERITAS_SPM_CHECKOUTS:-}" ]; then
-    CHECKOUTS="${VERITAS_SPM_CHECKOUTS}"
-else
-    CHECKOUTS="${BUILD_DIR%Build/*}SourcePackages/checkouts"
-fi
-GO_DIR="${CHECKOUTS}/wireguard-apple/Sources/WireGuardKitGo"
+# Vendored WireGuardKit (Packages/WireGuardKit), relative to this script.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+GO_DIR="${SCRIPT_DIR}/../Packages/WireGuardKit/Sources/WireGuardKitGo"
 if [ ! -d "$GO_DIR" ]; then
-    echo "error: WireGuardKitGo sources not found at ${GO_DIR}. Resolve Swift packages first." >&2
+    echo "error: WireGuardKitGo sources not found at ${GO_DIR}." >&2
     exit 1
 fi
 
@@ -31,7 +26,7 @@ if [ "$ACTION" = "clean" ]; then
 fi
 
 if ! command -v go >/dev/null 2>&1; then
-    echo "error: Go is required to build the WireGuard bridge. Install Go 1.22 (brew install go@1.22) or set VERITAS_GO_BIN." >&2
+    echo "error: Go is required to build the WireGuard bridge. Install Go 1.26 or newer or set VERITAS_GO_BIN." >&2
     exit 1
 fi
 

@@ -23,8 +23,8 @@ permissions:
   contents: read
 
 env:
-  # wireguard-apple's Go runtime patch and pinned x/sys target this range.
-  APPLE_GO_VERSION: "1.22.12"
+  # Same Go as the rest of the repo; the vendored WireGuardKitGo go.mod needs 1.26.
+  APPLE_GO_VERSION: "1.26.10"
 
 jobs:
   core:
@@ -90,7 +90,6 @@ jobs:
             -destination "${{ matrix.destination }}" \
             -derivedDataPath build/DerivedData \
             -clonedSourcePackagesDirPath "$PWD/build/SourcePackages" \
-            VERITAS_SPM_CHECKOUTS="$PWD/build/SourcePackages/checkouts" \
             VERITAS_GO_BIN="$(dirname "$(command -v go)")" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \

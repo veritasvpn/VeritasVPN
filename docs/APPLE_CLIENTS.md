@@ -135,7 +135,7 @@ CI (`macos-15`): `swift test` for VeritasCore, `Scripts/l10n.py --check`,
 Locally on a Mac with Xcode 16 (not on the user's MacBook):
 
 ```sh
-brew install xcodegen go@1.22
+brew install xcodegen go   # Go 1.26+
 cd clients/apple
 xcodegen generate
 open VeritasVPN.xcodeproj
@@ -181,8 +181,9 @@ apply to the installed Go, the script warns and builds without it.
 - The code has not been compiled on the Linux box (no Xcode). CI is the first
   compile; expect small fixes.
 - The WireGuardKit Go bridge for the arm64 iOS Simulator and newer Go versions
-  is the most fragile build step. CI pins Go 1.22.
-- WireGuardKit API drift (pinned to 1.0.16-27 by commit).
+  is the most fragile build step. CI uses Go 1.26 (the repo-wide version).
+- WireGuardKit is vendored in `clients/apple/Packages/WireGuardKit` (1.0.16-27 with a
+  tools-version 5.5 manifest and bumped Go deps); see its README.
 - The world map is an SVG in the asset catalog (vector preserved); check its
   rendering on device.
 - Turnstile inside `WKWebView` has to be tested against the live page.
