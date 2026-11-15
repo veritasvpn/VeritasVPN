@@ -17,4 +17,7 @@ Local changes:
   raised to versions without known high/critical advisories (same as the
   rest of the repo). Needs Go 1.26+.
 
-The Swift and C sources are unchanged.
+- `Sources/WireGuardKitC/WireGuardKitC.h`: `#include <sys/types.h>` (needed
+  for `u_int32_t`/`u_char` with explicit modules on Xcode 16).
+
+The Swift sources are unchanged.
