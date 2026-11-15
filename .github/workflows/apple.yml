@@ -1,0 +1,105 @@
+name: Apple clients
+
+# Builds the iOS and macOS apps unsigned and runs the VeritasCore unit tests.
+# No signing, no TestFlight, no tags, no releases.
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "clients/apple/**"
+      - ".github/workflows/apple.yml"
+  pull_request:
+    paths:
+      - "clients/apple/**"
+      - ".github/workflows/apple.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # wireguard-apple's Go runtime patch and pinned x/sys target this range.
+  APPLE_GO_VERSION: "1.22.12"
+
+jobs:
+  core:
+    name: VeritasCore tests + l10n
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: clients/apple
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Localization check (en + es-419)
+        run: python3 Scripts/l10n.py --check
+      - name: Unit tests
+        working-directory: clients/apple/Packages/VeritasCore
+        run: swift test --parallel
+
+  build:
+    name: Build ${{ matrix.name }} (unsigned)
+    needs: core
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: iOS Simulator
+            scheme: VeritasVPN-iOS
+            destination: generic/platform=iOS Simulator
+          - name: macOS
+            scheme: VeritasVPN-macOS
+            destination: generic/platform=macOS
+    defaults:
+      run:
+        working-directory: clients/apple
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.APPLE_GO_VERSION }}
+          cache: false
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Resolve packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project VeritasVPN.xcodeproj \
+            -scheme "${{ matrix.scheme }}" \
+            -clonedSourcePackagesDirPath "$PWD/build/SourcePackages"
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project VeritasVPN.xcodeproj \
+            -scheme "${{ matrix.scheme }}" \
+            -configuration Debug \
+            -destination "${{ matrix.destination }}" \
+            -derivedDataPath build/DerivedData \
+            -clonedSourcePackagesDirPath "$PWD/build/SourcePackages" \
+            VERITAS_SPM_CHECKOUTS="$PWD/build/SourcePackages/checkouts" \
+            VERITAS_GO_BIN="$(dirname "$(command -v go)")" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | tee build/xcodebuild.log
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: xcodebuild-${{ matrix.scheme }}
+          path: clients/apple/build/xcodebuild.log
+          retention-days: 7
