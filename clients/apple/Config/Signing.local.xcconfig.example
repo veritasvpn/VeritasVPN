@@ -1,0 +1,3 @@
+// Copy to Signing.local.xcconfig (git-ignored) and fill in.
+VERITAS_DEVELOPMENT_TEAM = ABCDE12345
+// VERITAS_BUNDLE_ID_PREFIX = cloud.veritasvpn

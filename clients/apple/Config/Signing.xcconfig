@@ -1,0 +1,28 @@
+// Signing placeholders. Nothing here is a secret.
+//
+// When the Apple Developer account exists:
+//   1. Copy Signing.local.xcconfig.example to Signing.local.xcconfig
+//      (git-ignored) and set VERITAS_DEVELOPMENT_TEAM to the 10-character
+//      Team ID.
+//   2. Optionally change VERITAS_BUNDLE_ID_PREFIX (default cloud.veritasvpn).
+// CI builds unsigned (CODE_SIGNING_ALLOWED=NO) and does not need any of this.
+
+VERITAS_DEVELOPMENT_TEAM =
+VERITAS_BUNDLE_ID_PREFIX = cloud.veritasvpn
+
+#include? "Signing.local.xcconfig"
+
+DEVELOPMENT_TEAM = $(VERITAS_DEVELOPMENT_TEAM)
+CODE_SIGN_STYLE = Automatic
+
+VERITAS_APP_BUNDLE_ID = $(VERITAS_BUNDLE_ID_PREFIX).vpn
+VERITAS_TUNNEL_BUNDLE_ID = $(VERITAS_APP_BUNDLE_ID).tunnel
+
+// Shared between the app and its packet tunnel extension.
+// iOS app groups use the "group." prefix; macOS sandboxed app groups use the
+// Team ID prefix so they work for App Store and TestFlight builds.
+VERITAS_APP_GROUP_IOS = group.$(VERITAS_APP_BUNDLE_ID)
+VERITAS_APP_GROUP_MACOS = $(VERITAS_DEVELOPMENT_TEAM).$(VERITAS_APP_BUNDLE_ID)
+// Keychain access group (Team ID prefix + name) holding the tunnel profile.
+VERITAS_KEYCHAIN_GROUP_NAME = $(VERITAS_APP_BUNDLE_ID).shared
+VERITAS_KEYCHAIN_GROUP = $(VERITAS_DEVELOPMENT_TEAM).$(VERITAS_KEYCHAIN_GROUP_NAME)
