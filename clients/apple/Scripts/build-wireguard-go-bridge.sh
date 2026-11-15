@@ -45,6 +45,11 @@ if [ ! -f "$PREPARED" ]; then
     touch "$PREPARED"
 fi
 
+# The repo root has a go.work that does not list this module; build it
+# standalone and with the installed toolchain only.
+export GOWORK=off
+export GOTOOLCHAIN=local
+
 EXTRA=""
 case "${PLATFORM_NAME:-}" in
     iphonesimulator) EXTRA="GOOS_iphonesimulator=ios" ;;
