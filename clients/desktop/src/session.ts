@@ -1,4 +1,4 @@
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch, type ApiFetchInit } from "./apiFetch";
 import {
   SESSION_EXPIRED_EVENT,
   SessionExpiredError,
@@ -30,7 +30,7 @@ export interface AuthFetchOptions {
 /** Authenticated API call with proactive refresh and one 401 retry. */
 export async function fetchWithAuth(
   url: string,
-  init: RequestInit = {},
+  init: ApiFetchInit = {},
   options: AuthFetchOptions = {}
 ): Promise<Response> {
   const background = options.background === true;

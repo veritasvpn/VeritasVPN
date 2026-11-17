@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { fetch as nativeFetch } from "@tauri-apps/plugin-http";
+import { fetch as nativeFetch } from "./apiFetch";
 import {
   getStoredToken,
   getStoredUser,
@@ -1254,8 +1254,13 @@ function App() {
 
   useEffect(() => {
     if ((!checkoutUrl && !checkoutSettlementPending) || !user) return;
+    let billingInFlight = false;
     const timer = window.setInterval(() => {
-      refreshBillingStatus().then((status) => {
+      if (billingInFlight) return;
+      billingInFlight = true;
+      refreshBillingStatus().finally(() => {
+        billingInFlight = false;
+      }).then((status) => {
         if (status?.is_premium) {
           setCheckoutUrl(null);
           setCheckoutSettlementPending(false);
@@ -1974,7 +1979,11 @@ function App() {
     }
 
     let cancelled = false;
+    // One poll at a time: a slow service answer must not stack calls.
+    let statsInFlight = false;
     const pollStats = async () => {
+      if (statsInFlight) return;
+      statsInFlight = true;
       try {
         const stats = await invoke<WgTransferStats>("wireguard_stats");
         if (cancelled) return;
@@ -2029,7 +2038,9 @@ function App() {
           reconnectingRef.current = true;
           setReconnecting(true);
           setStatusSticky(false);
-          setStatusMsg("Reconnecting…");
+          // The service may explain a long reconnect in plain words; it
+          // always starts with "Reconnecting".
+          setStatusMsg(reconnectNotice ? displayStatus(notice) : "Reconnecting…");
           setWgStats(stats);
           return;
         }
@@ -2061,6 +2072,8 @@ function App() {
         // interactive pkexec for teardown.sh and spammed auth dialogs.
       } catch {
         // ignore transient stats errors
+      } finally {
+        statsInFlight = false;
       }
     };
 
@@ -2084,10 +2097,22 @@ function App() {
     }
     let cancelled = false;
     let peerCheckInFlight = false;
+    let peersInFlight = false;
     const pollPeers = async () => {
+      // One poll at a time. While the tunnel reconnects requests can hang
+      // until their timeout; the interval must not pile more on top.
+      if (peersInFlight) return;
+      peersInFlight = true;
+      try {
+        await pollPeersOnce();
+      } finally {
+        peersInFlight = false;
+      }
+    };
+    const pollPeersOnce = async () => {
       try {
         // Background poll: an auth hiccup here never signs the user out.
-        const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`, {}, { background: true });
+        const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`, { timeoutMs: 8000 }, { background: true });
         if (response.ok && !cancelled) {
           const data = await readApiJson<{ peers?: PeerInfo[] }>(response).catch(() => ({} as { peers?: PeerInfo[] }));
           if (!cancelled && Array.isArray(data.peers)) {

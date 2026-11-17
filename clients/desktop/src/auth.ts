@@ -1,5 +1,5 @@
 import { AUTH_API } from "./config";
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch } from "./apiFetch";
 import { invoke } from "@tauri-apps/api/core";
 import { ApiError, SERVER_UNREACHABLE_MESSAGE, isDisplaySafeMessage, isServerUnavailableStatus, looksLikeEdgeResponse } from "./errorMapper";
 

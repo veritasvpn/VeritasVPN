@@ -40,6 +40,7 @@ mod network_switch;
 #[path = "network_switch_stub.rs"]
 mod network_switch;
 
+mod api_http;
 mod tunnel;
 #[cfg(target_os = "windows")]
 mod win_pipe;
@@ -4524,6 +4525,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            api_http::api_fetch,
             secure_credential_set,
             secure_credential_get,
             secure_credential_delete,

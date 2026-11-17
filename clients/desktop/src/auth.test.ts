@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const httpFetch = vi.fn();
 const invoke = vi.fn();
 
-vi.mock("@tauri-apps/plugin-http", () => ({ fetch: (...args: unknown[]) => httpFetch(...args) }));
+vi.mock("./apiFetch", () => ({ fetch: (...args: unknown[]) => httpFetch(...args) }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
 import {
