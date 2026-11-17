@@ -154,10 +154,6 @@ pub struct PinnedEndpoint {
     pub gateway: Ipv4Addr,
 }
 
-pub fn default_gateway() -> Option<Ipv4Addr> {
-    underlay_default(0).map(|(_, gateway)| gateway)
-}
-
 pub fn pin_endpoint(endpoint: Ipv4Addr, tunnel_luid: u64) -> Result<Option<PinnedEndpoint>, u32> {
     if endpoint.is_unspecified() || owns_address(endpoint) {
         return Ok(None);
@@ -261,30 +257,67 @@ fn interface_prefixes(luid: u64) -> Vec<(Ipv4Addr, u8)> {
 }
 
 fn underlay_default(tunnel_luid: u64) -> Option<(u64, Ipv4Addr)> {
+    crate::underlay::best_default(&default_routes(), tunnel_luid).map(|route| (route.luid, route.gateway))
+}
+
+/// Every IPv4 default route with the effective metric Windows uses
+/// (route metric plus interface metric) and whether the adapter is up.
+/// The old pick compared route metrics only, so Ethernet and Wi-Fi with
+/// the same route metric were chosen by table order.
+fn default_routes() -> Vec<crate::underlay::DefaultRoute> {
     let mut table = std::ptr::null_mut();
     let err = unsafe { GetIpForwardTable2(AF_INET, &mut table) };
     if err != 0 || table.is_null() {
-        return None;
+        return Vec::new();
     }
     let count = unsafe { (*table).NumEntries };
     let rows = unsafe { (*table).Table.as_ptr() };
-    let mut best: Option<(u32, u64, Ipv4Addr)> = None;
+    let mut out = Vec::new();
     for index in 0..count {
         let row = unsafe { &*rows.add(index as usize) };
         if row.DestinationPrefix.PrefixLength != 0 {
             continue;
         }
         let luid = unsafe { row.InterfaceLuid.Value };
-        if luid == 0 || luid == tunnel_luid {
+        if luid == 0 {
             continue;
         }
         let gateway = ipv4_of(unsafe { row.NextHop.Ipv4.sin_addr });
-        if best.as_ref().is_none_or(|item| row.Metric < item.0) {
-            best = Some((row.Metric, luid, gateway));
-        }
+        let (interface_metric, connected) = interface_state(luid);
+        out.push(crate::underlay::DefaultRoute {
+            luid,
+            gateway,
+            metric: row.Metric.saturating_add(interface_metric),
+            connected,
+        });
     }
     unsafe { FreeMibTable(table as *const _) };
-    best.map(|(_, luid, gateway)| (luid, gateway))
+    out
+}
+
+/// Interface metric and media state. An adapter that cannot be read counts
+/// as connected with metric 0, the old behaviour.
+fn interface_state(luid: u64) -> (u32, bool) {
+    let mut row = unsafe { std::mem::zeroed::<MIB_IPINTERFACE_ROW>() };
+    unsafe { InitializeIpInterfaceEntry(&mut row) };
+    row.Family = AF_INET;
+    row.InterfaceLuid = luid_of(luid);
+    if unsafe { GetIpInterfaceEntry(&mut row) } != 0 {
+        return (0, true);
+    }
+    (row.Metric, row.Connected)
+}
+
+/// Physical network fingerprint for the reconnect monitor: the default
+/// routes and the preferred IPv4 addresses of every adapter except the
+/// tunnel. Disabling one of two adapters on the same router changes it.
+pub fn underlay_fingerprint(tunnel_luid: u64) -> String {
+    let addresses: Vec<(u64, Ipv4Addr)> = unicast_rows()
+        .into_iter()
+        .filter(|row| unsafe { row.Address.si_family } == AF_INET && row.DadState == IpDadStatePreferred)
+        .map(|row| (unsafe { row.InterfaceLuid.Value }, ipv4_of(unsafe { row.Address.Ipv4.sin_addr })))
+        .collect();
+    crate::underlay::fingerprint(&default_routes(), &addresses, tunnel_luid)
 }
 
 fn ipv4_of(addr: IN_ADDR) -> Ipv4Addr {

@@ -45,6 +45,8 @@ impl Drop for Helper {
     fn drop(&mut self) {
         unsafe {
             TerminateProcess(self.process, 1);
+            // Wait briefly so the next helper can bind 127.0.0.1:41820.
+            windows_sys::Win32::System::Threading::WaitForSingleObject(self.process, 3_000);
             CloseHandle(self.process);
             CloseHandle(self.thread);
             CloseHandle(self.job);

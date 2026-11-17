@@ -19,6 +19,8 @@ mod wfp;
 mod reconnect;
 #[cfg_attr(any(not(windows), not(test)), allow(dead_code))]
 mod stealth_watch;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod underlay;
 mod wfp_plan;
 #[cfg(windows)]
 mod wg;
