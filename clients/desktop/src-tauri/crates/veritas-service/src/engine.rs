@@ -63,11 +63,12 @@ pub fn handle(request: &Request, caller_ok: bool) -> Response {
     match request.op.as_str() {
         OP_HELLO => Response::ok(request.id),
         OP_STATUS | OP_STATS => status_response(request.id, &session),
-        OP_CONNECT => connect(request, &mut session),
+        OP_CONNECT => connect(request, &mut session, true),
         OP_DISCONNECT => {
             session.saved = None;
             forget_session();
             release_tunnel(&mut session);
+            clear_monitor();
             match release_lock() {
                 Ok(()) => Response::ok(request.id),
                 Err(_) => Response::fail(request.id, CODE_TUNNEL_FAILED),
@@ -126,7 +127,7 @@ pub fn release_lock() -> Result<(), u32> {
     }
 }
 
-fn connect(request: &Request, session: &mut Session) -> Response {
+fn connect(request: &Request, session: &mut Session, confirm_stealth: bool) -> Response {
     if session.adapter.is_some() {
         return Response::fail(request.id, CODE_BUSY);
     }
@@ -138,7 +139,7 @@ fn connect(request: &Request, session: &mut Session) -> Response {
         return Response::fail(request.id, CODE_INVALID_CONFIG);
     }
     let using_stealth = !config.stealth_endpoint.trim().is_empty();
-    if using_stealth && !crate::stealth::prefix_ok(config.stealth_path_prefix.trim()) && !config.stealth_path_prefix.trim().is_empty() {
+    if using_stealth && !crate::stealth::prefix_ok(&config.stealth_path_prefix) {
         log_line("stealth", "prefix");
         return Response::fail(request.id, CODE_INVALID_CONFIG);
     }
@@ -207,6 +208,22 @@ fn connect(request: &Request, session: &mut Session) -> Response {
             session.endpoint_pin = pin;
             session.local_network = local_network;
             session.helper = helper.take();
+            if using_stealth {
+                restart_gate(|gate| gate.reset());
+            }
+            if using_stealth && confirm_stealth {
+                // Connected means the TLS websocket upgrade and the WireGuard
+                // handshake through it both completed. Otherwise undo
+                // everything; the window shows a fixed sentence and never
+                // switches to Direct.
+                if let Err(reason) = wait_stealth_handshake(session, config) {
+                    log_line("stealth", reason);
+                    release_tunnel(session);
+                    let _ = release_lock();
+                    return Response::fail(request.id, veritas_ipc::CODE_STEALTH_UNREACHABLE);
+                }
+                log_line("stealth", "handshake");
+            }
             session.saved = Some(SavedConnect {
                 config: config.clone(),
                 full_lock: request.full_lock == Some(true),
@@ -217,7 +234,7 @@ fn connect(request: &Request, session: &mut Session) -> Response {
             if let Some(saved) = session.saved.clone() {
                 persist_session(&saved);
             }
-            note_connected();
+            note_connected(session.luid);
             log_line("connect", "ok");
             status_response(request.id, session)
         }
@@ -229,12 +246,78 @@ fn connect(request: &Request, session: &mut Session) -> Response {
     }
 }
 
+/// How long Connect waits for the first handshake through Stealth. The
+/// window's pipe call allows 20s for the whole connect.
+const STEALTH_CONFIRM: Duration = Duration::from_secs(13);
+
+fn wait_stealth_handshake(session: &Session, config: &WgTunnelConfig) -> Result<(), &'static str> {
+    let started = Instant::now();
+    let nudge = nudge_target(config);
+    let mut last_nudge: Option<Instant> = None;
+    while started.elapsed() < STEALTH_CONFIRM {
+        let Some(adapter) = session.adapter.as_ref() else {
+            return Err("no_adapter");
+        };
+        if let Some((_, _, handshake)) = adapter.counters() {
+            if wg::filetime_to_unix(handshake) > 0 {
+                return Ok(());
+            }
+        }
+        match session.helper.as_ref() {
+            Some(helper) if helper.flooded() => return Err("upgrade_refused"),
+            Some(helper) if !helper.alive() => return Err("helper_exited"),
+            None => return Err("helper_missing"),
+            _ => {}
+        }
+        // WireGuard only starts a handshake when it has something to send.
+        if let Some(target) = nudge {
+            if last_nudge.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
+                last_nudge = Some(Instant::now());
+                let _ = std::net::UdpSocket::bind("0.0.0.0:0").and_then(|socket| socket.send_to(&[0u8], target));
+            }
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    if session.helper.as_ref().is_some_and(|helper| helper.upgrade_failures() > 0) {
+        return Err("upgrade_failed");
+    }
+    Err("no_handshake")
+}
+
+/// Discard port on the tunnel DNS address, only when that address is routed
+/// into the tunnel. Nothing is ever sent outside it.
+fn nudge_target(config: &WgTunnelConfig) -> Option<SocketAddr> {
+    let dns: Ipv4Addr = config.dns.trim().parse().ok()?;
+    let inside = ipv4_routes(&config.allowed_ips)
+        .iter()
+        .any(|(network, len)| network_base(dns, *len) == *network);
+    inside.then(|| SocketAddr::from((dns, 9)))
+}
+
+static RESTART: Mutex<crate::stealth_watch::RestartGate> = Mutex::new(crate::stealth_watch::RestartGate::new());
+
+fn restart_gate<T>(f: impl FnOnce(&mut crate::stealth_watch::RestartGate) -> T) -> T {
+    let mut gate = RESTART.lock().unwrap_or_else(|e| e.into_inner());
+    f(&mut gate)
+}
+
+fn jitter_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_nanos()) / 1_000)
+        .unwrap_or(0)
+}
+
 fn bring_up(
     config: &WgTunnelConfig,
 ) -> Result<(AdapterHandle, u64, Vec<(Ipv4Addr, u8)>, Option<net::PinnedEndpoint>), &'static str> {
     let api = load_api().map_err(|_| CODE_TUNNEL_FAILED)?;
     let private_key = decode_key(&config.private_key).map_err(|_| CODE_INVALID_CONFIG)?;
     let peer_key = decode_key(&config.server_public_key).map_err(|_| CODE_INVALID_CONFIG)?;
+    // The control plane issues a per-device preshared key. Without it the
+    // server never answers the handshake, so a bad one fails the connect.
+    let preshared_key =
+        wg::decode_preshared_key(&config.preshared_key).map_err(|_| CODE_INVALID_CONFIG)?;
     let using_stealth = !config.stealth_endpoint.trim().is_empty();
     let endpoint = if using_stealth {
         (Ipv4Addr::LOCALHOST, 41820)
@@ -271,6 +354,7 @@ fn bring_up(
     let blob = wg::direct_config(
         private_key,
         peer_key,
+        preshared_key,
         Some(endpoint),
         0,
         25,
@@ -495,6 +579,9 @@ struct MonitorState {
     rx: u64,
     tx: u64,
     flat_since: Option<Instant>,
+    /// Set by every kick. Reconnecting ends only when traffic flows again.
+    recovery: Option<crate::underlay::Recovery>,
+    recovery_stealth: bool,
 }
 
 static MONITOR: Mutex<MonitorState> = Mutex::new(MonitorState {
@@ -507,6 +594,8 @@ static MONITOR: Mutex<MonitorState> = Mutex::new(MonitorState {
     rx: 0,
     tx: 0,
     flat_since: None,
+    recovery: None,
+    recovery_stealth: false,
 });
 static MONITOR_STOP: AtomicBool = AtomicBool::new(false);
 static MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
@@ -531,23 +620,56 @@ pub fn note_power(kind: &'static str) {
     }
 }
 
-fn note_connected() {
+fn note_connected(tunnel_luid: u64) {
+    let fp = current_fingerprint(tunnel_luid);
     if let Ok(mut state) = MONITOR.lock() {
-        state.last_fp = current_fingerprint();
+        state.last_fp = fp;
         state.reconnecting = false;
         state.stalled = false;
         state.backoff.reset();
         state.next_kick = None;
         state.flat_since = None;
+        state.recovery = None;
     }
+}
+
+fn clear_monitor() {
+    if let Ok(mut state) = MONITOR.lock() {
+        state.last_fp.clear();
+        state.reconnecting = false;
+        state.stalled = false;
+        state.backoff.reset();
+        state.next_kick = None;
+        state.flat_since = None;
+        state.recovery = None;
+    }
+}
+
+/// Record a kick. The first kick of an outage starts the recovery clock;
+/// later ones move the traffic baseline.
+fn note_kick(state: &mut MonitorState, snap: &Snap, now: Instant) {
+    match state.recovery.as_mut() {
+        Some(recovery) => recovery.kicked(now, snap.rx, snap.handshake_unix),
+        None => state.recovery = Some(crate::underlay::Recovery::begin(now, snap.rx, snap.handshake_unix)),
+    }
+    state.recovery_stealth = snap.stealth;
+    state.reconnecting = true;
+    state.stalled = true;
 }
 
 fn phase_snapshot() -> Phase {
     let state = MONITOR.lock().unwrap_or_else(|e| e.into_inner());
+    let stuck = state.recovery.is_some_and(|recovery| recovery.explain(Instant::now()));
     Phase {
         reconnecting: state.reconnecting,
         stalled: state.stalled,
-        notice: if state.reconnecting || state.stalled {
+        notice: if stuck {
+            if state.recovery_stealth {
+                crate::underlay::STEALTH_STUCK_NOTICE.to_string()
+            } else {
+                crate::underlay::DIRECT_STUCK_NOTICE.to_string()
+            }
+        } else if state.reconnecting || state.stalled {
             NOTICE.to_string()
         } else {
             String::new()
@@ -591,7 +713,8 @@ fn tick() {
         return;
     };
     let sim = read_sim();
-    let fp = current_fingerprint();
+    let fp = current_fingerprint(snapshot.luid);
+    let now = Instant::now();
     let mut state = MONITOR.lock().unwrap_or_else(|e| e.into_inner());
     let first = state.last_fp.is_empty();
     let changed = !first && state.last_fp != fp;
@@ -605,9 +728,10 @@ fn tick() {
         return;
     }
     if let Some("resume") = power {
+        note_kick(&mut state, &snapshot, now);
         drop(state);
-        show(crate::reconnect::on_resume(), false);
-        kick(true);
+        show(crate::reconnect::on_resume(), true);
+        kick(true, snapshot.stealth);
         return;
     }
     if !up {
@@ -616,35 +740,77 @@ fn tick() {
         drop(state);
         show(crate::reconnect::on_link_down(), false);
         if due {
-            kick(false);
+            kick(false, false);
         }
         return;
     }
     if changed {
+        // A different physical network: the server route moves to the new
+        // default adapter and, in Stealth, wstunnel reconnects over it.
+        // Its old TLS socket can stay bound to an address that is gone.
+        note_kick(&mut state, &snapshot, now);
         drop(state);
-        show(crate::reconnect::on_underlay_change(), false);
-        kick(true);
+        log_line("reconnect", "network_changed");
+        show(crate::reconnect::on_underlay_change(), true);
+        kick(true, snapshot.stealth);
         return;
     }
     if snapshot.helper_down {
-        state.reconnecting = true;
         let due = kick_due(&mut state);
-        drop(state);
-        show(crate::reconnect::on_link_up(), false);
         if due {
-            kick(true);
+            note_kick(&mut state, &snapshot, now);
+        }
+        state.reconnecting = true;
+        state.stalled = true;
+        drop(state);
+        show(crate::reconnect::on_link_up(), true);
+        if due {
+            kick(true, false);
+        }
+        return;
+    }
+    if let Some(recovery) = state.recovery {
+        if !force_stall && recovery.recovered(snapshot.rx, snapshot.handshake_unix) {
+            state.recovery = None;
+            state.reconnecting = false;
+            state.stalled = false;
+            state.backoff.reset();
+            state.next_kick = None;
+            state.flat_since = None;
+            state.rx = snapshot.rx;
+            state.tx = snapshot.tx;
+            drop(state);
+            restart_gate(|gate| gate.reset());
+            log_line("reconnect", "recovered");
+            return;
+        }
+        state.reconnecting = true;
+        state.stalled = true;
+        let retry = recovery.retry_due(now) && kick_due(&mut state);
+        if retry {
+            note_kick(&mut state, &snapshot, now);
+        }
+        drop(state);
+        // Give WireGuard something to send so a working path answers.
+        nudge(snapshot.nudge);
+        if retry {
+            log_line("reconnect", "retry");
+            kick(true, snapshot.stealth);
         }
         return;
     }
     let lost = force_stall || stall_now(&mut state, snapshot.rx, snapshot.tx, snapshot.handshake_age);
     if lost {
         let due = kick_due(&mut state);
+        if due {
+            note_kick(&mut state, &snapshot, now);
+        }
         state.reconnecting = true;
         state.stalled = true;
         drop(state);
         show(crate::reconnect::on_stall(due), true);
         if due {
-            kick(true);
+            kick(true, snapshot.stealth);
         }
         return;
     }
@@ -654,6 +820,14 @@ fn tick() {
         state.stalled = false;
         state.backoff.reset();
         state.next_kick = None;
+        drop(state);
+        restart_gate(|gate| gate.reset());
+    }
+}
+
+fn nudge(target: Option<SocketAddr>) {
+    if let Some(target) = target {
+        let _ = std::net::UdpSocket::bind("0.0.0.0:0").and_then(|socket| socket.send_to(&[0u8], target));
     }
 }
 
@@ -673,10 +847,14 @@ fn stall_now(state: &mut MonitorState, rx: u64, tx: u64, age: Option<Duration>) 
 struct Snap {
     adapter: Option<bool>,
     up: Option<bool>,
+    luid: u64,
     rx: u64,
     tx: u64,
+    handshake_unix: i64,
     handshake_age: Option<Duration>,
     helper_down: bool,
+    stealth: bool,
+    nudge: Option<SocketAddr>,
 }
 
 fn tunnel_snapshot() -> Snap {
@@ -685,10 +863,14 @@ fn tunnel_snapshot() -> Snap {
         return Snap {
             adapter: None,
             up: None,
+            luid: 0,
             rx: 0,
             tx: 0,
+            handshake_unix: 0,
             handshake_age: None,
             helper_down: false,
+            stealth: false,
+            nudge: None,
         };
     };
     let up = adapter.is_up();
@@ -708,10 +890,14 @@ fn tunnel_snapshot() -> Snap {
     Snap {
         adapter: Some(true),
         up: Some(up),
+        luid: session.luid,
         rx,
         tx,
+        handshake_unix: unix,
         handshake_age: age,
         helper_down,
+        stealth,
+        nudge: session.saved.as_ref().and_then(|saved| nudge_target(&saved.config)),
     }
 }
 
@@ -724,17 +910,25 @@ fn stealth_permit(config: &WgTunnelConfig) -> Option<crate::wfp_plan::Endpoint> 
     Some(crate::wfp_plan::Endpoint { addr, port })
 }
 
-fn kick(refresh: bool) {
+/// `restart_helper` replaces a running wstunnel too. A network change, a
+/// resume, or a stalled Stealth tunnel leaves its TLS socket on the old
+/// path, and a live process with a dead socket never recovers by itself.
+fn kick(refresh: bool, restart_helper: bool) {
     let mut session = SESSION.lock().unwrap_or_else(|e| e.into_inner());
     let Some(saved) = session.saved.clone() else {
         return;
     };
-    if kick_locked(&mut session, &saved, refresh).is_err() {
+    if kick_locked(&mut session, &saved, refresh, restart_helper).is_err() {
         log_line("reconnect", "kick_failed");
     }
 }
 
-fn kick_locked(session: &mut Session, saved: &SavedConnect, refresh: bool) -> Result<(), &'static str> {
+fn kick_locked(
+    session: &mut Session,
+    saved: &SavedConnect,
+    refresh: bool,
+    restart_helper: bool,
+) -> Result<(), &'static str> {
     let Some(adapter) = session.adapter.as_ref() else {
         return Err(CODE_TUNNEL_FAILED);
     };
@@ -742,21 +936,6 @@ fn kick_locked(session: &mut Session, saved: &SavedConnect, refresh: bool) -> Re
         adapter.set_up().map_err(|_| CODE_TUNNEL_FAILED)?;
     }
     let using_stealth = !saved.config.stealth_endpoint.trim().is_empty();
-    if using_stealth {
-        let dead = session.helper.as_ref().map(|helper| !helper.alive()).unwrap_or(true);
-        if dead {
-            if let Some(path) = crate::stealth::locate() {
-                match crate::stealth::start(
-                    &path,
-                    saved.config.stealth_endpoint.trim(),
-                    saved.config.stealth_path_prefix.trim(),
-                ) {
-                    Ok(helper) => session.helper = Some(helper),
-                    Err(code) => log_code("stealth", code),
-                }
-            }
-        }
-    }
     let endpoint = if using_stealth {
         (Ipv4Addr::LOCALHOST, 41820)
     } else {
@@ -769,6 +948,10 @@ fn kick_locked(session: &mut Session, saved: &SavedConnect, refresh: bool) -> Re
     } else {
         endpoint.0
     };
+    // Route first: the server /32 moves to the current default adapter, so
+    // a restarted wstunnel dials out over the new network. The Stealth
+    // kill-switch permit is the server address and port for the pinned
+    // wstunnel binary on any physical adapter, so it needs no change.
     if refresh {
         if let Some(pin) = session.endpoint_pin.take() {
             net::unpin_endpoint(&pin);
@@ -778,10 +961,56 @@ fn kick_locked(session: &mut Session, saved: &SavedConnect, refresh: bool) -> Re
             Err(code) => log_code("endpoint_route", code),
         }
     }
+    if using_stealth {
+        let flooded = session.helper.as_ref().is_some_and(|helper| helper.flooded());
+        if flooded {
+            // The reader already stopped it. Drop it once and count the cut
+            // as an attempt so the next start waits for the backoff.
+            session.helper = None;
+            restart_gate(|gate| gate.note_failure(Instant::now(), jitter_ms()));
+            log_line("stealth", "upgrade_loop_stopped");
+        }
+        let dead = session.helper.as_ref().map(|helper| !helper.alive()).unwrap_or(true);
+        let restart = if restart_helper && !flooded {
+            // Counted, so a network that keeps flapping still backs off
+            // through the monitor's kick schedule.
+            restart_gate(|gate| {
+                let _ = gate.try_restart(Instant::now(), jitter_ms());
+            });
+            true
+        } else {
+            dead && restart_gate(|gate| gate.try_restart(Instant::now(), jitter_ms()))
+        };
+        if restart {
+            log_line("stealth", if restart_helper { "restart_network" } else { "restart" });
+            // Stop the old one first so the new one can bind the local port.
+            session.helper = None;
+            if let Some(path) = crate::stealth::locate() {
+                match crate::stealth::start(
+                    &path,
+                    saved.config.stealth_endpoint.trim(),
+                    saved.config.stealth_path_prefix.trim(),
+                ) {
+                    Ok(helper) => session.helper = Some(helper),
+                    Err(code) => log_code("stealth", code),
+                }
+            }
+        }
+    }
     let private_key = decode_key(&saved.config.private_key).map_err(|_| CODE_INVALID_CONFIG)?;
     let peer_key = decode_key(&saved.config.server_public_key).map_err(|_| CODE_INVALID_CONFIG)?;
+    let preshared_key =
+        wg::decode_preshared_key(&saved.config.preshared_key).map_err(|_| CODE_INVALID_CONFIG)?;
     let allowed = ipv4_routes(&saved.config.allowed_ips);
-    let blob = wg::direct_config(private_key, peer_key, Some(endpoint), 0, 25, &allowed);
+    let blob = wg::direct_config(
+        private_key,
+        peer_key,
+        preshared_key,
+        Some(endpoint),
+        0,
+        25,
+        &allowed,
+    );
     adapter.set_config(&blob).map_err(|_| CODE_TUNNEL_FAILED)?;
     log_line("reconnect", "kick");
     Ok(())
@@ -800,7 +1029,7 @@ fn soft_reconnect(session: &mut Session, id: u64, replacement: Option<WgTunnelCo
         return Response::fail(id, CODE_TUNNEL_FAILED);
     };
     show(crate::reconnect::on_link_up(), false);
-    match kick_locked(session, &saved, true) {
+    match kick_locked(session, &saved, true, true) {
         Ok(()) => status_response(id, session),
         Err(code) => {
             log_line("reconnect", code);
@@ -824,7 +1053,9 @@ fn resume_saved() {
     if session.adapter.is_some() || !session_blob_exists() {
         return;
     }
-    let _ = connect(&request, &mut session);
+    // Boot resume keeps the old rule: the lock stays armed and the monitor
+    // keeps retrying, so it does not wait for the first handshake here.
+    let _ = connect(&request, &mut session, false);
 }
 
 struct Sim {
@@ -859,17 +1090,14 @@ fn read_sim() -> Sim {
     sim
 }
 
-fn current_fingerprint() -> String {
+fn current_fingerprint(tunnel_luid: u64) -> String {
     let sim = read_sim();
     if let Some(underlay) = sim.underlay {
         if !underlay.is_empty() {
             return format!("sim:{underlay}");
         }
     }
-    match net::default_gateway() {
-        Some(gateway) => format!("gw:{gateway}"),
-        None => "gw:".to_string(),
-    }
+    net::underlay_fingerprint(tunnel_luid)
 }
 
 fn take_power(sim: &Sim, state: &mut MonitorState) -> Option<&'static str> {

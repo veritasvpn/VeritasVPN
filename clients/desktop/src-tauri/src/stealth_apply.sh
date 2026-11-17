@@ -8,9 +8,9 @@ stealth_paths_ok() {
   [[ "$bin" == /* ]] || return 1
   [[ "$bin" != *..* ]] || return 1
   [[ "$bin" =~ ^/[A-Za-z0-9._~+/-]+$ ]] || return 1
-  [[ "$prefix" == /* ]] || return 1
+  # One bare segment: wstunnel builds /<prefix>/events itself.
   [[ "$prefix" != *..* ]] || return 1
-  [[ "$prefix" =~ ^[A-Za-z0-9/._~-]+$ ]] || return 1
+  [[ "$prefix" =~ ^[A-Za-z0-9._~-]{1,128}$ ]] || return 1
   return 0
 }
 
@@ -147,12 +147,12 @@ start_wstunnel_pinned() {
       --tls-sni-override "$sni" \
       --http-upgrade-path-prefix "$STEALTH_PREFIX" \
       -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
-      "$url" >"$wst_log" 2>&1 &
+      "$url" > >(capped_log_sink "$wst_log") 2>&1 &
   else
     "$WSTUNNEL_BIN" client \
       --http-upgrade-path-prefix "$STEALTH_PREFIX" \
       -L "udp://127.0.0.1:41820:127.0.0.1:51820?timeout_sec=0" \
-      "$url" >"$wst_log" 2>&1 &
+      "$url" > >(capped_log_sink "$wst_log") 2>&1 &
   fi
   pid=$!
   echo "$pid" > "$STATE_DIR/wstunnel.pid"

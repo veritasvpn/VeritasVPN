@@ -31,6 +31,7 @@ macOS builds reject stealth at connect time; the UI marks Stealth as **Linux onl
 
 - `resources/bin/wireguard-go` — userspace WG
 - `resources/bin/wstunnel` — Linux stealth sidecar (omit or leave unused on macOS)
+- Windows does not ship `resources/bin`: `tauri.windows.conf.json` replaces the resource list with the service, `wireguard.dll`, and `wstunnel.exe` under `service/`
 - Before installing full-tunnel routes, bring-up **must** add a host route for the WG/stealth endpoint via the original default gateway
 - Teardown must never use `set -e` so cleanup always finishes
 - Do not tell end users to `brew install wireguard-tools`

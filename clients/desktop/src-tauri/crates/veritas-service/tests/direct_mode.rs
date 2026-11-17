@@ -73,12 +73,16 @@ fn direct_mode_body(dll: String, service: PathBuf) {
 
     let server_keys = generate_keypair();
     let client_keys = generate_keypair();
+    // Production peers always carry a per-device preshared key. Prove the
+    // service hands it to WireGuardNT: without it no handshake completes.
+    let psk = generate_keypair().private_key;
     let api = ensure_api(std::path::Path::new(&dll)).expect("load dll");
     let _peer = TestPeer::up(
         api,
         "VeritasTestSrv",
         decode(&server_keys.private_key),
         decode(&client_keys.public_key),
+        Some(decode(&psk)),
         51830,
         "10.66.0.1".parse().unwrap(),
         24,
@@ -95,7 +99,7 @@ fn direct_mode_body(dll: String, service: PathBuf) {
         endpoint: format!("{host}:51830"),
         allowed_ips: vec!["10.66.0.1/32".into(), "10.66.0.50/32".into()],
         peer_id: "peer-test".into(),
-        preshared_key: String::new(),
+        preshared_key: psk,
         stealth_endpoint: String::new(),
         stealth_path_prefix: String::new(),
         endpoint_lan: String::new(),
@@ -569,6 +573,32 @@ fn write_sim(body: &str) {
     fs::write(r"C:\ProgramData\VeritasVPN\sim.txt", body).expect("sim");
 }
 
+/// Same shape as the production secret (`openssl rand -hex 16`): a bare
+/// segment with no leading slash. wstunnel only accepts the upgrade when the
+/// client sends exactly this segment, so a handshake proves the prefix matched.
+const STEALTH_SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+fn wait_stealth_handshake() {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(30) {
+        let _ = std::net::UdpSocket::bind("0.0.0.0:0")
+            .and_then(|socket| socket.send_to(b"veritas", "10.66.0.50:9"));
+        if let Ok(response) = transact(&Request::new(10, OP_STATS), 2_000) {
+            if let Some(status) = response.status.as_ref() {
+                if status.handshake > 0 && status.rx > 0 {
+                    eprintln!("STEALTH_HANDSHAKE rx {}", status.rx);
+                    return;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    panic!(
+        "stealth handshake did not complete within 30s\n{}",
+        fs::read_to_string(r"C:\ProgramData\VeritasVPN\stealth.log").unwrap_or_default()
+    );
+}
+
 fn wait_status(label: &str, pred: impl Fn(&TunnelStatus) -> bool) {
     let start = Instant::now();
     loop {
@@ -620,8 +650,11 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
         .args([
             "server",
             "--restrict-http-upgrade-path-prefix",
-            "/veritas",
-            &format!("ws://127.0.0.1:{port}"),
+            STEALTH_SECRET,
+            // Production runs `wss://0.0.0.0:443` with wstunnel's built-in
+            // certificate. A plain ws:// client against this port fails
+            // every upgrade, which is the bug this test guards.
+            &format!("wss://127.0.0.1:{port}"),
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -629,9 +662,15 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
         .expect("stealth server");
     let _server = ServerGuard(server);
     wait_tcp(port);
+    assert_plain_ws_is_refused(&wstunnel, port);
     let doc = outside_oracle();
     let _peer = bring_up_stealth(&dll, &format!("127.0.0.1:{port}"));
+    let log = fs::read_to_string(r"C:\ProgramData\VeritasVPN\stealth.log").unwrap_or_default();
+    assert!(!log.contains("invalid HTTP version"), "helper spoke plain ws to TLS\n{log}");
+    assert!(!log.contains(STEALTH_SECRET), "stealth.log leaked the path secret");
+    eprintln!("STEALTH_TLS");
     wait_carry();
+    wait_stealth_handshake();
     assert_blocked(doc, "stealth lock");
     eprintln!("STEALTH_UP");
     eprintln!("STEALTH_NO_LEAK");
@@ -665,6 +704,50 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
     eprintln!("STEALTH_DISCONNECT");
 }
 
+/// Same server, plain ws:// client: the upgrade must fail with wstunnel's
+/// TLS mismatch error. If this ever passes, the server is not TLS and the
+/// test would no longer catch a ws:// regression in the service.
+fn assert_plain_ws_is_refused(wstunnel: &str, port: u16) {
+    let probe_port = free_udp();
+    let mut client = Command::new(wstunnel)
+        .args([
+            "client",
+            "--http-upgrade-path-prefix",
+            STEALTH_SECRET,
+            "-L",
+            &format!("udp://127.0.0.1:{probe_port}:127.0.0.1:9?timeout_sec=0"),
+            &format!("ws://127.0.0.1:{port}"),
+        ])
+        .env("NO_COLOR", "true")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("plain ws client");
+    thread::sleep(Duration::from_millis(600));
+    if let Ok(socket) = std::net::UdpSocket::bind("127.0.0.1:0") {
+        let _ = socket.send_to(b"veritas", ("127.0.0.1", probe_port));
+    }
+    thread::sleep(Duration::from_millis(800));
+    let _ = client.kill();
+    let out = wait_output(client, Duration::from_secs(10), "plain ws client");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("failed to do websocket handshake"),
+        "plain ws:// to the TLS stealth port did not fail\n{}",
+        text.chars().take(2000).collect::<String>()
+    );
+    eprintln!("STEALTH_PLAIN_WS_REFUSED");
+}
+
+fn free_udp() -> u16 {
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("udp port");
+    socket.local_addr().expect("udp port").port()
+}
+
 struct ServerGuard(std::process::Child);
 
 impl Drop for ServerGuard {
@@ -694,12 +777,16 @@ fn wait_tcp(port: u16) {
 fn bring_up_stealth(dll: &str, remote: &str) -> TestPeer {
     let server_keys = generate_keypair();
     let client_keys = generate_keypair();
+    // Production peers always carry a per-device preshared key. Prove the
+    // service hands it to WireGuardNT: without it no handshake completes.
+    let psk = generate_keypair().private_key;
     let api = ensure_api(std::path::Path::new(dll)).expect("load dll");
     let peer = TestPeer::up(
         api,
         "VeritasTestSrv",
         decode(&server_keys.private_key),
         decode(&client_keys.public_key),
+        Some(decode(&psk)),
         51820,
         "10.66.0.1".parse().unwrap(),
         24,
@@ -715,9 +802,9 @@ fn bring_up_stealth(dll: &str, remote: &str) -> TestPeer {
         endpoint: format!("{host}:51820"),
         allowed_ips: vec!["10.66.0.1/32".into(), "10.66.0.50/32".into()],
         peer_id: "peer-stealth".into(),
-        preshared_key: String::new(),
+        preshared_key: psk,
         stealth_endpoint: remote.into(),
-        stealth_path_prefix: "/veritas".into(),
+        stealth_path_prefix: STEALTH_SECRET.into(),
         endpoint_lan: String::new(),
         endpoint_wan: String::new(),
     };
@@ -739,12 +826,16 @@ fn bring_up_stealth(dll: &str, remote: &str) -> TestPeer {
 fn bring_up_tunnel(dll: &str) -> TestPeer {
     let server_keys = generate_keypair();
     let client_keys = generate_keypair();
+    // Production peers always carry a per-device preshared key. Prove the
+    // service hands it to WireGuardNT: without it no handshake completes.
+    let psk = generate_keypair().private_key;
     let api = ensure_api(std::path::Path::new(dll)).expect("load dll");
     let peer = TestPeer::up(
         api,
         "VeritasTestSrv",
         decode(&server_keys.private_key),
         decode(&client_keys.public_key),
+        Some(decode(&psk)),
         51830,
         "10.66.0.1".parse().unwrap(),
         24,
@@ -760,7 +851,7 @@ fn bring_up_tunnel(dll: &str) -> TestPeer {
         endpoint: format!("{host}:51830"),
         allowed_ips: vec!["10.66.0.1/32".into(), "10.66.0.50/32".into()],
         peer_id: "peer-lock".into(),
-        preshared_key: String::new(),
+        preshared_key: psk,
         stealth_endpoint: String::new(),
         stealth_path_prefix: String::new(),
         endpoint_lan: String::new(),

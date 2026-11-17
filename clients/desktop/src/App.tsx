@@ -1,6 +1,6 @@
 import { useState, useEffect, FormEvent, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { fetch as nativeFetch } from "@tauri-apps/plugin-http";
+import { fetch as nativeFetch } from "./apiFetch";
 import {
   getStoredToken,
   getStoredUser,
@@ -21,7 +21,7 @@ import {
   User,
   validateSessionOnResume,
 } from "./auth";
-import { fetchWithAuth, SessionExpiredError, SESSION_EXPIRED_EVENT } from "./session";
+import { fetchWithAuth, SessionExpiredError, SESSION_EXPIRED_EVENT, type AuthFetchOptions } from "./session";
 import {
   readCachedBillingStatus,
   writeCachedBillingStatus,
@@ -57,7 +57,8 @@ import {
   WORLD_MAP_WIDTH,
 } from "./connectionMap";
 import { statusAfterDisconnectFailure } from "./disconnectStatus";
-import { toUserMessage } from "./errorMapper";
+import { readApiJson, safeErrorText, toUserMessage } from "./errorMapper";
+import { formatConnectError } from "./connectError";
 import veritasMark from "./assets/veritas-mark.png";
 import veritasLogo from "./assets/veritas-logo.png";
 import "./App.css";
@@ -216,11 +217,16 @@ function writeLocalFlag(key: string, enabled: boolean) {
 }
 
 /** Billing, peer create, and peer delete during a kill-switch recovery. */
-async function fetchRecovery(url: string, init: RequestInit = {}, budgetMs = RECOVERY_REQUEST_MS): Promise<Response> {
+async function fetchRecovery(
+  url: string,
+  init: RequestInit = {},
+  budgetMs = RECOVERY_REQUEST_MS,
+  authOptions: AuthFetchOptions = {},
+): Promise<Response> {
   const limit = Math.max(1, Math.min(RECOVERY_REQUEST_MS, budgetMs));
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), limit);
-  const pending = fetchWithAuth(url, { ...init, signal: controller.signal });
+  const pending = fetchWithAuth(url, { ...init, signal: controller.signal }, authOptions);
   try {
     return await Promise.race([
       pending,
@@ -295,46 +301,6 @@ function writeStealthChoice(choice: StealthChoice) {
   } catch {
     // ignore quota / private mode
   }
-}
-
-function formatConnectError(err: unknown, wantedStealth: boolean): string {
-  let raw = "Connection failed";
-  if (err instanceof Error) raw = err.message;
-  else if (typeof err === "string") raw = err;
-  else if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
-    raw = (err as { message: string }).message;
-  }
-  const lower = raw.toLowerCase();
-  if (
-    wantedStealth ||
-    /stealth|wstunnel/.test(lower)
-  ) {
-    if (/wstunnel|stealth engine/.test(lower) && /missing|not found|not bundled/.test(lower)) {
-      return "Stealth failed: wstunnel is not bundled in this build. Rebuild with the Linux stealth binary, or choose UDP only.";
-    }
-    if (/stealth engine missing/.test(lower)) {
-      return "Stealth failed: wstunnel binary missing. Bundle it for Linux or choose UDP only.";
-    }
-    if (/linux desktop|linux only|available on linux/.test(lower)) {
-      return "Stealth mode is Linux-only in this build. Choose UDP only to connect with Direct UDP.";
-    }
-    if (/failed to start stealth|stealth transport/.test(lower)) {
-      return "Stealth transport failed to start. Check TLS endpoint reachability, or choose UDP only.";
-    }
-    if (/path prefix/.test(lower)) {
-      return "Stealth failed: server path prefix missing. Try again later or choose UDP only.";
-    }
-    if (/not available on the (server|vpn node)/.test(lower)) {
-      return "Stealth is not available on the VPN node yet. Choose UDP only or try again later.";
-    }
-  }
-  if (/firewall kill switch|kill switch/.test(lower)) {
-    if (/nftables|iptables/.test(lower)) {
-      return "Kill switch required: install nftables or iptables, then connect again. There is no off option.";
-    }
-    return "Kill switch could not be enabled. Connect was cancelled so traffic stays unprotected only while you fix it.";
-  }
-  return displayStatus(raw) || "Connection failed";
 }
 
 function isStickyStatusMessage(msg: string): boolean {
@@ -1159,7 +1125,7 @@ function App() {
     setBillingLoading(true);
     try {
       const response = await fetchWithAuth(`${AUTH_API}/api/v1/billing/status`);
-      const status = (await response.json()) as BillingStatus;
+      const status = await readApiJson<BillingStatus>(response);
       if (!response.ok) throw new Error(status.error || "Could not load your subscription.");
       setBillingStatus(status);
       setSubscriptionActive(status.is_premium === true);
@@ -1273,7 +1239,7 @@ function App() {
       if (timedOutPeer) {
         await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${timedOutPeer}`, {
           method: "DELETE",
-        }).catch(() => undefined);
+        }, { background: true }).catch(() => undefined);
       }
       setConnecting(false);
       setConnected(false);
@@ -1288,8 +1254,13 @@ function App() {
 
   useEffect(() => {
     if ((!checkoutUrl && !checkoutSettlementPending) || !user) return;
+    let billingInFlight = false;
     const timer = window.setInterval(() => {
-      refreshBillingStatus().then((status) => {
+      if (billingInFlight) return;
+      billingInFlight = true;
+      refreshBillingStatus().finally(() => {
+        billingInFlight = false;
+      }).then((status) => {
         if (status?.is_premium) {
           setCheckoutUrl(null);
           setCheckoutSettlementPending(false);
@@ -1480,7 +1451,7 @@ function App() {
           return_target: "desktop",
         }),
       });
-      const data = await response.json() as { checkout_url?: string; error?: string };
+      const data = await readApiJson<{ checkout_url?: string; error?: string }>(response);
       if (!response.ok || !isAllowedBtcpayCheckoutUrl(data.checkout_url)) {
         throw new Error(data.error || "The billing server returned an invalid checkout.");
       }
@@ -1507,7 +1478,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: "{}",
       });
-      const data = await response.json() as { error?: string };
+      const data = await readApiJson<{ error?: string }>(response);
       if (!response.ok) throw new Error(data.error || "Could not cancel your subscription.");
       await refreshBillingStatus();
       setShowCancelConfirmation(false);
@@ -1534,7 +1505,8 @@ function App() {
     if (!id) return;
     if (recovery) {
       try {
-        await fetchRecovery(`${AUTH_API}/api/v1/wg/peers/${id}`, { method: "DELETE" }, budgetMs);
+        // Cleanup never signs the user out.
+        await fetchRecovery(`${AUTH_API}/api/v1/wg/peers/${id}`, { method: "DELETE" }, budgetMs, { background: true });
       } catch {
         // best effort cleanup
       }
@@ -1543,10 +1515,11 @@ function App() {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 5000);
     try {
+      // Disconnect cleanup is best effort and must never sign the user out.
       await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${id}`, {
         method: "DELETE",
         signal: controller.signal,
-      });
+      }, { background: true });
     } catch {
       // best effort cleanup
     } finally {
@@ -1608,7 +1581,7 @@ function App() {
 
       if (recover && (!recoveryOwned() || budgetLeft() < 1000)) return false;
       const billingResponse = await (recover ? fetchRecovery(`${AUTH_API}/api/v1/billing/status`, {}, budgetLeft()) : fetchWithAuth(`${AUTH_API}/api/v1/billing/status`));
-      const billing = (await billingResponse.json()) as BillingStatus;
+      const billing = await readApiJson<BillingStatus>(billingResponse);
       if (!billingResponse.ok || !billing.is_premium) {
         setSubscriptionActive(false);
         setSubscriptionChecked(true);
@@ -1641,12 +1614,12 @@ function App() {
       const res = recover
         ? await fetchRecovery(`${AUTH_API}/api/v1/wg/peers`, peerInit, budgetLeft())
         : await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`, peerInit);
-      const peer = (await res.json()) as PeerResponse & { code?: string };
+      const peer = await readApiJson<PeerResponse & { code?: string }>(res);
       if (!res.ok) {
         if (peer.code?.startsWith("plan_device_limit")) {
-          throw new Error(peer.error || "Device limit reached. Disconnect another device or upgrade your plan.");
+          throw new Error(safeErrorText(peer.error, "Device limit reached. Disconnect another device or upgrade your plan."));
         }
-        throw new Error(peer.error || "Failed to create WireGuard peer");
+        throw new Error(safeErrorText(peer.error, "Couldn't set up a VPN connection on the server. Please try again."));
       }
       createdPeerId = peer.peer_id;
       connectPeerRef.current = peer.peer_id;
@@ -2006,7 +1979,11 @@ function App() {
     }
 
     let cancelled = false;
+    // One poll at a time: a slow service answer must not stack calls.
+    let statsInFlight = false;
     const pollStats = async () => {
+      if (statsInFlight) return;
+      statsInFlight = true;
       try {
         const stats = await invoke<WgTransferStats>("wireguard_stats");
         if (cancelled) return;
@@ -2061,7 +2038,9 @@ function App() {
           reconnectingRef.current = true;
           setReconnecting(true);
           setStatusSticky(false);
-          setStatusMsg("Reconnecting…");
+          // The service may explain a long reconnect in plain words; it
+          // always starts with "Reconnecting".
+          setStatusMsg(reconnectNotice ? displayStatus(notice) : "Reconnecting…");
           setWgStats(stats);
           return;
         }
@@ -2093,6 +2072,8 @@ function App() {
         // interactive pkexec for teardown.sh and spammed auth dialogs.
       } catch {
         // ignore transient stats errors
+      } finally {
+        statsInFlight = false;
       }
     };
 
@@ -2116,11 +2097,24 @@ function App() {
     }
     let cancelled = false;
     let peerCheckInFlight = false;
+    let peersInFlight = false;
     const pollPeers = async () => {
+      // One poll at a time. While the tunnel reconnects requests can hang
+      // until their timeout; the interval must not pile more on top.
+      if (peersInFlight) return;
+      peersInFlight = true;
       try {
-        const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`);
+        await pollPeersOnce();
+      } finally {
+        peersInFlight = false;
+      }
+    };
+    const pollPeersOnce = async () => {
+      try {
+        // Background poll: an auth hiccup here never signs the user out.
+        const response = await fetchWithAuth(`${AUTH_API}/api/v1/wg/peers`, { timeoutMs: 8000 }, { background: true });
         if (response.ok && !cancelled) {
-          const data = (await response.json()) as { peers?: PeerInfo[] };
+          const data = await readApiJson<{ peers?: PeerInfo[] }>(response).catch(() => ({} as { peers?: PeerInfo[] }));
           if (!cancelled && Array.isArray(data.peers)) {
             const match = data.peers.find((p) => p.id === peerIdRef.current);
             if (match && typeof match.dns_blocked_count === "number") {
@@ -2165,7 +2159,7 @@ function App() {
         const timer = window.setTimeout(() => controller.abort(), 4000);
         const pending = fetchWithAuth(`${AUTH_API}/api/v1/wg/peers/${peerIdRef.current}`, {
           signal: controller.signal,
-        });
+        }, { background: true });
         try {
           const res = await Promise.race([
             pending,
@@ -2285,7 +2279,7 @@ function App() {
         body: JSON.stringify(shieldRequest(next)),
       });
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        const body = await readApiJson<{ error?: string }>(res);
         throw new Error(body.error || "Could not update Veritas Shield. Try again.");
       }
     } catch (err) {

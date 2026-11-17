@@ -147,6 +147,19 @@ choose_stealth() {
   printf '\n'
 }
 
+# capped_log_sink FILE
+# Copy stdin to FILE up to 1 MiB, then keep draining without writing.
+# wstunnel retries a refused websocket upgrade in a tight loop and can write
+# hundreds of thousands of lines a minute. Draining (instead of closing the
+# pipe) matters: wstunnel aborts when its stdout goes away.
+capped_log_sink() {
+  awk -v out="$1" -v max=1048576 '
+    { n += length($0) + 1
+      if (n <= max) { print > out; fflush(out) }
+      else if (!noted) { print "veritas: log capped at 1 MiB" > out; fflush(out); noted = 1 }
+    }'
+}
+
 # wstunnel_prepare_line REMOTE RESOLVED_IP
 # Prints "url <wss://...>" and "sni <host-or-empty>".
 # When the remote is a name, dial the resolved address so the /32 pin and the

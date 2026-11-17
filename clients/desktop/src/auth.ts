@@ -1,7 +1,7 @@
 import { AUTH_API } from "./config";
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch } from "./apiFetch";
 import { invoke } from "@tauri-apps/api/core";
-import { ApiError } from "./errorMapper";
+import { ApiError, SERVER_UNREACHABLE_MESSAGE, isDisplaySafeMessage, isServerUnavailableStatus, looksLikeEdgeResponse } from "./errorMapper";
 
 interface AuthResponse {
   access_token?: string;
@@ -69,27 +69,47 @@ export interface User {
 
 function defaultAuthError(status: number): string {
   switch (status) {
+    case 400:
+      return "Check your details and try again.";
     case 401:
       return "incorrect email or password";
     case 403:
       return "verify your email before signing in";
+    case 404:
+      return "Account ID not found.";
+    case 409:
+      return "already exists";
     case 429:
       return "too many sign-in attempts; try again later";
     default:
-      return `request failed (${status})`;
+      return isServerUnavailableStatus(status) ? SERVER_UNREACHABLE_MESSAGE : "The sign-in service couldn't complete that request. Please try again.";
   }
 }
 
+/**
+ * Pick the text describing an auth failure. Only a JSON `error`/`message`
+ * from the VeritasVPN API is used; Cloudflare pages ("error code: 1033"),
+ * HTML and other non-JSON bodies never reach the UI.
+ */
 function extractAuthError(
   data: (AuthResponse & AuthError & { message?: string }) | undefined,
   status: number,
   rawText: string
 ): string {
+  if (isServerUnavailableStatus(status) || looksLikeEdgeResponse(rawText)) return SERVER_UNREACHABLE_MESSAGE;
   const fromJson = (data?.error || data?.message || "").trim();
   if (fromJson) return fromJson;
-  const trimmed = rawText.trim();
-  if (trimmed && !trimmed.startsWith("{")) return trimmed;
   return defaultAuthError(status);
+}
+
+/** Parse an auth response body; a non-JSON body never becomes UI text. */
+function parseAuthBody(text: string): (AuthResponse & AuthError & { message?: string }) | undefined {
+  try {
+    const data = JSON.parse(text) as unknown;
+    return data && typeof data === "object" ? (data as AuthResponse & AuthError & { message?: string }) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function humanizeError(msg: string): string {
@@ -118,15 +138,19 @@ function humanizeError(msg: string): string {
   if (m.includes("complete verification") || m.includes("complete the check")) {
     return "Complete the security check to continue.";
   }
-  if (m.includes("too many")) return msg.endsWith(".") ? msg : `${msg}.`;
+  if (m.includes("too many")) {
+    const text = msg.endsWith(".") ? msg : `${msg}.`;
+    return isDisplaySafeMessage(text) ? text : "Too many attempts. Please wait a moment and try again.";
+  }
   if (m.includes("already exists")) return "An account with this email already exists.";
   if (m.includes("account") && (m.includes("invalid") || m.includes("not found") || m.includes("id"))) {
     return "Account ID not found.";
   }
   if (m.startsWith("request failed (")) {
-    return "Could not reach the sign-in service. Check your connection and try again.";
+    return SERVER_UNREACHABLE_MESSAGE;
   }
-  return msg;
+  if (msg === SERVER_UNREACHABLE_MESSAGE || looksLikeEdgeResponse(msg)) return SERVER_UNREACHABLE_MESSAGE;
+  return isDisplaySafeMessage(msg) ? msg : "The sign-in service couldn't complete that request. Please try again.";
 }
 
 export function isTurnstileRequiredError(error: unknown): boolean {
@@ -147,16 +171,13 @@ async function authAPI(
     body: JSON.stringify(body),
     maxRedirections: 0,
   });
-  const text = await res.text();
-  let data: AuthResponse & AuthError & { message?: string };
-  try {
-    data = JSON.parse(text) as AuthResponse & AuthError & { message?: string };
-  } catch {
-    data = { error: extractAuthError(undefined, res.status, text) };
-  }
+  const text = await res.text().catch(() => "");
+  const data = parseAuthBody(text);
   if (!res.ok) {
     throw new ApiError(humanizeError(extractAuthError(data, res.status, text)), res.status);
   }
+  // A 2xx that is not API JSON (captive portal, proxy page) is an outage, not a session.
+  if (!data || looksLikeEdgeResponse(text)) throw new ApiError(SERVER_UNREACHABLE_MESSAGE, res.status);
   return data;
 }
 
@@ -169,6 +190,7 @@ async function persistSession(user: User, data: AuthResponse): Promise<User> {
   ]);
   accessTokenCache = data.access_token;
   refreshTokenCache = data.refresh_token;
+  learnClockOffset(data.access_token);
   return user;
 }
 
@@ -195,29 +217,69 @@ export class SessionExpiredError extends Error {
   }
 }
 
-function parseJwtPayload(token: string): { exp?: number } | null {
+function parseJwtPayload(token: string): { exp?: number; iat?: number } | null {
   try {
     const part = token.split(".")[1];
     if (!part) return null;
     const base64 = part.replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(atob(base64)) as { exp?: number };
+    return JSON.parse(atob(base64)) as { exp?: number; iat?: number };
   } catch {
     return null;
   }
+}
+
+/** Server time minus this computer's clock, in seconds. Learned from the
+ * `iat` of each freshly issued access token, so a PC whose clock is hours
+ * fast or slow still judges token expiry by the server's clock. Without it a
+ * fast clock made every new token look expired and refreshed in a loop. */
+let clockOffsetSeconds = 0;
+
+function localNowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+/** Current time on the server's clock, as best this client knows it. */
+export function serverNowSeconds(): number {
+  return localNowSeconds() + clockOffsetSeconds;
+}
+
+export function getClockOffsetSeconds(): number {
+  return clockOffsetSeconds;
+}
+
+function learnClockOffset(token: string): void {
+  const iat = parseJwtPayload(token)?.iat;
+  if (typeof iat !== "number" || !Number.isFinite(iat) || iat <= 0) return;
+  clockOffsetSeconds = Math.round(iat) - localNowSeconds();
 }
 
 export function isAccessTokenExpired(token: string, skewSeconds = 30): boolean {
   const payload = parseJwtPayload(token);
   const exp = payload?.exp;
   if (!exp) return true;
-  return exp <= Math.floor(Date.now() / 1000) + skewSeconds;
+  return exp <= serverNowSeconds() + skewSeconds;
 }
 
 export type RefreshOutcome = "ok" | "rejected" | "offline";
 
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
+
 /** A network failure is not a rejected session. Signing out here used to tear
- * the tunnel down with --purge while the kill switch was still up. */
-export async function refreshSessionOutcome(): Promise<RefreshOutcome> {
+ * the tunnel down with --purge while the kill switch was still up.
+ *
+ * Single-flight: concurrent callers share one refresh. The server rotates the
+ * refresh token on every use, so two parallel refreshes with the same token
+ * used to make the second one fail with 401 and sign the user out. */
+export function refreshSessionOutcome(): Promise<RefreshOutcome> {
+  if (!refreshInFlight) {
+    refreshInFlight = runRefresh().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function runRefresh(): Promise<RefreshOutcome> {
   const rt = refreshTokenCache;
   if (!rt) return "rejected";
   try {
@@ -230,10 +292,31 @@ export async function refreshSessionOutcome(): Promise<RefreshOutcome> {
     return "ok";
   } catch (err) {
     if (err instanceof ApiError && (err.httpCode === 401 || err.httpCode === 403)) {
+      // Another refresh (another window, or an older in-flight call) already
+      // rotated this token. The session is fine; use the newer tokens.
+      if (await refreshTokenRotatedSince(rt)) return "ok";
       return "rejected";
     }
     return "offline";
   }
+}
+
+async function refreshTokenRotatedSince(used: string): Promise<boolean> {
+  if (refreshTokenCache && refreshTokenCache !== used) return true;
+  try {
+    const [stored, storedAccess] = await Promise.all([
+      getSecureCredential("refresh_token"),
+      getSecureCredential("access_token"),
+    ]);
+    if (stored && stored !== used && storedAccess) {
+      refreshTokenCache = stored;
+      accessTokenCache = storedAccess;
+      return true;
+    }
+  } catch {
+    // Credential store unavailable: fall through to a real rejection.
+  }
+  return false;
 }
 
 /** Returns a fresh access token, refreshing when expired. */
@@ -355,15 +438,12 @@ export async function signUp(
     }),
     maxRedirections: 0,
   });
-  const text = await res.text();
-  let data: AuthResponse & AuthError & { message?: string };
-  try {
-    data = JSON.parse(text) as AuthResponse & AuthError & { message?: string };
-  } catch {
-    data = { error: extractAuthError(undefined, res.status, text) };
-  }
+  const text = await res.text().catch(() => "");
+  const parsed = parseAuthBody(text);
+  if (res.ok && (!parsed || looksLikeEdgeResponse(text))) throw new ApiError(SERVER_UNREACHABLE_MESSAGE, res.status);
+  const data: Partial<AuthResponse & AuthError> = parsed ?? {};
   if (!res.ok) {
-    const msg = humanizeError(extractAuthError(data, res.status, text));
+    const msg = humanizeError(extractAuthError(parsed, res.status, text));
     if (msg === "An account with this email already exists.") {
       throw new AccountAlreadyExistsError(normalizedEmail);
     }
@@ -424,7 +504,13 @@ export async function downloadAccountFile(): Promise<void> {
     headers: { Authorization: `Bearer ${token}` },
     maxRedirections: 0,
   });
-  const text = await res.text();
+  const text = await res.text().catch(() => "");
+  // Never save a Cloudflare or error page as the account file.
+  if (!res.ok || looksLikeEdgeResponse(text)) {
+    throw new ApiError(isServerUnavailableStatus(res.status) || looksLikeEdgeResponse(text)
+      ? SERVER_UNREACHABLE_MESSAGE
+      : "Could not download your account file. Please try again.", res.status);
+  }
   const blob = new Blob([text], { type: "text/plain" });
   const blobUrl = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -454,17 +540,25 @@ export async function deleteAccount(options: { password?: string; turnstileToken
     maxRedirections: 0,
   });
   if (res.status !== 204) {
-    const text = await res.text();
+    const text = await res.text().catch(() => "");
     let message = "Could not delete the account.";
-    try {
-      const data = JSON.parse(text) as AuthError;
-      if (data.error) message = humanizeError(data.error);
-    } catch {
-      if (text.trim()) message = humanizeError(text);
+    if (isServerUnavailableStatus(res.status) || looksLikeEdgeResponse(text)) {
+      message = SERVER_UNREACHABLE_MESSAGE;
+    } else {
+      const data = parseAuthBody(text);
+      if (data?.error) message = humanizeError(data.error);
     }
     throw new ApiError(message, res.status);
   }
   await signOut();
+}
+
+/** Test-only: reset in-memory auth state between unit tests. */
+export function resetAuthStateForTests(): void {
+  accessTokenCache = null;
+  refreshTokenCache = null;
+  clockOffsetSeconds = 0;
+  refreshInFlight = null;
 }
 
 export async function signOut(): Promise<void> {

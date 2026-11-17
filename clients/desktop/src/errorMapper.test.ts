@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toUserMessage, ApiError } from './errorMapper';
+import { toUserMessage, ApiError, SERVER_UNREACHABLE_MESSAGE } from './errorMapper';
 
 describe('errorMapper', () => {
   describe('toUserMessage', () => {
@@ -21,17 +21,17 @@ describe('errorMapper', () => {
 
     it('returns cannot reach message for TypeError', () => {
       const error = new TypeError('Failed to fetch');
-      expect(toUserMessage(error)).toBe("Can't reach VeritasVPN. Check that you're online and try again.");
+      expect(toUserMessage(error)).toBe(SERVER_UNREACHABLE_MESSAGE);
     });
 
     it('returns cannot reach message for network error', () => {
       const error = new Error('Network error');
-      expect(toUserMessage(error)).toBe("Can't reach VeritasVPN. Check that you're online and try again.");
+      expect(toUserMessage(error)).toBe(SERVER_UNREACHABLE_MESSAGE);
     });
 
     it('returns cannot reach message for error sending request', () => {
       const error = new Error('Error sending request');
-      expect(toUserMessage(error)).toBe("Can't reach VeritasVPN. Check that you're online and try again.");
+      expect(toUserMessage(error)).toBe(SERVER_UNREACHABLE_MESSAGE);
     });
 
     it('returns secure connection failed for SSL error', () => {
@@ -63,8 +63,8 @@ describe('errorMapper', () => {
     });
 
     it('keeps a server message that mentions a transport phrase', () => {
-      const error = new ApiError('The server hit os error 22 while saving.', 500);
-      expect(toUserMessage(error)).toBe('The server hit os error 22 while saving.');
+      const error = new ApiError('The payment provider is unreachable from your region.', 409);
+      expect(toUserMessage(error)).toBe('The payment provider is unreachable from your region.');
     });
 
     it('does not treat a plain invalid-argument error as no internet', () => {
