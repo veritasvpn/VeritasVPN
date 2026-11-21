@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.26.10"
+  GO_VERSION: "1.26.11"
   TRIVY_VERSION: "0.74.0"
 
 jobs:
@@ -221,7 +221,7 @@ jobs:
 
   build-desktop:
     name: Build desktop web bundle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       checks: write
