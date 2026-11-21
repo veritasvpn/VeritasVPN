@@ -33,6 +33,8 @@ static SESSION: Mutex<Session> = Mutex::new(Session {
     stealth_requested: false,
     saved: None,
     helper: None,
+    lock_plan: None,
+    lock_helper: None,
 });
 
 struct Session {
@@ -44,6 +46,10 @@ struct Session {
     stealth_requested: bool,
     saved: Option<SavedConnect>,
     helper: Option<crate::stealth::Helper>,
+    /// What the kill switch was armed with, so a reconnect can re-scope the
+    /// server permits in one transaction when the server address changes.
+    lock_plan: Option<crate::wfp_plan::LockPlan>,
+    lock_helper: Option<PathBuf>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -66,6 +72,8 @@ pub fn handle(request: &Request, caller_ok: bool) -> Response {
         OP_CONNECT => connect(request, &mut session, true),
         OP_DISCONNECT => {
             session.saved = None;
+            session.lock_plan = None;
+            session.lock_helper = None;
             forget_session();
             release_tunnel(&mut session);
             clear_monitor();
@@ -208,6 +216,8 @@ fn connect(request: &Request, session: &mut Session, confirm_stealth: bool) -> R
             session.endpoint_pin = pin;
             session.local_network = local_network;
             session.helper = helper.take();
+            session.lock_plan = Some(plan.clone());
+            session.lock_helper = helper_path.clone();
             if using_stealth {
                 restart_gate(|gate| gate.reset());
             }
@@ -960,6 +970,7 @@ fn kick_locked(
             Ok(pin) => session.endpoint_pin = pin,
             Err(code) => log_code("endpoint_route", code),
         }
+        rescope_lock(&mut session.lock_plan, &mut session.lock_helper, saved, using_stealth);
     }
     if using_stealth {
         let flooded = session.helper.as_ref().is_some_and(|helper| helper.flooded());
@@ -1014,6 +1025,45 @@ fn kick_locked(
     adapter.set_config(&blob).map_err(|_| CODE_TUNNEL_FAILED)?;
     log_line("reconnect", "kick");
     Ok(())
+}
+
+/// A reconnect can carry a new server address (a replacement config, or a
+/// hostname that now resolves elsewhere). Re-arm with the new server
+/// permits. `wfp::arm` deletes and re-adds every filter inside one WFP
+/// transaction, so the blocks never lapse; on failure the old lock stays.
+fn rescope_lock(
+    lock_plan: &mut Option<crate::wfp_plan::LockPlan>,
+    lock_helper: &mut Option<PathBuf>,
+    saved: &SavedConnect,
+    using_stealth: bool,
+) {
+    let Some(plan) = lock_plan.as_ref() else {
+        return;
+    };
+    let wireguard = if using_stealth {
+        vec![crate::wfp_plan::Endpoint {
+            addr: Ipv4Addr::LOCALHOST,
+            port: 41820,
+        }]
+    } else {
+        crate::wfp::endpoints_from(&saved.config)
+    };
+    let Some(next) = crate::wfp_plan::rescoped(plan, wireguard, stealth_permit(&saved.config)) else {
+        return;
+    };
+    let helper = if using_stealth {
+        lock_helper.clone().or_else(crate::stealth::locate)
+    } else {
+        None
+    };
+    match crate::wfp::arm(&next, helper.as_deref()) {
+        Ok(()) => {
+            *lock_plan = Some(next);
+            *lock_helper = helper;
+            log_line("lock", "rescoped");
+        }
+        Err(code) => log_code("lock_rescope", code),
+    }
 }
 
 fn soft_reconnect(session: &mut Session, id: u64, replacement: Option<WgTunnelConfig>) -> Response {

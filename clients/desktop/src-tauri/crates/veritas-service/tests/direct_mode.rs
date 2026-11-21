@@ -599,6 +599,63 @@ fn wait_stealth_handshake() {
     );
 }
 
+fn wait_new_stealth_handshake(before: i64) {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(40) {
+        let _ = std::net::UdpSocket::bind("0.0.0.0:0")
+            .and_then(|socket| socket.send_to(b"veritas", "10.66.0.50:9"));
+        if let Ok(response) = transact(&Request::new(15, OP_STATS), 2_000) {
+            if let Some(status) = response.status.as_ref() {
+                if status.handshake > before && !status.reconnecting {
+                    eprintln!("STEALTH_REHANDSHAKE {} -> {}", before, status.handshake);
+                    return;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    panic!(
+        "no new stealth handshake after the network change\n{}\n{}",
+        fs::read_to_string(r"C:\ProgramData\VeritasVPN\service.log").unwrap_or_default(),
+        fs::read_to_string(r"C:\ProgramData\VeritasVPN\stealth.log").unwrap_or_default()
+    );
+}
+
+/// The Stealth server permit must not depend on one adapter, one local
+/// address or the helper's App ID: a restarted helper on a new network has
+/// to reach the server with the lock in force. Read the live filters.
+fn assert_stealth_permit_is_adapter_free(port: u16) {
+    let path = std::env::temp_dir().join(format!("veritas-wfp-{}.xml", std::process::id()));
+    let _ = fs::remove_file(&path);
+    let arg = format!("file={}", path.display());
+    let out = output_bounded("netsh", &["wfp", "show", "filters", &arg], Duration::from_secs(60));
+    let xml = fs::read_to_string(&path).unwrap_or_default();
+    let _ = fs::remove_file(&path);
+    assert!(
+        !xml.is_empty(),
+        "netsh wfp show filters wrote nothing: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let wanted = format!("<uint16>{port}</uint16>");
+    let ours: Vec<&str> = xml
+        .split("<filterKey>")
+        .filter(|chunk| chunk.contains("<name>VeritasVPN</name>") && chunk.contains(&wanted))
+        .collect();
+    assert!(!ours.is_empty(), "no VeritasVPN filter names the stealth port {port}");
+    let adapter_free = ours.iter().any(|chunk| {
+        chunk.contains("FWP_ACTION_PERMIT")
+            && chunk.contains("FWPM_CONDITION_IP_REMOTE_PORT")
+            && !chunk.contains("FWPM_CONDITION_ALE_APP_ID")
+            && !chunk.contains("FWPM_CONDITION_IP_LOCAL_ADDRESS")
+            && !chunk.contains("FWPM_CONDITION_INTERFACE_INDEX")
+    });
+    assert!(
+        adapter_free,
+        "stealth permit is tied to the helper, an adapter or a local address:\n{}",
+        ours.iter().map(|chunk| &chunk[..chunk.len().min(3000)]).collect::<Vec<_>>().join("\n----\n")
+    );
+}
+
 fn wait_status(label: &str, pred: impl Fn(&TunnelStatus) -> bool) {
     let start = Instant::now();
     loop {
@@ -674,13 +731,21 @@ fn stealth_body(dll: String, wstunnel: String, service: PathBuf) {
     assert_blocked(doc, "stealth lock");
     eprintln!("STEALTH_UP");
     eprintln!("STEALTH_NO_LEAK");
+    assert_stealth_permit_is_adapter_free(port);
+    eprintln!("STEALTH_PERMIT_ANY_ADAPTER");
 
+    let before = stats_once(14).status.expect("status").handshake;
     write_sim("underlay=198.51.100.8\n");
     wait_status("stealth network", |status| status.reconnecting);
     assert_blocked(doc, "stealth lock during a network change");
     wait_carry();
     eprintln!("STEALTH_NETWORK");
     let _ = fs::remove_file(r"C:\ProgramData\VeritasVPN\sim.txt");
+    // The restarted helper dials out with the lock armed. Recovery means a
+    // new WireGuard handshake through it, not just packets sent.
+    wait_new_stealth_handshake(before);
+    assert_blocked(doc, "stealth lock after the network change");
+    eprintln!("STEALTH_NETWORK_HANDSHAKE");
 
     let _ = output_bounded(
         "powershell",
