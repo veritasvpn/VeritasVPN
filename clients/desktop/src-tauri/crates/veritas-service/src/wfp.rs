@@ -199,7 +199,7 @@ fn add_rule(
             )?;
         }
         Rule::PermitStealth { addr, port } => {
-            add_stealth(engine, *addr, *port, helper, weight)?;
+            add_stealth(engine, luid, *addr, *port, helper, weight)?;
         }
         Rule::PermitDhcp => {
             for port in [67u16, 68] {
@@ -553,33 +553,49 @@ fn value_blob(
     out
 }
 
+/// Stealth server TCP on the physical adapters.
+///
+/// The old filter matched the wstunnel App ID only. It was never exercised
+/// on a real network: at connect wstunnel opens its one websocket before the
+/// lock is armed, and CI's server is on loopback, which the loopback permit
+/// covers. After a network change the restarted wstunnel has to dial out
+/// with the lock in force, and on the test PC every dial to the server was
+/// dropped. The permit now matches the server address, port and protocol on
+/// any non-tunnel adapter, exactly like the Direct WireGuard permit (which
+/// does recover on a network change). It carries no adapter or local address,
+/// so a new Ethernet or Wi-Fi adapter needs no new filter. The App ID filter
+/// stays as a second, narrower permit when Windows can name the helper.
 fn add_stealth(
     engine: windows_sys::Win32::Foundation::HANDLE,
+    tunnel_luid: u64,
     addr: std::net::Ipv4Addr,
     port: u16,
     helper: Option<&std::path::Path>,
     weight: u8,
 ) -> Result<(), u32> {
-    let mut conds = tcp_endpoint(addr, port);
+    let mut endpoint = tcp_endpoint(addr, port);
+    endpoint.push(Cond::NotInterface(tunnel_luid));
+    add_simple(engine, FWPM_LAYER_ALE_AUTH_CONNECT_V4, weight, true, &endpoint)?;
+    let Some(path) = helper else {
+        return Ok(());
+    };
     let mut app = ptr::null_mut();
-    if let Some(path) = helper {
-        let wide = wide(&path.display().to_string());
-        let err = unsafe {
-            windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmGetAppIdFromFileName0(
-                wide.as_ptr(),
-                &mut app,
-            )
-        };
-        if err != 0 || app.is_null() {
-            return Err(if err == 0 { 87 } else { err });
-        }
-        conds.push(Cond::App(app));
+    let wide = wide(&path.display().to_string());
+    let err = unsafe {
+        windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmGetAppIdFromFileName0(
+            wide.as_ptr(),
+            &mut app,
+        )
+    };
+    if err != 0 || app.is_null() {
+        crate::engine::log_line("lock", "stealth_app_id_skipped");
+        return Ok(());
     }
+    let mut conds = tcp_endpoint(addr, port);
+    conds.push(Cond::App(app));
     let result = add_simple(engine, FWPM_LAYER_ALE_AUTH_CONNECT_V4, weight, true, &conds);
-    if !app.is_null() {
-        unsafe {
-            FwpmFreeMemory0(&mut app as *mut _ as *mut *mut _);
-        }
+    unsafe {
+        FwpmFreeMemory0(&mut app as *mut _ as *mut *mut _);
     }
     result
 }

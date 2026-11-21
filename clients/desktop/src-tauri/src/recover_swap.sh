@@ -363,7 +363,8 @@ recovery_apply() {
   [[ -z "$endpoint_lan" ]] || recovery_valid_ep "$endpoint_lan" || return 1
   [[ -z "$stealth" ]] || recovery_valid_ep "$stealth" || return 1
   if [[ -n "$stealth" ]]; then
-    [[ "$prefix" == /* && "$prefix" != *..* && "$prefix" =~ ^[A-Za-z0-9/._~-]+$ ]] || return 1
+    prefix="${prefix#/}"
+    [[ "$prefix" != *..* && "$prefix" =~ ^[A-Za-z0-9._~-]{1,128}$ ]] || return 1
   else
     prefix=""
   fi

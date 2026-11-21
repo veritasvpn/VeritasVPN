@@ -9,7 +9,7 @@ pub struct Endpoint {
     pub port: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockPlan {
     pub tunnel_luid: u64,
     pub wireguard: Vec<Endpoint>,
@@ -112,6 +112,17 @@ fn usable_v4(addr: Ipv4Addr) -> bool {
 
 fn usable_v6(addr: Ipv6Addr) -> bool {
     !addr.is_unspecified() && !addr.is_loopback() && !addr.is_multicast()
+}
+
+/// The same lock with the server permits for the current config. `None`
+/// when nothing changed. Everything else (tunnel adapter, LAN choice,
+/// harness hosts, the blocks) is kept, so re-arming it in one WFP
+/// transaction only re-scopes permits and never opens a gap.
+pub fn rescoped(plan: &LockPlan, wireguard: Vec<Endpoint>, stealth: Option<Endpoint>) -> Option<LockPlan> {
+    let mut next = plan.clone();
+    next.wireguard = wireguard;
+    next.stealth = stealth;
+    (next != *plan).then_some(next)
 }
 
 pub fn local_network_from_allowed(allowed: &[String]) -> bool {
@@ -237,5 +248,32 @@ mod tests {
             "0.0.0.0/5".into(),
             "8.0.0.0/7".into()
         ]));
+    }
+
+    #[test]
+    fn rescope_only_moves_server_permits_and_keeps_the_blocks() {
+        let base = plan(false, true);
+        let same = rescoped(&base, base.wireguard.clone(), base.stealth.clone());
+        assert!(same.is_none(), "unchanged endpoints must not re-arm");
+        let moved = rescoped(
+            &base,
+            base.wireguard.clone(),
+            Some(Endpoint {
+                addr: Ipv4Addr::new(192, 168, 0, 6),
+                port: 443,
+            }),
+        )
+        .expect("new stealth server re-arms");
+        assert_eq!(moved.tunnel_luid, base.tunnel_luid);
+        assert_eq!(moved.local_network, base.local_network);
+        assert_eq!(moved.management_v4, base.management_v4);
+        let list = rules(&moved);
+        assert!(list.contains(&Rule::PermitStealth {
+            addr: Ipv4Addr::new(192, 168, 0, 6),
+            port: 443
+        }));
+        assert_eq!(list.last(), Some(&Rule::BlockOther));
+        assert!(list.contains(&Rule::BlockDns));
+        assert!(!list.contains(&Rule::PermitLocalNetwork));
     }
 }

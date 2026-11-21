@@ -139,18 +139,31 @@ fn validate_endpoint(value: &str, field: &str, allow_empty: bool) -> Result<(), 
 }
 
 fn validate_path_prefix(value: &str) -> Result<(), String> {
+    normalize_path_prefix(value)
+        .map(|_| ())
+        .ok_or_else(|| "invalid stealth path prefix".to_string())
+}
+
+/// Canonical wstunnel upgrade-path prefix.
+///
+/// The server secret is a bare segment (`openssl rand -hex 16`) and wstunnel
+/// builds `/<prefix>/events` itself, so a leading slash would never match the
+/// server. Accept one optional leading `/` from older configs, then require a
+/// single segment of `[A-Za-z0-9-_.~]`, at most 128 bytes, never `..`.
+/// Returns the bare segment, the same form Android sends.
+pub fn normalize_path_prefix(value: &str) -> Option<String> {
     let value = value.trim();
-    if value.is_empty()
-        || value.len() > 128
-        || !value.starts_with('/')
-        || value.split('/').any(|part| part == "..")
-        || !value
+    let segment = value.strip_prefix('/').unwrap_or(value);
+    if segment.is_empty()
+        || segment.len() > 128
+        || segment.contains("..")
+        || !segment
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~'))
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~'))
     {
-        return Err("invalid stealth path prefix".into());
+        return None;
     }
-    Ok(())
+    Some(segment.to_string())
 }
 
 #[cfg(test)]
@@ -214,5 +227,48 @@ mod tests {
         config.stealth_endpoint = "vpn.example.com:443".into();
         config.stealth_path_prefix = "/safe/../../tmp/x".into();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn server_prefix_without_a_slash_is_accepted() {
+        // The server secret is `openssl rand -hex 16`: no leading slash.
+        let hex = "0123456789abcdef0123456789abcdef";
+        let mut config = valid_config();
+        config.stealth_endpoint = "vpn.example.com:443".into();
+        config.stealth_path_prefix = hex.into();
+        config.validate().expect("slash-less server prefix");
+        config.stealth_path_prefix = format!("/{hex}");
+        config.validate().expect("legacy leading slash");
+    }
+
+    #[test]
+    fn path_prefix_normalizes_to_one_bare_segment() {
+        assert_eq!(normalize_path_prefix("abc123").as_deref(), Some("abc123"));
+        assert_eq!(normalize_path_prefix("/abc123").as_deref(), Some("abc123"));
+        assert_eq!(normalize_path_prefix(" /abc123 ").as_deref(), Some("abc123"));
+        assert_eq!(normalize_path_prefix("a-b_c.d~e").as_deref(), Some("a-b_c.d~e"));
+        let longest = "a".repeat(128);
+        assert_eq!(normalize_path_prefix(&longest).as_deref(), Some(longest.as_str()));
+        assert_eq!(normalize_path_prefix(&format!("/{longest}")).as_deref(), Some(longest.as_str()));
+        for bad in [
+            "",
+            " ",
+            "/",
+            "//abc",
+            "abc/def",
+            "/abc/",
+            "..",
+            "/..",
+            "a..b",
+            "abc def",
+            "abc;id",
+            "$(id)",
+            "abc\nx",
+            "abc%2f",
+            "ab\u{e9}",
+        ] {
+            assert_eq!(normalize_path_prefix(bad), None, "accepted {bad:?}");
+        }
+        assert_eq!(normalize_path_prefix(&"a".repeat(129)), None);
     }
 }

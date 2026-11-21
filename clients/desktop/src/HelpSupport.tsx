@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { ScreenTopBar } from "./SettingsDrawer";
 import veritasMark from "./assets/veritas-mark.png";
+import { safeErrorText } from "./errorMapper";
 import {
   CONTACT_EMAIL,
   FALLBACK_APP_VERSION,
@@ -216,7 +217,7 @@ export function HelpSupport({
 
   const fail = (err: unknown, fallback: string) => {
     setNotice("");
-    setActionError(err instanceof Error && err.message ? err.message : fallback);
+    setActionError(safeErrorText(err instanceof Error ? err.message : "", fallback));
   };
 
   const openLink = async (url: string, fallback: string) => {

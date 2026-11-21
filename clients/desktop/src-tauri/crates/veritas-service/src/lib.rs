@@ -17,9 +17,15 @@ mod svc;
 #[cfg(windows)]
 mod wfp;
 mod reconnect;
+#[cfg_attr(any(not(windows), not(test)), allow(dead_code))]
+mod stealth_watch;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod underlay;
 mod wfp_plan;
 #[cfg(windows)]
 mod wg;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod wg_blob;
 
 #[cfg(windows)]
 pub use engine::ensure_api;

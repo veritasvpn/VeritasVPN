@@ -12,61 +12,10 @@ use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
 pub const ADAPTER_NAME: &str = "VeritasVPN";
 const TUNNEL_TYPE: &str = "WireGuard";
-const AF_INET: u16 = 2;
+
+pub use crate::wg_blob::{decode_preshared_key, direct_config};
 
 type Adapter = *mut c_void;
-
-#[repr(C, align(4))]
-#[derive(Clone, Copy)]
-struct SockaddrInet {
-    family: u16,
-    port: u16,
-    addr: [u8; 4],
-    _rest: [u8; 20],
-}
-
-#[repr(C, align(8))]
-#[derive(Clone, Copy)]
-struct WgInterface {
-    flags: u32,
-    listen_port: u16,
-    private_key: [u8; 32],
-    public_key: [u8; 32],
-    _pad_peers: u16,
-    peers_count: u32,
-}
-
-#[repr(C, align(8))]
-#[derive(Clone, Copy)]
-struct WgPeer {
-    flags: u32,
-    reserved: u32,
-    public_key: [u8; 32],
-    preshared_key: [u8; 32],
-    persistent_keepalive: u16,
-    _pad_endpoint: u16,
-    endpoint: SockaddrInet,
-    tx_bytes: u64,
-    rx_bytes: u64,
-    last_handshake: u64,
-    allowed_ips_count: u32,
-    _pad_end: u32,
-}
-
-#[repr(C, align(8))]
-#[derive(Clone, Copy)]
-struct WgAllowedIp {
-    address: [u8; 16],
-    address_family: u16,
-    cidr: u8,
-    _pad_flags: u8,
-    flags: u32,
-}
-
-const _: () = assert!(size_of::<WgInterface>() == 80);
-const _: () = assert!(size_of::<WgPeer>() == 136);
-const _: () = assert!(size_of::<WgAllowedIp>() == 24);
-const _: () = assert!(size_of::<SockaddrInet>() == 28);
 
 type CreateAdapter = unsafe extern "system" fn(*const u16, *const u16, *const u8) -> Adapter;
 type OpenAdapter = unsafe extern "system" fn(*const u16) -> Adapter;
@@ -240,72 +189,6 @@ pub fn last_error() -> u32 {
     unsafe { GetLastError() }
 }
 
-pub fn direct_config(
-    private_key: [u8; 32],
-    peer_key: [u8; 32],
-    endpoint: Option<(Ipv4Addr, u16)>,
-    listen_port: u16,
-    keepalive: u16,
-    allowed: &[(Ipv4Addr, u8)],
-) -> Vec<u8> {
-    let mut flags = 1 << 1; // HAS_PRIVATE_KEY
-    flags |= 1 << 3; // REPLACE_PEERS
-    if listen_port != 0 {
-        flags |= 1 << 2; // HAS_LISTEN_PORT
-    }
-    let iface = WgInterface {
-        flags,
-        listen_port,
-        private_key,
-        public_key: [0; 32],
-        _pad_peers: 0,
-        peers_count: 1,
-    };
-    let mut peer_flags = 1 << 0 | 1 << 5; // public key, replace allowed IPs
-    let mut endpoint_addr = SockaddrInet {
-        family: AF_INET,
-        port: 0,
-        addr: [0; 4],
-        _rest: [0; 20],
-    };
-    if let Some((ip, port)) = endpoint {
-        peer_flags |= 1 << 3;
-        endpoint_addr.port = port.to_be();
-        endpoint_addr.addr = ip.octets();
-    }
-    if keepalive != 0 {
-        peer_flags |= 1 << 2;
-    }
-    let peer = WgPeer {
-        flags: peer_flags,
-        reserved: 0,
-        public_key: peer_key,
-        preshared_key: [0; 32],
-        persistent_keepalive: keepalive,
-        _pad_endpoint: 0,
-        endpoint: endpoint_addr,
-        tx_bytes: 0,
-        rx_bytes: 0,
-        last_handshake: 0,
-        allowed_ips_count: allowed.len() as u32,
-        _pad_end: 0,
-    };
-    let mut bytes = Vec::with_capacity(80 + 136 + 24 * allowed.len());
-    bytes.extend_from_slice(bytes_of(&iface));
-    bytes.extend_from_slice(bytes_of(&peer));
-    for (ip, cidr) in allowed {
-        let row = WgAllowedIp {
-            address: ip_bytes(*ip),
-            address_family: AF_INET,
-            cidr: *cidr,
-            _pad_flags: 0,
-            flags: 0,
-        };
-        bytes.extend_from_slice(bytes_of(&row));
-    }
-    bytes
-}
-
 pub fn filetime_to_unix(ticks: u64) -> i64 {
     if ticks == 0 {
         return 0;
@@ -331,6 +214,7 @@ impl TestPeer {
         name: &str,
         private_key: [u8; 32],
         peer_key: [u8; 32],
+        preshared_key: Option<[u8; 32]>,
         listen_port: u16,
         address: Ipv4Addr,
         prefix: u8,
@@ -340,7 +224,7 @@ impl TestPeer {
             let _ = old.set_down();
         });
         let adapter = AdapterHandle::create(api, name)?;
-        let blob = direct_config(private_key, peer_key, None, listen_port, 0, allowed);
+        let blob = direct_config(private_key, peer_key, preshared_key, None, listen_port, 0, allowed);
         adapter.set_config(&blob)?;
         adapter.set_up()?;
         let luid = adapter.luid();
@@ -351,17 +235,6 @@ impl TestPeer {
             luid,
         })
     }
-}
-
-fn ip_bytes(ip: Ipv4Addr) -> [u8; 16] {
-    let o = ip.octets();
-    let mut out = [0u8; 16];
-    out[..4].copy_from_slice(&o);
-    out
-}
-
-fn bytes_of<T>(value: &T) -> &[u8] {
-    unsafe { std::slice::from_raw_parts((value as *const T).cast(), size_of::<T>()) }
 }
 
 fn wide(value: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
