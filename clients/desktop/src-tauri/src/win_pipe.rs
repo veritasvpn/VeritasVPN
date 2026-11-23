@@ -80,6 +80,31 @@ pub fn lock_status() -> StaleLock {
     }
 }
 
+/// The session the service is running, read on window start so a reopened
+/// window shows Connected for a tunnel that is already up.
+pub fn running_session() -> Option<veritas_ipc::SessionInfo> {
+    let response = call(&Request::new(9, OP_STATS), 2_000).ok()?;
+    let status = response.status?;
+    crate::service_session::adoptable(status.up, status.session)
+}
+
+/// Before a Connect from a window that shows Not connected: end any session
+/// the service still runs. Registering the new key on the server revokes the
+/// old one, and its adapter would otherwise keep every route while the new
+/// connect waits on a dead tunnel.
+pub fn release_stale_session() -> bool {
+    let Ok(response) = call(&Request::new(10, OP_STATS), 2_000) else {
+        return false;
+    };
+    let Some(status) = response.status else {
+        return false;
+    };
+    if !crate::service_session::needs_release(status.up, status.session.is_some()) {
+        return false;
+    }
+    matches!(call(&Request::new(11, OP_DISCONNECT), 10_000), Ok(done) if done.ok)
+}
+
 pub fn repair_lock() -> StaleLock {
     match call(&Request::new(6, OP_CLEAR_LOCK), 10_000) {
         Ok(response) if response.ok => StaleLock {

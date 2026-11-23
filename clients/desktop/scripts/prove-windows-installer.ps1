@@ -82,6 +82,31 @@ try {
     if ($code -ne 0 -or $text -ne "PIPE_OK") { throw "pipe check failed" }
     Write-Host "PIPE_OK"
 
+    # Reinstall over the running install, as Add/Reinstall does. The hooks must
+    # stop the service, clear its saved session, and start it again.
+    $hook = Join-Path $env:TEMP "veritas-install-hook.txt"
+    if (Test-Path $hook) { Remove-Item $hook -Force }
+    $code = Invoke-Bounded $installer.FullName @("/S") 180
+    $hookLines = @()
+    if (Test-Path $hook) { $hookLines = @(Get-Content $hook) }
+    $hookLines | ForEach-Object { Write-Host "REINSTALL_HOOK $_" }
+    if ($code -ne 0) { throw "reinstall exit $code" }
+    if (-not ($hookLines | Where-Object { $_ -like "reset=*" })) { throw "reinstall did not run the reset hook" }
+    $running = $false
+    $deadline = (Get-Date).AddSeconds(45)
+    while ((Get-Date) -lt $deadline) {
+        $svc = Get-Service -Name VeritasVPN -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq "Running") { $running = $true; break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $running) { throw "service did not reach Running after the reinstall" }
+    if (Test-Path $marker) { Remove-Item $marker -Force }
+    $code = Invoke-Bounded $ui @("--veritas-pipe-check") 20
+    $text = ""
+    if (Test-Path $marker) { $text = (Get-Content -Raw $marker).Trim() }
+    if ($code -ne 0 -or $text -ne "PIPE_OK") { throw "pipe check failed after the reinstall" }
+    Write-Host "REINSTALL_SILENT"
+
     if (-not (Test-Path (Join-Path $installDir "uninstall.exe"))) { throw "uninstaller is missing" }
     $code = Invoke-Uninstall 120
     if ($code -ne 0) { throw "uninstaller exit $code" }

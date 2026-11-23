@@ -310,7 +310,7 @@ fn wait_until_stopped() {
     }
 }
 
-fn service_running() -> bool {
+pub(crate) fn service_running() -> bool {
     unsafe {
         let scm = OpenSCManagerW(ptr::null(), ptr::null(), SC_MANAGER_CONNECT);
         if scm.is_null() {
@@ -349,7 +349,7 @@ fn delete_service() -> bool {
     !service_installed()
 }
 
-fn remove_adapter() -> bool {
+pub(crate) fn remove_adapter() -> bool {
     let Ok(path) = engine::dll_path() else {
         return true;
     };
@@ -364,7 +364,7 @@ fn remove_adapter() -> bool {
     }
 }
 
-fn kill_helper() {
+pub(crate) fn kill_helper() {
     let Ok(mut child) = Command::new("taskkill")
         .args(["/F", "/IM", "wstunnel.exe"])
         .stdout(Stdio::null())

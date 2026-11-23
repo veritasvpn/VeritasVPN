@@ -17,6 +17,8 @@ mod svc;
 #[cfg(windows)]
 mod wfp;
 mod reconnect;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod session_policy;
 #[cfg_attr(any(not(windows), not(test)), allow(dead_code))]
 mod stealth_watch;
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -48,11 +50,12 @@ pub fn console_main() -> i32 {
         "start" => start(),
         "stop" => stop_service(),
         "repair" => repair(),
+        "reset" => reset(),
         "run" => svc::run_service(),
         "call" => call_from_args(args.collect()),
         "leftover" => leftover(),
         _ => {
-            eprintln!("usage: veritas-service install|uninstall|start|stop|repair|run|call");
+            eprintln!("usage: veritas-service install|uninstall|start|stop|repair|reset|run|call");
             Err(2)
         }
     };
@@ -106,12 +109,50 @@ fn leftover() -> Result<(), i32> {
     }
 }
 
+/// Console Repair. Also deletes the saved session: a service restarted by
+/// its recovery action used to resume that session right after Repair and
+/// arm the lock again. A resume already under way can still arm it once, so
+/// the lock is checked again for a few seconds while the service runs.
 #[cfg(windows)]
 fn repair() -> Result<(), i32> {
-    engine::release_lock().map_err(|code| {
+    engine::forget_saved_session();
+    let mut result = engine::release_lock().map_err(|code| {
         engine::log_code("repair", code);
         3
-    })
+    });
+    for _ in 0..3 {
+        if !svc::service_running() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        if wfp::is_armed() {
+            engine::log_line("repair", "rearmed_by_resume");
+            result = engine::release_lock().map_err(|code| {
+                engine::log_code("repair", code);
+                3
+            });
+        }
+    }
+    result
+}
+
+/// Installer step for a reinstall or upgrade, also safe by hand. Stops the
+/// service, then clears the saved session, the kill switch, the DNS policy,
+/// any VeritasVPN adapter, and the Stealth helper, so the service that starts
+/// next comes up disconnected instead of resuming the old tunnel.
+#[cfg(windows)]
+fn reset() -> Result<(), i32> {
+    let _ = stop_service();
+    svc::kill_helper();
+    let lock_ok = engine::reset_offline();
+    let adapter_gone = svc::remove_adapter();
+    println!("RESET_LOCK {}", u8::from(lock_ok));
+    println!("RESET_ADAPTER {}", u8::from(adapter_gone));
+    if lock_ok && adapter_gone {
+        Ok(())
+    } else {
+        Err(3)
+    }
 }
 
 #[cfg(windows)]

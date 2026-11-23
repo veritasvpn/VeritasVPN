@@ -59,6 +59,14 @@ import {
 import { statusAfterDisconnectFailure } from "./disconnectStatus";
 import { readApiJson, safeErrorText, toUserMessage } from "./errorMapper";
 import { formatConnectError } from "./connectError";
+import {
+  ADOPT_POLL_MS,
+  adoptedTransport,
+  canAskService,
+  releaseBeforeConnect,
+  shouldAdoptSession,
+  type AttachedSession,
+} from "./serviceSession";
 import veritasMark from "./assets/veritas-mark.png";
 import veritasLogo from "./assets/veritas-logo.png";
 import "./App.css";
@@ -1039,8 +1047,10 @@ function App() {
   useEffect(() => { stealthModeRef.current = stealthMode; }, [stealthMode]);
   useEffect(() => { shieldFlagsRef.current = shieldFlags; }, [shieldFlags]);
 
+  const restoringRef = useRef(false);
   const restoreLeftoverKillSwitch = useCallback(async () => {
     if (!capabilities.killSwitch || connectedRef.current || connectingRef.current) return;
+    restoringRef.current = true;
     setKillSwitchBusy(true);
     try {
       // Windows keeps the lock across a crash. Opening the app must not drop it.
@@ -1053,6 +1063,7 @@ function App() {
       // A failed command is not proof of a leftover firewall, and its text
       // must never reach the screen.
     } finally {
+      restoringRef.current = false;
       setKillSwitchBusy(false);
     }
   }, [capabilities.killSwitch, capabilities.os]);
@@ -1739,11 +1750,16 @@ function App() {
       await invoke<ConnectResult>("recovery_close", { releaseLock: false }).catch(() => undefined);
     }
     try {
+      if (releaseBeforeConnect(capabilities.os, connectedRef.current)) {
+        // A tunnel this window does not own (left by a reinstall) would take
+        // the new handshake and every route once the server revokes its key.
+        await invoke<boolean>("release_stale_session").catch(() => false);
+      }
       await connectVpn();
     } finally {
       connectInFlightRef.current = false;
     }
-  }, [clearReconnectTimer, connectVpn, capabilities.killSwitch]);
+  }, [clearReconnectTimer, connectVpn, capabilities.killSwitch, capabilities.os]);
   handleConnectRef.current = handleConnect;
 
   const disconnectInFlightRef = useRef(false);
@@ -1803,6 +1819,54 @@ function App() {
     }
   }, [tunnelMode, peerId, clearReconnectTimer, deletePeer, capabilities.killSwitch]);
   handleDisconnectRef.current = handleDisconnect;
+
+  // The Windows service can already hold a tunnel when this window opens:
+  // after a reinstall, a crash of the window, or its boot resume. Show it as
+  // Connected instead of Not connected with a leftover banner.
+  const adoptInFlightRef = useRef(false);
+  const adoptServiceSession = useCallback(async () => {
+    const gate = () => ({
+      os: capabilities.os,
+      signedIn: !!user,
+      connected: connectedRef.current,
+      connecting: connectingRef.current || connectInFlightRef.current,
+      disconnecting: disconnectInFlightRef.current,
+      restoring: restoringRef.current,
+    });
+    if (adoptInFlightRef.current || !canAskService(gate())) return;
+    adoptInFlightRef.current = true;
+    try {
+      const session = await invoke<AttachedSession>("service_session").catch(() => null);
+      if (!session || !shouldAdoptSession(session, gate())) return;
+      connectedRef.current = true;
+      userDisconnectedRef.current = false;
+      hadGoodHandshakeRef.current = false;
+      hadInterfaceUpRef.current = false;
+      reconnectAttemptRef.current = 0;
+      peerGoneLatchedRef.current = false;
+      setKillSwitchLeftover(false);
+      setConnected(true);
+      setTunnelMode("wireguard");
+      setTransport(adoptedTransport(session));
+      setPeerId(session.peer_id);
+      setReconnectToApply(false);
+      setStatusSticky(false);
+      setStatusMsg("");
+      setWgStats(null);
+      setDnsBlockedCount(null);
+      setDnsBlockedBaseline(null);
+      setDnsGateway(session.dns);
+    } finally {
+      adoptInFlightRef.current = false;
+    }
+  }, [capabilities.os, user]);
+
+  useEffect(() => {
+    if (capabilities.os !== "windows" || !user || connected) return;
+    void adoptServiceSession();
+    const timer = window.setInterval(() => { void adoptServiceSession(); }, ADOPT_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [capabilities.os, user, connected, adoptServiceSession]);
 
   useEffect(() => {
     if (capabilities.os !== "windows") return;

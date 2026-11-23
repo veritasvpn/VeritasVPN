@@ -15,7 +15,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use veritas_core::WgTunnelConfig;
 use veritas_ipc::{
-    Diagnostics, Request, Response, TunnelStatus, CODE_BUSY, CODE_INVALID_CONFIG,
+    Diagnostics, Request, Response, TunnelStatus, CODE_INVALID_CONFIG,
     CODE_NOT_IN_THIS_BUILD, CODE_TUNNEL_FAILED, OP_CLEAR_LOCK, OP_CONNECT, OP_DIAGNOSTICS,
     OP_DISCONNECT, OP_HELLO, OP_SET_OPTIONS, OP_SOFT_RECONNECT, OP_STATS, OP_STATUS,
 };
@@ -70,23 +70,20 @@ pub fn handle(request: &Request, caller_ok: bool) -> Response {
         OP_HELLO => Response::ok(request.id),
         OP_STATUS | OP_STATS => status_response(request.id, &session),
         OP_CONNECT => connect(request, &mut session, true),
-        OP_DISCONNECT => {
-            session.saved = None;
-            session.lock_plan = None;
-            session.lock_helper = None;
-            forget_session();
-            release_tunnel(&mut session);
-            clear_monitor();
-            match release_lock() {
+        OP_DISCONNECT => match teardown(&mut session, &crate::session_policy::FULL_TEARDOWN) {
+            Ok(()) => Response::ok(request.id),
+            Err(_) => Response::fail(request.id, CODE_TUNNEL_FAILED),
+        },
+        OP_SOFT_RECONNECT => soft_reconnect(&mut session, request.id, request.config.clone()),
+        // Restore internet. It used to remove only the filters, so a tunnel the
+        // window did not know about kept its adapter and every route.
+        OP_CLEAR_LOCK => {
+            log_line("restore", "teardown");
+            match teardown(&mut session, &crate::session_policy::FULL_TEARDOWN) {
                 Ok(()) => Response::ok(request.id),
                 Err(_) => Response::fail(request.id, CODE_TUNNEL_FAILED),
             }
         }
-        OP_SOFT_RECONNECT => soft_reconnect(&mut session, request.id, request.config.clone()),
-        OP_CLEAR_LOCK => match release_lock() {
-            Ok(()) => Response::ok(request.id),
-            Err(_) => Response::fail(request.id, CODE_TUNNEL_FAILED),
-        },
         OP_SET_OPTIONS => {
             if let Some(value) = request.local_network {
                 session.local_network = value;
@@ -125,6 +122,51 @@ pub fn shutdown_tunnel() {
     }
 }
 
+/// Run teardown steps in order while the caller holds the session lock.
+/// Returns the lock result; every other step is best effort.
+fn teardown(session: &mut Session, steps: &[crate::session_policy::Teardown]) -> Result<(), u32> {
+    use crate::session_policy::Teardown;
+    let mut lock = Ok(());
+    for step in steps {
+        match step {
+            Teardown::ForgetSaved => {
+                session.saved = None;
+                session.lock_plan = None;
+                session.lock_helper = None;
+                forget_session();
+            }
+            Teardown::ReleaseTunnel => release_tunnel(session),
+            Teardown::ClearMonitor => clear_monitor(),
+            Teardown::ReleaseLock => lock = release_lock(),
+            Teardown::StaleAdapter => down_stale_adapter(),
+        }
+    }
+    lock
+}
+
+/// An adapter named VeritasVPN that this session does not hold: left by a
+/// previous service process. Turning it off removes its routes.
+fn down_stale_adapter() {
+    let Ok(api) = load_api() else {
+        return;
+    };
+    if let Ok(old) = AdapterHandle::open(api, wg::ADAPTER_NAME) {
+        let _ = old.set_down();
+        log_line("adapter", "stale_down");
+    }
+}
+
+/// Installer and console reset, run while the service is stopped: no saved
+/// session, no lock, no adapter. A reinstall used to restart the service with
+/// the old session on disk, and the boot resume brought the old tunnel back.
+pub fn reset_offline() -> bool {
+    forget_session();
+    let lock_ok = release_lock().is_ok();
+    down_stale_adapter();
+    log_line("reset", if lock_ok { "ok" } else { "lock" });
+    lock_ok
+}
+
 pub fn release_lock() -> Result<(), u32> {
     match crate::wfp::disarm() {
         Ok(()) => Ok(()),
@@ -136,9 +178,6 @@ pub fn release_lock() -> Result<(), u32> {
 }
 
 fn connect(request: &Request, session: &mut Session, confirm_stealth: bool) -> Response {
-    if session.adapter.is_some() {
-        return Response::fail(request.id, CODE_BUSY);
-    }
     let Some(config) = request.config.as_ref() else {
         return Response::fail(request.id, CODE_INVALID_CONFIG);
     };
@@ -146,6 +185,27 @@ fn connect(request: &Request, session: &mut Session, confirm_stealth: bool) -> R
         log_line("connect", CODE_INVALID_CONFIG);
         return Response::fail(request.id, CODE_INVALID_CONFIG);
     }
+    // A session the window does not know about (left by a reinstall or an
+    // earlier window) used to answer Busy here while its adapter kept every
+    // route. Replace it: the lock stays and is re-armed for the new tunnel.
+    let start = crate::session_policy::connect_start(session.adapter.is_some(), session.saved.is_some());
+    if start == crate::session_policy::ConnectStart::ReplaceStale {
+        log_line("connect", "replace_stale");
+        let _ = teardown(session, &crate::session_policy::REPLACE_TEARDOWN);
+    }
+    let response = connect_inner(request, config, session, confirm_stealth);
+    if !response.ok && crate::session_policy::release_lock_after_failed_connect(start) {
+        let _ = release_lock();
+    }
+    response
+}
+
+fn connect_inner(
+    request: &Request,
+    config: &WgTunnelConfig,
+    session: &mut Session,
+    confirm_stealth: bool,
+) -> Response {
     let using_stealth = !config.stealth_endpoint.trim().is_empty();
     if using_stealth && !crate::stealth::prefix_ok(&config.stealth_path_prefix) {
         log_line("stealth", "prefix");
@@ -438,6 +498,7 @@ fn read_status(session: &Session) -> TunnelStatus {
             reconnecting: phase.reconnecting,
             stalled: phase.stalled,
             notice: phase.notice,
+            session: None,
         };
     };
     let (rx, tx, handshake) = adapter.counters().unwrap_or((0, 0, 0));
@@ -449,6 +510,13 @@ fn read_status(session: &Session) -> TunnelStatus {
         reconnecting: phase.reconnecting,
         stalled: phase.stalled,
         notice: phase.notice,
+        session: session.saved.as_ref().map(|saved| {
+            crate::session_policy::session_info(
+                &saved.config.peer_id,
+                &saved.config.stealth_endpoint,
+                &saved.config.dns,
+            )
+        }),
     }
 }
 
@@ -1104,8 +1172,13 @@ fn resume_saved() {
         return;
     }
     // Boot resume keeps the old rule: the lock stays armed and the monitor
-    // keeps retrying, so it does not wait for the first handshake here.
-    let _ = connect(&request, &mut session, false);
+    // keeps retrying, so it does not wait for the first handshake here. It is
+    // a fresh start, never a replace, so a failed resume keeps the lock and
+    // the blob on disk for the next try.
+    session.saved = None;
+    if let Some(config) = request.config.clone() {
+        let _ = connect_inner(&request, &config, &mut session, false);
+    }
 }
 
 struct Sim {
@@ -1196,6 +1269,11 @@ fn load_session() -> Option<SavedConnect> {
 
 fn session_blob_exists() -> bool {
     program_data().is_some_and(|dir| dir.join("session.bin").is_file())
+}
+
+/// Console Repair runs in its own process; it can only delete the blob.
+pub fn forget_saved_session() {
+    forget_session();
 }
 
 fn forget_session() {
