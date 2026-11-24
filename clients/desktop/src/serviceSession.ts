@@ -49,3 +49,37 @@ export function adoptedTransport(session: AttachedSession): "stealth" | "udp" {
 export function releaseBeforeConnect(os: string, connected: boolean): boolean {
   return os === "windows" && !connected;
 }
+
+/** Polls in a row (1.5 s apart) before a lost service session ends Protected. */
+export const SESSION_GONE_POLLS = 2;
+
+export type ReconcileAction = "keep" | "leftover" | "disconnected";
+
+export const SESSION_ENDED_BLOCKED =
+  "The VPN connection ended. Your internet stays blocked until you tap Restore internet.";
+export const SESSION_ENDED = "The VPN connection ended. Connect again when you're ready.";
+
+/**
+ * While the window shows Protected or Reconnecting, check it against the
+ * service. When the service was restarted without its saved session there is
+ * no tunnel: with the kill switch still armed the window shows the leftover
+ * banner with Restore internet, otherwise Not connected. It never reconnects
+ * or changes mode by itself.
+ */
+export function reconcileServiceSession(input: {
+  os: string;
+  sessionGone: boolean;
+  killSwitchArmed: boolean;
+  goneStreak: number;
+}): { action: ReconcileAction; streak: number } {
+  if (input.os !== "windows" || !input.sessionGone) return { action: "keep", streak: 0 };
+  const streak = input.goneStreak + 1;
+  if (streak < SESSION_GONE_POLLS) return { action: "keep", streak };
+  return { action: input.killSwitchArmed ? "leftover" : "disconnected", streak };
+}
+
+export function sessionEndedMessage(action: ReconcileAction): string {
+  if (action === "leftover") return SESSION_ENDED_BLOCKED;
+  if (action === "disconnected") return SESSION_ENDED;
+  return "";
+}

@@ -125,7 +125,20 @@ pub struct StaleLock {
 
 pub fn stats() -> WgTransferStats {
     match call(&Request::new(4, OP_STATS), 2_000) {
-        Ok(response) => from_status(response.status.as_ref()),
+        Ok(response) => {
+            let mut stats = from_status(response.status.as_ref());
+            if let Some(status) = response.status.as_ref() {
+                if crate::service_session::session_gone(status.up, status.session.is_some(), status.resuming) {
+                    // Stopped and started without its saved session: no
+                    // tunnel. Say whether the kill switch still blocks.
+                    stats.service_session_gone = true;
+                    stats.kill_switch_armed = lock_status().blocked;
+                }
+            }
+            stats
+        }
+        // No answer is not proof of a lost session: the recovery action
+        // restarts the service and it resumes from its saved session.
         Err(_) => from_status(None),
     }
 }
@@ -144,6 +157,8 @@ fn from_status(status: Option<&TunnelStatus>) -> WgTransferStats {
         underlay_gave_up: false,
         underlay_path_ok: status.up || status.reconnecting,
         stalled: status.stalled,
+        service_session_gone: false,
+        kill_switch_armed: false,
     }
 }
 
@@ -158,6 +173,8 @@ fn empty() -> WgTransferStats {
         underlay_gave_up: false,
         underlay_path_ok: false,
         stalled: false,
+        service_session_gone: false,
+        kill_switch_armed: false,
     }
 }
 

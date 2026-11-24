@@ -108,5 +108,7 @@ fn empty_stats() -> WgTransferStats {
         underlay_gave_up: false,
         underlay_path_ok: false,
         stalled: false,
+        service_session_gone: false,
+        kill_switch_armed: false,
     }
 }

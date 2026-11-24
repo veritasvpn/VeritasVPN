@@ -480,6 +480,15 @@ pub struct WgTransferStats {
     /// stale. The UI shows Reconnecting. No error text is attached.
     #[serde(default)]
     pub stalled: bool,
+    /// Windows: the service answered but runs no session and is not about to
+    /// resume one (it was restarted, or its saved session is gone). The window
+    /// must stop showing Protected.
+    #[serde(default)]
+    pub service_session_gone: bool,
+    /// Windows, only read when `service_session_gone`: the kill switch is
+    /// still armed, so the internet is blocked until Restore internet.
+    #[serde(default)]
+    pub kill_switch_armed: bool,
 }
 
 #[tauri::command]
@@ -611,6 +620,8 @@ fn wireguard_stats_linux() -> WgTransferStats {
             underlay_gave_up: network_switch::underlay_gave_up(),
             underlay_path_ok: false,
             stalled: false,
+            service_session_gone: false,
+            kill_switch_armed: false,
         };
     }
 
@@ -632,6 +643,8 @@ fn wireguard_stats_linux() -> WgTransferStats {
         underlay_gave_up: network_switch::underlay_gave_up(),
         underlay_path_ok: path_ok,
         stalled: network_switch::tunnel_stalled_now(),
+        service_session_gone: false,
+        kill_switch_armed: false,
     }
 }
 

@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   adoptedTransport,
   canAskService,
+  reconcileServiceSession,
   releaseBeforeConnect,
+  sessionEndedMessage,
   shouldAdoptSession,
+  SESSION_GONE_POLLS,
   type AdoptGate,
   type AttachedSession,
 } from "./serviceSession";
@@ -50,5 +53,37 @@ describe("service session adoption", () => {
     expect(releaseBeforeConnect("windows", false)).toBe(true);
     expect(releaseBeforeConnect("windows", true)).toBe(false);
     expect(releaseBeforeConnect("linux", false)).toBe(false);
+  });
+});
+
+describe("reconcile a Protected window with the service", () => {
+  const base = { os: "windows", sessionGone: true, killSwitchArmed: true, goneStreak: 0 };
+
+  it("keeps Protected while the service still runs the session", () => {
+    expect(reconcileServiceSession({ ...base, sessionGone: false, goneStreak: 1 })).toEqual({ action: "keep", streak: 0 });
+  });
+
+  it("waits one more poll, then shows the leftover banner when the lock is armed", () => {
+    const first = reconcileServiceSession(base);
+    expect(first).toEqual({ action: "keep", streak: 1 });
+    expect(reconcileServiceSession({ ...base, goneStreak: first.streak }).action).toBe("leftover");
+  });
+
+  it("goes to Not connected when nothing is armed", () => {
+    expect(reconcileServiceSession({ ...base, killSwitchArmed: false, goneStreak: SESSION_GONE_POLLS - 1 }).action).toBe("disconnected");
+  });
+
+  it("never acts off Windows", () => {
+    expect(reconcileServiceSession({ ...base, os: "linux", goneStreak: 5 }).action).toBe("keep");
+  });
+
+  it("explains it in plain words with no codes", () => {
+    for (const action of ["leftover", "disconnected"] as const) {
+      const text = sessionEndedMessage(action);
+      expect(text.length).toBeGreaterThan(10);
+      expect(text).not.toMatch(/\d|error|code|exception/i);
+    }
+    expect(sessionEndedMessage("leftover")).toMatch(/Restore internet/);
+    expect(sessionEndedMessage("keep")).toBe("");
   });
 });

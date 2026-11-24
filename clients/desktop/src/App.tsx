@@ -63,7 +63,9 @@ import {
   ADOPT_POLL_MS,
   adoptedTransport,
   canAskService,
+  reconcileServiceSession,
   releaseBeforeConnect,
+  sessionEndedMessage,
   shouldAdoptSession,
   type AttachedSession,
 } from "./serviceSession";
@@ -193,6 +195,8 @@ interface WgTransferStats {
   underlay_reconnecting?: boolean;
   underlay_gave_up?: boolean;
   underlay_path_ok?: boolean;
+  service_session_gone?: boolean;
+  kill_switch_armed?: boolean;
   stalled?: boolean;
 }
 
@@ -2014,6 +2018,7 @@ function App() {
         networkValidated: online,
         alreadyStealth: stealthMode === "stealth" || transport === "stealth",
         dismissed: blockedDismissedRef.current,
+        serviceSessionGone: wgStats?.service_session_gone === true,
         clock: blockedClockRef.current,
       };
       const step = advanceBlocked(reading);
@@ -2045,6 +2050,7 @@ function App() {
     let cancelled = false;
     // One poll at a time: a slow service answer must not stack calls.
     let statsInFlight = false;
+    let sessionGoneStreak = 0;
     const pollStats = async () => {
       if (statsInFlight) return;
       statsInFlight = true;
@@ -2052,6 +2058,38 @@ function App() {
         const stats = await invoke<WgTransferStats>("wireguard_stats");
         if (cancelled) return;
         if (userDisconnectedRef.current || disconnectInFlightRef.current) return;
+        // The service can lose the session under a Protected window (it was
+        // restarted without its saved session). Then there is no tunnel:
+        // stop showing Protected, and show Restore internet if the kill
+        // switch still blocks. Never reconnect or change mode here.
+        const reconcile = reconcileServiceSession({
+          os: capabilities.os,
+          sessionGone: stats.service_session_gone === true,
+          killSwitchArmed: stats.kill_switch_armed === true,
+          goneStreak: sessionGoneStreak,
+        });
+        sessionGoneStreak = reconcile.streak;
+        if (reconcile.action !== "keep") {
+          if (connectingRef.current || connectInFlightRef.current) return;
+          const oldPeer = peerIdRef.current;
+          userDisconnectedRef.current = false;
+          reconnectingRef.current = false;
+          connectedRef.current = false;
+          setReconnecting(false);
+          setConnected(false);
+          setTunnelMode("");
+          setTransport("");
+          setPeerId("");
+          setWgStats(null);
+          hadGoodHandshakeRef.current = false;
+          hadInterfaceUpRef.current = false;
+          peerGoneLatchedRef.current = false;
+          setKillSwitchLeftover(reconcile.action === "leftover");
+          setStatusSticky(true);
+          setStatusMsg(sessionEndedMessage(reconcile.action));
+          if (oldPeer) void deletePeer(oldPeer);
+          return;
+        }
         const notice = (stats.underlay_notice || "").trim();
         const gaveUp = stats.underlay_gave_up === true;
         const nowSec = Math.floor(Date.now() / 1000);
@@ -2147,7 +2185,7 @@ function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [connected, reconnecting, deletePeer]);
+  }, [connected, reconnecting, deletePeer, capabilities.os]);
 
   // Poll peers for DNS blocked count of current peer
   useEffect(() => {

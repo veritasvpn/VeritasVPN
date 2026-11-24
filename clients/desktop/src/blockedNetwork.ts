@@ -23,6 +23,8 @@ export type BlockedSample = {
   networkValidated: boolean;
   alreadyStealth: boolean;
   dismissed: boolean;
+  /** Windows: the service runs no session, so there is no tunnel to be blocked. */
+  serviceSessionGone?: boolean;
   clock: BlockedClock;
 };
 
@@ -38,6 +40,7 @@ export function initialBlockedClock(): BlockedClock {
 }
 
 export function blockedSessionLive(sample: BlockedSample): boolean {
+  if (sample.serviceSessionGone) return false;
   return sample.connecting || sample.reconnecting || (sample.connected && !sample.handshakeOk);
 }
 

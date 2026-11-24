@@ -27,6 +27,15 @@ function sample(overrides: Partial<BlockedSample> = {}): BlockedSample {
 }
 
 describe("blocked network notice", () => {
+  it("never shows, and hides at once, while the service runs no session", () => {
+    const shown = advanceBlocked(sample({ nowMs: 11_000, connecting: false, connected: true, clock: { stallSinceMs: 1_000, rxAtStall: 0, visible: true, rxRiseSamples: 0 } }));
+    expect(shown.visible).toBe(true);
+    const gone = advanceBlocked(sample({ nowMs: 12_000, connecting: false, connected: true, serviceSessionGone: true, clock: shown.clock }));
+    expect(gone.visible).toBe(false);
+    expect(gone.offerStealth).toBe(false);
+    expect(gone.suggestOtherNetwork).toBe(false);
+  });
+
   it("stays hidden until the stall has lasted about ten seconds", () => {
     const first = advanceBlocked(sample({ nowMs: 1_000 }));
     expect(first.visible).toBe(false);

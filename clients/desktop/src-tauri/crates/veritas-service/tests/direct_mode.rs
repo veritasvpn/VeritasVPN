@@ -681,6 +681,31 @@ fn stale_body(dll: String, service: PathBuf) {
     assert!(!status.up && status.session.is_none(), "the session came back after Restore");
     assert!(adapter_gone("VeritasVPN"), "the adapter came back after Restore");
     eprintln!("RESTORE_TEARS_DOWN");
+
+    // Service restarted without its saved session while connected: no
+    // tunnel, lock still armed. Status must say so (no session, not
+    // resuming) so a Protected window can switch to Restore internet.
+    connect_locked(&config);
+    wait_status("connected again", |status| status.up && status.session.is_some());
+    run(&service, ["stop"]);
+    let _ = fs::remove_file(r"C:\ProgramData\VeritasVPN\session.bin");
+    run(&service, ["start"]);
+    wait_until_hello();
+    thread::sleep(Duration::from_secs(5));
+    let status = stats_once(24).status.expect("status");
+    assert!(!status.up, "no tunnel after the restart");
+    assert!(status.session.is_none(), "no session after the restart");
+    assert!(!status.resuming, "nothing on disk to resume");
+    assert_blocked(doc, "kill switch after a restart without the saved session");
+    eprintln!("SESSION_GONE_LOCK_ARMED");
+    let restored = transact(&Request::new(25, OP_CLEAR_LOCK), 15_000).expect("restore");
+    assert!(restored.ok, "restore code {}", restored.code);
+    thread::sleep(Duration::from_millis(600));
+    assert!(
+        probe(doc).as_ref().err().is_none_or(|err| !is_denied(err)),
+        "Restore internet left the lock engaged after a lost session"
+    );
+    eprintln!("RESTORE_AFTER_SESSION_GONE");
 }
 
 fn write_sim(body: &str) {

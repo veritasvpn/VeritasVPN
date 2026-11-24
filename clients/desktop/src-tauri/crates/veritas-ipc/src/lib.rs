@@ -100,6 +100,10 @@ pub struct TunnelStatus {
     /// boot resume) uses this to show Connected instead of Not connected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<SessionInfo>,
+    /// No tunnel yet, but a saved session is on disk and the monitor is about
+    /// to resume it (service restart or boot). Not a lost session.
+    #[serde(default)]
+    pub resuming: bool,
 }
 
 /// What a newly opened window needs to adopt a running session. No keys.
@@ -236,6 +240,7 @@ mod tests {
         let old = br#"{"up":true,"rx":1,"tx":2,"handshake":3}"#;
         let status: TunnelStatus = serde_json::from_slice(old).unwrap();
         assert!(status.session.is_none(), "an older service sends no session");
+        assert!(!status.resuming);
         let mut status = status;
         status.session = Some(SessionInfo {
             peer_id: "peer-1".into(),

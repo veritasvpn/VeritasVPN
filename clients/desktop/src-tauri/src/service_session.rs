@@ -42,6 +42,12 @@ pub fn needs_release(up: bool, has_session: bool) -> bool {
     up || has_session
 }
 
+/// The service answered but has no session and is not resuming one. Whatever
+/// the window shows as Protected is no longer there.
+pub fn session_gone(up: bool, has_session: bool, resuming: bool) -> bool {
+    !up && !has_session && !resuming
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,5 +87,14 @@ mod tests {
         assert!(needs_release(true, false));
         assert!(needs_release(false, true));
         assert!(!needs_release(false, false));
+    }
+
+    #[test]
+    fn session_gone_only_without_tunnel_session_or_resume() {
+        assert!(session_gone(false, false, false), "restarted without its saved session");
+        assert!(!session_gone(false, false, true), "resuming from disk");
+        assert!(!session_gone(false, true, false), "link down, still the same session");
+        assert!(!session_gone(true, true, false));
+        assert!(!session_gone(true, false, false), "an adapter is still up");
     }
 }

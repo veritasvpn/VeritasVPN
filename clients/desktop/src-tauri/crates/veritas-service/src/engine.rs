@@ -499,6 +499,7 @@ fn read_status(session: &Session) -> TunnelStatus {
             stalled: phase.stalled,
             notice: phase.notice,
             session: None,
+            resuming: session_blob_exists(),
         };
     };
     let (rx, tx, handshake) = adapter.counters().unwrap_or((0, 0, 0));
@@ -517,6 +518,7 @@ fn read_status(session: &Session) -> TunnelStatus {
                 &saved.config.dns,
             )
         }),
+        resuming: false,
     }
 }
 
