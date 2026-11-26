@@ -59,6 +59,17 @@ import {
 import { statusAfterDisconnectFailure } from "./disconnectStatus";
 import { readApiJson, safeErrorText, toUserMessage } from "./errorMapper";
 import { formatConnectError } from "./connectError";
+import {
+  ADOPT_POLL_MS,
+  adoptedTransport,
+  canAskService,
+  reconcileServiceSession,
+  releaseBeforeConnect,
+  sessionEndedMessage,
+  shouldAdoptSession,
+  statusAfterRestore,
+  type AttachedSession,
+} from "./serviceSession";
 import veritasMark from "./assets/veritas-mark.png";
 import veritasLogo from "./assets/veritas-logo.png";
 import "./App.css";
@@ -185,6 +196,8 @@ interface WgTransferStats {
   underlay_reconnecting?: boolean;
   underlay_gave_up?: boolean;
   underlay_path_ok?: boolean;
+  service_session_gone?: boolean;
+  kill_switch_armed?: boolean;
   stalled?: boolean;
 }
 
@@ -1039,8 +1052,10 @@ function App() {
   useEffect(() => { stealthModeRef.current = stealthMode; }, [stealthMode]);
   useEffect(() => { shieldFlagsRef.current = shieldFlags; }, [shieldFlags]);
 
+  const restoringRef = useRef(false);
   const restoreLeftoverKillSwitch = useCallback(async () => {
     if (!capabilities.killSwitch || connectedRef.current || connectingRef.current) return;
+    restoringRef.current = true;
     setKillSwitchBusy(true);
     try {
       // Windows keeps the lock across a crash. Opening the app must not drop it.
@@ -1048,11 +1063,21 @@ function App() {
       const command = capabilities.os === "windows" ? "repair_kill_switch" : "clear_stale_kill_switch";
       const status = await invoke<StaleKillSwitchStatus>(command);
       if (connectedRef.current || connectingRef.current) return;
+      const cleared = status.cleared || !status.blocked;
       setKillSwitchLeftover(status.blocked && !status.cleared);
+      // The leftover banner is gone; do not keep "stays blocked until you
+      // tap Restore internet" on the status card.
+      setStatusMsg((current) => {
+        if (cleared && /stays blocked until you tap Restore internet/i.test(current)) {
+          return statusAfterRestore(true);
+        }
+        return current;
+      });
     } catch {
       // A failed command is not proof of a leftover firewall, and its text
       // must never reach the screen.
     } finally {
+      restoringRef.current = false;
       setKillSwitchBusy(false);
     }
   }, [capabilities.killSwitch, capabilities.os]);
@@ -1739,11 +1764,16 @@ function App() {
       await invoke<ConnectResult>("recovery_close", { releaseLock: false }).catch(() => undefined);
     }
     try {
+      if (releaseBeforeConnect(capabilities.os, connectedRef.current)) {
+        // A tunnel this window does not own (left by a reinstall) would take
+        // the new handshake and every route once the server revokes its key.
+        await invoke<boolean>("release_stale_session").catch(() => false);
+      }
       await connectVpn();
     } finally {
       connectInFlightRef.current = false;
     }
-  }, [clearReconnectTimer, connectVpn, capabilities.killSwitch]);
+  }, [clearReconnectTimer, connectVpn, capabilities.killSwitch, capabilities.os]);
   handleConnectRef.current = handleConnect;
 
   const disconnectInFlightRef = useRef(false);
@@ -1803,6 +1833,54 @@ function App() {
     }
   }, [tunnelMode, peerId, clearReconnectTimer, deletePeer, capabilities.killSwitch]);
   handleDisconnectRef.current = handleDisconnect;
+
+  // The Windows service can already hold a tunnel when this window opens:
+  // after a reinstall, a crash of the window, or its boot resume. Show it as
+  // Connected instead of Not connected with a leftover banner.
+  const adoptInFlightRef = useRef(false);
+  const adoptServiceSession = useCallback(async () => {
+    const gate = () => ({
+      os: capabilities.os,
+      signedIn: !!user,
+      connected: connectedRef.current,
+      connecting: connectingRef.current || connectInFlightRef.current,
+      disconnecting: disconnectInFlightRef.current,
+      restoring: restoringRef.current,
+    });
+    if (adoptInFlightRef.current || !canAskService(gate())) return;
+    adoptInFlightRef.current = true;
+    try {
+      const session = await invoke<AttachedSession>("service_session").catch(() => null);
+      if (!session || !shouldAdoptSession(session, gate())) return;
+      connectedRef.current = true;
+      userDisconnectedRef.current = false;
+      hadGoodHandshakeRef.current = false;
+      hadInterfaceUpRef.current = false;
+      reconnectAttemptRef.current = 0;
+      peerGoneLatchedRef.current = false;
+      setKillSwitchLeftover(false);
+      setConnected(true);
+      setTunnelMode("wireguard");
+      setTransport(adoptedTransport(session));
+      setPeerId(session.peer_id);
+      setReconnectToApply(false);
+      setStatusSticky(false);
+      setStatusMsg("");
+      setWgStats(null);
+      setDnsBlockedCount(null);
+      setDnsBlockedBaseline(null);
+      setDnsGateway(session.dns);
+    } finally {
+      adoptInFlightRef.current = false;
+    }
+  }, [capabilities.os, user]);
+
+  useEffect(() => {
+    if (capabilities.os !== "windows" || !user || connected) return;
+    void adoptServiceSession();
+    const timer = window.setInterval(() => { void adoptServiceSession(); }, ADOPT_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [capabilities.os, user, connected, adoptServiceSession]);
 
   useEffect(() => {
     if (capabilities.os !== "windows") return;
@@ -1950,6 +2028,7 @@ function App() {
         networkValidated: online,
         alreadyStealth: stealthMode === "stealth" || transport === "stealth",
         dismissed: blockedDismissedRef.current,
+        serviceSessionGone: wgStats?.service_session_gone === true,
         clock: blockedClockRef.current,
       };
       const step = advanceBlocked(reading);
@@ -1981,6 +2060,7 @@ function App() {
     let cancelled = false;
     // One poll at a time: a slow service answer must not stack calls.
     let statsInFlight = false;
+    let sessionGoneStreak = 0;
     const pollStats = async () => {
       if (statsInFlight) return;
       statsInFlight = true;
@@ -1988,6 +2068,38 @@ function App() {
         const stats = await invoke<WgTransferStats>("wireguard_stats");
         if (cancelled) return;
         if (userDisconnectedRef.current || disconnectInFlightRef.current) return;
+        // The service can lose the session under a Protected window (it was
+        // restarted without its saved session). Then there is no tunnel:
+        // stop showing Protected, and show Restore internet if the kill
+        // switch still blocks. Never reconnect or change mode here.
+        const reconcile = reconcileServiceSession({
+          os: capabilities.os,
+          sessionGone: stats.service_session_gone === true,
+          killSwitchArmed: stats.kill_switch_armed === true,
+          goneStreak: sessionGoneStreak,
+        });
+        sessionGoneStreak = reconcile.streak;
+        if (reconcile.action !== "keep") {
+          if (connectingRef.current || connectInFlightRef.current) return;
+          const oldPeer = peerIdRef.current;
+          userDisconnectedRef.current = false;
+          reconnectingRef.current = false;
+          connectedRef.current = false;
+          setReconnecting(false);
+          setConnected(false);
+          setTunnelMode("");
+          setTransport("");
+          setPeerId("");
+          setWgStats(null);
+          hadGoodHandshakeRef.current = false;
+          hadInterfaceUpRef.current = false;
+          peerGoneLatchedRef.current = false;
+          setKillSwitchLeftover(reconcile.action === "leftover");
+          setStatusSticky(true);
+          setStatusMsg(sessionEndedMessage(reconcile.action));
+          if (oldPeer) void deletePeer(oldPeer);
+          return;
+        }
         const notice = (stats.underlay_notice || "").trim();
         const gaveUp = stats.underlay_gave_up === true;
         const nowSec = Math.floor(Date.now() / 1000);
@@ -2083,7 +2195,7 @@ function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [connected, reconnecting, deletePeer]);
+  }, [connected, reconnecting, deletePeer, capabilities.os]);
 
   // Poll peers for DNS blocked count of current peer
   useEffect(() => {

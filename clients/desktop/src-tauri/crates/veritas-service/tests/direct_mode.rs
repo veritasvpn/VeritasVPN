@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use veritas_core::{generate_keypair, WgTunnelConfig};
 use veritas_ipc::{
-    Request, TunnelStatus, CODE_BUSY, CODE_UNAVAILABLE, OP_CONNECT, OP_DISCONNECT, OP_HELLO,
-    OP_SOFT_RECONNECT, OP_STATS,
+    Request, TunnelStatus, CODE_BUSY, CODE_UNAVAILABLE, OP_CLEAR_LOCK, OP_CONNECT, OP_DISCONNECT,
+    OP_HELLO, OP_SOFT_RECONNECT, OP_STATS,
 };
 use veritas_service::{ensure_api, management_snapshot, transact, TestPeer};
 use windows_sys::Win32::Foundation::{
@@ -569,6 +569,145 @@ fn reconnect_body(dll: String, service: PathBuf) {
     eprintln!("RECONNECT_DISCONNECT");
 }
 
+/// Reinstall while connected. The installer hooks are `stop`, then `reset`,
+/// then `install` and `start`. The new service must come up disconnected:
+/// before the fix it resumed the old session from disk, so the adapter and
+/// its routes came back while the new window showed Not connected.
+#[test]
+fn reinstall_while_connected_comes_up_clean() {
+    let dll = std::env::var("VERITAS_WIREGUARD_DLL").expect("VERITAS_WIREGUARD_DLL");
+    let service = PathBuf::from(
+        option_env!("CARGO_BIN_EXE_veritas_service").unwrap_or("veritas-service.exe"),
+    );
+    let _guard = Cleanup {
+        service: service.clone(),
+    };
+    let service = service.clone();
+    finish_within(Duration::from_secs(150), move || reinstall_body(dll, service));
+}
+
+fn reinstall_body(dll: String, service: PathBuf) {
+    let client = std::env::current_exe().expect("test exe");
+    fs::copy(&dll, service.parent().unwrap().join("wireguard.dll")).expect("copy dll");
+    let install = ["install".to_string(), "--client".into(), client.display().to_string(), "--dll".into(), dll.clone()];
+    run(&service, &install);
+    run(&service, ["start"]);
+    wait_until_hello();
+    let doc = outside_oracle();
+    let _peer = bring_up_tunnel(&dll);
+    assert_tunnel_carries();
+    assert_blocked(doc, "lock before reinstall");
+    let status = stats_once(20).status.expect("status");
+    let session = status.session.expect("a connected service reports its session");
+    assert_eq!(session.peer_id, "peer-lock");
+    assert_eq!(session.dns, "10.66.0.1");
+    assert!(!session.stealth);
+    eprintln!("SESSION_REPORTED");
+
+    // The installer hooks, in order.
+    run(&service, ["stop"]);
+    let reset = output_bounded_os(&service, &["reset".into()], Duration::from_secs(30));
+    let reset_text = String::from_utf8_lossy(&reset.stdout).to_string();
+    assert!(reset.status.success(), "reset failed: {reset_text}");
+    assert!(reset_text.contains("RESET_LOCK 1"), "{reset_text}");
+    assert!(
+        !std::path::Path::new(r"C:\ProgramData\VeritasVPN\session.bin").exists(),
+        "reset left the saved session"
+    );
+    run(&service, &install);
+    run(&service, ["start"]);
+    wait_until_hello();
+    // Three monitor ticks: a saved session would have been resumed by now.
+    thread::sleep(Duration::from_secs(7));
+    let status = stats_once(21).status.expect("status");
+    assert!(!status.up, "the new service resumed the old tunnel");
+    assert!(status.session.is_none(), "the new service holds the old session");
+    assert!(adapter_gone("VeritasVPN"), "the old adapter is still there");
+    assert!(
+        probe(doc).as_ref().err().is_none_or(|err| !is_denied(err)),
+        "the kill switch is still engaged after the reinstall"
+    );
+    eprintln!("REINSTALL_CLEAN");
+}
+
+/// Connect from a window that does not know the running session replaces it
+/// (it used to answer Busy), and Restore internet removes the adapter and its
+/// routes, not only the filters.
+#[test]
+fn connect_and_restore_clear_a_stale_session() {
+    let dll = std::env::var("VERITAS_WIREGUARD_DLL").expect("VERITAS_WIREGUARD_DLL");
+    let service = PathBuf::from(
+        option_env!("CARGO_BIN_EXE_veritas_service").unwrap_or("veritas-service.exe"),
+    );
+    let _guard = Cleanup {
+        service: service.clone(),
+    };
+    let service = service.clone();
+    finish_within(Duration::from_secs(150), move || stale_body(dll, service));
+}
+
+fn stale_body(dll: String, service: PathBuf) {
+    let client = std::env::current_exe().expect("test exe");
+    fs::copy(&dll, service.parent().unwrap().join("wireguard.dll")).expect("copy dll");
+    run(
+        &service,
+        ["install", "--client", &client.display().to_string(), "--dll", &dll],
+    );
+    run(&service, ["start"]);
+    wait_until_hello();
+    let doc = outside_oracle();
+    let (_peer, config) = bring_up_tunnel_with_config(&dll);
+    assert_tunnel_carries();
+
+    // A second Connect while the first session is up: replaced, not Busy,
+    // and the lock never lifts in between.
+    connect_locked(&config);
+    assert_blocked(doc, "lock right after a replacing connect");
+    wait_status("replaced session up", |status| status.up && status.session.is_some());
+    wait_carry();
+    eprintln!("CONNECT_REPLACES_STALE");
+
+    let restored = transact(&Request::new(22, OP_CLEAR_LOCK), 15_000).expect("restore");
+    assert!(restored.ok, "restore code {}", restored.code);
+    thread::sleep(Duration::from_millis(600));
+    assert!(adapter_gone("VeritasVPN"), "Restore internet left the adapter up");
+    assert!(
+        probe(doc).as_ref().err().is_none_or(|err| !is_denied(err)),
+        "Restore internet left the lock engaged"
+    );
+    // Nothing comes back: the saved session went with it.
+    thread::sleep(Duration::from_secs(5));
+    let status = stats_once(23).status.expect("status");
+    assert!(!status.up && status.session.is_none(), "the session came back after Restore");
+    assert!(adapter_gone("VeritasVPN"), "the adapter came back after Restore");
+    eprintln!("RESTORE_TEARS_DOWN");
+
+    // Service restarted without its saved session while connected: no
+    // tunnel, lock still armed. Status must say so (no session, not
+    // resuming) so a Protected window can switch to Restore internet.
+    connect_locked(&config);
+    wait_status("connected again", |status| status.up && status.session.is_some());
+    run(&service, ["stop"]);
+    let _ = fs::remove_file(r"C:\ProgramData\VeritasVPN\session.bin");
+    run(&service, ["start"]);
+    wait_until_hello();
+    thread::sleep(Duration::from_secs(5));
+    let status = stats_once(24).status.expect("status");
+    assert!(!status.up, "no tunnel after the restart");
+    assert!(status.session.is_none(), "no session after the restart");
+    assert!(!status.resuming, "nothing on disk to resume");
+    assert_blocked(doc, "kill switch after a restart without the saved session");
+    eprintln!("SESSION_GONE_LOCK_ARMED");
+    let restored = transact(&Request::new(25, OP_CLEAR_LOCK), 15_000).expect("restore");
+    assert!(restored.ok, "restore code {}", restored.code);
+    thread::sleep(Duration::from_millis(600));
+    assert!(
+        probe(doc).as_ref().err().is_none_or(|err| !is_denied(err)),
+        "Restore internet left the lock engaged after a lost session"
+    );
+    eprintln!("RESTORE_AFTER_SESSION_GONE");
+}
+
 fn write_sim(body: &str) {
     fs::write(r"C:\ProgramData\VeritasVPN\sim.txt", body).expect("sim");
 }
@@ -889,6 +1028,10 @@ fn bring_up_stealth(dll: &str, remote: &str) -> TestPeer {
 }
 
 fn bring_up_tunnel(dll: &str) -> TestPeer {
+    bring_up_tunnel_with_config(dll).0
+}
+
+fn bring_up_tunnel_with_config(dll: &str) -> (TestPeer, WgTunnelConfig) {
     let server_keys = generate_keypair();
     let client_keys = generate_keypair();
     // Production peers always carry a per-device preshared key. Prove the
@@ -922,8 +1065,13 @@ fn bring_up_tunnel(dll: &str) -> TestPeer {
         endpoint_lan: String::new(),
         endpoint_wan: String::new(),
     };
+    connect_locked(&config);
+    (peer, config)
+}
+
+fn connect_locked(config: &WgTunnelConfig) {
     let mut request = Request::new(2, OP_CONNECT);
-    request.config = Some(config);
+    request.config = Some(config.clone());
     request.full_lock = Some(true);
     attach_management(&mut request);
     let connected = transact(&request, 20_000).expect("connect");
@@ -933,7 +1081,6 @@ fn bring_up_tunnel(dll: &str) -> TestPeer {
         connected.code,
         fs::read_to_string(r"C:\ProgramData\VeritasVPN\service.log").unwrap_or_default()
     );
-    peer
 }
 
 fn probe(addr: SocketAddr) -> std::io::Result<()> {

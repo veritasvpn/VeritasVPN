@@ -95,6 +95,23 @@ pub struct TunnelStatus {
     /// Fixed sentence. Empty when there is nothing to say.
     #[serde(default)]
     pub notice: String,
+    /// The session the service is running, if any. A window that opens while
+    /// the service already holds a tunnel (after a reinstall, a crash, or the
+    /// boot resume) uses this to show Connected instead of Not connected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<SessionInfo>,
+    /// No tunnel yet, but a saved session is on disk and the monitor is about
+    /// to resume it (service restart or boot). Not a lost session.
+    #[serde(default)]
+    pub resuming: bool,
+}
+
+/// What a newly opened window needs to adopt a running session. No keys.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub peer_id: String,
+    pub stealth: bool,
+    pub dns: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,5 +233,25 @@ mod tests {
         }
         assert_eq!(user_message(CODE_STEALTH_UNREACHABLE), STEALTH_UNREACHABLE_MESSAGE);
         assert!(!STEALTH_UNREACHABLE_MESSAGE.chars().any(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn status_session_round_trips_and_stays_optional() {
+        let old = br#"{"up":true,"rx":1,"tx":2,"handshake":3}"#;
+        let status: TunnelStatus = serde_json::from_slice(old).unwrap();
+        assert!(status.session.is_none(), "an older service sends no session");
+        assert!(!status.resuming);
+        let mut status = status;
+        status.session = Some(SessionInfo {
+            peer_id: "peer-1".into(),
+            stealth: true,
+            dns: "10.8.0.1".into(),
+        });
+        let text = serde_json::to_string(&status).unwrap();
+        assert!(!text.contains("private_key"));
+        let back: TunnelStatus = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.session, status.session);
+        status.session = None;
+        assert!(!serde_json::to_string(&status).unwrap().contains("session"));
     }
 }

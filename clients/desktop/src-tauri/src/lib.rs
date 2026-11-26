@@ -41,6 +41,8 @@ mod network_switch;
 mod network_switch;
 
 mod api_http;
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod service_session;
 mod tunnel;
 #[cfg(target_os = "windows")]
 mod win_pipe;
@@ -478,6 +480,15 @@ pub struct WgTransferStats {
     /// stale. The UI shows Reconnecting. No error text is attached.
     #[serde(default)]
     pub stalled: bool,
+    /// Windows: the service answered but runs no session and is not about to
+    /// resume one (it was restarted, or its saved session is gone). The window
+    /// must stop showing Protected.
+    #[serde(default)]
+    pub service_session_gone: bool,
+    /// Windows, only read when `service_session_gone`: the kill switch is
+    /// still armed, so the internet is blocked until Restore internet.
+    #[serde(default)]
+    pub kill_switch_armed: bool,
 }
 
 #[tauri::command]
@@ -609,6 +620,8 @@ fn wireguard_stats_linux() -> WgTransferStats {
             underlay_gave_up: network_switch::underlay_gave_up(),
             underlay_path_ok: false,
             stalled: false,
+            service_session_gone: false,
+            kill_switch_armed: false,
         };
     }
 
@@ -630,6 +643,8 @@ fn wireguard_stats_linux() -> WgTransferStats {
         underlay_gave_up: network_switch::underlay_gave_up(),
         underlay_path_ok: path_ok,
         stalled: network_switch::tunnel_stalled_now(),
+        service_session_gone: false,
+        kill_switch_armed: false,
     }
 }
 
@@ -1510,6 +1525,48 @@ fn clear_stale_kill_switch_blocking() -> StaleKillSwitchStatus {
         blocked: still,
         cleared: !still,
     }
+}
+
+/// On window start: the session the service already runs, so the window can
+/// show Connected for it. A reinstall, a crash of the window, or the boot
+/// resume all leave the service connected while a new window opens.
+#[tauri::command]
+async fn service_session(app: AppHandle) -> service_session::AttachedSession {
+    #[cfg(target_os = "windows")]
+    {
+        let found = tauri::async_runtime::spawn_blocking(crate::win_pipe::running_session)
+            .await
+            .unwrap_or(None);
+        let attached = service_session::attached(found);
+        if attached.active {
+            // Same bookkeeping as a Connect that succeeded here.
+            let _ = APP_HANDLE_FOR_RECOVER.set(app.clone());
+            network_switch::mark_reconnect_wanted();
+            network_switch::clear_underlay_notice();
+            start_network_switch_watcher_if_needed();
+        }
+        return attached;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        service_session::AttachedSession::default()
+    }
+}
+
+/// Before a Connect from Not connected: end any session the service still
+/// runs, so its adapter cannot capture the new handshake. True when one was
+/// ended.
+#[tauri::command]
+async fn release_stale_session() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return tauri::async_runtime::spawn_blocking(crate::win_pipe::release_stale_session)
+            .await
+            .unwrap_or(false);
+    }
+    #[cfg(not(target_os = "windows"))]
+    false
 }
 
 /// User-facing Repair. Startup only looks; this is the button that releases the lock.
@@ -4542,6 +4599,8 @@ pub fn run() {
             recover_wireguard,
             clear_stale_kill_switch,
             repair_kill_switch,
+            service_session,
+            release_stale_session,
             autostart_enabled,
             set_autostart,
             set_session_resident
