@@ -67,6 +67,7 @@ import {
   releaseBeforeConnect,
   sessionEndedMessage,
   shouldAdoptSession,
+  statusAfterRestore,
   type AttachedSession,
 } from "./serviceSession";
 import veritasMark from "./assets/veritas-mark.png";
@@ -1062,7 +1063,16 @@ function App() {
       const command = capabilities.os === "windows" ? "repair_kill_switch" : "clear_stale_kill_switch";
       const status = await invoke<StaleKillSwitchStatus>(command);
       if (connectedRef.current || connectingRef.current) return;
+      const cleared = status.cleared || !status.blocked;
       setKillSwitchLeftover(status.blocked && !status.cleared);
+      // The leftover banner is gone; do not keep "stays blocked until you
+      // tap Restore internet" on the status card.
+      setStatusMsg((current) => {
+        if (cleared && /stays blocked until you tap Restore internet/i.test(current)) {
+          return statusAfterRestore(true);
+        }
+        return current;
+      });
     } catch {
       // A failed command is not proof of a leftover firewall, and its text
       // must never reach the screen.

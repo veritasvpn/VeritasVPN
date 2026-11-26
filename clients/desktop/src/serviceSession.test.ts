@@ -6,6 +6,9 @@ import {
   releaseBeforeConnect,
   sessionEndedMessage,
   shouldAdoptSession,
+  statusAfterRestore,
+  SESSION_ENDED,
+  SESSION_ENDED_BLOCKED,
   SESSION_GONE_POLLS,
   type AdoptGate,
   type AttachedSession,
@@ -85,5 +88,16 @@ describe("reconcile a Protected window with the service", () => {
     }
     expect(sessionEndedMessage("leftover")).toMatch(/Restore internet/);
     expect(sessionEndedMessage("keep")).toBe("");
+  });
+});
+
+describe("status after Restore internet", () => {
+  it("drops the blocked line once the lock is released", () => {
+    expect(statusAfterRestore(true)).toBe(SESSION_ENDED);
+    expect(statusAfterRestore(true)).not.toMatch(/blocked|Restore internet/i);
+  });
+
+  it("keeps the blocked line if the lock is still on", () => {
+    expect(statusAfterRestore(false)).toBe(SESSION_ENDED_BLOCKED);
   });
 });

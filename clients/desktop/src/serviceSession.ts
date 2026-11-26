@@ -83,3 +83,8 @@ export function sessionEndedMessage(action: ReconcileAction): string {
   if (action === "disconnected") return SESSION_ENDED;
   return "";
 }
+
+/** After Restore internet: drop the "stays blocked" line once the lock is gone. */
+export function statusAfterRestore(cleared: boolean): string {
+  return cleared ? SESSION_ENDED : SESSION_ENDED_BLOCKED;
+}

@@ -165,4 +165,31 @@ mod tests {
         let pre_reset = position(pre, "veritas-service.exe\" reset");
         assert!(stop < pre_reset);
     }
+
+    #[test]
+    fn reinstall_waits_for_the_window_to_exit_before_the_running_app_check() {
+        // Tauri's CheckIfAppIsRunning runs immediately after PREINSTALL.
+        // The hook must kill the window and wait until it is gone, or
+        // Restart Manager still lists the exiting PID and the installer
+        // aborts with "Failed to kill VeritasVPN".
+        let stop_helper = macro_body(INSTALLER_HOOKS, "StopDesktopAndHelper");
+        let kill = position(stop_helper, "taskkill /F /IM veritasvpn-desktop.exe");
+        let wait = position(stop_helper, "WaitUntilImageGone \"veritasvpn-desktop.exe\"");
+        assert!(kill < wait, "must wait after taskkill, not before");
+
+        let wait_macro = macro_body(INSTALLER_HOOKS, "WaitUntilImageGone");
+        assert!(wait_macro.contains("tasklist"), "wait must check that the process has exited");
+        assert!(wait_macro.contains("Sleep"), "the wait must be bounded and retried");
+        // 30 tries of 500 ms is 15s; an already-gone process leaves on the first check.
+        assert!(wait_macro.contains("attempts"), "the loop is bounded");
+
+        let pre = macro_body(INSTALLER_HOOKS, "NSIS_HOOK_PREINSTALL");
+        let first = position(pre, "StopDesktopAndHelper");
+        let after = position(pre, "WaitUntilImageGone \"veritasvpn-desktop.exe\" desktop2");
+        let reset = position(pre, "veritas-service.exe\" reset");
+        assert!(first < reset && reset < after, "wait again after reset, in case of a brief restart");
+
+        let uninstall = macro_body(INSTALLER_HOOKS, "NSIS_HOOK_PREUNINSTALL");
+        assert!(uninstall.contains("StopDesktopAndHelper"), "uninstall has the same race");
+    }
 }

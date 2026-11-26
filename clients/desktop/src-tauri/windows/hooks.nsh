@@ -2,6 +2,40 @@
 ; Signing is not done here. Cloud signing belongs in bundle.windows.signCommand
 ; once a real certificate exists. Do not point that at a stand-in.
 
+; After taskkill, wait until the image is really gone. Tauri's installer
+; runs CheckIfAppIsRunning immediately after this hook. If the process is
+; still exiting, Restart Manager lists it, "Click OK to kill it" runs
+; RmShutdown, that call fails on an already-dead PID, and the installer
+; aborts with "Failed to kill VeritasVPN. Please close it first then try
+; again". 30 tries of 500 ms is 15 seconds. A process that is already
+; gone returns immediately so a user-launched app that was closed first
+; is unchanged.
+!macro WaitUntilImageGone image tag attempts
+  StrCpy $R8 0
+  veritas_wait_${tag}:
+    nsExec::ExecToStack 'cmd /c tasklist /NH /FI "IMAGENAME eq ${image}" | find /I "${image}"'
+    Pop $R7
+    Pop $R6
+    ; find exits 0 when the image is still listed, 1 (or anything else) when it is gone.
+    ${If} $R7 != 0
+      Goto veritas_waited_${tag}
+    ${EndIf}
+    IntOp $R8 $R8 + 1
+    ${If} $R8 >= ${attempts}
+      Goto veritas_waited_${tag}
+    ${EndIf}
+    Sleep 500
+    Goto veritas_wait_${tag}
+  veritas_waited_${tag}:
+!macroend
+
+!macro StopDesktopAndHelper
+  ExecWait 'taskkill /F /IM veritasvpn-desktop.exe' $0
+  ExecWait 'taskkill /F /IM wstunnel.exe' $0
+  !insertmacro WaitUntilImageGone "veritasvpn-desktop.exe" desktop 30
+  !insertmacro WaitUntilImageGone "wstunnel.exe" helper 10
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
   FileOpen $9 "$TEMP\veritas-install-hook.txt" w
   FileWrite $9 "preinstall$\n"
@@ -22,8 +56,7 @@
     ${EndIf}
     Abort
   ${EndIf}
-  ExecWait 'taskkill /F /IM veritasvpn-desktop.exe' $0
-  ExecWait 'taskkill /F /IM wstunnel.exe' $0
+  !insertmacro StopDesktopAndHelper
   IfFileExists "$INSTDIR\service\veritas-service.exe" 0 veritas_pre_done
     ExecWait '"$INSTDIR\service\veritas-service.exe" stop' $0
     ; Disconnect cleanly before the files are replaced. A service older than
@@ -31,6 +64,17 @@
     ; and the new service's reset below does the work.
     ExecWait '"$INSTDIR\service\veritas-service.exe" reset' $0
   veritas_pre_done:
+  ; Confirm the window finished exiting after stop/reset as well, in case a
+  ; brief restart raced with the first wait, then tell the hook log.
+  !insertmacro WaitUntilImageGone "veritasvpn-desktop.exe" desktop2 10
+  FileOpen $9 "$TEMP\veritas-install-hook.txt" a
+  FileSeek $9 0 END
+  ${If} $R7 != 0
+    FileWrite $9 "desktop_gone$\n"
+  ${Else}
+    FileWrite $9 "desktop_still_running$\n"
+  ${EndIf}
+  FileClose $9
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -60,8 +104,7 @@
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  ExecWait 'taskkill /F /IM veritasvpn-desktop.exe' $0
-  ExecWait 'taskkill /F /IM wstunnel.exe' $0
+  !insertmacro StopDesktopAndHelper
   IfFileExists "$INSTDIR\service\veritas-service.exe" 0 veritas_un_done
     ExecWait '"$INSTDIR\service\veritas-service.exe" uninstall' $0
   veritas_un_done:

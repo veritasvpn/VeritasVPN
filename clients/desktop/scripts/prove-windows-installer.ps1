@@ -82,8 +82,23 @@ try {
     if ($code -ne 0 -or $text -ne "PIPE_OK") { throw "pipe check failed" }
     Write-Host "PIPE_OK"
 
+    # Leave the window running so the reinstall has to close it. A hook that
+    # only taskkills, without waiting, lost a race with Tauri's
+    # CheckIfAppIsRunning ("Failed to kill VeritasVPN").
+    Start-Process -FilePath $ui | Out-Null
+    $until = (Get-Date).AddSeconds(30)
+    $shown = $false
+    while ((Get-Date) -lt $until) {
+        if (Get-Process -Name "veritasvpn-desktop" -ErrorAction SilentlyContinue) { $shown = $true; break }
+        Start-Sleep -Milliseconds 400
+    }
+    if (-not $shown) { throw "could not start the app for the reinstall test" }
+    Start-Sleep -Seconds 2
+    Write-Host "REINSTALL_APP_RUNNING"
+
     # Reinstall over the running install, as Add/Reinstall does. The hooks must
-    # stop the service, clear its saved session, and start it again.
+    # stop the service, clear its saved session, wait for the window to exit,
+    # and start the service again.
     $hook = Join-Path $env:TEMP "veritas-install-hook.txt"
     if (Test-Path $hook) { Remove-Item $hook -Force }
     $code = Invoke-Bounded $installer.FullName @("/S") 180
@@ -91,6 +106,7 @@ try {
     if (Test-Path $hook) { $hookLines = @(Get-Content $hook) }
     $hookLines | ForEach-Object { Write-Host "REINSTALL_HOOK $_" }
     if ($code -ne 0) { throw "reinstall exit $code" }
+    if (-not ($hookLines | Where-Object { $_.Trim() -eq "desktop_gone" })) { throw "reinstall did not wait for the window to exit" }
     if (-not ($hookLines | Where-Object { $_ -like "reset=*" })) { throw "reinstall did not run the reset hook" }
     $running = $false
     $deadline = (Get-Date).AddSeconds(45)
